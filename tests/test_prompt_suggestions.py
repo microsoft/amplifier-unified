@@ -145,73 +145,112 @@ class Requests(unittest.IsolatedAsyncioTestCase):
                                             (claims[0][0],)).fetchone(), claims[0])
         self.assertNotIn(original['suggestion'], repr(list(self.app.db.execute('SELECT * FROM suggestion_requests'))))
 
-    async def test_explicit_regeneration_is_once_per_new_intent_and_never_reopens_automatic_source(self):
-        first = await self.terminal_request('manual-first', regenerate=True)
-        self.assertEqual(first['status'], 'ready')
-        self.assertFalse(first['reused'])
-        repeated = await self.terminal_request('manual-first', regenerate=True)
-        self.assertEqual(repeated['generationId'], first['generationId'])
-        self.assertEqual(len(self.calls), 1)
-        with self.assertRaisesRegex(Exception, 'different inputs'):
-            await self.request('manual-first', regenerate=False)
-        for invalid in ('true', 1, None):
-            with self.subTest(invalid=invalid), self.assertRaisesRegex(Exception, 'boolean'):
+    async def test_superseded_regeneration_flag_is_rejected_and_legacy_claims_stay_inert(self):
+        self.app.db.execute('INSERT INTO suggestion_requests VALUES (?,?)', ('old-intent', 'old-manual-input'))
+        self.app.db.commit()
+        for invalid in (True, False, 'true', 1, None):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(Exception, 'automatic only'):
                 await self.request('bad', regenerate=invalid)
-        cached = await self.terminal_request('automatic-after-manual')
-        self.assertTrue(cached['reused'])
-        self.assertEqual(cached['generationId'], first['generationId'])
-        second = await self.terminal_request('manual-second', regenerate=True)
-        self.assertFalse(second['reused'])
-        self.assertNotEqual(second['generationId'], first['generationId'])
-        self.assertEqual(len(self.calls), 2)
-        claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
-        self.app.clients.current.set('two')
-        # Same gesture ID in another audience must not authorize another paid call.
-        replay = await self.terminal_request('manual-second', regenerate=True)
-        self.assertEqual(replay['status'], 'expired')
-        self.assertEqual(len(self.calls), 2)
-        await self.host.close()
-        self.host = PromptSuggestions(self.app)
-        self.host.settings = lambda: (self.config, {'id': 'explicit-account'}, self.revision)
-        self.host.complete = AsyncMock(side_effect=AssertionError('lost memory is not a retry grant'))
-        absent = await self.terminal_request('automatic-lost-memory')
-        self.assertEqual(absent['status'], 'duplicate_source')
-        self.assertEqual(absent['reason'], 'prior_attempt_unavailable')
-        self.assertTrue(all(self.app.db.execute('SELECT * FROM suggestion_requests WHERE identity=?',
-                                               (row[0],)).fetchone() == row for row in claims))
-        replay = await self.terminal_request('manual-second', regenerate=True)
-        self.assertEqual(replay['status'], 'expired')
-        self.host.complete.assert_not_called()
-        self.host.complete = AsyncMock(return_value={
-            'status': 'ready', 'suggestion': 'A deliberately new attempt.', 'usage': None, 'cost': None})
-        recovered = await self.terminal_request('deliberate-recovery', regenerate=True)
-        self.assertEqual(recovered['status'], 'ready')
-        self.assertFalse(recovered['reused'])
-        self.assertTrue((await self.terminal_request('automatic-after-recovery'))['reused'])
-        self.host.complete.assert_awaited_once()
-        self.assertTrue(all(self.app.db.execute('SELECT * FROM suggestion_requests WHERE identity=?',
-                                               (row[0],)).fetchone() == row for row in claims))
+        self.assertEqual(self.calls, [])
+        self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')),
+                         [('old-intent', 'old-manual-input')])
 
-    async def test_explicit_intent_uuid_cannot_repay_after_audience_source_config_or_owner_change(self):
-        await self.terminal_request('one-gesture', regenerate=True)
-        claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
-        self.app.clients.current.set('two')
-        self.app.session['messages'][-1]['text'] = 'Changed assistant text, identical message ID'
-        self.revision = 'changed-settings'
-        result = await self.request('one-gesture', regenerate=True)
-        self.assertEqual(result['status'], 'expired')
-        self.assertEqual(result['reason'], 'prior_attempt_unavailable')
+    async def test_corrupt_oversized_or_invalid_durable_cache_never_exposes_text_or_retries_claim(self):
+        for index, corrupt in enumerate((
+                '{not json', 'x' * 5000,
+                json.dumps({'status': 'ready', 'suggestion': 'x' * 241, 'usage': None,
+                            'cost': None, 'generationId': 'a' * 32}),
+                json.dumps({'status': 'empty', 'suggestion': 'SECRET', 'usage': None,
+                            'cost': None, 'generationId': 'a' * 32}),
+                json.dumps({'status': 'failed', 'suggestion': 'SECRET', 'usage': None,
+                            'cost': None, 'generationId': 'a' * 32}))):
+            self.app.session['messages'][-1]['text'] = 'Cache source ' + str(index)
+            await self.terminal_request('populate-' + str(index))
+            self.app.db.execute('UPDATE suggestion_success_cache SET value=?', (corrupt,))
+            self.app.db.commit()
+            result = await self.terminal_request('corrupt-' + str(index))
+            self.assertEqual(result['status'], 'duplicate_source')
+            self.assertEqual(result['reason'], 'prior_attempt_unavailable')
+            self.assertNotIn('SECRET', repr(result))
+            self.assertIsNone(result['suggestion'])
+            self.assertEqual(self.app.db.execute('SELECT count(*) FROM suggestion_success_cache').fetchone()[0], 0)
+        self.assertEqual(len(self.calls), 5)
+
+    async def test_cache_write_failure_cannot_publish_success_or_retry_provider(self):
+        self.app.db.execute('''CREATE TRIGGER fail_success_insert BEFORE INSERT ON suggestion_success_cache
+            BEGIN SELECT RAISE(ABORT, 'synthetic disk failure'); END''')
+        self.app.db.commit()
+        result = await self.terminal_request('storage-failed')
+        self.assertEqual(result['status'], 'failed')
+        self.assertIsNone(result['suggestion'])
+        self.assertNotIn('synthetic disk failure', repr(result))
+        self.assertEqual(self.app.db.execute('SELECT count(*) FROM suggestion_success_cache').fetchone()[0], 0)
+        self.app.db.execute('DROP TRIGGER fail_success_insert')
+        self.app.db.commit()
+        repeated = await self.terminal_request('after-storage-failure')
+        self.assertEqual(repeated['status'], 'duplicate_source')
         self.assertEqual(len(self.calls), 1)
-        self.assertEqual((await self.request('one-gesture', regenerate=False))['status'], 'expired')
-        await self.host.close()
-        self.host = PromptSuggestions(self.app)
-        self.host.settings = lambda: (self.config, {'id': 'explicit-account'}, self.revision)
-        self.host.complete = AsyncMock(side_effect=AssertionError('old explicit intent repaid'))
-        self.app.session['messages'][-1]['text'] = 'Yet another public input after request-owner loss'
-        result = await self.request('one-gesture', regenerate=True)
-        self.assertEqual(result['status'], 'expired')
+
+    async def test_hash_only_legacy_paid_claim_is_not_reclassified_or_replayed_into_new_cache(self):
+        from amplifier_web.suggestion_settings import digest
+        from amplifier_web.suggestion_source import capture
+        rows, _ = await capture(self.app, 'chat', self.config, 'assistant')
+        source = digest(['suggestion-input-v1', 'cookie-one', 'chat', self.revision, rows])
+        self.app.db.execute('INSERT INTO suggestion_requests VALUES (?,?)', ('legacy-unknown-request', source))
+        self.app.db.commit()
+        before = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+        self.host.complete = AsyncMock(side_effect=AssertionError('legacy migration must never infer'))
+        result = await self.terminal_request('new-document')
+        self.assertEqual(result['status'], 'duplicate_source')
+        self.assertEqual(result['reason'], 'prior_attempt_unavailable')
+        self.assertIsNone(result['suggestion'])
         self.host.complete.assert_not_called()
-        self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
+        self.assertTrue(all(self.app.db.execute('SELECT * FROM suggestion_requests WHERE identity=?',
+                                               (row[0],)).fetchone() == row for row in before))
+        self.assertIsNone(self.app.db.execute('SELECT 1 FROM suggestion_success_cache').fetchone())
+
+    async def test_durable_cache_lru_per_principal_total_bounds_and_eviction_keep_paid_claims(self):
+        with patch('amplifier_web.prompt_suggestions.CACHE_PER_PRINCIPAL', 2), \
+                patch('amplifier_web.prompt_suggestions.CACHE_TOTAL', 3):
+            for i in range(3):
+                sid = 'chat-' + str(i)
+                self.app.session['id'] = sid
+                self.app.clients.records['one']['selectedSessionId'] = sid
+                await self.host.dispatch('session.suggestion.request', {
+                    'sessionId': sid, 'requestId': sid, 'expectedLastMessageId': 'assistant'}, 'ui')
+                await self.settle()
+            rows = list(self.app.db.execute('SELECT session_id,length(CAST(value AS BLOB)) FROM suggestion_success_cache'))
+            self.assertEqual({row[0] for row in rows}, {'chat-1', 'chat-2'})
+            self.assertTrue(all(row[1] <= 4096 for row in rows))
+            self.app.session['id'] = 'chat-1'
+            self.app.clients.records['one']['selectedSessionId'] = 'chat-1'
+            await self.host.dispatch('session.suggestion.request', {
+                'sessionId': 'chat-1', 'requestId': 'touch', 'expectedLastMessageId': 'assistant'}, 'ui')
+            await self.settle()
+            token = BROWSER.set({'principal': 'other-cookie', 'valid': lambda: True})
+            try:
+                for i in (3, 4):
+                    sid = 'chat-' + str(i)
+                    self.app.session['id'] = sid
+                    self.app.clients.records['one']['selectedSessionId'] = sid
+                    await self.host.dispatch('session.suggestion.request', {
+                        'sessionId': sid, 'requestId': sid, 'expectedLastMessageId': 'assistant'}, 'ui')
+                    await self.settle()
+            finally:
+                BROWSER.reset(token)
+            self.assertEqual(self.app.db.execute('SELECT count(*) FROM suggestion_success_cache').fetchone()[0], 3)
+            self.assertIsNone(self.app.db.execute(
+                "SELECT 1 FROM suggestion_success_cache WHERE session_id='chat-2'").fetchone())
+            before = len(self.calls)
+            self.app.session['id'] = 'chat-0'
+            self.app.clients.records['one']['selectedSessionId'] = 'chat-0'
+            await self.host.dispatch('session.suggestion.request', {
+                'sessionId': 'chat-0', 'requestId': 'evicted', 'expectedLastMessageId': 'assistant'}, 'ui')
+            await self.settle()
+            result = await self.host.dispatch('session.suggestion.status', {
+                'sessionId': 'chat-0', 'requestId': 'evicted'}, 'ui')
+            self.assertEqual(result['status'], 'duplicate_source')
+            self.assertEqual(len(self.calls), before)
 
     async def test_ready_lru_is_bounded_status_keeps_exact_record_and_eviction_never_replays(self):
         with patch('amplifier_web.prompt_suggestions.MAX_RETAINED', 3):
@@ -272,8 +311,8 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         # cannot rebind an old READY even though its SQL input digest matches.
         for index, change in enumerate((
                 patch.dict(self.app.session, interruptionRevision=1),
-                patch.dict(self.app.session, runtimeSessionId='other-runtime'),
-                patch.object(self.host, '_epoch', return_value='changed-signout-epoch'))):
+                patch.dict(self.app.session, nativeIdentity='other-native-owner'),
+                patch('amplifier_web.auth._read_epoch', return_value=123))):
             with self.subTest(index=index), change:
                 denied = await self.terminal_request('changed-witness-' + str(index))
                 self.assertEqual(denied['status'], 'duplicate_source')
@@ -304,7 +343,7 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         token = BROWSER.set({'principal': 'cookie-one', 'valid': lambda: False})
         try:
             with self.assertRaisesRegex(Exception, 'browser displaying'):
-                await self.request('revoked', regenerate=True)
+                await self.request('revoked')
         finally:
             BROWSER.reset(token)
         self.assertEqual(len(self.calls), 4)
@@ -316,15 +355,15 @@ class Requests(unittest.IsolatedAsyncioTestCase):
                 'status': state, 'suggestion': None, 'usage': None, 'cost': None})
             await self.terminal_request(state)
             repeated = await self.terminal_request('after-' + state)
-            self.assertEqual(repeated['status'], 'duplicate_source')
-            self.assertEqual(repeated['reason'], 'prior_attempt_' + state)
+            self.assertEqual(repeated['status'], 'empty' if state == 'empty' else 'duplicate_source')
+            if state == 'empty':
+                self.assertTrue(repeated['reused'])
+            else:
+                self.assertEqual(repeated['reason'], 'prior_attempt_' + state)
             self.host.complete.assert_awaited_once()
-            explicit = await self.terminal_request('explicit-' + state, regenerate=True)
-            self.assertEqual(explicit['status'], state)
-            self.assertEqual(self.host.complete.await_count, 2)
         self.assertNotIn('prior_attempt_', repr(list(self.app.db.execute('SELECT * FROM suggestion_requests'))))
 
-    async def test_pending_cancel_blocks_other_client_regenerate_until_physical_settlement(self):
+    async def test_pending_cancel_blocks_other_client_until_physical_settlement(self):
         entered, settling, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
         async def respond(*args):
             self.calls.append('entered')
@@ -343,7 +382,7 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         await settling.wait()
         self.app.clients.current.set('two')
         try:
-            self.assertEqual((await self.request('too-early', regenerate=True))['status'], 'busy')
+            self.assertEqual((await self.request('too-early'))['status'], 'busy')
         finally:
             release.set()
             await self.settle()
@@ -365,8 +404,8 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         await self.host.close()
         self.host = PromptSuggestions(self.app)
         self.host.settings = lambda: (self.config, {'id': 'explicit-account'}, self.revision)
-        self.assertEqual((await self.request())['status'], 'expired')
-        self.assertEqual((await self.terminal_request('third'))['status'], 'duplicate_source')
+        self.assertTrue((await self.terminal_request('request'))['reused'])
+        self.assertTrue((await self.terminal_request('third'))['reused'])
 
     async def test_new_browser_document_and_disposable_fence_do_not_repeat_paid_source(self):
         await self.request()
@@ -399,7 +438,7 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         statements = []
         self.app.db.set_trace_callback(statements.append)
         try:
-            self.assertEqual((await self.request('uncertain'))['status'], 'expired')
+            self.assertEqual((await self.terminal_request('uncertain'))['status'], 'expired')
             self.assertEqual((await self.terminal_request('same-source'))['status'], 'duplicate_source')
             self.app.session['messages'][-1]['text'] = 'A genuinely new completed source'
             self.assertEqual((await self.request('new-source'))['status'], 'pending')
@@ -410,11 +449,15 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.host.complete.assert_awaited_once()
         selects = [sql for sql in statements if sql.upper().startswith('SELECT')]
         self.assertTrue(selects)
-        self.assertTrue(all('WHERE identity=' in sql or 'WHERE source=' in sql for sql in selects))
+        # Historical claim lookup remains indexed. The independently bounded
+        # success table uses exact principal/session keys; trimming visits only
+        # that <=128-row cache, never the 5000+ durable claim history.
+        claim_selects = [sql for sql in selects if 'FROM suggestion_requests' in sql]
+        self.assertTrue(all('WHERE identity=' in sql or 'WHERE source' in sql for sql in claim_selects))
         self.assertFalse(any('count(' in sql.lower() for sql in statements))
         self.assertEqual(self.app.db.execute('SELECT * FROM suggestion_requests WHERE identity=?',
                                             (original_claim[0],)).fetchone(), original_claim)
-        self.assertEqual(self.app.db.execute('SELECT count(*) FROM suggestion_requests').fetchone()[0], 5003)
+        self.assertEqual(self.app.db.execute('SELECT count(*) FROM suggestion_requests').fetchone()[0], 5005)
 
     async def test_provider_refusal_reason_is_allowlisted_without_leaking_arbitrary_text(self):
         allowed = ('custom_source_not_prepared', 'runtime_not_prepared', 'qualified_source_mismatch')
@@ -463,7 +506,7 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.host.settings = lambda: (self.config, {'id': 'explicit-account'}, self.revision)
         self.host.complete = AsyncMock(side_effect=AssertionError('replayed'))
         self.app.clients.current.set('two')
-        self.assertEqual((await self.terminal_request('after-restart'))['status'], 'duplicate_source')
+        self.assertTrue((await self.terminal_request('after-restart'))['reused'])
         self.host.complete.assert_not_called()
 
     async def test_nonready_expiry_is_absolute_and_ready_switches_to_explicit_source_retention(self):
@@ -566,8 +609,7 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.host.settings = lambda: (self.config, {'id': 'explicit-account'}, self.revision)
         self.host.complete = AsyncMock(side_effect=AssertionError('native source replay'))
         with patch('amplifier_web.automatic_history.directory', return_value=root):
-            self.assertEqual((await self.terminal_request('native-restart', expectedLastMessageId=last))['status'],
-                             'duplicate_source')
+            self.assertTrue((await self.terminal_request('native-restart', expectedLastMessageId=last))['reused'])
         self.host.complete.assert_not_called()
 
     async def test_native_utility_page_does_not_replace_ordinary_cached_page(self):
@@ -615,7 +657,7 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.host = PromptSuggestions(self.app)
         self.host.settings = lambda: (self.config, {'id': 'explicit-account'}, self.revision)
         self.host.complete = AsyncMock(side_effect=AssertionError('request replay'))
-        self.assertEqual((await self.request('before-capture'))['status'], 'expired')
+        self.assertEqual((await self.terminal_request('before-capture'))['status'], 'expired')
         self.host.complete.assert_not_called()
 
     async def test_status_does_not_read_or_hydrate_transcript(self):
@@ -1506,6 +1548,325 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         self.env.stop()
         self.tmp.cleanup()
 
+    async def test_durable_success_and_empty_recover_after_real_app_restart_without_draft_or_model_work(self):
+        from amplifier_web.service import AppService
+        manager = self.app.prompt_suggestions.manager
+        manager.store.update(self.root, 'global', lambda value: value.update(config={'providers': [{
+            'id': 'saved', 'module': 'provider-openai',
+            'source': 'git+https://github.com/microsoft/amplifier-module-provider-openai@main',
+            'config': {'api_key': 'synthetic-key'}}]}))
+        await self.app.dispatch('providers.configureSuggestions', {
+            'enabled': True, 'provider': 'saved', 'model': 'utility-model',
+            'scope': 'global', 'configurationTarget': {'kind': 'global'}}, include_state=False)
+        originals = {}
+        token = BROWSER.set({'principal': 'same-authenticated-cookie', 'valid': lambda: True})
+        try:
+            self.app.clients.attach('original', kind='web')
+            for state in ('ready', 'empty'):
+                await self.app.dispatch('session.create', {}, include_state=False)
+                session = self.app._session()
+                sid = session['id']
+                session.update(status='idle', historyManaged=False, runtimeSessionId='old-worker-incarnation',
+                    messages=[{'id': 'human', 'role': 'user', 'inputOrigin': 'ui',
+                               'text': 'Human ' + state + ' x' * 4200},
+                              {'id': 'assistant', 'role': 'assistant', 'text': 'Completed ' + state + ' y' * 4200}])
+                self.app._publish_changes(sessions={sid})
+                self.app.clients.records['original']['selectedSessionId'] = sid
+                with self.app.clients.bind('original'):
+                    await self.app.dispatch('view.update', {'patch': {'draft': 'ACTUAL USER DRAFT ' + state}},
+                                            include_state=False)
+                    self.app.prompt_suggestions.complete = AsyncMock(return_value={
+                        'status': state, 'suggestion': 'DURABLE PRIVATE GHOST' if state == 'ready' else None,
+                        'usage': {'input_tokens': 40, 'output_tokens': 6}, 'cost': None})
+                    args = {'sessionId': sid, 'requestId': state, 'expectedLastMessageId': 'assistant'}
+                    await self.app.dispatch('session.suggestion.request', args, include_state=False)
+                    await asyncio.gather(*tuple(self.app.prompt_suggestions.jobs))
+                    result = (await self.app.dispatch('session.suggestion.status',
+                        {'sessionId': sid, 'requestId': state}, include_state=False))['result']
+                    self.assertEqual(result['status'], state)
+                    self.app.prompt_suggestions.complete.assert_awaited_once()
+                    originals[state] = (sid, result)
+            before_claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+            # Real private DB rows exist before publication. Draft/state/command
+            # owners cannot accidentally serialize a candidate from this table.
+            for table, column in (('client_views', 'value'), ('state_records', 'value'), ('commands', 'receipt')):
+                self.assertNotIn('DURABLE PRIVATE GHOST',
+                                 repr(list(self.app.db.execute(f'SELECT {column} FROM {table}'))))
+            self.assertEqual((self.root / 'app' / 'app.sqlite3').stat().st_mode & 0o777, 0o600)
+            self.app._state['selectedSessionId'] = None
+            for client in self.app.clients.records.values():
+                client['selectedSessionId'] = None
+            with patch.object(self.app.cold_display, 'RECENT_LIMIT', 0):
+                retired = self.app.cold_display.retire(force=True)
+            self.assertTrue(all(sid in retired for sid, _ in originals.values()))
+            self.assertTrue(all(not dict.__contains__(self.app._session(sid, hydrate=False), 'messages')
+                                for sid, _ in originals.values()))
+            await self.app.close()
+            # Neither a fresh process's discovery salt nor a worker incarnation
+            # is a change to the public input or saved model/account selection.
+            with patch('amplifier_web.provider_catalog._UNQUALIFIED_GENERATION', 'fresh-process-salt'):
+                self.app = AppService(self.root / 'app', self.runtime, workspace=self.root)
+                self.app.prompt_suggestions.complete = AsyncMock(side_effect=AssertionError('recovery must not infer'))
+                self.assertFalse(self.app.prompt_suggestions.records)
+                self.app._state['selectedSessionId'] = None
+                with patch.object(self.app.cold_display, 'RECENT_LIMIT', 0):
+                    self.app.cold_display.retire(force=True)
+                for i in range(70):
+                    self.app.history.windows._fence('unrelated-owner-' + str(i))
+                self.app.clients.attach('new-document', kind='web')
+                for state, (sid, original) in originals.items():
+                    session = self.app._session(sid, hydrate=False)
+                    session['runtimeSessionId'] = 'fresh-worker-incarnation'
+                    self.app._publish_changes(sessions={sid})
+                    self.app._state['selectedSessionId'] = None
+                    self.app.clients.records['new-document']['selectedSessionId'] = None
+                    with patch.object(self.app.cold_display, 'RECENT_LIMIT', 0):
+                        self.app.cold_display.retire(force=True)
+                    self.assertFalse(dict.__contains__(session, 'messages'), 'cold setup before utility lookup')
+                    self.app.clients.records['new-document']['selectedSessionId'] = sid
+                    with self.app.clients.bind('new-document'):
+                        await self.app.prompt_suggestions.dispatch('session.suggestion.request', {
+                            'sessionId': sid, 'requestId': 'reopened-' + state,
+                            'expectedLastMessageId': 'assistant'}, 'ui')
+                        await asyncio.gather(*tuple(self.app.prompt_suggestions.jobs))
+                        recovered = await self.app.prompt_suggestions.dispatch('session.suggestion.status', {
+                            'sessionId': sid, 'requestId': 'reopened-' + state}, 'ui')
+                        self.assertEqual(recovered['status'], state)
+                        self.assertEqual(recovered['suggestion'], original['suggestion'])
+                        self.assertEqual(recovered['generationId'], original['generationId'])
+                        self.assertEqual(recovered['usage'], original['usage'])
+                        self.assertIsNone(recovered['cost'])
+                        self.assertTrue(recovered['reused'])
+                        self.assertNotEqual(recovered['configRevision'], original['configRevision'])
+                        self.assertFalse(dict.__contains__(session, 'messages'))
+                self.app.prompt_suggestions.complete.assert_not_called()
+                self.assertEqual(self.app.db.execute('SELECT count(*) FROM suggestion_success_cache').fetchone()[0], 2)
+                # A discovery-only revision or worker change can stale an old
+                # immediate receipt, never delete the stable saved result.
+                sid, original = originals['ready']
+                self.app.clients.records['new-document']['selectedSessionId'] = sid
+                with self.app.clients.bind('new-document'):
+                    self.app._session(sid, hydrate=False)['runtimeSessionId'] = 'another-worker-incarnation'
+                    stale = await self.app.prompt_suggestions.dispatch('session.suggestion.status', {
+                        'sessionId': sid, 'requestId': 'reopened-ready'}, 'ui')
+                    self.assertEqual(stale['status'], 'stale')
+                    self.assertEqual(self.app.db.execute('SELECT count(*) FROM suggestion_success_cache').fetchone()[0], 2)
+                    await self.app.prompt_suggestions.dispatch('session.suggestion.request', {
+                        'sessionId': sid, 'requestId': 'after-transient-status',
+                        'expectedLastMessageId': 'assistant'}, 'ui')
+                    await asyncio.gather(*tuple(self.app.prompt_suggestions.jobs))
+                    recovered = await self.app.prompt_suggestions.dispatch('session.suggestion.status', {
+                        'sessionId': sid, 'requestId': 'after-transient-status'}, 'ui')
+                    self.assertEqual(recovered['generationId'], original['generationId'])
+                    self.assertEqual(recovered['status'], 'ready')
+                self.app.prompt_suggestions.complete.assert_not_called()
+            for state, (sid, _) in originals.items():
+                self.assertEqual(self.app.clients.records['original']['drafts'][sid], 'ACTUAL USER DRAFT ' + state)
+            self.assertNotIn('DURABLE PRIVATE GHOST', repr(self.app.get_state()))
+            self.assertTrue(all(self.app.db.execute('SELECT * FROM suggestion_requests WHERE identity=?',
+                                                   (row[0],)).fetchone() == row for row in before_claims))
+            self.runtime.start.assert_not_called()
+            self.runtime.send.assert_not_called()
+        finally:
+            BROWSER.reset(token)
+
+    async def test_stable_paid_claim_survives_stop_and_discovery_incarnation_without_automatic_retry(self):
+        from amplifier_web.service import AppService
+        manager = self.app.prompt_suggestions.manager
+        manager.store.update(self.root, 'global', lambda value: value.update(config={'providers': [{
+            'id': 'saved', 'module': 'provider-openai',
+            'source': 'git+https://github.com/microsoft/amplifier-module-provider-openai@main',
+            'config': {'api_key': 'synthetic-key'}}]}))
+        await self.app.dispatch('providers.configureSuggestions', {
+            'enabled': True, 'provider': 'saved', 'model': 'utility-model',
+            'scope': 'global', 'configurationTarget': {'kind': 'global'}}, include_state=False)
+        await self.app.dispatch('session.create', {}, include_state=False)
+        session = self.app._session()
+        sid = session['id']
+        session.update(status='idle', historyManaged=False, interruptionRevision=0, messages=[
+            {'id': 'human', 'role': 'user', 'inputOrigin': 'ui', 'text': 'Task'},
+            {'id': 'assistant', 'role': 'assistant', 'text': 'Unchanged input'}])
+        self.app._publish_changes(sessions={sid})
+        host = self.app.prompt_suggestions
+        host.complete = AsyncMock(side_effect=TimeoutError('unknown remote result'))
+        token = BROWSER.set({'principal': 'cookie', 'valid': lambda: True})
+        try:
+            self.app.clients.attach('first', kind='web')
+            self.app.clients.records['first']['selectedSessionId'] = sid
+            with self.app.clients.bind('first'):
+                await host.dispatch('session.suggestion.request', {
+                    'sessionId': sid, 'requestId': 'uncertain', 'expectedLastMessageId': 'assistant'}, 'ui')
+                await asyncio.gather(*tuple(host.jobs))
+            host.complete.assert_awaited_once()
+            claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+            session['interruptionRevision'] += 1
+            self.app._publish_changes(sessions={sid})
+            await self.app.close()
+            with patch('amplifier_web.provider_catalog._UNQUALIFIED_GENERATION', 'different-process'):
+                self.app = AppService(self.root / 'app', self.runtime, workspace=self.root)
+                self.app.clients.attach('second', kind='web')
+                self.app.clients.records['second']['selectedSessionId'] = sid
+                host = self.app.prompt_suggestions
+                host.complete = AsyncMock(side_effect=AssertionError('Stop plus salt is not a retry grant'))
+                with self.app.clients.bind('second'):
+                    await host.dispatch('session.suggestion.request', {
+                        'sessionId': sid, 'requestId': 'after-restart', 'expectedLastMessageId': 'assistant'}, 'ui')
+                    await asyncio.gather(*tuple(host.jobs))
+                    result = await host.dispatch('session.suggestion.status', {
+                        'sessionId': sid, 'requestId': 'after-restart'}, 'ui')
+                    self.assertEqual(result['status'], 'duplicate_source')
+                    self.assertEqual(result['reason'], 'prior_attempt_unavailable')
+                host.complete.assert_not_called()
+            self.assertTrue(all(self.app.db.execute('SELECT * FROM suggestion_requests WHERE identity=?',
+                                                   (row[0],)).fetchone() == row for row in claims))
+        finally:
+            BROWSER.reset(token)
+
+    async def test_legacy_migration_blocks_unprojectable_old_tail_but_real_new_ui_completion_resumes_automatically(self):
+        from amplifier_web.service import AppService
+        class OfflineRuntime:
+            def __init__(self):
+                self.sent = []
+            async def start(self, session, emit):
+                pass
+            async def send(self, session, text, input_id, emit):
+                self.sent.append((session['id'], input_id))
+                await emit('assistant.message', {'sessionId': session['id'], 'text': 'New completed reply',
+                                                 'inputId': input_id, 'generationId': 'post-migration'})
+                await emit('runtime.generation', {'sessionId': session['id'], 'event': 'generation.finished',
+                    'generation_id': 'post-migration', 'input_ids': [input_id],
+                    'active_job_ids': [], 'disposition': 'manager_turn_finished'})
+                await emit('runtime.status', {'sessionId': session['id'], 'status': 'idle'})
+            async def close(self):
+                pass
+        manager = self.app.prompt_suggestions.manager
+        manager.store.update(self.root, 'global', lambda value: value.update(config={'providers': [{
+            'id': 'saved', 'module': 'provider-openai',
+            'source': 'git+https://github.com/microsoft/amplifier-module-provider-openai@main',
+            'config': {'api_key': 'synthetic-key'}}]}))
+        await self.app.dispatch('providers.configureSuggestions', {
+            'enabled': True, 'provider': 'saved', 'model': 'utility-model',
+            'scope': 'global', 'configurationTarget': {'kind': 'global'}}, include_state=False)
+        await self.app.dispatch('session.create', {}, include_state=False)
+        session = self.app._session()
+        sid = session['id']
+        session.update(status='idle', historyManaged=False, messages=[
+            {'id': 'human', 'role': 'user', 'inputOrigin': 'ui', 'text': 'Old user'},
+            {'id': 'old-assistant', 'role': 'assistant', 'text': 'Old completed response',
+             'createdAt': time.time() + 999999}])
+        self.app._publish_changes(sessions={sid})
+        await self.app.close()
+        # Exact old table shape, before cache-policy migration. The old salted
+        # hash cannot be projected onto a conversation/outcome; preserve it.
+        raw = sqlite3.connect(self.root / 'app' / 'app.sqlite3')
+        raw.execute('DROP TABLE suggestion_cache_policy')
+        raw.execute('INSERT INTO suggestion_requests VALUES (?,?)', ('legacy-unknown', 'unprojectable-old-salted-hash'))
+        raw.commit()
+        raw.close()
+        offline_runtime = OfflineRuntime()
+        with patch('amplifier_web.provider_catalog._UNQUALIFIED_GENERATION', 'migration-new-process'):
+            self.app = AppService(self.root / 'app', offline_runtime, workspace=self.root)
+            host = self.app.prompt_suggestions
+            host.complete = AsyncMock(return_value={'status': 'ready', 'suggestion': 'A new automatic suggestion.',
+                                                   'usage': None, 'cost': None})
+            self.app.clients.attach('browser', kind='web')
+            self.app.clients.records['browser']['selectedSessionId'] = sid
+            token = BROWSER.set({'principal': 'cookie', 'valid': lambda: True})
+            try:
+                with self.app.clients.bind('browser'):
+                    # No model/provider work is used to establish the boundary.
+                    host.observe_message(self.app._session(sid), {
+                        'id': 'forged-import', 'role': 'assistant', 'source': 'native',
+                        'inputId': 'made-up', 'createdAt': time.time() + 999999})
+                    self.assertIsNone(self.app.db.execute('SELECT 1 FROM suggestion_fresh_completion').fetchone())
+                    await host.dispatch('session.suggestion.request', {
+                        'sessionId': sid, 'requestId': 'old-tail', 'expectedLastMessageId': 'old-assistant'}, 'ui')
+                    await asyncio.gather(*tuple(host.jobs))
+                    result = await host.dispatch('session.suggestion.status', {
+                        'sessionId': sid, 'requestId': 'old-tail'}, 'ui')
+                    self.assertEqual(result['status'], 'duplicate_source')
+                    self.assertEqual(result['reason'], 'migration_prior_attempt_unavailable')
+                    host.complete.assert_not_called()
+                    # A manufactured future timestamp/imported assistant row is
+                    # not a canonical new UI admission/completion.
+                    self.assertIsNone(self.app.db.execute(
+                        'SELECT 1 FROM suggestion_fresh_completion').fetchone())
+                    await self.app.dispatch('conversation.send', {'sessionId': sid, 'text': 'Genuinely new work'},
+                                            command_id='new-ui-input', include_state=False)
+                    while self.app.tasks:
+                        await asyncio.gather(*tuple(self.app.tasks))
+                    current = self.app._session(sid)
+                    self.assertEqual(current['status'], 'idle')
+                    tail = current['messages'][-1]
+                    self.assertEqual(tail['role'], 'assistant')
+                    self.assertIsNotNone(self.app.db.execute(
+                        'SELECT 1 FROM suggestion_fresh_completion WHERE session_id=?', (sid,)).fetchone())
+                    # A proof cannot authorize a different/imported tail.
+                    self.assertFalse(host._migration_allows({'sessionId': sid}, [{'id': 'forged-import'}]))
+                    await host.dispatch('session.suggestion.request', {
+                        'sessionId': sid, 'requestId': 'new-tail', 'expectedLastMessageId': tail['id']}, 'ui')
+                    await asyncio.gather(*tuple(host.jobs))
+                    result = await host.dispatch('session.suggestion.status', {
+                        'sessionId': sid, 'requestId': 'new-tail'}, 'ui')
+                    self.assertEqual(result['status'], 'ready')
+                    host.complete.assert_awaited_once()
+                self.assertEqual(self.app.db.execute(
+                    "SELECT source FROM suggestion_requests WHERE identity='legacy-unknown'").fetchone(),
+                    ('unprojectable-old-salted-hash',))
+                self.assertEqual(len(offline_runtime.sent), 1)  # Synthetic maintained runtime, not a provider.
+            finally:
+                BROWSER.reset(token)
+
+    async def test_durable_cache_deletion_stop_and_config_invalidation_use_existing_private_transaction(self):
+        from amplifier_web.state_records import UPSERT
+        await self.app.dispatch('session.create', {}, include_state=False)
+        session = self.app._session()
+        sid = session['id']
+        session.update(status='idle', historyManaged=False, interruptionRevision=0, messages=[
+            {'id': 'human', 'role': 'user', 'inputOrigin': 'ui', 'text': 'Build'},
+            {'id': 'assistant', 'role': 'assistant', 'text': 'Ready'}])
+        self.app._publish_changes(sessions={sid})
+        host = self.app.prompt_suggestions
+        config = {'enabled': True, 'provider': 'fixture', 'model': 'model',
+                  'transcriptMode': 'last_n', 'humanTurns': 6}
+        host.settings = lambda: (config, {'id': 'fixture'}, 'revision')
+        host.complete = AsyncMock(return_value={'status': 'ready', 'suggestion': 'PRIVATE CACHE',
+                                               'usage': None, 'cost': None})
+        self.app.clients.attach('browser', kind='web')
+        self.app.clients.records['browser']['selectedSessionId'] = sid
+        token = BROWSER.set({'principal': 'cookie', 'valid': lambda: True})
+        try:
+            with self.app.clients.bind('browser'):
+                await host.dispatch('session.suggestion.request', {
+                    'sessionId': sid, 'requestId': 'original', 'expectedLastMessageId': 'assistant'}, 'ui')
+                await asyncio.gather(*tuple(host.jobs))
+            cached = self.app.db.execute('SELECT * FROM suggestion_success_cache').fetchone()
+            self.assertIsNotNone(cached)
+            claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+            session['interruptionRevision'] += 1
+            self.app._publish_changes(sessions={sid})
+            self.assertIsNone(self.app.db.execute('SELECT 1 FROM suggestion_success_cache').fetchone())
+            # The ordinary canonical owner removal clears a saved body even
+            # when no request/client is polling that chat.
+            self.app.db.execute('INSERT INTO suggestion_success_cache VALUES (?,?,?,?,?)', cached)
+            self.app.db.execute(UPSERT, ('session', sid, 'null'))
+            self.app.db.commit()
+            self.assertIsNone(self.app.db.execute('SELECT 1 FROM suggestion_success_cache').fetchone())
+            self.app.db.execute('INSERT INTO suggestion_success_cache VALUES (?,?,?,?,?)', cached)
+            host.invalidate()
+            self.assertIsNone(self.app.db.execute('SELECT 1 FROM suggestion_success_cache').fetchone())
+            self.app.db.execute('INSERT INTO suggestion_success_cache VALUES (?,?,?,?,?)', cached)
+            self.app.db.commit()
+            # Ordinary connection/source/account writes all converge on this
+            # existing owner, including A->B->A without a suggestion poll.
+            from amplifier_web.management import Management
+            self.app.management = Management(self.app)
+            await self.app.management.invalidate_configuration(warm=False, session_ids=set())
+            self.assertIsNone(self.app.db.execute('SELECT 1 FROM suggestion_success_cache').fetchone())
+            self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
+        finally:
+            BROWSER.reset(token)
+
     async def test_real_cold_retirement_and_hydration_preserve_canonical_public_freshness(self):
         from amplifier_web.suggestion_source import changed_component
         await self.app.dispatch('session.create', {}, include_state=False)
@@ -1754,8 +2115,8 @@ class Integration(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result['status'], 'duplicate_source')
             host.complete.assert_not_called()
             self.assertFalse(dict.__contains__(reopened, 'messages'), 'bounded capture must not hydrate cold history')
-            self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests WHERE identity=?',
-                                                     (claims[0][0],))), claims)
+            self.assertTrue(all(self.app.db.execute('SELECT * FROM suggestion_requests WHERE identity=?',
+                                                   (row[0],)).fetchone() == row for row in claims))
         finally:
             BROWSER.reset(token)
 
@@ -2138,35 +2499,28 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             response = await client.post('/api/actions', json=status, headers=headers(cookie_one, bearer=True))
             self.assertEqual(response.status, 403)
             self.assertNotIn('SECRET', await response.text())
-            regenerate = {'action': 'session.suggestion.request',
-                          'args': {**args, 'requestId': 'manual', 'regenerate': True}}
             calls = host.complete.await_count
-            response = await client.post('/api/actions', json=regenerate, headers=headers(cookie_one, bearer=True))
-            self.assertEqual(response.status, 403)
-            self.assertEqual(host.complete.await_count, calls)
-            # Schema validation belongs to the real AppService, not a test
-            # wrapper that merges or strips client action fields.
-            for invalid in ('true', 1, None):
+            # Superseded manual API is rejected in the real action schema,
+            # including false: no silent legacy compatibility path remains.
+            for invalid in (True, False, 'true', 1, None):
                 response = await client.post('/api/actions', json={
-                    **regenerate, 'args': {**regenerate['args'], 'regenerate': invalid}},
+                    'action': 'session.suggestion.request',
+                    'args': {**args, 'requestId': 'manual', 'regenerate': invalid}},
                     headers=headers(cookie_one))
                 self.assertEqual(response.status, 400)
-            response = await client.post('/api/actions', json=regenerate, headers=headers(cookie_one))
-            self.assertEqual(response.status, 200)
+            response = await client.post('/api/actions', json={
+                'action': 'session.suggestion.request', 'args': {**args, 'requestId': 'automatic-recovery'}},
+                headers=headers(cookie_one, 'two'))
             self.assertEqual((await response.json())['result']['status'], 'pending')
             await asyncio.gather(*tuple(host.jobs))
-            self.assertEqual(host.complete.await_count, calls + 1)
-            response = await client.post('/api/actions', json=regenerate, headers=headers(cookie_one))
+            response = await client.post('/api/actions', json={'action': 'session.suggestion.status', 'args': {
+                'sessionId': session['id'], 'requestId': 'automatic-recovery'}}, headers=headers(cookie_one, 'two'))
             body = (await response.json())['result']
             self.assertEqual(body['status'], 'ready')
             self.assertEqual(body['retention'], 'source')
             self.assertIsNone(body['expiresAt'])
-            self.assertFalse(body['reused'])
-            response = await client.post('/api/actions', json={
-                **regenerate, 'args': {**regenerate['args'], 'regenerate': False}},
-                headers=headers(cookie_one))
-            self.assertEqual(response.status, 409)
-            self.assertEqual(host.complete.await_count, calls + 1)
+            self.assertTrue(body['reused'])
+            self.assertEqual(host.complete.await_count, calls)
 
     async def test_cookie_owner_can_cancel_pending_request_after_real_navigation_but_cannot_read_old_chat(self):
         from aiohttp import web

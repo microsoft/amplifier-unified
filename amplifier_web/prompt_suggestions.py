@@ -4,15 +4,23 @@ from collections import OrderedDict
 from contextvars import ContextVar
 import time
 import uuid
+import json
+import math
+import re
 
 from .errors import AppError
 from .suggestion_settings import digest, selected
 from .suggestion_source import Unavailable, capture, witness, eligible, changed_component, SOURCE_REASONS
-from .suggestion_provider import failure, FAILURE_REASONS
+from .suggestion_provider import failure, FAILURE_REASONS, parse
 
 MAX_RETAINED = 128
 TTL = 60
 DEADLINE = 15
+CACHE_PER_PRINCIPAL = 32
+CACHE_TOTAL = 128
+CACHE_ENTRY_BYTES = 4096
+USAGE_FIELDS = frozenset({'input_tokens', 'output_tokens', 'total_tokens',
+                          'cache_read_input_tokens', 'cache_creation_input_tokens'})
 CURRENT_REASONS = frozenset('current_' + name for name in (
     'closed', 'auth', 'epoch', 'audience', 'selected', 'config', 'session',
     'archived', 'deleting', 'eligibility', 'busy', 'sourcewitness')) | SOURCE_REASONS
@@ -30,9 +38,7 @@ def definitions(schema, string):
         'session.suggestion.request': (
             'Request one private app-model suggestion from bounded display transcript. '
             'Requires the attached browser displaying this chat. Never sends a chat turn.',
-            schema({**owner, 'expectedLastMessageId': string(200),
-                    'regenerate': {'type': 'boolean'}},
-                   ['sessionId', 'requestId', 'expectedLastMessageId'])),
+            schema({**owner, 'expectedLastMessageId': string(200)})),
         'session.suggestion.status': (
             'Read this browser’s private suggestion receipt. Never starts or retries inference.',
             schema(owner)),
@@ -56,6 +62,89 @@ class PromptSuggestions:
         # impose a lifetime request quota. Never age out uncertain paid effects.
         service.db.execute('CREATE TABLE IF NOT EXISTS suggestion_requests '
                            '(identity TEXT PRIMARY KEY, source TEXT NOT NULL UNIQUE)')
+        # Old hashes have no recoverable owner/outcome and may contain a
+        # process-salted discovery identity. Never treat a new-domain miss as
+        # proof that an old input was unpaid. Record one exact migration fence.
+        service.db.execute('''CREATE TABLE IF NOT EXISTS suggestion_cache_policy (
+            version INTEGER PRIMARY KEY CHECK(version=1), legacy INTEGER NOT NULL,
+            command_floor INTEGER NOT NULL)''')
+        if not service.db.execute('SELECT 1 FROM suggestion_cache_policy WHERE version=1').fetchone():
+            legacy = bool(service.db.execute('SELECT 1 FROM suggestion_requests LIMIT 1').fetchone())
+            has_commands = service.db.execute("SELECT 1 FROM sqlite_master WHERE name='commands'").fetchone()
+            floor = service.db.execute('SELECT COALESCE(MAX(rowid),0) FROM commands').fetchone()[0] if has_commands else 0
+            service.db.execute('INSERT INTO suggestion_cache_policy VALUES (1,?,?)', (legacy, floor))
+        service.db.execute('''CREATE TABLE IF NOT EXISTS suggestion_fresh_completion (
+            session_id TEXT PRIMARY KEY, message_key TEXT NOT NULL, observed INTEGER NOT NULL)''')
+        # Separate from client_views/drafts and state_records/shared readback.
+        # No input bodies, request IDs, provider config or credentials persist.
+        service.db.execute('''CREATE TABLE IF NOT EXISTS suggestion_success_cache (
+            principal TEXT NOT NULL, session_id TEXT NOT NULL, input_key TEXT NOT NULL,
+            value TEXT NOT NULL, used_at INTEGER NOT NULL,
+            PRIMARY KEY(principal, session_id))''')
+        service.db.execute('CREATE INDEX IF NOT EXISTS suggestion_success_lru '
+                           'ON suggestion_success_cache(used_at)')
+        service.db.execute('CREATE INDEX IF NOT EXISTS suggestion_success_principal_lru '
+                           'ON suggestion_success_cache(principal, used_at)')
+        # Canonical deletion/archive/Stop writes clean bodies in the same DB
+        # transaction. No dependency on resident session membership or hydration.
+        if service.db.execute("SELECT 1 FROM sqlite_master WHERE name='state_records'").fetchone():
+            service.db.execute('''CREATE TRIGGER IF NOT EXISTS suggestion_success_session_delete
+                AFTER DELETE ON state_records WHEN OLD.kind='session'
+                BEGIN DELETE FROM suggestion_success_cache WHERE session_id=OLD.id;
+                      DELETE FROM suggestion_fresh_completion WHERE session_id=OLD.id; END''')
+            service.db.execute('''CREATE TRIGGER IF NOT EXISTS suggestion_success_session_change
+                AFTER UPDATE OF value ON state_records WHEN NEW.kind='session' AND (
+                    NEW.value='null' OR json_extract(NEW.value,'$.archived')=1 OR
+                    json_extract(NEW.value,'$._deleting')=1 OR
+                    COALESCE(json_extract(NEW.value,'$.interruptionRevision'),0) !=
+                    COALESCE(json_extract(OLD.value,'$.interruptionRevision'),0))
+                BEGIN DELETE FROM suggestion_success_cache WHERE session_id=NEW.id;
+                      DELETE FROM suggestion_fresh_completion WHERE session_id=NEW.id; END''')
+        self._trim_cache()
+        service.db.commit()
+
+    def observe_message(self, session, message):
+        """Exact host-observed response to a newly admitted UI input, not text/time inference."""
+        if (message.get('role') != 'assistant' or not message.get('inputId')
+                or message.get('source') not in {'amplifier', 'external'}):
+            return
+        db = self.service.db
+        legacy, floor = db.execute('SELECT legacy,command_floor FROM suggestion_cache_policy WHERE version=1').fetchone()
+        if not legacy:
+            return
+        # Exact indexed receipt, never an event/transcript scan. Host command
+        # row identity is post-migration; message-provided timestamps prove nothing.
+        row = db.execute('SELECT rowid,receipt FROM commands WHERE id=?', (message['inputId'],)).fetchone()
+        if row is None or row[0] <= floor:
+            return
+        try:
+            receipt = json.loads(row[1])
+        except (ValueError, TypeError):
+            return
+        post = receipt.get('navigationPost') or {}
+        # navigationPost is authored only by ordinary host-trusted UI send,
+        # not caller fields, imported history or an agent-origin command.
+        if (receipt.get('accepted') is not True or receipt.get('inputId') != message['inputId']
+                or receipt.get('sessionId') != session['id'] or not isinstance(post, dict)
+                or post.get('sessionId') != session['id'] or post.get('inputId') != message['inputId']
+                or not isinstance(post.get('fence'), str) or not post['fence']
+                or post.get('disposition') == 'rejected'):
+            return
+        db.execute('INSERT OR REPLACE INTO suggestion_fresh_completion VALUES (?,?,?)',
+                   (session['id'], digest(message['id']), time.time_ns()))
+        db.execute('''DELETE FROM suggestion_fresh_completion WHERE rowid IN (
+            SELECT rowid FROM suggestion_fresh_completion ORDER BY observed DESC,rowid DESC LIMIT -1 OFFSET ?)''',
+                   (CACHE_TOTAL,))
+        # The caller commits this alongside the canonical assistant message.
+
+    def _migration_allows(self, record, rows):
+        db = self.service.db
+        legacy = db.execute('SELECT legacy FROM suggestion_cache_policy WHERE version=1').fetchone()[0]
+        if not legacy:
+            return True
+        proof = db.execute('SELECT message_key FROM suggestion_fresh_completion WHERE session_id=?',
+                           (record['sessionId'],)).fetchone()
+        return bool(proof and rows and proof[0] == digest(rows[-1]['id']))
 
     @property
     def manager(self):
@@ -167,42 +256,118 @@ class PromptSuggestions:
         if record.get('task') and not record['task'].done() and not record['task'].cancelling():
             record['task'].cancel()
 
-    def _retire(self, *, reserve=False, protect=None):
+    def _retire(self, *, reserve=False):
         now = time.monotonic()
         for record in self.records.values():
             if now - record['created'] > TTL and record['status'] not in {'expired', 'ready'}:
                 self._expire(record)
         while len(self.records) > MAX_RETAINED - int(reserve):
             key = next((key for key, row in self.records.items()
-                        if key != protect and (not row.get('task') or row['task'].done())), None)
+                        if not row.get('task') or row['task'].done()), None)
             if key is None:
                 return
             self.records.pop(key)['expiry'].cancel()
 
-    def _same_input(self, old, record, source):
-        # NEW authority/capture are checked separately. Old tab selection is not
-        # a cache authority; original source/Stop/epoch/config still must agree.
-        return (old.get('_inputSource') == source
-                and all(old.get(key) == record.get(key) for key in
-                        ('principal', 'sessionId', 'configRevision', 'epoch', 'sourceKey')))
+    def _cache_key(self, record, config, rows):
+        from .auth import _read_epoch
+        session = self.service._session(record['sessionId'], hydrate=False)
+        # Catalog discovery has a process salt before runtime qualification.
+        # Cache validity instead uses ordinary configured connection identity
+        # and saved preference intent, not a disposable discovery/reader owner.
+        if 'revision' in config:
+            manager, workspace = self.manager, str(self.service.data_dir)
+            with manager.read_snapshot(workspace):
+                settings = manager.config(workspace).settings.get('prompt_suggestions') or {}
+                selection = {key: value for key, value in config.items() if key != 'revision'}
+                binding = manager.catalog_key({'id': config['provider']}, workspace, binding=True)
+            config_key = digest([settings, selection, binding])
+        else:
+            config_key = record['configRevision']  # Injected offline test selection.
+        # Paid identity is deliberately less strict than cache eligibility.
+        # A Stop/owner/auth change invalidates saved assistance but cannot buy
+        # another call for an already-attempted input after discovery restart.
+        record['_paidKey'] = digest(['suggestion-durable-automatic-v1', record['principal'],
+                                     record['sessionId'], config_key, rows])
+        owner = [session.get(key) for key in ('id', 'nativeProject', 'nativeIdentity', 'createdAt',
+                                               'interruptionRevision')]
+        return digest(['suggestion-success-v1', record['principal'], owner,
+                       config_key, _read_epoch(self.service.data_dir), rows])
 
-    def _prior(self, record, source):
-        for key, old in reversed(self.records.items()):
-            if old is not record and self._same_input(old, record, source):
-                if old['status'] == 'ready':
-                    self.records.move_to_end(key)
-                    record.update({name: old.get(name) for name in
-                                   ('suggestion', 'usage', 'cost', 'generationId')},
-                                  status='ready', reason=None, reused=True)
-                    self._ready(record)
-                    return True
-        return False
+    @staticmethod
+    def _success(value):
+        if not isinstance(value, dict) or set(value) != {'status', 'suggestion', 'usage', 'cost', 'generationId'}:
+            raise ValueError('Invalid cached result')
+        if value['status'] not in {'ready', 'empty'}:
+            raise ValueError('Invalid cached result')
+        text = parse(json.dumps({'suggestion': value['suggestion']}, ensure_ascii=False))
+        if (value['status'] == 'ready') != (text is not None):
+            raise ValueError('Invalid cached result')
+        if not isinstance(value['generationId'], str) or not re.fullmatch('[0-9a-f]{32}', value['generationId']):
+            raise ValueError('Invalid cached result')
+        usage = value['usage']
+        if usage is not None and (not isinstance(usage, dict) or not set(usage) <= USAGE_FIELDS
+                or any(type(v) not in (int, float) or not math.isfinite(v) or v < 0 for v in usage.values())):
+            raise ValueError('Invalid cached usage')
+        cost = value['cost']
+        if cost is not None and (type(cost) not in (int, float) or not math.isfinite(cost) or cost < 0):
+            raise ValueError('Invalid cached cost')
+        return value
+
+    def _trim_cache(self):
+        db = self.service.db
+        # Limits bound bytes too: at most 128 rows of <=4096 bytes; one latest
+        # result per conversation. LRU uses a persistent clock, not RAM order.
+        db.execute('''DELETE FROM suggestion_success_cache WHERE rowid IN (
+            SELECT rowid FROM (SELECT rowid, row_number() OVER (
+                PARTITION BY principal ORDER BY used_at DESC, rowid DESC) AS n
+                FROM suggestion_success_cache) WHERE n>?)''', (CACHE_PER_PRINCIPAL,))
+        db.execute('''DELETE FROM suggestion_success_cache WHERE rowid IN (
+            SELECT rowid FROM suggestion_success_cache ORDER BY used_at DESC, rowid DESC LIMIT -1 OFFSET ?)''',
+                   (CACHE_TOTAL,))
+
+    def _cached(self, record):
+        db = self.service.db
+        row = db.execute('''SELECT input_key, CASE WHEN length(CAST(value AS BLOB))<=?
+            THEN value END FROM suggestion_success_cache WHERE principal=? AND session_id=?''',
+            (CACHE_ENTRY_BYTES, record['principal'], record['sessionId'])).fetchone()
+        if row is None:
+            return False
+        try:
+            if row[0] != record['_cacheKey'] or row[1] is None:
+                raise ValueError('Changed cached input')
+            value = self._success(json.loads(row[1]))
+        except (ValueError, TypeError, OverflowError, RecursionError):
+            db.execute('DELETE FROM suggestion_success_cache WHERE principal=? AND session_id=?',
+                       (record['principal'], record['sessionId']))
+            db.commit()
+            return False
+        db.execute('UPDATE suggestion_success_cache SET used_at=? WHERE principal=? AND session_id=?',
+                   (time.time_ns(), record['principal'], record['sessionId']))
+        db.commit()
+        record.update(value, reason=None, reused=True)
+        if record['status'] == 'ready':
+            self._ready(record)
+        return True
+
+    def _save_success(self, record, result):
+        value = self._success({key: result.get(key) if key != 'generationId' else record[key]
+                               for key in ('status', 'suggestion', 'usage', 'cost', 'generationId')})
+        raw = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
+        if len(raw.encode()) > CACHE_ENTRY_BYTES:
+            raise ValueError('Cached result exceeds budget')
+        db = self.service.db
+        with db:
+            db.execute('INSERT OR REPLACE INTO suggestion_success_cache VALUES (?,?,?,?,?)',
+                       (record['principal'], record['sessionId'], record['_cacheKey'], raw, time.time_ns()))
+            self._trim_cache()
+        return value
 
     def _absence(self, record, source):
         # Content-free dispositions only; no other request/client identity or
         # error prose. SQL alone cannot attest an evicted prior outcome.
         for old in reversed(self.records.values()):
-            if (old is not record and self._same_input(old, record, source)
+            if (old is not record and old.get('_inputSource') == source
+                    and old.get('principal') == record['principal']
                     and old['status'] in {'empty', 'failed', 'timeout', 'cancelled', 'stale', 'unsupported'}):
                 return 'prior_attempt_' + old['status']
         return 'prior_attempt_unavailable'
@@ -216,9 +381,8 @@ class PromptSuggestions:
             # Only cancellation omits display selection; the lookup below
             # remains exact principal/device/client/session/request ownership.
             audience = self.audience(sid, origin, require_selected=action != 'session.suggestion.cancel')
-            regenerate = args.get('regenerate', False)
-            if action.endswith('.request') and type(regenerate) is not bool:
-                raise AppError('Regenerate must be a boolean.')
+            if 'regenerate' in args:
+                raise AppError('Prompt suggestions are automatic only.')
             self._retire()
             key = digest([audience, sid, request_id])
             record = self.records.get(key)
@@ -236,8 +400,7 @@ class PromptSuggestions:
                         record['task'].cancel()
                 return self.wire(record)
             if record is not None:
-                if (record.get('expectedLastMessageId') != args['expectedLastMessageId']
-                        or record['regenerate'] != regenerate):
+                if record.get('expectedLastMessageId') != args['expectedLastMessageId']:
                     raise AppError('This suggestion request ID has different inputs.', 409)
                 self.records.move_to_end(key)
                 if record['status'] in {'pending', 'ready'} and not self.current(record):
@@ -245,7 +408,7 @@ class PromptSuggestions:
                     if record.get('task') and not record['task'].cancelling():
                         record['task'].cancel()
                 return self.wire(record)
-            record = {**args, 'regenerate': regenerate,
+            record = {**args,
                       'audience': audience, 'client': self.service.clients.current.get(),
                       'principal': BROWSER.get()['principal'], 'authenticated': BROWSER.get()['valid'],
                       'created': time.monotonic(), 'status': 'pending', 'suggestion': None,
@@ -253,14 +416,8 @@ class PromptSuggestions:
                       'sourceKey': None, 'configRevision': None, 'usage': None, 'cost': None,
                       'retention': None, 'reused': False, 'generationId': None}
             record['_expiresAt'] = record['expiresAt']
-            if self.service.db.execute('SELECT 1 FROM suggestion_requests WHERE identity=?', (key,)).fetchone():
-                return self.wire({**record, 'status': 'expired', 'reason': 'prior_attempt_unavailable'})
-            # One explicit gesture ID cannot become new paid authority merely
-            # by changing tab, source text, settings or the in-memory owner.
-            intent = digest(['suggestion-explicit-intent-v1', record['principal'], sid, request_id])
-            if self.service.db.execute(
-                    'SELECT 1 FROM suggestion_requests WHERE identity=?', (intent,)).fetchone():
-                return self.wire({**record, 'status': 'expired', 'reason': 'prior_attempt_unavailable'})
+            record['_cacheOnly'] = bool(self.service.db.execute(
+                'SELECT 1 FROM suggestion_requests WHERE identity=?', (key,)).fetchone())
             record['expiry'] = asyncio.get_running_loop().call_later(TTL, self._expire, record)
             config, provider, revision = self.settings()
             record['configRevision'] = revision
@@ -290,24 +447,16 @@ class PromptSuggestions:
                         record['_sourceComponents'] = components
                     except (ValueError, OSError):
                         self._finish(record, 'unsupported', reason='transcript_unavailable')
-            # Keep an exact READY source hot until the bounded capture can
-            # rebind it; no second candidate cache or durable body is created.
-            protect = next((old_key for old_key, old in reversed(self.records.items())
-                            if old['status'] == 'ready' and all(
-                                old.get(name) == record.get(name) for name in
-                                ('principal', 'sessionId', 'configRevision', 'epoch', 'sourceKey'))), None)
-            self._retire(reserve=True, protect=protect)
+            self._retire(reserve=True)
             if record['status'] == 'pending':
                 # Exact request tombstone precedes capture and every effect.
                 # Its domain-separated provisional source is replaced only
                 # after a bounded canonical input has passed fresh admission.
                 record['identity'] = key
-                self.service.db.execute('INSERT INTO suggestion_requests VALUES (?,?)',
-                                        (key, digest(['suggestion-request-v1', key])))
-                if regenerate:
+                if not record['_cacheOnly']:
                     self.service.db.execute('INSERT INTO suggestion_requests VALUES (?,?)',
-                                            (intent, digest(['suggestion-explicit-request-v1', intent])))
-                self.service.db.commit()
+                                            (key, digest(['suggestion-request-v1', key])))
+                    self.service.db.commit()
                 task = asyncio.create_task(self.run(record, config))
                 record['task'] = task
                 self.jobs.add(task)
@@ -348,30 +497,42 @@ class PromptSuggestions:
                     source = digest(['suggestion-input-v1', record['principal'],
                                      record['sessionId'], record['configRevision'], rows])
                     record['_inputSource'] = source
-                    if not record['regenerate'] and self._prior(record, source):
+                    record['_cacheKey'] = self._cache_key(record, config, rows)
+                    if self._cached(record):
                         return
-                    paid_source = (digest(['suggestion-explicit-input-v1', record['principal'],
-                                           record['sessionId'], record['configRevision'], rows,
-                                           record['requestId']]) if record['regenerate'] else source)
-                    if self.service.db.execute('SELECT 1 FROM suggestion_requests WHERE source=?',
-                                               (paid_source,)).fetchone():
+                    if record['_cacheOnly']:
+                        self._finish(record, 'expired', reason='prior_attempt_unavailable')
+                        return
+                    stable_source = record['_paidKey']
+                    if self.service.db.execute('SELECT 1 FROM suggestion_requests WHERE source IN (?,?)',
+                                               (source, stable_source)).fetchone():
+                        # A demonstrable old-domain match can safely acquire
+                        # its stable alias without changing that original claim.
+                        with self.service.db:
+                            self.service.db.execute('INSERT OR IGNORE INTO suggestion_requests VALUES (?,?)',
+                                (digest(['suggestion-automatic-anchor-v1', stable_source]), stable_source))
                         self._finish(record, 'duplicate_source', reason=self._absence(record, source))
                         return
-                    if record['regenerate']:
-                        # A manual-first attempt also spends the automatic base.
-                        # Do not remove or overwrite any original/unknown claim.
+                    if not self._migration_allows(record, rows):
+                        self._finish(record, 'duplicate_source', reason='migration_prior_attempt_unavailable')
+                        return
+                    # Preserve the original paid domain and every old claim;
+                    # an additional stable identity prevents a discovery-process
+                    # salt from buying another call after future cache eviction.
+                    with self.service.db:
                         self.service.db.execute('INSERT OR IGNORE INTO suggestion_requests VALUES (?,?)',
-                                                (digest(['suggestion-base-anchor-v1', source]), source))
-                    # Retain uncertainty forever once transport can occur.
-                    # Never authorize a provider before this claim commits.
-                    self.service.db.execute('UPDATE suggestion_requests SET source=? WHERE identity=?',
-                                            (paid_source, record['identity']))
-                    self.service.db.commit()
+                                                (digest(['suggestion-automatic-anchor-v1', stable_source]), stable_source))
+                        self.service.db.execute('UPDATE suggestion_requests SET source=? WHERE identity=?',
+                                                (source, record['identity']))
                     record['generationId'] = uuid.uuid4().hex
                 provider_started = True
                 result = await self.complete(record, config, rows)
                 if record['status'] == 'pending':
                     if self.current(record):
+                        if result.get('status') in {'ready', 'empty'}:
+                            # Durable commit precedes READY/EMPTY publication.
+                            # Failure leaves the once-only paid claim intact.
+                            result = self._save_success(record, result)
                         record.update({key: result.get(key) for key in ('status', 'suggestion', 'usage', 'cost')})
                         reason = (record.get('_currentFailure') if record['status'] == 'stale'
                                   and record.get('_currentFailure') in CURRENT_REASONS else result.get('reason'))
@@ -401,7 +562,10 @@ class PromptSuggestions:
                 else:
                     self._finish(record, 'failed')
 
-    def invalidate(self):
+    def invalidate(self, *, clear_cache=True):
+        if clear_cache:
+            self.service.db.execute('DELETE FROM suggestion_success_cache')
+            self.service.db.commit()
         for record in self.records.values():
             self._finish(record, 'stale', reason=record.get('_currentFailure') or 'current_invalidated')
             if record.get('task') and not record['task'].cancelling():
@@ -409,7 +573,7 @@ class PromptSuggestions:
 
     async def close(self):
         self.closed = True
-        self.invalidate()
+        self.invalidate(clear_cache=False)
         if self.jobs:
             await asyncio.gather(*tuple(self.jobs), return_exceptions=True)
         for record in self.records.values():

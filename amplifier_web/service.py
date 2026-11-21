@@ -1766,6 +1766,7 @@ class AppService:
     def _message(self, session, role, text, via="chat", *, human_post=False, **extra):
         message = {"id": str(uuid.uuid4()), "role": role, "text": text, "via": via, "createdAt": time.time(), **extra}
         session["messages"].append(message)
+        self.prompt_suggestions.observe_message(session, message)
         if getattr(self, 'workspace_work', None):
             from .workspace_work_coverage import observe
             observe(self.workspace_work, session, message)
