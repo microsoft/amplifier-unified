@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-unified"
-version = "0.114.7"
+version = "0.114.8"
 description = "A local voice-first Amplifier workspace with a shared user and agent interface"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -143,7 +143,7 @@ dev = [
     "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@6e77ea5673930bc70f8e5b8327e791237a44668f#subdirectory=modules/context-managed",
     "amplifier-module-provider-openai[native] @ git+https://github.com/microsoft/amplifier-module-provider-openai@main",
     # Cold selected-model budget and private overflow feedback integration.
-    "amplifier-module-provider-anthropic @ git+https://github.com/microsoft/amplifier-module-provider-anthropic@498d20d6caebb45d7493888b38c5358be02ac595",
+    "amplifier-module-provider-anthropic @ git+https://github.com/microsoft/amplifier-module-provider-anthropic@681b67a0b22695285140e61d71ed6cf9ae7d5951",
     # Same real QuickJS dispatcher used by the maintained native-check workflow.
     "amplifier-module-tool-exec @ git+https://github.com/microsoft/amplifier-module-tool-exec@f267548ccd1b38a236a46afb96252bb6dd474dcd",
     # Ordinary-root switch fixtures retain the real local capture hook offline.

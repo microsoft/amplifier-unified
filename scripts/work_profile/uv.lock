@@ -255,7 +255,7 @@ source = { git = "https://github.com/microsoft/amplifier-module-loop-streaming?r
 [[package]]
 name = "amplifier-module-provider-anthropic"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-module-provider-anthropic?rev=main#498d20d6caebb45d7493888b38c5358be02ac595" }
+source = { git = "https://github.com/microsoft/amplifier-module-provider-anthropic?rev=main#681b67a0b22695285140e61d71ed6cf9ae7d5951" }
 dependencies = [
     { name = "anthropic" },
 ]
@@ -263,7 +263,7 @@ dependencies = [
 [[package]]
 name = "amplifier-module-provider-openai"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main#69b40dde3b4bdfd98843c3da1d53e975ca6c8c4d" }
+source = { git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main#d5fbf4f82a7fbf58f4f367e53df8b9b711d09d62" }
 dependencies = [
     { name = "httpx" },
     { name = "openai" },
@@ -277,7 +277,7 @@ source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?
 
 [[package]]
 name = "amplifier-unified"
-version = "0.114.7"
+version = "0.114.8"
 source = { directory = "../../" }
 dependencies = [
     { name = "agent-client-protocol" },
@@ -355,7 +355,7 @@ dev = [
     { name = "amplifier-module-hook-context-intelligence", git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?subdirectory=modules%2Fhook-context-intelligence&rev=a80ce69d0e96e9a343501f238dcd867350dd9aa2" },
     { name = "amplifier-module-hooks-candidate-guard", git = "https://github.com/microsoft/amplifier-bundle-converge?subdirectory=modules%2Fhooks-candidate-guard&rev=da7dd8878c9e7b672e86151b32d59c0cce68bcb6" },
     { name = "amplifier-module-loop-live", git = "https://github.com/microsoft/amplifier-module-loop-live?rev=ddc44d50352c5015c7e27617de5eb389168b3f32" },
-    { name = "amplifier-module-provider-anthropic", git = "https://github.com/microsoft/amplifier-module-provider-anthropic?rev=498d20d6caebb45d7493888b38c5358be02ac595" },
+    { name = "amplifier-module-provider-anthropic", git = "https://github.com/microsoft/amplifier-module-provider-anthropic?rev=681b67a0b22695285140e61d71ed6cf9ae7d5951" },
     { name = "amplifier-module-provider-openai", extras = ["native"], git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main" },
     { name = "amplifier-module-tool-apply-patch", git = "https://github.com/microsoft/amplifier-bundle-filesystem?subdirectory=modules%2Ftool-apply-patch&rev=515599f0d0763a946aa96ed1d0110db723f5c386" },
     { name = "amplifier-module-tool-delegate", git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Ftool-delegate&rev=05082c89a171758f8d0fb9d8df630ea581e5bdb5" },
