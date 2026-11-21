@@ -130,8 +130,9 @@ async def test_actual_work_source_composition(tmp_path, monkeypatch, work_source
     assert "@work:context/system.md" in bundle.instruction
 
 
+@pytest.mark.parametrize("profile", [False, True])
 async def test_actual_work_stdio_acp_effect_and_native_reconnect(
-        tmp_path, monkeypatch, aiohttp_client, work_sources):
+        tmp_path, monkeypatch, aiohttp_client, work_sources, profile):
     from amplifier_web.runtime import RuntimeManager
     from amplifier_web.server import create_app
     from amplifier_web.session_files import project_slug
@@ -148,6 +149,11 @@ async def test_actual_work_stdio_acp_effect_and_native_reconnect(
         background_updates=False, background_work=False)
     service = app["service"]
     runtime.app_bridge, runtime.home = service.app_bridge, tmp_path / "app"
+    from amplifier_web.agent_instance import NAMESPACE, room_source, session_metadata, prompt_metadata
+    source = room_source("actual-work-source", "https://work-fixture.example")
+    if profile:
+        service.server_config["agentInstance"] = {"id": "urn:fixture:work-U", "label": "Work U",
+            "workspace": str(workspace), "bundle": "work", "sources": [source]}
     client = await aiohttp_client(app)
     credential = tmp_path / "owner-token"
     credential.write_text(app["control_token"])
@@ -179,25 +185,40 @@ async def test_actual_work_stdio_acp_effect_and_native_reconnect(
             stderr=asyncio.subprocess.PIPE)
         processes.append(process)
         peer = NativePeer(process)
-        assert (await peer.call("initialize", protocolVersion=1))["result"]["protocolVersion"] == 1
+        initialized = await peer.call("initialize", protocolVersion=1,
+            **({"_meta": {NAMESPACE: {"version": 1}}} if profile else {}))
+        assert initialized["result"]["protocolVersion"] == 1
+        if profile:
+            assert initialized["result"]["_meta"][NAMESPACE]["agentId"] == "urn:fixture:work-U"
         return peer
 
     try:
         first = await launch()
-        sid = (await first.call("session/new", cwd=str(workspace), mcpServers=[]))["result"]["sessionId"]
+        bound = {"_meta": session_metadata("urn:fixture:work-U", source)} if profile else {}
+        sid = (await first.call("session/new", cwd=str(workspace), mcpServers=[], **bound))["result"]["sessionId"]
+        input_receipts = []
         for turn in (1, 2):
             peer = first if turn == 1 else await launch()
             if turn == 2:
                 assert (await peer.call("session/resume", sessionId=sid, cwd=str(workspace),
-                                       mcpServers=[]))["result"] == {}
+                                       mcpServers=[], **bound)).get("error") is None
+            metadata = prompt_metadata("urn:fixture:work-U", source, f"work-source-{turn}",
+                actor="fixture-human", audience=["conversation"], reply_to=source["conversationId"],
+                interruption_revision=0)
             response = await peer.call(
                 "session/prompt", sessionId=sid,
-                prompt=[{"type": "text", "text": f"Actual Work input {turn}: 漢🙂"}])
+                prompt=[{"type": "text", "text": f"Actual Work input {turn}: 漢🙂"}],
+                **({"_meta": metadata} if profile else {}))
             assert response.get("result", {}).get("stopReason") == "end_turn", response
             text = "".join(row["params"]["update"].get("content", {}).get("text", "")
                            for row in peer.updates if row.get("method") == "session/update")
             assert f"Native reply {turn}: 漢🙂" in text, peer.updates
             assert service._session(sid)["title"] == f"Native ACP effect {turn}"
+            if profile:
+                receipt = await peer.call("_amplifier/instance", sessionId=sid,
+                    operation="inspectInput", binding=metadata[NAMESPACE])
+                assert receipt["result"]["delivery"] == "accepted", receipt
+                input_receipts.append(receipt["result"])
             await peer.eof()
         rows = [json.loads(line) for line in audit.read_text().splitlines()]
         work = [row for row in rows if row["kind"] == "work"]
@@ -265,7 +286,8 @@ async def test_actual_work_stdio_acp_effect_and_native_reconnect(
                    for p in root.rglob(".amplifier_cache_meta.json")]
         assert not fetched, fetched
         evidence = {
-            "status": "passed", "nativeSession": sid, "workerPid": worker_pid,
+            "status": "passed", "nativeSession": sid, "workerPid": worker_pid, "profile": profile,
+            "sourceInputReceipts": input_receipts,
             "project": project_slug(workspace), "nativeInputs": dict(delivered),
             "nativeTerminals": dict(terminal), "effects": commands,
             "work": work, "budget": budgets, "dispatches": dispatches,
@@ -287,13 +309,13 @@ async def test_actual_work_stdio_acp_effect_and_native_reconnect(
         }
         (tmp_path / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
         if artifacts:
-            target = Path(artifacts) / "actual-work-acp"
+            target = Path(artifacts) / ("actual-work-profile" if profile else "actual-work-acp")
             target.mkdir(parents=True, exist_ok=True)
             (target / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
     finally:
         try:
             if artifacts:
-                target = Path(artifacts) / "actual-work-acp"
+                target = Path(artifacts) / ("actual-work-profile" if profile else "actual-work-acp")
                 target.mkdir(parents=True, exist_ok=True)
                 (target / "events.json").write_text(json.dumps(events, indent=2) + "\n")
                 if audit.exists():
