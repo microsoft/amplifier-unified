@@ -300,7 +300,7 @@ class ExternalConversations:
             from .agent_instance import room_source
             origins = getattr(self.service, 'server_config', {}).get('public_origins', [])
             source_ref = copy.deepcopy(binding.get('instanceSource') or room_source(sid, origins[0] if origins else None))
-            original = next(row for row in session['messages']
+            original = next(row for row in reversed(session['messages'])
                             if row.get('inputId') == turn.input_id and row['role'] == 'user')
             source_proof = copy.deepcopy(original)
             await asyncio.wait_for(turn.participant.connect(
@@ -311,7 +311,7 @@ class ExternalConversations:
                 if turn.stop or session.get('interruptionRevision', 0) != turn.revision:
                     raise asyncio.CancelledError()
                 self.selected(session, turn.agent_id)
-                current_source = next(row for row in session['messages']
+                current_source = next(row for row in reversed(session['messages'])
                                       if row.get('inputId') == turn.input_id and row['role'] == 'user')
                 if current_source != source_proof:
                     raise ValueError('The original source changed before external dispatch.')

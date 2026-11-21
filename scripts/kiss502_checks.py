@@ -29,6 +29,7 @@ TARGETS = (
     "test_peer_return_workflow",
     "test_agent_instance",
     "test_agent_instance_composition",
+    "test_owner_update_wait",
 )
 FIXTURES = (
     "acp_native_provider.py", "external_acp_agent.py", "external_acp_participation.py",
@@ -39,7 +40,7 @@ FIXTURES = (
 BROWSERS = ("external-multiparty-browser.mjs", "external-approval-browser.mjs")
 CHANGED_TARGETS = ("test_acp_native_execution", "test_agent_instance",
                    "test_agent_instance_composition", "test_external_conversation",
-                   "test_shared_conversation", "test_acp_participant")
+                   "test_shared_conversation", "test_acp_participant", "test_owner_update_wait")
 
 
 def digest(path):
