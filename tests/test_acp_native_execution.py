@@ -191,6 +191,7 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
         session_options = {"_meta": session_metadata("urn:fixture:U", source)} if wrapper == "unified-profile" else {}
         sid = (await first.call("session/new", cwd=str(workspace), mcpServers=[], **session_options))["result"]["sessionId"]
         source_inputs = []
+        observed_worker = None
         for turn in (1, 2):
             peer = first if turn == 1 else await launch()
             if turn == 2:
@@ -207,6 +208,10 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
                            for row in peer.updates if row.get("method") == "session/update")
             assert f"Native reply {turn}: 漢🙂" in text, peer.updates
             assert service._session(sid)["title"] == f"Native ACP effect {turn}"
+            current_worker = runtime.workers[sid]
+            if observed_worker is None:
+                observed_worker = current_worker
+            assert current_worker is observed_worker
             if options:
                 inspected = await peer.call("_amplifier/instance", sessionId=sid,
                     operation="inspectInput", binding=binding[NAMESPACE])
@@ -214,11 +219,30 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
                 source_inputs.append(inspected["result"])
                 assert inspected["result"]["delivery"] == "accepted"
                 assert bool(inspected["result"]["work"]) is (turn == 1), inspected
+                if turn == 2:
+                    read = await peer.call("_amplifier/instance", sessionId=sid,
+                        operation="read", binding=session_options["_meta"][NAMESPACE])
+                    task = read["result"]["work"]["task"]
+                    assert task["status"] in {"active", "completed"}, read
+                    stopped = await peer.call("_amplifier/instance", sessionId=sid,
+                        operation="stop", binding=session_options["_meta"][NAMESPACE],
+                        commandId="profile-native-stop", taskId=task["id"] if task["status"] == "active" else None,
+                        expectedRevision=task["revision"] if task["status"] == "active" else 0,
+                        expectedExecution=read["result"]["expectedExecution"], changes={})
+                    assert "result" in stopped, stopped
+                    stale_binding = json.loads(json.dumps(binding))
+                    stale_binding[NAMESPACE]["input"]["id"] = "stale-after-stop"
+                    stale = await peer.call("session/prompt", sessionId=sid,
+                        prompt=[{"type": "text", "text": "Must not dispatch stale intent"}], _meta=stale_binding)
+                    assert "error" in stale, stale
+                    old = await peer.call("_amplifier/instance", sessionId=sid,
+                        operation="inspectInput", binding=binding[NAMESPACE])
+                    assert old["result"]["commandId"] == inspected["result"]["commandId"]
             await peer.eof()
         rows = [json.loads(line) for line in audit.read_text().splitlines()]
         provider_rows = [row for row in rows if row["kind"] == "provider"]
         assert [row["round"] for row in provider_rows] == [1, 2]
-        worker_pid = runtime.workers[sid]["process"].pid
+        worker_pid = observed_worker["process"].pid
         assert {row["pid"] for row in rows} == {worker_pid}
         for provider_row in provider_rows:
             for name, worker_module in provider_row["modules"].items():
@@ -229,7 +253,7 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
             "SELECT receipt FROM commands WHERE id IN ('native-acp-title-1','native-acp-title-2')")]
         assert len(commands) == 2 and all(row["accepted"] for row in commands)
         row = service._session(sid)
-        assert native_id(row) == runtime.workers[sid]["runtime_id"] == sid
+        assert native_id(row) == observed_worker["runtime_id"] == sid
         delivered = Counter(payload["inputId"] for kind, payload in events
                             if kind == "runtime.status" and payload.get("event") == "input.delivered")
         terminal = Counter(identity for kind, payload in events
