@@ -2140,6 +2140,10 @@ class Collaboration:
                         self.record_outcome(request, response)
                     self.save(args['requestId'], request)
                     receipt = {'accepted': True, 'commandAction': action,
+                        # Existing permanent-deletion ownership must include the
+                        # pointer too, not just its canonical request's body.
+                        'senderSessionId': request['senderSessionId'],
+                        'recipientSessionId': source['id'],
                         'responseRef': args['requestId'],
                         'result': {key: response[key] for key in
                                    ('requestId', 'operationId', 'responseRevision')}}
