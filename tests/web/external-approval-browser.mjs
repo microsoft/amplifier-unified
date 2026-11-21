@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {fixturePython} from './fixture-python.mjs';
-import {ownFixture} from './fixture-lifecycle.mjs';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 
 const root=process.env.AMPLIFIER_TEST_ROOT||fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(fixturePython(root+'/.venv/bin/python'),[root+'/tests/fixtures/external_multiparty_ui_server.py'],{stdio:['ignore','pipe','inherit']});
@@ -75,6 +75,6 @@ try{
  console.log(JSON.stringify({passed:true,decisions:3,reloadWithoutReplay:true,withdrawalWithoutDecision:true,stopWithoutDecision:true,mobileNoOverflow:true}));
 }catch(error){report.error=error.stack||String(error);throw error}
 finally{
- if(artifacts){await mkdir(artifacts,{recursive:true});await writeFile(join(artifacts,'result.json'),JSON.stringify(report,null,2));if(page&&!report.passed)await page.screenshot({path:join(artifacts,'failure.png'),fullPage:true}).catch(()=>{});}
- await browser?.close();await stopFixture();
+ try{if(artifacts){await mkdir(artifacts,{recursive:true});await writeFile(join(artifacts,'result.json'),JSON.stringify(report,null,2));if(page&&!report.passed)await page.screenshot({path:join(artifacts,'failure.png'),fullPage:true}).catch(()=>{});}}
+ finally{await finishFixture({label:'External approval fixture',close:[['Browser',()=>browser?.close()]],stop:stopFixture})}
 }

@@ -7,6 +7,8 @@ also permits qualification of an installed wheel outside the checkout.
 """
 import asyncio
 from collections import Counter
+import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
@@ -39,7 +41,6 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
     if wrapper == "published-instance":
         if not binary:
             pytest.skip("Select verified published Instance 0.22.15 ARM64 binary for wrapper qualification")
-        import hashlib
         assert hashlib.sha256(Path(binary).read_bytes()).hexdigest() == (
             "8772fc97435eb9922bed694b9e0d4ef43d5312c0ee036ff0173b9a27a18afbfa")
     graph, paths = qualification_runtime()
@@ -112,21 +113,22 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
              "acp", "--bundle", str(bundle), "--server", str(client.make_url("")).rstrip("/"),
              "--token-file", str(credential)]
     instance_process = None
+    instance_init = None
     instance_log = None
     endpoint_command = relay
 
     async def prepare_instance():
-        nonlocal instance_process, instance_log, endpoint_command
+        nonlocal instance_process, instance_init, instance_log, endpoint_command
         home = tmp_path / "instance"
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
         instance_log = (tmp_path / "instance.log").open("wb")
-        init = await asyncio.create_subprocess_exec(
+        instance_init = await asyncio.create_subprocess_exec(
             binary, "init", "--home", str(home), "--name", "Native ACP fixture",
             "--bind", "127.0.0.1", "--port", str(port),
             stdout=instance_log, stderr=instance_log)
-        assert await asyncio.wait_for(init.wait(), 10) == 0
+        assert await asyncio.wait_for(instance_init.wait(), 10) == 0
         config_path = home / "config.json"
         configured = json.loads(config_path.read_text())
         value = configured["config"]
@@ -194,6 +196,10 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
         assert [row["round"] for row in provider_rows] == [1, 2]
         worker_pid = runtime.workers[sid]["process"].pid
         assert {row["pid"] for row in rows} == {worker_pid}
+        for provider_row in provider_rows:
+            for name, worker_module in provider_row["modules"].items():
+                path = Path(importlib.import_module(name).__file__).resolve()
+                assert worker_module == {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
         assert worker_pid not in {os.getpid(), *(p.pid for p in processes)}
         commands = [json.loads(raw) for (raw,) in service.db.execute(
             "SELECT receipt FROM commands WHERE id IN ('native-acp-title-1','native-acp-title-2')")]
@@ -227,13 +233,14 @@ async def test_stdio_acp_executes_real_core_tool_and_same_native_resume(tmp_path
             if process.returncode is None:
                 process.kill()
         await asyncio.gather(*(process.wait() for process in processes))
-        if instance_process and instance_process.returncode is None:
-            instance_process.terminate()
-            try:
-                await asyncio.wait_for(instance_process.wait(), 10)
-            except TimeoutError:
-                instance_process.kill()
-                await instance_process.wait()
+        for process in (instance_init, instance_process):
+            if process and process.returncode is None:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), 10)
+                except TimeoutError:
+                    process.kill()
+                    await process.wait()
         if instance_log:
             instance_log.close()
         await client.close()

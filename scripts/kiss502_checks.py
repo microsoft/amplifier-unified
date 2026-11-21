@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import shutil
 import subprocess
 import sys
@@ -61,7 +62,16 @@ def selection():
                     candidate = base / (module.replace(".", "/") + ".py")
                     if candidate.is_file() and candidate.is_relative_to(ROOT / "tests"):
                         pending.append(candidate)
-    selected |= {ROOT / "tests/web" / name for name in (*BROWSERS, "fixture-python.mjs")}
+    pending_js = [ROOT / "tests/web" / name for name in BROWSERS]
+    while pending_js:
+        path = pending_js.pop()
+        if path in selected:
+            continue
+        selected.add(path)
+        # Maintained browser helpers use literal sibling ES module imports.
+        import re
+        for name in re.findall(r"""from\s+['"](\./[^'"]+)['"]""", path.read_text()):
+            pending_js.append(path.parent / name)
     for path in selected:
         if not path.is_file() or path.is_symlink():
             raise ValueError(f"Missing regular test input: {path}")
@@ -140,9 +150,15 @@ def run(output):
     if ROOT != Path("/workspace") or not os.environ.get("AMPLIFIER_TEST_CONTRACT"):
         raise ValueError("Run only in the task-owned prepared guest, never a serving installation")
     output.mkdir(parents=True, exist_ok=False)
+    contract = json.loads(Path(os.environ["AMPLIFIER_TEST_CONTRACT"]).read_text())
+    if not contract.get("pythonBuild", {}).get("available"):
+        raise ValueError("The ordinary prepared build prerequisites are unavailable; inspect preparation logs")
+    if platform.system() != "Linux" or platform.machine() != "aarch64":
+        raise ValueError("The selected published Instance artifact requires Linux ARM64")
+    write(output / "execution-contract.json", contract)
     inputs = selection()
     write(output / "inputs.json", inputs)
-    python = os.environ["AMPLIFIER_TEST_PYTHON"]
+    python = contract["python"]
     clean = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": ""}
     clean.pop("VIRTUAL_ENV", None)
     clean["TMPDIR"] = str(output / "tmp")
@@ -159,7 +175,7 @@ def run(output):
             raise RuntimeError(f"{name} failed; retained log and stages.json")
 
     clean["KISS502_INSTANCE_BINARY"] = str(published_instance(output))
-    command("build", ["/opt/unified-prepared/build-venv/bin/python", "-I", "-B",
+    command("build", [contract["pythonBuild"]["python"], "-I", "-B",
                       "-m", "build", "--wheel", "--no-isolation", "--outdir",
                       str(output / "dist"), str(ROOT)])
     wheel, = (output / "dist").glob("*.whl")
@@ -176,7 +192,7 @@ def run(output):
     (harness / "tests/web/node_modules").symlink_to(ROOT / "tests/web/node_modules", target_is_directory=True)
     command("installed-before", [python, "-I", "-B", "-c", PROBE, str(wheel), str(ROOT)], cwd=harness)
     command("pytest", [python, "-I", "-B", "-m", "pytest", "-c", "/dev/null",
-                      "-o", "asyncio_mode=auto", "-q", "--basetemp", str(output / "pytest-tmp"),
+                      "-o", "asyncio_mode=auto", "-p", "no:cacheprovider", "-q", "--basetemp", str(output / "pytest-tmp"),
                       "--junitxml=" + str(output / "junit.xml"),
                       *["tests/" + name + ".py" for name in TARGETS]], cwd=harness,
             env={**clean, "AMPLIFIER_TEST_ARTIFACTS": str(output / "native")}, required=False)

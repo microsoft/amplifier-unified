@@ -6,9 +6,11 @@ import {join} from 'node:path';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {fixturePython} from './fixture-python.mjs';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 
 const root=process.env.AMPLIFIER_TEST_ROOT||fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(fixturePython(root+'/.venv/bin/python'),[root+'/tests/fixtures/external_multiparty_ui_server.py'],{stdio:['ignore','pipe','inherit']});
+const stopFixture=ownFixture(fixture,{label:'External multiparty fixture'});
 const artifacts=process.env.AMPLIFIER_TEST_ARTIFACTS;
 const report={passed:false,posts:[]};let browser;
 try{
@@ -64,6 +66,25 @@ try{
  const sharedBindings=shared.externalAgent.participants.map(row=>row.sessionId);assert.equal(new Set(sharedBindings).size,2);
  await page.reload();await expect(page.getByText('Beta answer: 42',{exact:true})).toBeVisible();
  assert.deepEqual((await observe()).peers,sharedFirst.peers);
+ // Separate browser clients keep private drafts and navigation, even while
+ // they inspect the same public room. Neither draft is submitted to a peer.
+ const other=await browser.newPage({viewport:{width:1280,height:950},
+  extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ try{
+  await other.goto(url);await other.waitForFunction(()=>window.amplifier?.dispatch);
+  await other.evaluate(id=>window.amplifier.dispatch('session.select',{id}),sharedId);
+  const otherComposer=other.getByRole('textbox',{name:'Message Amplifier',exact:true});
+  await composer.fill('First private draft — never public');
+  await otherComposer.fill('Second private draft — never public');
+  await expect(composer).toHaveValue('First private draft — never public');
+  await other.evaluate(id=>window.amplifier.dispatch('session.select',{id}),legacyId);
+  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),sharedId);
+  await expect(composer).toHaveValue('First private draft — never public');
+  await other.evaluate(id=>window.amplifier.dispatch('session.select',{id}),sharedId);
+  await expect(otherComposer).toHaveValue('Second private draft — never public');
+  assert.deepEqual((await observe()).peers,sharedFirst.peers);
+  report.privateClientViews={separateDrafts:true,separateNavigation:true,noPeerPrompt:true};
+ }finally{await other.close()}
  // Both streamed drafts remain attributed; a public post while busy is not
  // forced into either current prompt. Room Stop cancels current and queued work.
  await send('wait-for-stop');
@@ -146,7 +167,6 @@ try{
  report.passed=true;
  console.log(JSON.stringify({passed:true,sharedRoom:true,autonomousPeerResponse:true,independentStreams:true,roomStopAndLaterPost:true,legacyDirectedPreserved:true,noNativeWorker:true,mobileNoOverflow:true}));
 }finally{
- if(artifacts){await mkdir(artifacts,{recursive:true});await writeFile(join(artifacts,'result.json'),JSON.stringify(report,null,2));}
- await browser?.close();
- if(fixture.exitCode===null){const exited=new Promise(resolve=>fixture.once('exit',resolve));fixture.kill('SIGTERM');await exited;}
+ try{if(artifacts){await mkdir(artifacts,{recursive:true});await writeFile(join(artifacts,'result.json'),JSON.stringify(report,null,2));}}
+ finally{await finishFixture({label:'External multiparty fixture',close:[['Browser',()=>browser?.close()]],stop:stopFixture})}
 }
