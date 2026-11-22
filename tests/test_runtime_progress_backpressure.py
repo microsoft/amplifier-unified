@@ -176,7 +176,7 @@ async def test_terminal_execution_event_commits_without_rewriting_unrelated_stat
 async def test_terminal_generation_binds_only_its_call_failure(app_factory, call_scope):
     from amplifier_web.runtime import normalize_event
     from amplifier_web.session_projection import hydrate
-    from amplifier_web.session_health import current_terminal_failure
+    from amplifier_web.session_health import current_terminal_failure, generation_failure
 
     app = app_factory()
     await app.dispatch('session.create', {})
@@ -191,7 +191,8 @@ async def test_terminal_generation_binds_only_its_call_failure(app_factory, call
              'kind': 'llm', 'phase': 'failed', 'generationId': generation_id,
              'admissionInputId': input_id, 'turnId': input_id,
              'startedAt': 10, 'endedAt': 11,
-             'failure': {'category': 'provider_unavailable', 'errorType': 'FixtureError'}}
+             'failure': generation_failure({'error_category': 'provider_unavailable',
+                 'error_type': 'FixtureError', 'error_stage': 'provider_request'})}
     if call_scope == 'old-generation':
         event['generationId'] = 'older-generation'
     elif call_scope == 'other-input':
@@ -212,6 +213,10 @@ async def test_terminal_generation_binds_only_its_call_failure(app_factory, call
         restored = load_saved_state(db)
         hydrate(app.data_dir, restored, db)
     saved = next(row for row in restored['sessions'] if row['id'] == sid)
+    node = next(row for row in saved['execution']['nodes'] if row['id'] == 'failed-call')
+    for key in ('sessionId', 'rootSessionId', 'generationId', 'admissionInputId', 'turnId', 'failure'):
+        assert node[key] == event[key]
+    assert node.get('lifecycle') == event.get('lifecycle')
     failure = saved['failure']
     assert failure['category'] == ('provider_unavailable' if call_scope == 'current' else 'unknown')
     assert failure['errorType'] == 'FixtureError'
