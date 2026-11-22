@@ -41,9 +41,10 @@ async def fresh_generation(app, target, identity, inputs, epoch, *, runtime_owne
 
 async def provider_failure(app, target, category, *, terminal_id='failed-generation',
                            terminal_inputs=None, terminal_category='unknown',
-                           terminal_type='RuntimeError'):
+                           terminal_type='RuntimeError', admitted_inputs=None):
     """Do not seed the failure identity required by peer recovery."""
-    await fresh_generation(app, target, 'failed-generation', ['failed-input'],
+    admitted_inputs = ['failed-input'] if admitted_inputs is None else admitted_inputs
+    await fresh_generation(app, target, 'failed-generation', admitted_inputs,
                            target.get('interruptionRevision', 0))
     failure = RuntimeError({'authentication': 'Authentication failed',
                             'rate_limit': 'Rate limit reached',
@@ -82,7 +83,7 @@ async def provider_failure(app, target, category, *, terminal_id='failed-generat
     assert 'generationId' not in classified
     await app.on_runtime_event(*normalize_event({
         'type': 'generation.failed', 'generation_id': terminal_id,
-        'input_ids': ['failed-input'] if terminal_inputs is None else terminal_inputs,
+        'input_ids': admitted_inputs if terminal_inputs is None else terminal_inputs,
         'error_category': terminal_category, 'error_type': terminal_type,
         'error_stage': 'manager_turn',
     }, target['id']))
@@ -135,6 +136,66 @@ async def test_provider_cause_does_not_explain_a_different_terminal_error_type(a
     assert target['failure']['errorType'] == 'ManagerTurnError'
     assert target['failure']['generationId'] == 'failed-generation'
     assert target['failure']['inputIds'] == ['failed-input']
+    assert not app.runtime.inputs
+
+
+@pytest.mark.parametrize('terminal_inputs', [
+    ['failed-input', 'steered-input'], ['steered-input', 'failed-input'],
+    ['failed-input'], ['steered-input'], ['failed-input', 'steered-input', 'foreign-input'], [],
+])
+async def test_failed_recovery_requires_the_whole_admitted_input_set(app, terminal_inputs):
+    from amplifier_web.session_health import current_terminal_failure
+    source, target, human = await paused_member(app)
+    admitted = ['failed-input', 'steered-input']
+    await provider_failure(app, target, 'authentication',
+                           admitted_inputs=admitted, terminal_inputs=terminal_inputs)
+    app.runtime.stopped_boundary = RuntimeManager().stopped_boundary
+    before = copy.deepcopy(target['failure'])
+    matches = set(terminal_inputs) == set(admitted)
+    assert current_terminal_failure(target) is matches
+    if matches:
+        await submit(app, source, target, human)
+        receipt = await settled(app, 'resume-member', 'accepted')
+        assert receipt['humanResume']['failedRecovery']['failure'] == before
+        await submit(app, source, target, human)
+        assert [row[1] for row in app.runtime.inputs] == ['resume-member']
+    else:
+        with pytest.raises(AppError, match='recoverable stopped boundary'):
+            await submit(app, source, target, human)
+        assert not app.db.execute("SELECT 1 FROM commands WHERE id='resume-member'").fetchone()
+        assert not app.runtime.inputs
+    assert target['failure'] == before
+
+
+@pytest.mark.parametrize('change', ['generation', 'inputs', 'missing-inputs', 'completed'])
+async def test_failed_recovery_rechecks_terminal_identity_after_preparation(app, change):
+    source, target, human = await paused_member(app)
+    await provider_failure(app, target, 'rate_limit')
+    app.runtime.stopped_boundary = RuntimeManager().stopped_boundary
+    before = copy.deepcopy(target['failure'])
+
+    async def delayed(session, args, guard, emit):
+        # Warming is not recovery and cannot exempt pending input from the
+        # current terminal identity checks at its actual admission boundary.
+        await emit('runtime.status', {'sessionId': target['id'], 'status': 'ready'})
+        assert target['failure'] == before
+        active = target['collaborationGeneration']
+        if change == 'generation':
+            active['id'] = 'different-generation'
+        elif change == 'inputs':
+            active['inputIds'] = ['different-input']
+        elif change == 'missing-inputs':
+            active.pop('inputIds')
+        else:
+            active['completed'] = True
+        assert guard()
+        assert not app.collaboration.admission(target['id'], args)['admitted']
+        return {'accepted': False, 'effect': 'none', 'reason': guard()}
+
+    app.runtime.collaboration_input = delayed
+    await submit(app, source, target, human)
+    await settled(app, 'resume-member', 'suppressed')
+    assert target['failure'] == before
     assert not app.runtime.inputs
 
 
