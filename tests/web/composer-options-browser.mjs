@@ -68,7 +68,7 @@ try{
  await expect(menu.locator('#chat-provider')).toBeFocused();
  await expect(menu.getByRole('button',{name:/^(Choose model|Choose provider|Choose reasoning effort|Back to chat options)$/})).toHaveCount(0);
  for(const section of ['provider','model'])await showComposerOption(page,section);
- await expect(menu.locator('#chat-effort')).toBeHidden();
+ await expect(menu.locator('[data-composer-page="effort"]')).toBeVisible();
  const bundle=menu.locator('#composer-options-bundle');
  await expect(bundle).toBeHidden();await showComposerOption(page,'effort');await showComposerOption(page,'bundle');
  const bundleSaved=actionResponse('view.update',args=>args?.patch?.newSessionDraft?.bundle==='work');

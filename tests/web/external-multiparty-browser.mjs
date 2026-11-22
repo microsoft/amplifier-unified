@@ -82,7 +82,7 @@ try{
   await expect(settings).toBeVisible();
   const centerY=async locator=>{const {y,height}=await locator.boundingBox();return y+height/2};
   assert.ok(Math.abs(await centerY(settings.locator('span'))-await centerY(settings))<=1,'Trigger text is vertically centered');
-  assert.ok(Math.abs(await centerY(settings)-await centerY(editor.locator('.a-compose-add')))<=2,'Settings and Add share a center line');
+  assert.ok(Math.abs(await centerY(settings)-await centerY(editor.locator('[data-part="composer-primary-action"]')))<=2,'Settings and the send control share a center line');
   const before=await input.boundingBox();
   await settings.click();
   await panel.getByLabel('Agent',{exact:true}).selectOption(identity);
@@ -105,7 +105,10 @@ try{
   if(artifacts)await editor.screenshot({path:join(artifacts,'agent-settings-'+width+'.png')});
   await expect(panel.getByText('Agent settings',{exact:true})).toHaveCount(0);
   await expect(panel.getByRole('button',{name:/close|dismiss/i})).toHaveCount(0);
-  if(phone)await input.tap();else await editor.keyboard.press('Escape');
+  if(phone){
+   const popup=await panel.boundingBox();
+   await editor.touchscreen.tap(popup.x+popup.width/2,popup.y-8);
+  }else await editor.keyboard.press('Escape');
   await expect(panel).toBeHidden();
   if(!phone)await expect(settings).toBeFocused();
   }finally{await phone?.close()}
