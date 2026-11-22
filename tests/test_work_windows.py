@@ -736,3 +736,79 @@ async def test_connected_web_work_ready_evicts_outer_cache_without_shell_registr
                 await socket.close()
         finally:
             await client.close()
+
+
+@pytest.mark.asyncio
+async def test_oversized_legacy_placement_restores_qualified_model_steps_from_cold_owner(tmp_path, monkeypatch):
+    import sqlite3
+    from amplifier_web import saved_execution_window as legacy
+    from amplifier_web.cold_display import ColdRecord, MARKER, execution_reference
+    from amplifier_web.resource_files import detach
+
+    owner, initial, _, service = fixture(tmp_path, monkeypatch, count=1)
+    db = service.db = sqlite3.connect(tmp_path / 'state.sqlite')
+    db.execute('CREATE TABLE state_resources (id TEXT PRIMARY KEY, value TEXT NOT NULL)')
+    turn = {'id': 't', 'anchorMessageId': 'user', 'inputId': 'user', 'phase': 'completed',
+            'startedAt': 1, 'endedAt': 500}
+    model = {'id': 'last', 'kind': 'llm', 'turnId': 't', 'provider': 'anthropic', 'model': 'example',
+             'sessionId': 's', 'rootSessionId': 's', 'producerId': 'worker', 'liveObservation': True,
+             'phase': 'completed', 'startedAt': 200, 'endedAt': 201, 'usage': {'inputTokens': 17}}
+    # Preserve an app-only tool containing a very large legacy payload next to a
+    # genuine model receipt, and reject a canonical row with no host placement.
+    nodes = [dict(model, id=f'model-{i}', startedAt=i+1, endedAt=i+2) for i in range(130)]
+    large_id = 'tool-' + 'k' * 214
+    nodes += [{'id': large_id, 'kind': 'tool', 'turnId': 't', 'label': 'Build', 'startedAt': 199,
+               'input': 'private tool body' * 270000}, model, dict(model, id='canonical', canonicalHistory=True)]
+    old_turn = {**turn, 'id': 'older', 'startedAt': 0}
+    nodes[0]['turnId'] = 'older'
+    turns = [old_turn] + [{**turn, 'id': f'unrelated-{i}'} for i in range(23)] + [turn]
+    reference = execution_reference(db, {'nodes': nodes, 'turns': turns, 'plan': {'obsolete': True},
+                                        'retiredUsageNodes': [model], 'currentTurnId': 't'})
+    assert reference['bytes'] > legacy.PAGE_BYTES
+    reference.pop('bytes')  # Historical references need only the content identity.
+    initial.pop('execution')
+    session = ColdRecord({**initial, MARKER: {'execution': reference}}, db)
+    service._session = lambda identity, hydrate=False: session
+    try:
+        await owner.read('s', _initial=True)
+        frame = owner.project(session)
+        assert frame['workProjection']['status'] == 'ready'
+        assert 'plan' not in frame['execution']
+        group = next(row for row in frame['execution']['segments'] if row['turnId'] == 't')
+        assert group['partialWindow'] and group['nodeCounts'] is None
+        rows = owner.live_pages.read(session, group['id'])['items']
+        assert len(rows) == 100
+        assert {row['id'] for row in rows} >= {'last', large_id}
+        assert next(row for row in rows if row['id'] == 'last')['usage'] == {'inputTokens': 17}
+        assert all(row['id'] != 'canonical' for row in rows)
+        assert 'private tool body' not in json.dumps([frame, rows])
+        assert frame['executionWindow']['unavailableRanges'][-1]['source'] == 'saved-execution'
+        saved = owner.resident_tree(session)
+        assert saved['nodes'][0]['id'] == 'model-0' and saved['nodes'][-1]['id'] == 'last'
+        with pytest.raises(ValueError):
+            saved['nodes'][:130]
+        oldest = owner.live_pages.read_groups(session, frame['executionWindow']['before'])
+        assert 'older' in {turn['id'] for turn in oldest['turns']}
+        earlier = next(row for row in oldest['items'] if row['turnId'] == 'older')
+        assert [item['id'] for item in owner.live_pages.read(session, earlier['id'])['items']] == ['model-0']
+        assert 'retiredUsageNodes' not in saved
+        assert not dict.__contains__(session, 'execution') and session[MARKER]['execution'] == reference
+        # Explicit new event page with the same pinned immutable input reuses the
+        # accepted display pages without a second full decode or a database write.
+        with monkeypatch.context() as patch:
+            patch.setattr(legacy, 'open_tree', lambda *args: pytest.fail('legacy snapshot decoded twice'))
+            await owner.read('s')
+        assert owner.resident_tree(session) is saved
+        assert db.execute('SELECT count(*) FROM state_resources').fetchone()[0] == 1
+        source = detach(db, reference['$resource'])
+        with (source.directory / (source.identity + '.json')).open('r+b') as stream:
+            stream.write(b'x')
+        # A third read rejects altered placement yet still admits the
+        # independently verified native tool event.
+        native = await owner.read('s')
+        assert owner.resident_tree(session) == {}
+        assert native['unavailableRanges'][-1]['reason'] == 'source_unavailable'
+        assert len(owner.nodes('s', native['items'][0]['id'])['items']) == 1
+    finally:
+        await owner.close()
+        db.close()
