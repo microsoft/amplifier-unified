@@ -101,9 +101,9 @@ def test_computer_use_installed_baseline_matches_optional_host_lock():
     baseline = next(row for row in data['repositories']
                     if row['name'] == 'amplifier-bundle-computer-use')
     lock = tomllib.loads((ROOT / 'uv.lock').read_text())
-    tool = next(row for row in lock['package']
-                if row['name'] == 'amplifier-module-tool-computer-use')
-    assert tool['source']['git'].rsplit('#', 1)[1] == baseline['commit']
+    for name in ('amplifier-module-tool-computer-use', 'amplifier-module-hook-computer-use'):
+        [module] = [row for row in lock['package'] if row['name'] == name]
+        assert module['source']['git'].rsplit('#', 1)[1] == baseline['commit']
     assert baseline['packages'] == ['modules/tool-computer-use', 'modules/hook-computer-use']
 
 
@@ -608,8 +608,9 @@ def test_residual_helpers_keep_module_counts_separate_from_product(tmp_path, cha
     ET.ElementTree(root).write(path)
     report = adapter.residual_helper_result(path, 1 if change == 'exit' else 0)
     assert report['passed'] is (change == 'none')
-    assert report['expectedCounts'] == {
-        'tests.test_integration_clients': 15, 'tests.test_integration_checks': 64}
+    # The independent source inventory test below checks this manifest. Keep
+    # these verdict mutations tied to it, not to a second stale copy of counts.
+    assert report['expectedCounts'] == adapter.RESIDUAL_HELPER_COUNTS
     assert report['exitCode'] == (1 if change == 'exit' else 0)
     assert not (tmp_path / 'junit.xml').exists()
     assert len(report['cases']) == len(list(root))
