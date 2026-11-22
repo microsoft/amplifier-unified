@@ -25,7 +25,7 @@ async def serve(home):
     identities = ('alpha', 'beta', 'legacy-alpha', 'legacy-beta')
     agents = [{'id': identity, 'label': identity.title(), 'command': sys.executable,
                'args': [str(Path(__file__).with_name('shared_acp_agent.py')),
-                        str(home / identity / 'peer'), identity]}
+                        str(home / identity / 'peer'), identity, 'picker']}
               for identity in ('alpha', 'beta')]
     agents.extend({**peer(home / identity), 'id': identity, 'label': identity.title()}
                   for identity in ('legacy-alpha', 'legacy-beta'))

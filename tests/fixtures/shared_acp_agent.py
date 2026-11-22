@@ -41,10 +41,35 @@ class SharedFixture(Fixture):
         return result
 
     async def new_session(self, cwd, mcp_servers=None, **kwargs):
-        return self.instance_session(await super().new_session(cwd, mcp_servers), kwargs)
+        result = self.instance_session(await super().new_session(cwd, mcp_servers), kwargs)
+        if self.profile == 'picker':
+            result.config_options = self.picker(result.session_id)
+        return result
 
     async def resume_session(self, session_id, cwd, mcp_servers=None, **kwargs):
-        return self.instance_session(await super().resume_session(session_id, cwd, mcp_servers), kwargs)
+        result = self.instance_session(await super().resume_session(session_id, cwd, mcp_servers), kwargs)
+        if self.profile == 'picker':
+            result.config_options = self.picker(session_id)
+        return result
+
+    def picker(self, session_id):
+        saved = self.home / (session_id + '.settings')
+        values = json.loads(saved.read_text()) if saved.exists() else dict(provider='one', model='draft', effort='low')
+        from acp.schema import SessionConfigOptionSelect
+        return [SessionConfigOptionSelect(id=key, name=name, category=category, current_value=values[key],
+                    options=[{'value': v, 'name': v} for v in choices])
+                for key, name, category, choices in [('provider','Connection','model_config',['one','two']),
+                    ('model','Model','model',['draft','review']), ('effort','Reasoning effort','thought_level',['low','high'])]]
+
+    async def set_config_option(self, session_id, config_id, value, **kwargs):
+        from acp.schema import SetSessionConfigOptionResponse
+        options = self.picker(session_id)
+        selected = next(row for row in options if row.id == config_id)
+        assert value in {choice.value for choice in selected.options}
+        settings = {row.id: (value if row.id == config_id else row.current_value) for row in options}
+        (self.home / (session_id + '.settings')).write_text(json.dumps(settings))
+        self.record('configure', sessionId=session_id, settings=settings)
+        return SetSessionConfigOptionResponse(config_options=self.picker(session_id))
 
     async def cancel(self, session_id, **kwargs):
         if self.profile.startswith('instance'):

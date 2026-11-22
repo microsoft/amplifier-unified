@@ -20,6 +20,10 @@ def definitions(schema, string):
         'cwd': string(4000), 'sessionCwd': string(4000),
     }, ['label', 'command'])
     return {
+        'conversation.participantConfigure': ('Set an advertised option on one saved ACP agent session.', schema({
+            'sessionId': string(200), 'participantId': identity, 'expectedRevision': string(64),
+            'configId': string(200), 'value': string(500)},
+            ['sessionId','participantId','expectedRevision','configId','value'])),
         'externalAgents.list': ('List saved external agent names for chat creation; no launch arguments or credentials.', schema({}, [])),
         'externalAgents.get': ('Read one private external launch configuration. Agents use existing global connections authority.', schema({'id': identity}, ['id'])),
         'externalAgents.save': ('Save an external launch configuration for immediate use. Omit id to add; existing entries require their expectedRevision. Does not connect, install or rebind existing chats.', schema({'agent': agent, 'expectedRevision': string(64)}, ['agent'])),

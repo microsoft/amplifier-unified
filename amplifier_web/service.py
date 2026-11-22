@@ -2204,6 +2204,8 @@ class AppService:
             if action.endswith('.view'):
                 values['session_id'] = args['id']
             return {'accepted':True, 'result':await query_history(self,values,reader)}
+        if action == 'conversation.participantConfigure':
+            return await self.external_conversations.configure_participant(args, origin, admission_check)
         if action == "approval.respond" and args["id"].startswith("collaboration:"):
             return await self.collaboration.decide(args, origin)
         if action == 'approval.respond' and args['id'].startswith('external:'):
@@ -5110,16 +5112,17 @@ class AppService:
         with self.performance_diagnostics.measure('execution.ingest', synchronous=True, session_id=session['id']):
             ingest_execution(session,payload)
             from .turn_model_settings import record as record_model_settings
-            record_model_settings(session, payload)
+            record_model_settings(session, payload, self.state.get('configurationRevision', 0))
         if (payload.get('kind') == 'llm' and payload.get('phase') == 'completed' and not payload.get('purpose')
                 and payload.get('lifecycle') != 'background'
                 and payload.get('sessionId') == payload.get('rootSessionId') == session['id']):
-            from .next_message_impact import impact, observation
+            from .next_message_impact import impact, observation, context_summary
             previous = session.get('_lastPromptUsage') or {}
             started = payload.get('startedAt', 0)
             if isinstance(started, (int, float)) and started >= previous.get('startedAt', 0):
                 usage = observation(payload)
                 session['_lastPromptUsage'] = {**usage, 'startedAt': started}
+                session['lastRequestContext'] = context_summary(usage)
                 choices = (session.get('runtimeReport') or {}).get('provider_choices', ())
                 session['nextMessageImpact'] = impact(usage, choices)
         if (payload.get('incompleteHistoryDispatched') is True and payload.get('kind') == 'llm'

@@ -146,3 +146,29 @@ async def test_restore_in_flight_preserves_frozen_inputs_and_previous_default_or
         assert 'pendingModelSelection' not in session and session['selection'] is None
     save(app, {**args, 'expectedRevision': 2, 'selection': A})
     assert 'restorePending' not in session['previousTurnSettings']
+
+
+async def test_keep_previous_requires_incremental_preparation(app, monkeypatch):
+    session = app._session()
+    monkeypatch.setattr('amplifier_web.provider_catalog.configured_binding', lambda *a, **kw: KEY)
+    _, event = setup_turn(session, 'measured', A)
+    record(session, event, app.state.get('configurationRevision', 0))
+    session['collaborationGeneration']['terminal'] = True
+    session['nextMessageImpact'] = {'source': {'instance': 'work', 'model': 'one'},
+                                    'inputTokens': 64000, 'coldModels': True}
+    def change(**patch):
+        return save(app, {'sessionId': session['id'], 'expectedRevision': session.get('nextMessageRevision', 0), **patch})
+    change(selection={**A, 'effort':'low'})
+    previous = session['previousTurnSettings']
+    assert not previous['canAvoidHistoryPreparation']
+    change(selection=B)
+    assert previous['canAvoidHistoryPreparation']
+    app.state['configurationRevision'] = previous['configurationRevision'] + 1
+    with pytest.raises(AppError, match='no longer avoid'):
+        change(restorePreviousInputId=previous['inputId'], restorePreviousGenerationId=previous['generationId'],
+               onlyIfAvoidable=True)
+    change(selection=B)
+    assert not previous['canAvoidHistoryPreparation']
+    app.state['configurationRevision'] = previous['configurationRevision']
+    change(selection=B, bundle='another-bundle')
+    assert not previous['canAvoidHistoryPreparation']

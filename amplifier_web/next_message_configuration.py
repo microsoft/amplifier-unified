@@ -8,13 +8,13 @@ def definitions(schema, string):
     from .new_chat import SELECTION
     value = schema({'sessionId': string(200), 'expectedRevision': {'type': 'integer', 'minimum': 0},
         'bundle': {**string(2000), 'minLength': 1}, 'selection': SELECTION,
-        'resetModel': {'type': 'boolean'}, 'restorePreviousInputId': {**string(200), 'minLength': 1},
+        'resetModel': {'type': 'boolean'}, 'onlyIfAvoidable': {'const': True}, 'restorePreviousInputId': {**string(200), 'minLength': 1},
         'restorePreviousGenerationId': {**string(200), 'minLength': 1}}, ['sessionId', 'expectedRevision'])
     restore_fields = ['restorePreviousInputId', 'restorePreviousGenerationId']
     value['oneOf'] = [
         {'required': restore_fields,
          'not': {'anyOf': [{'required': [key]} for key in ('bundle', 'selection', 'resetModel')]}},
-        {'not': {'anyOf': [{'required': [key]} for key in restore_fields]},
+        {'not': {'anyOf': [{'required': [key]} for key in (*restore_fields, 'onlyIfAvoidable')]},
          'anyOf': [{'required': ['bundle']}, {'required': ['selection']}]},
     ]
     return {
@@ -118,8 +118,11 @@ def save(service, args, authority=None):
     if session.get('sessionKind', 'root') != 'root':
         raise AppError('Worker and internal sessions retain their original configuration.', 409)
     if 'restorePreviousInputId' in args:
-        from .turn_model_settings import restore
-        return restore(service, session, args['restorePreviousInputId'], args['restorePreviousGenerationId'], authority)
+        from .turn_model_settings import avoidable, restore
+        if args.get('onlyIfAvoidable') and not avoidable(service, session):
+            raise AppError('These settings no longer avoid preparing history. Review the current choices.', 409)
+        return restore(service, session, args['restorePreviousInputId'], args['restorePreviousGenerationId'], authority,
+                       keep_independent_edits=args.get('onlyIfAvoidable', False))
     selected = selection(args['selection']) if 'selection' in args else None
     if 'selection' in args and not selected:
         raise AppError('Choose a provider and model.', 400)
@@ -147,6 +150,13 @@ def save(service, args, authority=None):
         from .provider_catalog import configured_binding
         binding = configured_binding(service.data_dir, session['workspace'], selected['instance'],
             global_only=session.get('location',{}).get('kind')=='managed')
+        previous = (session.get('previousTurnSettings') or {}).get('selection', {})
+        private = session.get('_previousTurnBinding')
+        if private and all(previous.get(k) == selected.get(k) for k in ('instance', 'model')):
+            if previous.get('effort') != selected.get('effort'):
+                private['retainedSelection'] = selected.copy()
+            else:
+                private.pop('retainedSelection', None)
         session['modelConnectionKey'] = binding
         session['selection'] = copy.deepcopy(selected)
         session['pendingModelSelection'] = copy.deepcopy(selected)
@@ -165,6 +175,9 @@ def save(service, args, authority=None):
     session.pop('nextMessageError', None)
     session.pop('nextMessageFailure', None)
     session['nextMessageStatus'] = 'saved'
+    if session.get('previousTurnSettings'):
+        from .turn_model_settings import avoidable
+        session['previousTurnSettings']['canAvoidHistoryPreparation'] = avoidable(service, session)
     return {'revision': revision + 1, 'status': 'saved', 'applies': 'next-message', 'mounted': False}
 
 

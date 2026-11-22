@@ -398,3 +398,34 @@ async def test_first_attachment_observes_callback_captured_by_existing_ui_worker
     assert projected[1]['rawOutput'] == {'value': 42}
     assert runtime.stopped == [] and len(runtime.sent) == 1
     await peer.socket.close()
+
+
+async def test_agent_options_target_exact_attachment_and_use_cached_choices(host, monkeypatch):
+    app, _, runtime, path = host
+    service = app['service']
+    async def cached(_, session, *, include_history):
+        assert not include_history
+        service.state.setdefault('runtimeControl', {}).setdefault(session['id'], {})['configuration.catalog'] = {
+            'phase':'ready', 'configurationRevision':0, 'nextMessageRevision':session.get('nextMessageRevision',0),
+            'providers':[{'id':k, 'sharedCatalogKey':k} for k in ('a','b')],
+            'effective':{'instance':'a','model':'first'}}
+        service.state['modelCatalogs'] = {k:{'models':['first','second'],
+            'metadata':{'modelListInfo':{'request_reasoning_efforts':{'second':['low','high']}}}} for k in ('a','b')}
+    monkeypatch.setattr('amplifier_web.conversation_models.browse', cached)
+    monkeypatch.setattr('amplifier_web.provider_catalog.configured_binding', lambda *a, **kw: 'key')
+    peer, other = await connect(host), await connect(host)
+    try:
+        sid = await peer.new(path)
+        foreign = await other.new(path)
+        assert 'error' in await peer.call('session/set_config_option', sessionId=foreign, configId='provider', value='b')
+        for key, value in [('provider','b'),('model','second'),('effort','high')]:
+            result = await peer.call('session/set_config_option', sessionId=sid, configId=key, value=value)
+            assert 'result' in result, result
+            options = result['result']['configOptions']
+            assert next(row for row in options if row['id']==key)['currentValue'] == value
+        assert service._session(sid)['pendingModelSelection'] == {'instance':'b','model':'second','effort':'high'}
+        assert not service._session(foreign).get('pendingModelSelection')
+        assert not runtime.sent
+    finally:
+        await peer.socket.close()
+        await other.socket.close()

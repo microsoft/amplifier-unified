@@ -49,7 +49,7 @@ async function verifyReopenedChat(seed) {
     ];
     async function openBrowser(width) {
       browser = await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined});
-      const page = await browser.newPage({locale:'en-US',viewport:{width,height:900}});
+      const page = await browser.newPage({locale:'en-US',isMobile:width<500,hasTouch:width<500,viewport:{width,height:width<500?844:900}});
       await page.context().addCookies([{name:handshake.cookieName,value:handshake.cookieValue,url:handshake.url}]);
       await page.goto(handshake.url);
       await openChat(page);
@@ -74,7 +74,7 @@ async function verifyReopenedChat(seed) {
     }
     const options = p => p.getByRole('button',{name:'Model and reasoning settings',exact:true});
     const dialog = p => p.getByRole('dialog',{name:'Model for this chat',exact:true});
-    const restore = p => dialog(p).getByRole('button',{name:'Use previous settings',exact:true});
+    const restore = p => dialog(p).getByRole('button',{name:/^Keep .+ · second$/});
     let page = await openBrowser(1200);
     await checkDividers(page,'restarted host');
     if (evidence) {
@@ -94,16 +94,23 @@ async function verifyReopenedChat(seed) {
     async function checkMeasured(phase, p) {
       const estimate = hint(p);
       await expect(estimate).toHaveCount(1);
-      await expect(estimate).toContainText('64,000 input tokens');
-      await expect(estimate).toContainText('time and cost');
+      await expect(estimate).toContainText('reread earlier messages');
+      await expect(estimate).toContainText('cost more');
       receipts.push({phase, estimate:await estimate.innerText()});
       if (evidence) await p.screenshot({path:evidence+'/'+phase+'.png'});
     }
     const revision = () => page.evaluate(id => window.amplifier.getState().sessions.find(s=>s.id===id).nextMessageRevision,result.sessionId);
+    const effortControl=panel.locator('#chat-effort');
+    await expect(effortControl).toBeVisible();
+    await effortControl.focus();
+    await page.keyboard.press('Home');
+    await expect.poll(()=>page.evaluate(id=>window.amplifier.getState().sessions.find(s=>s.id===id).pendingModelSelection?.model,result.sessionId)).toBe('second');
+    await expect(restore(page)).toHaveCount(0);
+
     const beforePick = await revision();
     const modelSelect = panel.locator('select#chat-model');
-    await expect(panel.locator('#chat-provider option[value="fixture"]')).toContainText('May cost more');
-    await expect(modelSelect.locator('option[value="first"]')).toContainText('May cost more');
+    await expect(panel.locator('#chat-provider option[value="fixture"]')).not.toContainText('May cost more');
+    await expect(modelSelect.locator('option[value="first"]')).not.toContainText('May cost more');
     await panel.locator('#chat-provider').selectOption('fixture');
     await checkMeasured('picker-draft',page);
     assert.equal(await revision(),beforePick,'Choosing a connection before a model stays local');
@@ -112,14 +119,27 @@ async function verifyReopenedChat(seed) {
     await checkMeasured('picker-pending',page);
     await checkDividers(page,'pending choice');
     await panel.getByRole('button',{name:'Close chat options'}).click();
-    await checkMeasured('picker-closed',page);
+    await expect(hint(page)).toHaveCount(0);
     await browser.close();
     page = await openBrowser(390);
     await checkDividers(page,'new browser');
-    await checkMeasured('reopened-pending',page);
+    await expect(hint(page)).toHaveCount(0);
     if (!await dialog(page).isVisible()) await options(page).click();
     await expect(restore(page)).toBeVisible();
     await checkMeasured('reopened-picker',page);
+    // A separate bundle change can require rebuilding the prefix either way.
+    const bundle=await page.evaluate(id=>window.amplifier.getState().sessions.find(s=>s.id===id).bundle,result.sessionId);
+    async function setBundle(value){
+      const response=await page.evaluate(([id,bundle])=>{
+        const session=window.amplifier.getState().sessions.find(s=>s.id===id);
+        return window.amplifier.dispatch('conversation.configure',{sessionId:id,expectedRevision:session.nextMessageRevision,bundle});
+      },[result.sessionId,value]);
+      assert.ok(response.accepted);
+    }
+    await setBundle(bundle.replace('bundle-a.yaml','bundle-b.yaml'));
+    await expect(restore(page)).toHaveCount(0);
+    await setBundle(bundle);
+    await expect(restore(page)).toBeVisible();
     await restore(page).focus();
     await page.keyboard.press('Enter');
     await expect(restore(page)).toHaveCount(0);
@@ -129,7 +149,7 @@ async function verifyReopenedChat(seed) {
     await page.keyboard.press('Enter');
     const effort = dialog(page).locator('[data-composer-page="effort"]');
     await expect(effort).toBeVisible();
-    await expect(effort).toContainText(/(?:Saved effort: |Reasoning effort\s*)high/i);
+    await expect(effort).toContainText(/(?:Saved effort: |Reasoning effort\s*)low/i);
     await page.reload();
     await openChat(page);
     await checkDividers(page,'after restore and reload');

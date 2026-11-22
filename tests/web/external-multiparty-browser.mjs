@@ -66,9 +66,49 @@ try{
  const sharedBindings=shared.externalAgent.participants.map(row=>row.sessionId);assert.equal(new Set(sharedBindings).size,2);
  await page.reload();await expect(page.getByText('Beta answer: 42',{exact:true})).toBeVisible();
  assert.deepEqual((await observe()).peers,sharedFirst.peers);
+ // Change each independent peer through its own standard ACP session.
+ for(const [width,identity] of [[1280,'alpha'],[390,'beta']]){
+  const phone=width===390?await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH||undefined}):null;
+  try{
+  const editor=phone?await phone.newPage({viewport:{width,height:844},hasTouch:true,isMobile:true,
+   extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}):page;
+  if(phone){
+   await editor.goto(url);await editor.waitForFunction(()=>window.amplifier?.dispatch);
+   await editor.evaluate(id=>window.amplifier.dispatch('session.select',{id}),sharedId);
+  }
+  const settings=editor.getByRole('button',{name:'Agent settings',exact:true});
+  const panel=editor.getByRole('dialog',{name:'Agent settings',exact:true});
+  const input=editor.getByRole('textbox',{name:'Message Amplifier',exact:true});
+  await expect(settings).toBeVisible();
+  const before=await input.boundingBox();
+  await settings.click();
+  await panel.getByLabel('Agent',{exact:true}).selectOption(identity);
+  await expect(panel.getByLabel('Connection')).toHaveValue('one');
+  const after=await input.boundingBox();
+  assert.deepEqual(after,before);
+  for(const [label,value] of [['Connection','two'],['Model','review'],['Reasoning effort','high']]){
+   const selector=panel.getByLabel(label,{exact:true});
+   await selector.selectOption(value);
+   await expect(selector).toHaveValue(value);
+   await expect(selector).toBeEnabled();
+  }
+  await expect(panel.getByRole('button',{name:/^Keep /})).toHaveCount(0);
+  const snapshot=await observe();
+  const changes=snapshot.peers[identity].filter(row=>row.kind==='configure');
+  assert.equal(changes.length,3);
+  assert.ok(changes.every(row=>row.sessionId===sharedBindings[identity==='alpha'?0:1]));
+  assert.deepEqual(changes.at(-1).settings,{provider:'two',model:'review',effort:'high'});
+  if(identity==='alpha')assert.equal(snapshot.peers.beta.filter(row=>row.kind==='configure').length,0);
+  if(artifacts)await editor.screenshot({path:join(artifacts,'agent-settings-'+width+'.png')});
+  await panel.getByRole('button',{name:'Close agent settings'}).click();
+  }finally{await phone?.close()}
+ }
+ await page.setViewportSize({width:1280,height:950});
  // Separate browser clients keep private drafts and navigation, even while
  // they inspect the same public room. Neither draft is submitted to a peer.
- const other=await browser.newPage({viewport:{width:1280,height:950},
+ const afterSettings=(await observe()).peers;
+ const secondBrowser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH||undefined});
+ const other=await secondBrowser.newPage({viewport:{width:1280,height:950},
   extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  try{
   await other.goto(url);await other.waitForFunction(()=>window.amplifier?.dispatch);
@@ -82,9 +122,9 @@ try{
   await expect(composer).toHaveText('First private draft — never public');
   await other.evaluate(id=>window.amplifier.dispatch('session.select',{id}),sharedId);
   await expect(otherComposer).toHaveText('Second private draft — never public');
-  assert.deepEqual((await observe()).peers,sharedFirst.peers);
+  assert.deepEqual((await observe()).peers,afterSettings);
   report.privateClientViews={separateDrafts:true,separateNavigation:true,noPeerPrompt:true};
- }finally{await other.close()}
+ }finally{await secondBrowser.close()}
  // Both streamed drafts remain attributed; a public post while busy is not
  // forced into either current prompt. Room Stop cancels current and queued work.
  await send('wait-for-stop');
