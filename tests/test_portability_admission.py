@@ -39,10 +39,11 @@ def delayed_dispatch(host, monkeypatch, action, args, command):
     original = host.app.history.ensure_loaded
     task = None
 
-    async def paused_history(sid):
-        result = await original(sid)
+    async def paused_history(sid, *, hydrate=True):
+        result = await original(sid, hydrate=hydrate)
         if asyncio.current_task() is task:
             assert sid == host.sid
+            assert hydrate is (action != 'conversation.send')
             entered.set()
             await proceed.wait()
         return result
@@ -50,6 +51,22 @@ def delayed_dispatch(host, monkeypatch, action, args, command):
     monkeypatch.setattr(host.app.history, 'ensure_loaded', paused_history)
     task = asyncio.create_task(host.app.dispatch(action, args, command_id=command))
     return task, entered, proceed
+
+
+async def wait_for_history(task, entered):
+    """Surface an early dispatch error instead of waiting for an unreachable gate."""
+    gate = asyncio.create_task(entered.wait())
+    try:
+        done, _ = await asyncio.wait({task, gate}, timeout=5,
+                                     return_when=asyncio.FIRST_COMPLETED)
+        if task in done:
+            await task
+            pytest.fail('Dispatch completed without pausing at history admission')
+        assert gate in done, 'Dispatch never reached history admission'
+    finally:
+        if not gate.done():
+            gate.cancel()
+        await asyncio.gather(gate, return_exceptions=True)
 
 
 async def resolve_transfer(host, monkeypatch, resolution):
@@ -103,7 +120,7 @@ async def test_explicit_action_waiting_on_history_cannot_cross_transfer(hosts, m
     command = 'delayed-' + action + '-' + resolution
     task, entered, proceed = delayed_dispatch(host, monkeypatch, action, args, command)
     try:
-        await asyncio.wait_for(entered.wait(), 5)
+        await wait_for_history(task, entered)
         await resolve_transfer(host, monkeypatch, resolution)
         await assert_rejected_without_mutation(host, task, proceed, command)
     finally:
@@ -123,7 +140,7 @@ async def test_implicit_send_keeps_original_task_ownership_after_await(hosts, mo
     task, entered, proceed = delayed_dispatch(host, monkeypatch, 'conversation.send',
         {'text': 'This belongs only to the original selection'}, command)
     try:
-        await asyncio.wait_for(entered.wait(), 5)
+        await wait_for_history(task, entered)
         await resolve_transfer(host, monkeypatch, 'cancel')
         if change_selection:
             await host.app.dispatch('session.select', {'id': other})
