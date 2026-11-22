@@ -245,13 +245,23 @@ try{
  // additionally require all label text and real interior hit targets to fit.
  // This is a geometry model, not physical screenshot/raster qualification.
  const dismissalReachability=button=>{
-  const box=button.getBoundingClientRect(),scale=devicePixelRatio*(visualViewport?.scale||1);
+  if(visualViewport&&(visualViewport.scale!==1||visualViewport.offsetLeft!==0||visualViewport.offsetTop!==0))
+   throw Error('This fixture requires an unscaled, unshifted visual viewport');
+  if(button.childElementCount!==0)throw Error('This fixture requires an ordinary text-only dismissal button');
+  const box=button.getBoundingClientRect(),scale=devicePixelRatio;
   const clip={left:0,top:0,right:innerWidth,bottom:innerHeight},clips=[];
-  for(let node=button.parentElement;node;node=node.parentElement){
+  for(let node=button;node;node=node.parentElement){
    const style=getComputedStyle(node),r=node.getBoundingClientRect();
-   if(style.transform!=='none'||style.clipPath!=='none')throw Error('Unsupported transformed or shaped dismissal clip');
+   if(style.transform!=='none'||style.clipPath!=='none'||style.scale!=='none'||style.rotate!=='none'||style.translate!=='none'
+    ||!['1','normal'].includes(style.zoom))throw Error('Unsupported transformed or shaped dismissal geometry');
+   if(node===button)continue;
    const x=style.overflowX!=='visible',y=style.overflowY!=='visible';
    if(!x&&!y)continue;
+   // This synthetic fixture has no classic scrollbar/gutter. Fail explicitly
+   // if one appears instead of treating it as usable padding-box content.
+   const verticalGutter=node.offsetWidth-node.clientWidth-Math.round(parseFloat(style.borderLeftWidth)+parseFloat(style.borderRightWidth));
+   const horizontalGutter=node.offsetHeight-node.clientHeight-Math.round(parseFloat(style.borderTopWidth)+parseFloat(style.borderBottomWidth));
+   if(verticalGutter!==0||horizontalGutter!==0)throw Error('Unexpected classic scrollbar/gutter in dismissal fixture');
    const inner={left:r.left+parseFloat(style.borderLeftWidth),right:r.right-parseFloat(style.borderRightWidth),
     top:r.top+parseFloat(style.borderTopWidth),bottom:r.bottom-parseFloat(style.borderBottomWidth)};
    if(x){clip.left=Math.max(clip.left,inner.left);clip.right=Math.min(clip.right,inner.right)}
@@ -269,7 +279,8 @@ try{
    const range=document.createRange();range.selectNodeContents(walker.currentNode);
    for(const r of range.getClientRects())texts.push({left:r.left,right:r.right,top:r.top,bottom:r.bottom});
   }
-  const textContained=texts.length>0&&texts.every(r=>r.left>=clip.left&&r.right<=clip.right&&r.top>=clip.top&&r.bottom<=clip.bottom);
+  const textContained=texts.length>0&&texts.every(r=>r.left>=Math.max(clip.left,box.left)&&r.right<=Math.min(clip.right,box.right)
+   &&r.top>=Math.max(clip.top,box.top)&&r.bottom<=Math.min(clip.bottom,box.bottom));
   const hits=[];
   for(const x of [.25,.5,.75])for(const y of [.25,.5,.75])
    hits.push(button.contains(document.elementFromPoint(box.left+box.width*x,box.top+box.height*y)));
@@ -280,11 +291,18 @@ try{
  assert.equal(reachable.reachable,true,JSON.stringify(reachable));
  // Reject a genuinely clipped target even while its center is still usable.
  const savedStyle=await dismissButton.getAttribute('style');
- let clipped,occluded;
+ let clipped,textClipped,occluded,offCenterOccluded;
  try{
-  await dismissButton.evaluate(button=>{button.style.transform='translateY(8px)'});
+  await dismissButton.evaluate(button=>{button.style.position='relative';button.style.top='8px'});
   clipped=await dismissButton.evaluate(dismissalReachability);
-  assert.equal(clipped.centerHit,true);assert.equal(clipped.modeledContained,false);assert.equal(clipped.reachable,false);
+  assert.equal(clipped.centerHit,true);assert.equal(clipped.textContained,true);assert.ok(clipped.hits.every(Boolean));
+  assert.equal(clipped.modeledContained,false);assert.equal(clipped.reachable,false);
+ }finally{await dismissButton.evaluate((button,style)=>style===null?button.removeAttribute('style'):button.setAttribute('style',style),savedStyle)}
+ try{
+  await dismissButton.evaluate(button=>{button.style.textIndent='500px';button.style.overflow='hidden'});
+  textClipped=await dismissButton.evaluate(dismissalReachability);
+  assert.equal(textClipped.modeledContained,true);assert.ok(textClipped.hits.every(Boolean));
+  assert.equal(textClipped.textContained,false);assert.equal(textClipped.reachable,false);
  }finally{await dismissButton.evaluate((button,style)=>style===null?button.removeAttribute('style'):button.setAttribute('style',style),savedStyle)}
  const cover=await dismissButton.evaluateHandle(button=>{
   const r=button.getBoundingClientRect(),cover=document.createElement('div');
@@ -294,10 +312,14 @@ try{
  });
  try{
   occluded=await dismissButton.evaluate(dismissalReachability);
-  assert.equal(occluded.modeledContained,true);assert.equal(occluded.centerHit,false);assert.equal(occluded.reachable,false);
+  assert.equal(occluded.modeledContained,true);assert.equal(occluded.textContained,true);assert.equal(occluded.centerHit,false);assert.equal(occluded.reachable,false);
+  await cover.evaluate((node,box)=>{node.style.left=box.x+box.width*.25-5+'px';node.style.top=box.y+box.height*.25-5+'px'},reachable.box);
+  offCenterOccluded=await dismissButton.evaluate(dismissalReachability);
+  assert.equal(offCenterOccluded.modeledContained,true);assert.equal(offCenterOccluded.textContained,true);
+  assert.equal(offCenterOccluded.centerHit,true);assert.equal(offCenterOccluded.hits[0],false);assert.equal(offCenterOccluded.reachable,false);
  }finally{await cover.evaluate(node=>node.remove());await cover.dispose()}
  assert.equal((await dismissButton.evaluate(dismissalReachability)).reachable,true);
- await writeFile(join(output,'dismissal-reachability.json'),JSON.stringify({reachable,clipped,occluded},null,2)+'\n');
+ await writeFile(join(output,'dismissal-reachability.json'),JSON.stringify({reachable,clipped,textClipped,occluded,offCenterOccluded},null,2)+'\n');
  await page.screenshot({path:join(output,'narrow-actions.png'),animations:'disabled'});
  await current.getByRole('button',{name:'Dismiss old request'}).click();
  await expect(current).toHaveCount(0);
