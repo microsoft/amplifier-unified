@@ -59,13 +59,13 @@ async function measurePaint(kind){
  // Runner/renderer reads and JSON writes stay outside the measured interaction.
  const before=await rendererMetrics(),pendingBefore=pendingActions(),loadBefore=loadavg();
  const sample=await page.evaluate(async kind=>{
-  const root=document.getElementById('amp-one'),button=kind==='appearance'?document.getElementById('appearance-color-mode'):null;
+  const root=document.getElementById('amp-one'),button=kind==='appearance'?document.querySelector('input[name="appearance-scheme"][value="dark"]'):null;
   const gallery={cards:document.querySelectorAll('.a-appearance-card').length,loading:!![...document.querySelectorAll('[role="status"]')].find(node=>node.textContent==='Loading appearances…')};
   let start,schemeChangeMs=null,firstFrameMs,secondFrameMs;
   const observer=new MutationObserver(()=>{if(schemeChangeMs===null&&root.style.colorScheme==='dark')schemeChangeMs=performance.now()-start});
   if(kind==='appearance')observer.observe(root,{attributes:true,attributeFilter:['style']});
   start=performance.now();
-  if(kind==='settings')window.pendingSettings=window.amplifier.dispatch('view.update',{patch:{panel:'settings'}});else {button.value='dark';button.dispatchEvent(new Event('change',{bubbles:true}))};
+  if(kind==='settings')window.pendingSettings=window.amplifier.dispatch('view.update',{patch:{panel:'settings'}});else button.click();
   const clickMs=performance.now()-start;
   await new Promise(resolve=>requestAnimationFrame(()=>{firstFrameMs=performance.now()-start;requestAnimationFrame(()=>{secondFrameMs=performance.now()-start;resolve()})}));
   const ms=performance.now()-start,visible=kind==='settings'?!!document.querySelector('[role="dialog"]'):root.style.colorScheme==='dark';
@@ -130,26 +130,29 @@ try{
  // Preserve simulated transport latency; the explicit gate proves persistence is still blocked.
  await page.route('**/api/actions',async route=>{
   const action=route.request().postDataJSON()?.action;
-  if(['view.update','shell.changes.prepare','shell.changes.apply'].includes(action))await new Promise(resolve=>setTimeout(resolve,500));
-  if(action==='shell.changes.prepare'&&!persistenceReleased){heldPrepares++;await persistenceGate}
+  if(['view.update','appearance.preferences.update'].includes(action))await new Promise(resolve=>setTimeout(resolve,500));
+  if(action==='appearance.preferences.update'&&!persistenceReleased){heldPrepares++;await persistenceGate}
   await route.continue();
  });
  evidence.stage='settings paint';await measurePaint('settings');
  await page.evaluate(()=>window.pendingSettings);
  await page.locator('[data-settings-section="appearance"]').click();
- const dark=page.getByRole('combobox',{name:'Color mode',exact:true});await dark.waitFor();
+ const dark=page.getByRole('radiogroup',{name:'Color mode',exact:true}).getByRole('radio',{name:'Dark',exact:true});await dark.waitFor();
+ const savedBefore=await page.evaluate(()=>window.amplifier.getState().appearance.effective.scheme);
  // Do not wait for gallery/fonts/network idle: keep the existing cold-opening coverage.
  evidence.stage='appearance paint';await measurePaint('appearance');
  evidence.stage='held persistence';await expect.poll(()=>heldPrepares).toBe(1);
- evidence.optimisticProof={heldPrepares,persistenceReleased,...await page.evaluate(()=>({localScheme:document.getElementById('amp-one').style.colorScheme,savedScheme:window.amplifier.getShellState().effectiveComposition.presentation.scheme??null}))};
+ evidence.optimisticProof={heldPrepares,persistenceReleased,...await page.evaluate(()=>({localScheme:document.getElementById('amp-one').style.colorScheme,savedScheme:window.amplifier.getState().appearance.effective.scheme}))};
  await persist();assert.ok(!evidence.optimisticProof.persistenceReleased&&evidence.optimisticProof.localScheme==='dark',JSON.stringify(evidence.optimisticProof));
+ assert.equal(evidence.optimisticProof.savedScheme,savedBefore,'Optimistic paint must not be mistaken for persistence');
  releasePersistence();
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().appearance.effective.scheme)).toBe('dark');
  await expect(dark).toBeEnabled();
  assert.equal(await page.evaluate(()=>window.amplifier.getShellState().effectiveComposition.presentation.scheme),'dark');
  // Failed persistence rolls back the preview and retains the saved appearance.
  evidence.stage='rejection rollback';await page.unroute('**/api/actions');
- await page.route('**/api/actions',async route=>{if(route.request().postDataJSON()?.action==='shell.changes.apply'){await new Promise(resolve=>setTimeout(resolve,300));return route.fulfill({status:409,json:{accepted:false,error:'Fixture rejected appearance'}})}await route.continue()});
- await page.getByRole('combobox',{name:'Color mode',exact:true}).selectOption('light');
+ await page.route('**/api/actions',async route=>{if(route.request().postDataJSON()?.action==='appearance.preferences.update'){await new Promise(resolve=>setTimeout(resolve,300));return route.fulfill({status:409,json:{accepted:false,error:'Fixture rejected appearance'}})}await route.continue()});
+ await page.getByRole('radiogroup',{name:'Color mode',exact:true}).getByRole('radio',{name:'Light',exact:true}).check();
  await expect(page.getByText('Fixture rejected appearance',{exact:true})).toBeVisible();
  assert.equal(await page.locator('#amp-one').evaluate(node=>node.style.colorScheme),'dark');evidence.rejectionRollback=true;
  await page.unroute('**/api/actions');

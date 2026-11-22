@@ -2,7 +2,9 @@ import {finishFixture} from './fixture-lifecycle.mjs';
 import {showComposerOption} from './composer-options-helpers.mjs';
 import {openChatAdvancedPage} from './browser-chat-pages.mjs';
 import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.mjs';
-import {startSettingsFixture} from './settings-fixture.mjs';
+import {startSettingsFixture,readAppearance,settledAppearance,updateAppearance} from './settings-fixture.mjs';
+import {execFileSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const {base,stop}=await startSettingsFixture({SETTINGS_RELEASE_FIXTURE:'1'});
@@ -41,7 +43,11 @@ try{
  await page.getByRole('button',{name:'Save active profile',exact:true}).click();
  await page.getByText('Routing profile saved and selected.').waitFor();
  assert.equal((await state()).setup.matrix.roles.general.candidates[0].model,'fixture-alternative');
- await page.evaluate(()=>window.amplifier.dispatch('theme.apply',{name:'Existing skin',css:'#amp-one .a-overlay{padding:24px;border-radius:22px} @media(max-width:760px){#amp-one .a-settings-overlay .a-dialog.wide{width:100%;height:100dvh;border-radius:0}} #amp-one .a-dialog label{display:block;flex-direction:column} #amp-one .a-dialog{max-height:90dvh;border-radius:24px;padding:26px} #amp-one .a-dialog.wide{width:min(860px,100%)}'}));
+ // Keep the original adversarial delta: shared Settings geometry must still win.
+ // Saving a format-2 package and selecting its ID are deliberately separate.
+ const skin=await page.evaluate(()=>window.amplifier.dispatch('theme.save',{name:'Existing skin',css:'#amp-one .a-overlay{padding:24px;border-radius:22px} @media(max-width:760px){#amp-one .a-settings-overlay .a-dialog.wide{width:100%;height:100dvh;border-radius:0}} #amp-one .a-dialog label{display:block;flex-direction:column} #amp-one .a-dialog{max-height:90dvh;border-radius:24px;padding:26px} #amp-one .a-dialog.wide{width:min(860px,100%)}'}));
+ assert.equal(skin.accepted,true);assert.equal(skin.result.packageVersion,2);
+ await updateAppearance(page,{appearanceId:skin.result.id});
  await openSettingsPage(page,'updates');
  assert.equal(await page.getByRole('button',{name:'Same-chat CLI and web',exact:true}).count(),0);
  await openSettingsPage(page,'history');
@@ -205,13 +211,29 @@ try{
  assert.equal(await page.evaluate(()=>window.amplifier.getState().view.newSessionDraft.bundle),'fixture-root','attaching a browsed folder preserves the selected bundle');
  assert.equal(await composer.innerText(),'Keep the new chat draft');
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'appearance'}}));
- await openSettingsPage(page,'custom-appearance');
- const data=await page.evaluateHandle(()=>{const transfer=new DataTransfer();transfer.items.add(new File(['#amp-one { --a-accent: purple; }'],'dropped.amplifier.css',{type:'text/css'}));return transfer});
+ await openSettingsPage(page,'appearance');
+ const appearanceAdvanced=page.locator('.a-appearance-more');
+ if(!await appearanceAdvanced.evaluate(el=>el.open))await appearanceAdvanced.locator(':scope > summary').click();
+ const packageBase64=execFileSync(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-c',String.raw`
+import base64,io,json,zipfile
+out=io.BytesIO()
+with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_DEFLATED) as archive:
+ archive.writestr('appearance.json',json.dumps({'type':'appearance','formatVersion':2,'base':'reference-v1','name':'dropped','stylesheet':'delta.css'}))
+ archive.writestr('delta.css','#amp-one { --a-accent: purple; }')
+print(base64.b64encode(out.getvalue()).decode())
+`],{encoding:'utf8'}).trim();
+ const beforeDrop=await settledAppearance(page);
+ const data=await page.evaluateHandle(base64=>{const transfer=new DataTransfer();transfer.items.add(new File([Uint8Array.from(atob(base64),c=>c.charCodeAt(0))],'dropped.zip',{type:'application/zip'}));return transfer},packageBase64);
  await page.locator('.a-file-drop').dispatchEvent('drop',{dataTransfer:data});
- await expect(page.getByRole('button',{name:'Preview dropped',exact:true})).toBeVisible();
- await page.getByRole('button',{name:'Preview dropped',exact:true}).click();
  await expect(page.getByRole('button',{name:'Use dropped',exact:true})).toBeVisible();
- await page.getByRole('button',{name:'Cancel preview',exact:true}).click();
+ assert.deepEqual((await readAppearance(page)).effective,beforeDrop.effective,'Package drop does not select it');
+ await page.getByRole('button',{name:'Edit dropped',exact:true}).click();
+ await page.getByRole('button',{name:'Preview draft',exact:true}).click();
+ await expect(page.locator('.a-appearance-preview')).toContainText('Previewing dropped');
+ assert.deepEqual((await settledAppearance(page)).effective,beforeDrop.effective);
+ await page.locator('.a-appearance-preview').getByRole('button',{name:'Cancel preview',exact:true}).click();
+ await expect.poll(async()=>(await readAppearance(page)).preview).toBe(null);
+ assert.deepEqual((await settledAppearance(page)).theme,beforeDrop.theme);
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({attentionTrail:true,informationalNoticesDoNotBadge:true,noticeReviewPersists:true,compactGroupedUpdates:true,narrowerModalBreakpoint:true,typedFolderPath:true,registeredBundlePicker:true,actionSpacing:true,focusedPages:true,wildcardFilters:true,filterRetainsSelection:true,inlineBundleRadio:true,inlineAddModule:true,singleModelSelector:true,providerResult:true,providerDragOrder:true,activeRoutingEdit:true,inlineCheckbox:true,mobileFullscreen:true,noHorizontalOverflow:true,liveModuleConfig:true,liveModuleToggle:true,folderBrowser:true,fileDrop:true,browserErrors:errors.length}));
 }catch(error){

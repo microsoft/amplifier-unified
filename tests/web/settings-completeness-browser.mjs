@@ -2,7 +2,7 @@ import {finishFixture} from './fixture-lifecycle.mjs';
 import {openSettingsPage,openPhoneNotificationSettings} from '../../.build/web-client/tests/browser-settings.mjs';
 import {settingsToolObservations} from './settings-tool-observations.mjs';
 import {settingsSections} from '../../.build/web-client/src/settings-navigation.js';
-import {startSettingsFixture} from './settings-fixture.mjs';
+import {startSettingsFixture,readAppearance,settledAppearance} from './settings-fixture.mjs';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const {base,stop}=await startSettingsFixture();
@@ -13,33 +13,28 @@ try{
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(base+'/');await page.waitForSelector('#amp-one');
  const state=()=>page.evaluate(()=>window.amplifier.getState());
+ const advanced=async()=>{const details=page.locator('.a-appearance-more');if(!await details.evaluate(el=>el.open))await details.locator(':scope > summary').click()};
  const presentation=async(id,value)=>{
-  if(id!=='scheme'&&!await page.locator('#'+id).isVisible())await page.getByText('Layout & background',{exact:true}).click();
-  const control=id==='scheme'?page.getByRole('combobox',{name:'Color mode',exact:true}):page.locator('#'+id);
+  if(id!=='scheme')await advanced();
+  const control=id==='scheme'?page.getByRole('radiogroup',{name:'Color mode',exact:true}).getByRole('radio',{name:{dark:'Dark',light:'Light',system:'System'}[value],exact:true}):page.getByRole('combobox',{name:'Layout',exact:true});
   // A prior edit may already be painted but still awaiting persistence. Do not
   // accidentally accept its response as the acknowledgment for this edit.
   await expect(control).toBeEnabled();
-  const selected=await control.inputValue()===value;
+  const before=await settledAppearance(page),scope=before.activeScope,profile=scope==='client'?'local':'shared';
+  const selected=before.effective[id]===value;
   if(!selected){
-   const prepared=page.waitForResponse(response=>{
+   const applied=page.waitForResponse(response=>{
     const request=response.request(),body=request.method()==='POST'?request.postDataJSON():null;
-    return response.url().endsWith('/api/actions')&&body?.action==='shell.changes.prepare'&&body.args.composition.presentation[id]===value;
+    return response.url().endsWith('/api/actions')&&body?.action==='appearance.preferences.update'&&body.args.scope===scope&&body.args.generation===before.generation&&body.args.expectedRevision===before[profile].revision&&body.args.patch[id]===value;
    });
-   const applied=page.waitForResponse(async response=>{
-    const request=response.request(),body=request.method()==='POST'?request.postDataJSON():null;
-    if(!response.url().endsWith('/api/actions')||body?.action!=='shell.changes.apply')return false;
-    const preparation=await prepared;
-    return body.args.changeId===(await preparation.json()).result.id;
-   });
-   await control.selectOption(value);
-   const preparation=await prepared;assert.ok(preparation.ok());
+   if(id==='scheme')await control.check();else await control.selectOption(value);
    const application=await applied;assert.ok(application.ok());
    assert.equal((await application.json()).accepted,true);
+   await expect.poll(async()=>(await readAppearance(page))[profile].revision).toBe(before[profile].revision+1);
   }
   await expect(control).toBeEnabled();
-  // The actual shell snapshot is separate from the optimistic controls.
-  await expect.poll(()=>page.evaluate(key=>window.amplifier.getShellState()?.effectiveComposition.presentation[key],id)).toBe(value);
-  await expect(control).toHaveValue(value);
+  assert.equal((await settledAppearance(page)).effective[id],value);
+  if(id==='scheme')await expect(control).toBeChecked();else await expect(control).toHaveValue(value);
  };
  await openSettingsPage(page,'notifications');
  assert.equal((await page.locator('.a-dialog').boundingBox()).width,1120);
@@ -94,30 +89,40 @@ try{
  await openSettingsPage(page,'routing');await openSettingsPage(page,'providers');
  assert.equal(await page.locator('#provider-key').inputValue(),'fixture-unsaved-key');
  assert.ok(!JSON.stringify(await state()).includes('fixture-unsaved-key'));
- await openSettingsPage(page,'custom-appearance');
+ await openSettingsPage(page,'appearance');await advanced();
  await page.getByText('Advanced customization',{exact:true}).click();
+ const beforePreview=await settledAppearance(page);
  await page.locator('#theme-name').fill('Acceptance skin');await page.locator('#theme-css').fill('#amp-one { --a-accent: #6b4dcc; }');
- await page.getByRole('button',{name:'Preview',exact:true}).click();
- assert.notEqual((await state()).theme?.name,'Acceptance skin');
- await openSettingsPage(page,'updates');await openSettingsPage(page,'custom-appearance');
- await expect.poll(async()=>(await state()).view.themePreview).toBe(false);
- await page.getByRole('button',{name:'Apply appearance',exact:true}).click();
- await page.waitForFunction(()=>window.amplifier.getState().theme.name==='Acceptance skin');
+ await page.getByRole('button',{name:'Preview draft',exact:true}).click();
+ await expect.poll(async()=>(await readAppearance(page)).preview?.name).toBe('Acceptance skin');
+ assert.deepEqual((await settledAppearance(page)).effective,beforePreview.effective);
+ await openSettingsPage(page,'updates');await openSettingsPage(page,'appearance');await advanced();
+ await expect.poll(async()=>(await readAppearance(page)).preview).toBe(null);
+ await expect(page.locator('#theme-name')).toHaveValue('Acceptance skin');
+ await expect(page.locator('#theme-css')).toHaveValue('#amp-one { --a-accent: #6b4dcc; }');
+ await page.getByRole('button',{name:'Save as copy',exact:true}).click();
+ const use=page.getByRole('button',{name:'Use Acceptance skin',exact:true});await expect(use).toBeVisible();
+ assert.deepEqual((await readAppearance(page)).effective,beforePreview.effective,'Saving a library copy never selects it');
+ await use.click();
+ await expect.poll(async()=>(await readAppearance(page)).theme.name).toBe('Acceptance skin');
+ await settledAppearance(page);
  // Persistence must survive a reload even when appearance paints before the
  // server accepts it. Keep these real writes in flight long enough to expose
  // a helper that mistakes optimistic controls for saved settings.
  await page.route('**/api/actions',async route=>{
-  if(['shell.changes.prepare','shell.changes.apply'].includes(route.request().postDataJSON()?.action))await new Promise(resolve=>setTimeout(resolve,500));
+  if(route.request().postDataJSON()?.action==='appearance.preferences.update')await new Promise(resolve=>setTimeout(resolve,500));
   await route.continue();
  });
  await openSettingsPage(page,'appearance');await presentation('scheme','dark');await presentation('layout','work');
- await page.reload();await page.locator('.a-settings-experience').waitFor();await openSettingsPage(page,'custom-appearance');await page.getByText('Advanced customization',{exact:true}).click();await page.locator('#theme-name').waitFor();
+ await page.reload();await page.locator('.a-settings-experience').waitFor();await openSettingsPage(page,'appearance');await advanced();await page.getByText('Advanced customization',{exact:true}).click();await page.locator('#theme-name').waitFor();
  assert.equal(await page.locator('#theme-name').inputValue(),'Acceptance skin');
  // Shell settings hydrate separately from the host's skin controls after reload.
- await openSettingsPage(page,'appearance');await page.getByText('Layout & background',{exact:true}).click();await expect(page.locator('#layout')).toHaveValue('work');
+ await expect(page.getByRole('combobox',{name:'Layout',exact:true})).toHaveValue('work');
+ assert.equal((await settledAppearance(page)).effective.scheme,'dark');
  await page.unrouteAll({behavior:'wait'});
- await openSettingsPage(page,'custom-appearance');await page.getByRole('button',{name:'Restore original appearance',exact:true}).click();
- await page.waitForFunction(()=>window.amplifier.getState().theme.name!=='Acceptance skin');
+ await page.getByRole('button',{name:'Restore neutral appearance',exact:true}).click();
+ await expect.poll(async()=>(await readAppearance(page)).effective.appearanceId).toBe('reference');
+ await settledAppearance(page);
  await openSettingsPage(page,'tool-connections');
  await page.getByRole('button',{name:'Tool catalog',exact:true}).click();
  await page.getByRole('button',{name:/Fixture catalog tool/}).waitFor();

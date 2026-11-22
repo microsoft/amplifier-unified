@@ -7,6 +7,7 @@ import {mkdir,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import {StandardUxEvidence} from './standard-ux-evidence.mjs';
+import {settledAppearance} from './settings-fixture.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url)),output=process.env.AMPLIFIER_TEST_ARTIFACTS;
 if(!output)throw Error('An owned AMPLIFIER_TEST_ARTIFACTS directory is required');
@@ -28,7 +29,7 @@ for(const variant of variants){
   await page.addInitScript(()=>{window.__notificationRequests=[];class DeniedNotification{static permission='default';static async requestPermission(){window.__notificationRequests.push({active:!!navigator.userActivation?.isActive});this.permission='denied';return 'denied'}}Object.defineProperty(window,'Notification',{value:DeniedNotification,configurable:true})});
   evidence.page=page;
   const state=()=>page.evaluate(()=>window.amplifier.getState());
-  const presentation=()=>page.evaluate(()=>window.amplifier.getShellState()?.effectiveComposition.presentation);
+  const presentation=async()=>(await settledAppearance(page)).effective;
   const act=async(label,control)=>evidence.action(label,async()=>{await expect(control).toBeVisible();await expect(control).toBeEnabled();if(variant.mode==='keyboard'){await control.focus();await expect(control).toBeFocused();await control.press(await control.evaluate(el=>el.matches('input[type=checkbox],input[type=radio]'))?'Space':'Enter')}else if(variant.mode==='touch')await control.tap();else await control.click()});
   const section=async id=>{
    await page.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId);
@@ -38,25 +39,37 @@ for(const variant of variants){
   const probe=async(id,workflows,run)=>{const record=await evidence.probe(variant.id+'.'+id,workflows,async()=>{await run();return {variant,...await evidence.snapshot(page,variant.id+'.'+id,'#amp-one')}});if(record.status!=='passed')throw Error('Dependent preference checks stopped after '+id)};
   const setPresentation=async(key,value,control,kind='select')=>{
    await expect(control).toBeEnabled();
-   const prepared=page.waitForResponse(response=>{const request=response.request(),body=request.method()==='POST'?request.postDataJSON():null;return new URL(response.url()).pathname==='/api/actions'&&body?.action==='shell.changes.prepare'&&body.args?.composition?.presentation?.[key]===value});
-   const applied=page.waitForResponse(async response=>{const request=response.request(),body=request.method()==='POST'?request.postDataJSON():null;if(new URL(response.url()).pathname!=='/api/actions'||body?.action!=='shell.changes.apply')return false;return body.args.changeId===(await(await prepared).json()).result.id});
+   const before=await settledAppearance(page);
+   evidence.assertion('Explicit This browser profile',before.activeScope,'client');
+   const applied=page.waitForResponse(response=>{const request=response.request(),body=request.method()==='POST'?request.postDataJSON():null;return new URL(response.url()).pathname==='/api/actions'&&body?.action==='appearance.preferences.update'&&body.args?.scope==='client'&&body.args?.generation===before.generation&&body.args?.expectedRevision===before.local.revision&&body.args?.patch?.[key]===value});
    if(kind==='select')await evidence.action('Choose '+key+'='+value+' through native select (picker gesture not qualified)',()=>control.selectOption(value));else await act('Set '+key+'='+value,control);
-   evidence.assertion('Prepare '+key+' accepted',(await prepared).ok());const result=await applied;evidence.assertion('Apply '+key+' HTTP succeeds',result.ok());evidence.assertion('Apply '+key+' accepted',(await result.json()).accepted,true);
-   await expect.poll(async()=>(await presentation())[key]).toBe(value);await expect(control).toBeEnabled();evidence.assertion(key+' exact canonical preference',(await presentation())[key],value);
+   const result=await applied;evidence.assertion('Apply '+key+' HTTP succeeds',result.ok());evidence.assertion('Apply '+key+' accepted',(await result.json()).accepted,true);
+   await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().appearance.local.revision)).toBe(before.local.revision+1);
+   const after=await settledAppearance(page);
+   evidence.assertion(key+' exact canonical preference',after.effective[key],value);
+   evidence.assertion('Browser edit leaves Global unchanged',after.shared,before.shared);
+   const stored=await page.evaluate(key=>JSON.parse(localStorage.getItem(key)),after.namespace);
+   evidence.assertion('Confirmed browser storage version',stored.version,after.local.storageVersion);
+   evidence.assertion('Confirmed whole browser profile',stored.values,after.local.values);
+   await expect(control).toBeEnabled();
   };
   let selected;
   await probe('entry',['entry.boot','settings.destinations'],async()=>{await evidence.action('Open clean synthetic Settings app',()=>page.goto(url));await showFixtureConversation(page,{navPinned:true});await page.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId);selected=(await state()).selectedSessionId;await expect(page.getByRole('textbox',{name:'Message Amplifier',exact:true})).toBeEditable();await evidence.action('Type retained unsent preference draft',()=>page.getByRole('textbox',{name:'Message Amplifier',exact:true}).fill('Keep this unsent preference draft'));await section('appearance');evidence.assertion('Settings retains selected chat',(await state()).selectedSessionId,selected)});
   await probe('color-detail',['appearance.mode'],async()=>{
-   for(const value of ['dark','light','system']){await setPresentation('scheme',value,page.getByRole('combobox',{name:'Color mode',exact:true}));const painted=value==='system'?'light':value;await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',painted)}
-   for(const [value,label] of [['minimal','Focused'],['detailed','Everything'],['standard','Balanced']]){await setPresentation('interfaceDetail',value,page.getByRole('radio',{name:new RegExp('^'+label)}),'radio');await expect(page.locator('#amp-one')).toHaveAttribute('data-interface-detail',value)}
+   const before=await settledAppearance(page);
+   await act('Select This browser profile',page.getByRole('group',{name:'Appearance profile',exact:true}).getByRole('button',{name:'This browser',exact:true}));
+   await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().appearance.activeScope)).toBe('client');
+   const local=await settledAppearance(page);evidence.assertion('Source selection preserves Global',local.shared,before.shared);
+   for(const [value,label] of [['dark','Dark'],['light','Light'],['system','System']]){await setPresentation('scheme',value,page.getByRole('radiogroup',{name:'Color mode',exact:true}).getByRole('radio',{name:label,exact:true}),'radio');const painted=value==='system'?'light':value;await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',painted)}
+   await act('Open advanced appearance preferences',page.locator('.a-appearance-more > summary'));
+   for(const value of ['minimal','detailed','standard']){await setPresentation('interfaceDetail',value,page.getByRole('combobox',{name:'Interface detail',exact:true}));await expect(page.locator('#amp-one')).toHaveAttribute('data-interface-detail',value)}
   });
   await probe('layout',['appearance.layout','appearance.interim'],async()=>{
    for(const value of ['inline','active','overview','composer'])await setPresentation('planPlacement',value,page.getByLabel('Plan location',{exact:true}));
-   const collapse=page.getByRole('checkbox',{name:/^Collapse interim replies/});for(const value of [true,false])await setPresentation('collapseInterimReplies',value,collapse,'checkbox');
-   await expect(page.locator('#collapse-interim-help')).toContainText('Applies to this browser.');evidence.assertion('Interim preference scope is explicit',(await page.locator('#collapse-interim-help').innerText()).includes('Applies to this browser.'));
-   await act('Open Layout & background',page.getByText('Layout & background',{exact:true}));
+   const collapse=page.getByRole('checkbox',{name:'Collapse earlier updates',exact:true});for(const value of [true,false])await setPresentation('collapseInterimReplies',value,collapse,'checkbox');
+   await expect(page.getByRole('group',{name:'Appearance profile',exact:true}).getByRole('button',{name:'This browser',exact:true})).toHaveAttribute('aria-pressed','true');
    for(const value of ['conversation','work','balanced']){await setPresentation('layout',value,page.getByLabel('Layout',{exact:true}));await expect(page.locator('#amp-one')).toHaveAttribute('data-layout',value)}
-   const decorations=page.getByRole('checkbox',{name:'Show decorative theme background',exact:true});for(const value of [false,true]){await setPresentation('decorations',value,decorations,'checkbox');await expect(page.locator('#amp-one')).toHaveAttribute('data-decorations',value?'on':'off')}
+   const decorations=page.getByRole('checkbox',{name:'Show background decorations',exact:true});for(const value of [false,true]){await setPresentation('decorations',value,decorations,'checkbox');await expect(page.locator('#amp-one')).toHaveAttribute('data-decorations',value?'on':'off')}
    await evidence.action('Reload after accepted preferences',()=>page.reload());await section('appearance');const current=await presentation();for(const [key,value] of Object.entries({scheme:'system',interfaceDetail:'standard',planPlacement:'composer',collapseInterimReplies:false,layout:'balanced',decorations:true}))evidence.assertion('Reload preserves '+key,current[key],value);
   });
   await probe('notification-defaults',['notifications.phone','notifications.browser'],async()=>{
