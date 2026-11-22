@@ -34,6 +34,7 @@ try{
  const act=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const info=async()=>(await page.request.get(`http://127.0.0.1:${port}/api/fixture/info`)).json();
  const landing=page.locator('.a-adaptive-home:visible'),sidebar=page.locator('#workspace-navigation');
+ const homeButton=page.getByRole('navigation',{name:'Site navigation',exact:true}).getByRole('button',{name:'Home',exact:true});
  const choose=mode=>landing.getByRole('group',{name:'Work view',exact:true}).getByRole('button',{name:mode,exact:true}).click();
  const settled=()=>expect.poll(async()=>{const snapshot=await shell();return !!snapshot&&Array.isArray(snapshot.navigationResources)&&Object.keys(snapshot.navigationResourcePending||{}).length===0},{timeout:15000}).toBe(true);
  const openSidebar=async()=>{if(!await sidebar.isVisible())await page.locator('#navigation-toggle').click()};
@@ -51,7 +52,7 @@ try{
   const receipt=await response.json();assert.equal(receipt.accepted,true);
   await expect.poll(async()=>{const current=await state();return current?.client?.hostInstanceId===receipt.hostInstanceId&&current?.revision>=receipt.stateRevision},{timeout:15000}).toBe(true);
  };
- const home=async()=>{await openSidebar();await acceptedDestination('home',()=>sidebar.getByRole('button',{name:'Home',exact:true}).click());await expect(landing).toHaveAttribute('data-landing','home');await settled()};
+ const home=async()=>{await acceptedDestination('home',()=>homeButton.click());await expect(landing).toHaveAttribute('data-landing','home');await settled()};
  const allChats=async()=>{await openSidebar();await acceptedDestination('chats',()=>sidebar.getByRole('button',{name:'Search chats',exact:true}).click());await expect(landing.getByRole('heading',{level:1})).toHaveText('All chats');await settled()};
  const allWorkspaces=async()=>{await openSidebar();await sidebar.getByRole('button',{name:'Browse',exact:true}).click();await acceptedDestination('workspaces',()=>sidebar.getByRole('button',{name:'All workspaces',exact:true}).click());await expect(landing).toHaveAttribute('data-landing','workspaces');await settled()};
  const focusRow=()=>landing.locator('.a-landing-chat[data-session-id]');
@@ -76,11 +77,13 @@ try{
   }).toPass({timeout:15000});
  };
  await page.goto(`http://127.0.0.1:${port}`);await expect(landing).toHaveAttribute('data-landing','home');await settled();
+ const branding=(await state()).instanceBranding;assert.ok(branding?.name);
  await expect(landing.getByText('Layout',{exact:true})).toHaveCount(0);
  await expect(landing.getByRole('group',{name:'Work view',exact:true})).toBeVisible();
  const initial=await info();
  await openSidebar();
- await expect(sidebar.getByRole('button',{name:'Home',exact:true})).toHaveAttribute('aria-current','page');
+ await expect(homeButton).toHaveAttribute('aria-current','page');
+ await expect(sidebar.getByRole('button',{name:'Home',exact:true})).toHaveCount(0);
  await expect(sidebar.getByRole('button',{name:'Search chats',exact:true})).toBeVisible();
  await expect(sidebar.getByRole('button',{name:'New chat',exact:true})).toBeVisible();
  assert.equal(await page.locator('header #navigation-toggle').count(),1);
@@ -99,7 +102,7 @@ try{
  await page.screenshot({path:join(output,'home-studio.png')});
  report.checks.push('Home has no visible Layout label but retains the accessible Work view group; Home icon and header toggle remain available; view choices stay stable across display detail and status remains visible');
 
- await allChats();await expect(page).toHaveTitle('All chats - Amplifier');
+ await allChats();await expect(page).toHaveTitle('All chats - '+branding.name);
  await choose('Focus');await expect(focusRow()).toHaveCount(1);
  const first=await focusRow().getAttribute('data-session-id');
  await landing.getByRole('button',{name:'Next Focus item',exact:true}).click();await expect(focusRow()).not.toHaveAttribute('data-session-id',first);
@@ -147,7 +150,7 @@ try{
  await expect(landing.getByRole('searchbox',{name:'Search chats',exact:true})).toHaveValue('Beta');
  await landing.getByRole('button',{name:'Clear search',exact:true}).click();await settled();
 
- await allWorkspaces();await expect(page).toHaveTitle('All workspaces - Amplifier');
+ await allWorkspaces();await expect(page).toHaveTitle('All workspaces - '+branding.name);
  await landing.getByRole('button',{name:'Recent',exact:true}).click();await settled();
  await choose('Brief');await expect.poll(()=>landing.locator('.a-landing-workspace').count()).toBeGreaterThan(1);
  await expect(landing.getByLabel('Workspace archive filter',{exact:true})).toBeVisible();
@@ -320,8 +323,8 @@ try{
  await page.locator('#amp-one').evaluate(node=>{for(const name of ['--a-text-base','--a-text-sm','--a-text-xs'])node.style.removeProperty(name)});
  await choose('Brief');await page.setViewportSize({width:390,height:844});await page.screenshot({path:join(output,'phone-workspaces.png')});
  await allChats();if(await sidebar.isVisible())await page.locator('#navigation-toggle').click();await page.screenshot({path:join(output,'phone-chats.png')});
- await page.emulateMedia({forcedColors:'active'});await openSidebar();
- await sidebar.getByRole('button',{name:'Home',exact:true}).focus();await page.keyboard.press('Enter');
+ await page.emulateMedia({forcedColors:'active'});await expect(sidebar).toBeHidden();
+ await homeButton.focus();await expect(homeButton).toBeFocused();await page.keyboard.press('Enter');
  await expect(landing).toHaveAttribute('data-landing','home');await expect(sidebar).toBeHidden();
  await page.screenshot({path:join(output,'phone-home-forced-colors.png')});
  await page.emulateMedia({forcedColors:'none'});await page.setViewportSize({width:1440,height:1000});

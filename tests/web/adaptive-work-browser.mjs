@@ -37,14 +37,17 @@ try{
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  await page.goto(url);await ready();
  await expect(page.locator('.a-work-heading')).toHaveCount(0);
- await expect(page).toHaveTitle('Amplifier');
+ const branding=(await state()).instanceBranding;assert.ok(branding?.name);
+ await expect(page).toHaveTitle(branding.name);
  await expect(page.locator('#workspace-navigation')).toBeHidden();
  await page.getByRole('button',{name:'Open navigation',exact:true}).click();
- await expect(page.locator('#workspace-navigation').getByRole('button',{name:'Home',exact:true})).toBeVisible();
- await expect(page.locator('#workspace-navigation').getByRole('button',{name:'Home',exact:true})).toHaveAttribute('aria-current','page');
+ const homeButton=page.getByRole('navigation',{name:'Site navigation',exact:true}).getByRole('button',{name:'Home',exact:true});
+ await expect(homeButton).toBeVisible();
+ await expect(homeButton).toHaveAttribute('aria-current','page');
+ await expect(page.locator('#workspace-navigation').getByRole('button',{name:'Home',exact:true})).toHaveCount(0);
  await page.getByRole('button',{name:'Close navigation',exact:true}).click();
  await expect(page.locator('#workspace-navigation')).toBeHidden();
- check('Fresh clients arrive at Home with app identity, no redundant header label and a sidebar Home icon');
+ check('Fresh clients arrive at Home with fixture instance identity, no redundant header label and one site-navigation Home icon');
 
  const fixtureHome=dirname((await state()).workspaceDefaults.root),projects=[],chats=[];
  for(const [name,title] of [['Launch','Home launch notes'],['Offsite','Other project chat']]){

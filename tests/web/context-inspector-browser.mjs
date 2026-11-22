@@ -23,14 +23,16 @@ try{
  await action('view.update',{patch:{workSurface:'chat',panel:null}});
  await action('canvas.visibility',{open:true});
  await action('canvas.show',{kind:'markdown',title:'Keep this document',content:'# Original document\nRetained while inspecting.'});
- await page.getByRole('tab',{name:'Chat overview',exact:true}).click();
+ const canvas=page.locator('#workspace-canvas');
+ await canvas.getByRole('button',{name:'Chat overview',exact:true}).or(canvas.getByRole('tab',{name:'Chat overview',exact:true})).click();
  await page.getByRole('button',{name:'Context inspector Last observed request · usage & contents'}).click();
  const panel=page.locator('.a-context-inspector');
  await expect(panel.getByRole('region',{name:'Request capacity',exact:true})).toBeVisible();record('overview entry opens actual context.inspect result');
  await expect(page.locator('.a-overlay')).toHaveCount(0);
- await expect(page.locator('#workspace-canvas').getByRole('tab',{name:'Context inspector',exact:true})).toHaveAttribute('aria-selected','true');
+ await expect(canvas).toHaveAttribute('data-navigation','compact');
+ await expect(canvas.getByRole('button',{name:/^Open documents, \d+ open, Context inspector$/})).toBeVisible();
  const inspectorId=await page.evaluate(()=>window.amplifier.getState().canvas.id);
- record('native Canvas tab, no superseded modal');
+ record('native compact Canvas current-document control, no superseded modal');
  assert.ok(requests.length===1);record('sidebar did not read history or prompt bodies before open');
  const initial=await panel.getAttribute('data-selected-call');assert.ok(initial.startsWith('llm:'));
  await panel.locator('.a-context-evidence summary').click();
@@ -38,6 +40,9 @@ try{
  await expect(panel.locator('.a-context-legend')).toContainText('of known text');
  await panel.locator('.a-context-evidence summary').click();
  await page.getByRole('button',{name:'Focus canvas',exact:true}).click();
+ await expect(canvas).toHaveAttribute('data-navigation','tabs');
+ await expect(canvas.getByRole('tab',{name:'Context inspector',exact:true})).toHaveAttribute('aria-selected','true');
+ record('wide Canvas exposes the selected inspector tab');
  await page.screenshot({path:path.join(artifacts,'overview-light.png'),fullPage:true,animations:'disabled'});
  await panel.locator('.a-context-category').filter({hasText:'Instructions & files'}).click();
  await panel.locator('.a-context-item').filter({hasText:'AGENTS.md'}).click();
@@ -128,7 +133,7 @@ try{
  await page.getByRole('tab',{name:'Context inspector',exact:true}).click();
  await expect(panel).toBeVisible();
  await expect(panel.locator('.a-context-pagination')).toContainText('6001');
- await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();
+ await page.locator('#canvas-toggle').click();
  await expect(panel).not.toBeVisible();
  await page.getByRole('button',{name:'Open canvas',exact:true}).click();
  await expect(panel).toBeVisible();
