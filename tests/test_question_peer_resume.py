@@ -213,11 +213,19 @@ async def test_answer_is_not_a_schedule_repair_or_foreign_assignment_grant(app):
 
 
 async def test_question_backed_recovery_preserves_failed_generation(app):
-    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.runtime import RuntimeManager, normalize_event
+    from amplifier_web.session_health import current_terminal_failure
     source, target, human, _ = await answered_member(app)
-    target.update(status='error', failure={'generationId': 'failed-turn',
-        'category': 'unknown', 'errorType': 'ValueError', 'effects': 'not_rolled_back'},
-        collaborationGeneration={'id': 'failed-turn', 'terminal': True, 'completed': False})
+    await generation(app, target, 'failed-turn', ['failed-input'],
+                     interruption_revision=target.get('interruptionRevision', 0))
+    await app.on_runtime_event(*normalize_event({
+        'type': 'generation.failed', 'generation_id': 'failed-turn',
+        'input_ids': ['failed-input'], 'error_category': 'unknown',
+        'error_type': 'ValueError', 'error_stage': 'manager_turn',
+    }, target['id']))
+    assert target['status'] == 'error' and current_terminal_failure(target)
+    assert target['failure']['generationId'] == 'failed-turn'
+    assert target['failure']['inputIds'] == ['failed-input']
     app.runtime.stopped_boundary = RuntimeManager().stopped_boundary
     before = copy.deepcopy(target['failure'])
     await submit(app, source, target, human)
