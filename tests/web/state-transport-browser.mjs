@@ -89,7 +89,7 @@ async function measurePaint(kind){
    },{capture:true,once:true});
   });
   await page.keyboard.press('Space');
-  await page.waitForFunction(()=>window.transportAppearanceSample!==null);
+  await page.waitForFunction(()=>window.transportAppearanceSample!==null,null,{timeout:5000});
   sample=await page.evaluate(()=>window.transportAppearanceSample);
  }else sample=await page.evaluate(async kind=>{
   const gallery={cards:document.querySelectorAll('.a-appearance-card').length,loading:!![...document.querySelectorAll('[role="status"]')].find(node=>node.textContent==='Loading appearances…')};
@@ -202,8 +202,13 @@ try{
  const light=page.getByRole('radiogroup',{name:'Color mode',exact:true}).getByRole('radio',{name:'Light',exact:true});
  await page.keyboard.press('Space');await page.keyboard.press('ArrowLeft');
  await expect(dark).toBeFocused();await expect(dark).toBeChecked();await expect(light).not.toBeChecked();
- const lightBox=await light.boundingBox();assert.ok(lightBox);
- await page.mouse.click(lightBox.x+lightBox.width/2,lightBox.y+lightBox.height/2);
+ const lightTarget=await light.evaluate(input=>{
+  const box=input.getBoundingClientRect(),x=box.x+box.width/2,y=box.y+box.height/2,hit=document.elementFromPoint(x,y);
+  return {x,y,inViewport:x>=0&&y>=0&&x<innerWidth&&y<innerHeight,
+   hitsControl:hit===input||!!input.closest('label')?.contains(hit)};
+ });
+ assert.ok(lightTarget.inViewport&&lightTarget.hitsControl,'Duplicate pointer attempt must hit the actual Light control');
+ await page.mouse.click(lightTarget.x,lightTarget.y);
  await expect(dark).toBeChecked();await expect(light).not.toBeChecked();
  assert.equal(preferenceWrites.length,1,'Held save admits exactly one preference request');
  evidence.pendingDuplicateProof={actions:['Space','ArrowLeft','pointer Light'],writes:preferenceWrites.length};
