@@ -91,12 +91,12 @@ try{
  // An ordinary failure remains inspectable. A fresh instruction is an explicit
  // composer send, not the retired error-banner continuation shortcut.
  const continuations=[],retries=[];
- let followupEntered;const followupGate=new Promise(resolve=>{releaseFollowup=resolve}),followupHeld=new Promise(resolve=>{followupEntered=resolve});
+ let followupEntered=false;const followupGate=new Promise(resolve=>{releaseFollowup=resolve});
  await page.route('**/api/actions',async route=>{
   const body=route.request().postDataJSON();
   if(body?.action==='conversation.retry')retries.push(body);
   if(body?.action==='conversation.send'){
-   continuations.push(body);followupEntered();await followupGate;
+   continuations.push(body);followupEntered=true;await followupGate;
    await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Temporary fixture failure'})});
   }else await route.continue();
  });
@@ -109,7 +109,8 @@ try{
  assert.deepEqual(continuations,[]);assert.deepEqual(retries,[]);
  const followup='Check what has already completed and continue only the unfinished work.';
  await composer.fill(followup);
- await page.getByRole('button',{name:'Send message',exact:true}).click();await followupHeld;
+ await page.getByRole('button',{name:'Send message',exact:true}).click();
+ await expect.poll(()=>followupEntered,{timeout:5000,message:'One explicit send must reach its held request'}).toBe(true);
  await expect.poll(()=>readComposerDraft(composer)).toBe('');
  await composer.fill('Keep my unsent draft');
  releaseFollowup();await page.getByText('Temporary fixture failure',{exact:true}).first().waitFor();
@@ -122,6 +123,10 @@ try{
  await page.waitForTimeout(1500);
  assert.equal(continuations.length,1,'No automatic follow-up replay during the observed uncertain interval');
  await page.reload();await expect(composer).toBeVisible();
+ const pendingFollowup=page.locator(`[data-input-id="${continuation.id}"]`);
+ await expect(pendingFollowup).toHaveCount(1);await expect(pendingFollowup).toContainText(followup);
+ await expect(pendingFollowup.getByRole('button',{name:'Check delivery',exact:true})).toBeVisible();
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),identities.first);
  assert.equal(await readComposerDraft(composer),'Keep my unsent draft');
  assert.equal(continuations.length,1,'Reload must not replay the unconfirmed follow-up');assert.deepEqual(retries,[]);
  await page.unroute('**/api/actions');

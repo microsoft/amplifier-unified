@@ -389,9 +389,11 @@ async function checkReadingAnchor(page,operation) {
   await clearComposer(composer);if(originalDraft)await composer.fill(originalDraft);
   await expect(composer).toHaveDraft(originalDraft);
   }finally{
-    const rows=await trace.evaluate(t=>t.finish());
-    writeFileSync(artifact('delegate-work-stream-anchor-events-'+page.viewportSize().width+'.json'),JSON.stringify(rows,null,2));
-    await trace.dispose();
+    await diagnostics.attempt('anchor event trace',async()=>{
+      const rows=await trace.evaluate(t=>t.finish());
+      writeFileSync(artifact('delegate-work-stream-anchor-events-'+page.viewportSize().width+'.json'),JSON.stringify(rows,null,2));
+    });
+    await diagnostics.attempt('anchor trace handle disposal',()=>trace.dispose());
   }
 }
 async function enterStreamConversation(page,expectedSessionId,stage) {
