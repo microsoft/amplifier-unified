@@ -177,7 +177,8 @@ async def test_current_edit_is_one_generation_in_same_chat_and_blocks_competing_
     await reopened.close()
 
 
-async def test_revision_preserves_earlier_execution_and_reconciles_after_restart(tmp_path,monkeypatch):
+@pytest.mark.parametrize('receipt_phase', ['committed', 'prepared'])
+async def test_revision_preserves_earlier_execution_and_reconciles_after_restart(tmp_path,monkeypatch,receipt_phase):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME',str(tmp_path))
     app=AppService(tmp_path,workspace=tmp_path)
     await app.dispatch('session.create',{})
@@ -185,18 +186,44 @@ async def test_revision_preserves_earlier_execution_and_reconciles_after_restart
     src['messages'][0]['inputId']='first';src['messages'][2]['inputId']='second'
     src['execution']={'currentTurnId':'second','turns':[{'id':name,'inputId':name,'anchorMessageId':str(i),'phase':'completed'} for name,i in [('first',0),('second',2)]],
         'nodes':[{'id':name+'-tool','turnId':name,'kind':'tool'} for name in ['first','second']]}
+    src['execution']['nodes'].append({'id': 'second-model', 'turnId': 'second',
+        'kind': 'llm', 'phase': 'completed', 'liveObservation': True,
+        'usage': {'totalTokens': 17}})
     src['historyEdit']={'phase':'working','operationId':'restart-edit','messageId':'2','text':'Changed second','via':'chat','attachments':[]}
     controls=Controls(tmp_path,src,transcript());await controls.checkpoint()
     result=await rewind(controls,{'source':src,'messageId':'2','operationId':'restart-edit'})
+    path = receipt_path(tmp_path, identity, 'restart-edit')
+    receipt = json.loads(path.read_text())
+    receipt['phase'] = receipt_phase
+    write_private(path, json.dumps(receipt))
+    original_receipt = path.read_bytes()
+    native = controls.store.directory(identity) / 'transcript.jsonl'
+    native_before = native.read_bytes()
+    # Existing assistance and uncertain paid claims are not recovery inputs.
+    app.db.execute("INSERT INTO suggestion_requests VALUES ('old-request','old-source')")
+    app.db.execute('UPDATE suggestion_cache_policy SET legacy=1')
+    app.db.execute('INSERT INTO suggestion_success_cache VALUES (?,?,?,?,?)',
+                   ('owner', identity, 'prior-source', '{"status":"empty","suggestion":null}', 1))
+    tables = ('suggestion_requests', 'suggestion_cache_policy',
+              'suggestion_success_cache', 'suggestion_fresh_completion')
+    suggestions = {table: list(app.db.execute(f'SELECT * FROM {table}')) for table in tables}
     app._publish();await app.close()
-    app=AppService(tmp_path,workspace=tmp_path)
+    from test_automatic_history import ObservedRuntime
+    runtime = ObservedRuntime()
+    app=AppService(tmp_path,runtime,workspace=tmp_path)
     restored=app._session(identity)
     assert [row['text'] for row in restored['messages']]==['First user turn','First answer','Changed second']
     assert restored['messages'][-1]['delivery']['status']=='unknown'
     assert [row['id'] for row in restored['execution']['nodes']]==['first-tool']
+    assert [(row['id'], row['usage']) for row in restored['execution']['retiredUsageNodes']] == [
+        ('second-model', {'totalTokens': 17})]
     assert restored['sharedHistoryTotal']==3 and not restored['configurationBusy']
     assert 'restarted during this edit' in restored['error']
     assert controls.store.load(identity)[0]==transcript()[:6]  # Restart did not submit edited input.
+    assert native.read_bytes() == native_before and path.read_bytes() == original_receipt
+    assert runtime.started == runtime.sent == []
+    assert {table: list(app.db.execute(f'SELECT * FROM {table}')) for table in tables} == suggestions
+    assert not app.prompt_suggestions.jobs and app.prompt_suggestions._manager is None
     await app.close()
 
 
