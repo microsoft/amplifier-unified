@@ -347,9 +347,12 @@ async function checkReadingAnchor(page,operation) {
     await expect(button).toBeFocused();
   }
   assert.deepEqual(await identity(),beforeIdentity,'Inspection preserves chat and retained Canvas selection');
-  assert.ok(await retained.evaluate(saved=>saved.pane===document.querySelector('[data-part="messages"]')
+  assert.ok(await retained.evaluate(saved=>!!saved.pane&&!!saved.composer&&saved.messages.length>0
+    &&saved.pane===document.querySelector('[data-part="messages"]')
     &&saved.composer===document.querySelector('[role="textbox"][contenteditable="true"]')
-    &&saved.messages.every(node=>node.isConnected)),'Messages and composer remain mounted');
+    &&saved.messages.length===document.querySelectorAll('[data-message-id]').length
+    &&saved.messages.every((node,index)=>node.isConnected&&node===document.querySelectorAll('[data-message-id]')[index])),
+    'Exact messages and composer remain mounted in order');
   await expect(composer).toHaveDraft(draft);
   await retained.dispose();
   await clearComposer(composer);if(originalDraft)await composer.fill(originalDraft);
