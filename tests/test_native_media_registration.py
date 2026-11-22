@@ -49,6 +49,21 @@ async def session_with_media(tmp_path, *, model="gpt-6.1-terra", enabled=True,
     return session, original, worker
 
 
+async def stop_loop(runtime, waiter, owner=None):
+    """Stop the actual loop; cancelling a Core awaitable is not retirement."""
+    from amplifier_module_loop_live.runtime import Input
+    if not runtime.closed and not runtime.stop_requested:
+        await runtime.submit(Input("stop"))
+    tasks = {waiter}
+    if owner is not None:
+        tasks.add(owner)
+    done, pending = await asyncio.wait(tasks, timeout=5)
+    assert not pending, "Actual loop did not finish after Stop"
+    for task in done:
+        if not task.cancelled():
+            task.result()
+
+
 async def test_hooks_precede_native_but_provider_observation_follows_it(tmp_path, monkeypatch):
     monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path / "app"))
     session, original, worker = await session_with_media(tmp_path)
@@ -202,8 +217,11 @@ async def test_actual_loop_issued_view_is_exact_and_expires(tmp_path, monkeypatc
             native.bind_execution(loop, media.HostRegistrationView(c, view.participant))
         with pytest.raises(ValueError, match="already has"):
             native.bind_execution(loop, view)
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        owner_task = native.execution_binding[-1]
+        await stop_loop(runtime, task, owner_task)
+        assert owner_task.done() and runtime.closed and not loop.running
+        assert loop.runtime is None
+        assert native.execution_binding is None
         token = LIVE_OWNER.set(loop)
         try:
             assert native.provider.owner_getter() is None
@@ -214,9 +232,12 @@ async def test_actual_loop_issued_view_is_exact_and_expires(tmp_path, monkeypatc
             LIVE_OWNER.reset(token)
         assert original._client is None and native.provider._client is None
     finally:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        await session.cleanup()
+        try:
+            native = c.get_capability("web.native_provider")
+            binding = native.execution_binding if native else None
+            await stop_loop(runtime, task, binding[-1] if binding else None)
+        finally:
+            await session.cleanup()
 
 
 @pytest.mark.parametrize("mode", ["native", "ordinary", "finite"])
@@ -270,8 +291,9 @@ async def test_children_install_retains_observed_adapter(tmp_path, monkeypatch, 
         assert (mounted is native.provider) if mode == "native" else (mounted is original)
         assert original._client is None and mounted._client is None
     finally:
-        if task is not None:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-        await child.cleanup()
-        await root.cleanup()
+        try:
+            if task is not None:
+                await stop_loop(runtime, task)
+        finally:
+            await child.cleanup()
+            await root.cleanup()
