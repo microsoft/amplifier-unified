@@ -260,6 +260,7 @@ try{
   report.checks.push('Open documents stays usable for non-inspector navigation; selected request/item/page survives');
   // All data is still from production capture; only scenario is synthetic.
   await page.request.post(url+'/fixture/context',{data:{scenario:'long-list-unknown'}});
+  await panel.getByRole('button',{name:'Expand request summary',exact:true}).click();
   await panel.getByRole('button',{name:'Refresh',exact:true}).click();
   await expect(panel.locator('.a-context-window')).toContainText('Model window unknown');
   await expect(panel.locator('.a-context-capacity-track')).toHaveCount(0);

@@ -97,7 +97,7 @@ try{
  await expect(card).toHaveAttribute('data-session-id',failed.id);
  const recoveryStart=actions.length,trouble=page.locator('[data-part="conversation-trouble"]');
  await card.locator('.a-work-card-open').click();
- assert.equal((await state()).selectedSessionId,failed.id);
+ await expect.poll(async()=>(await state()).selectedSessionId).toBe(failed.id);
  await expect(trouble).toBeVisible();
  await expect(trouble).toContainText('Something needs attention.');
  await expect(trouble).toContainText('Your saved messages are kept. Review the details below.');
@@ -105,7 +105,7 @@ try{
  await home();
  await expect(trouble).toHaveCount(0);
  await card.locator('.a-work-card-open').click();
- assert.equal((await state()).selectedSessionId,failed.id);
+ await expect.poll(async()=>(await state()).selectedSessionId).toBe(failed.id);
  await expect(trouble).toBeVisible();
  await expect(trouble).toContainText('Something needs attention.');
  await expect(page.getByRole('button',{name:'Continue conversation',exact:true})).toHaveCount(0);
