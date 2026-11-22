@@ -382,7 +382,7 @@ try{
  const staged=await action('shell.packages.stage',{manifest,source}),digest=staged.result.digest;
  assert.equal((await action('shell.packages.validate',{digest})).result.status,'passed');
  await panel.locator('summary[aria-label="More canvas options"]').click();
- await panel.getByRole('button',{name:'Canvas details',exact:true}).click();
+ await panel.locator('.a-canvas-more-menu').getByRole('button',{name:'Canvas details',exact:true}).click();
  await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(digest);
  const edit=page.getByLabel('Retained local edit', {exact:true});
  await panel.getByRole('button',{name:'Close canvas details',exact:true}).click();
