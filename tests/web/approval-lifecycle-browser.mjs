@@ -329,12 +329,14 @@ try{
  const historyOpening=responseFor(command=>command.action==='view.update'&&command.args?.patch?.canvasDraft?.delivery==='permissions');
  await historyEntry().click();await expect.poll(()=>selectionHeld).toBe(true);
  const selectionResponse=responseFor(command=>command.action==='canvas.select'&&command.args.id===newerDocumentId);
- const newerTab=panel.getByRole('tab',{name:'Newer document choice',exact:true});
- await newerTab.click();releaseHeld();
+ const documentControl=panel.getByRole('button',{name:/^Open documents, /});
+ await documentControl.click();
+ const documents=page.getByRole('dialog',{name:'Open documents',exact:true});
+ await documents.getByRole('button',{name:/^Newer document choice markdown/}).click();releaseHeld();
  const openedRow=await acceptedResponse(historyOpening),selectedRow=await acceptedResponse(selectionResponse);
  await page.unroute('**/api/actions',holdSelectionHistory);
- await expect(newerTab).toHaveAttribute('aria-selected','true');
- await expect(newerTab).toBeFocused();
+ await expect(documentControl).toHaveAttribute('aria-label',/^Open documents, \d+ open, Newer document choice$/);
+ await expect(documentControl).toBeFocused();
  // Allow the presentation frame, then flush queued housekeeping before the host read.
  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  // One explicit operation. Node bounds the wait; page defaultTimeout does not
@@ -397,7 +399,8 @@ try{
  await historyEntry().click();await expect(history).toBeVisible();await expect(edit).toBeHidden();
  const refusal=await action('canvas.show',{kind:'text',title:'Must not replace',content:'not accepted'}).then(value=>({value}),error=>({error:error.message}));
  assert.match(refusal.error,/viewer edit/);
- await panel.getByRole('tab',{name:'Unfinished document',exact:true}).click();
+ await documentControl.click();
+ await documents.getByRole('button',{name:/^Unfinished document markdown/}).click();
  await expect(edit).toHaveValue('Keep unsaved permission review edit');
  assert.equal(await edit.getAttribute('data-mount'),mount);
  const afterView=(await views()).find(row=>row.viewId==='primary');

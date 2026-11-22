@@ -6,8 +6,10 @@ import {fileURLToPath} from 'node:url';
 import {mkdir,writeFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls'],{stdio:['ignore','pipe','inherit']});
-let browser;
+const stopFixture=ownFixture(fixture,{label:'New chat fixture'});
+let browser,primary;
 const panelFrames=[];
 const out=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/amplifier-chat-controls';
 try{
@@ -104,4 +106,5 @@ try{
  await composer.fill('Keep this existing chat draft');await launcher.click();await expect(page.getByRole('region',{name:'New chat',exact:true})).toBeVisible();await expect(composer).toHaveDraft('');await expectCatalog([sid]);await composer.fill('A different new draft');await action('session.select',{id:sid});await expect(composer).toHaveDraft('Keep this existing chat draft');await launcher.click();await expect(composer).toHaveDraft('A different new draft');
  assert.deepEqual(errors,[]);assert.equal(calls.filter(row=>row.action==='session.create').length,1);
  console.log('New chat browser passed: one launcher, uncommitted configurable draft, reload and attachments, exact first submission, composer controls, header identity/export, send/stop transitions, damaged canvas, draft isolation, desktop/mobile.');
-}finally{await browser?.close();fixture.kill()}
+}catch(error){primary=error;throw error}
+finally{await finishFixture({label:'New chat fixture',close:[['browser',()=>browser?.close()]],stop:stopFixture,originalError:primary})}
