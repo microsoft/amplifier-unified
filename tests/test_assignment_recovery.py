@@ -1,25 +1,61 @@
 """Explicit human recovery of stopped assignments never replays old work."""
 import copy
+import time
 import pytest
 from amplifier_web.service import AppError, AppService
 from amplifier_web.capacity import admission
 from test_assignments import app, start, child, call, send, generation, until, agent_action, limits
 
 
-async def stop(app, source):
+async def stop(app, source, *, ended_owner='matching'):
     value = app.assignments.current(source)
+    owners = {}
+    # The shared collaboration fixture models transport, not a native process.
+    # Admit a real reducer-bound turn before testing exact-owner process loss.
+    for sid, member in value['members'].items():
+        if member['status'] != 'bound':
+            continue
+        session = app._session(sid)
+        owner = owners[sid] = 'runtime-' + sid
+        await app.on_runtime_event('runtime.generation', {
+            'sessionId': sid, 'rootSessionId': sid, 'runtimeOwnerId': owner,
+            'event': 'generation.started', 'generation_id': 'settlement-' + sid,
+            'initial_input_id': 'settlement-input-' + sid, 'observedAt': time.time(),
+            'interruptionRevision': session.get('interruptionRevision', 0),
+        })
+        turn = session['execution']['turns'][-1]
+        assert turn['runtimeOwnerId'] == owner
+        assert turn['generationId'] == session['collaborationGeneration']['id']
     result = await app.dispatch('assignment.stop', {'sessionId': source['id'], 'expectedRevision': value['revision']}, command_id='stop-recovery')
     await until(lambda: not app.assignments.interrupting)
     # The lightweight fixture emits only status on Stop. Supply the confirmed
     # process-exit event that the actual runtime emits, without inventing success.
     for sid, status in app.collaboration.receipt('stop-recovery')['interruptions'].items():
         if status == 'returned':
-            await app.on_runtime_event('runtime.ended', {'sessionId': sid, 'rootSessionId': sid})
+            await app.on_runtime_event('runtime.ended', {
+                'sessionId': sid, 'rootSessionId': sid,
+                **({'runtimeOwnerId': owners[sid] if ended_owner == 'matching' else ended_owner}
+                   if ended_owner is not None else {}),
+            })
     return app.assignments.current(source)
 
 
 async def resume(app, source, identity='resume-recovery', **extra):
     return await app.dispatch('assignment.resume', {'sessionId': source['id'], 'expectedRevision': app.assignments.current(source)['revision'], **extra}, command_id=identity)
+
+
+@pytest.mark.parametrize('ended_owner', [None, 'foreign-runtime'])
+async def test_unbound_or_foreign_exit_cannot_settle_assignment(app, ended_owner):
+    source = app.state['sessions'][0]
+    await start(app)
+    await stop(app, source, ended_owner=ended_owner)
+    before = copy.deepcopy(app.assignments.current(source))
+    assert not source['collaborationGeneration']['terminal']
+    assert source['execution']['turns'][-1]['phase'] == 'running'
+    with pytest.raises(AppError, match='settle'):
+        await resume(app, source)
+    assert app.assignments.current(source) == before
+    assert not app.runtime.inputs
 
 
 async def test_resume_preserves_topology_limits_accounting_and_does_not_run(app):

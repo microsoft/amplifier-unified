@@ -342,13 +342,52 @@ async def test_durable_fence_precedes_file_write_and_survives_failure_and_restar
     ('conversation.send',{'text':'new work'}), ('worker.spawn',{'instruction':'new child'}),
     ('worker.message',{'id':'persistent','text':'new child turn'}),
     ('worker.steer',{'id':'persistent','text':'new instruction'}), ('call.start',{})])
-async def test_persistent_child_pending_policy_fences_new_input_until_retirement(app, action, extra):
+async def test_persistent_child_pending_policy_fences_new_input_until_retirement(app, monkeypatch, action, extra):
     source = app.state['sessions'][0]
     source['workers'] = [{'id':'persistent','persistent':True,'status':'idle'}]
     await command(app, 'permissions.save', args(app,allowed=[],denied=['private']), 'pending')
     assert source['fileAccessPending'] and source['configurationPending'] and not app.runtime.calls
-    with pytest.raises(AppError, match='Finish or stop existing child'):
-        await app.dispatch(action, {'sessionId':source['id'], **extra}, command_id='new-input')
+    if action == 'conversation.send':
+        from amplifier_module_loop_live.runtime import Runtime as NativeRuntime
+        from amplifier_web.runtime import RuntimeManager
+        from test_steering_runtime import owned_worker
+        native = NativeRuntime()
+        worker = owned_worker(native, SimpleNamespace(coordinator=object()), object())
+        manager = RuntimeManager()
+        ready = asyncio.get_running_loop().create_future()
+        ready.set_result(True)
+        manager.workers[source['id']] = {'process': SimpleNamespace(returncode=None), 'ready': ready}
+        replies = []
+        monkeypatch.setattr('amplifier_web.runtime_worker.publish', replies.append)
+
+        async def admit(sid, operation, arguments):
+            return sid, operation, arguments
+
+        async def reply(sid, operation, arguments, **unused):
+            assert sid == source['id'] and operation == 'send'
+            assert arguments['configuration_if_idle'] is True
+            await worker.command({'id': 'pending-policy-rpc', 'op': operation, **arguments})
+            response, = [row for row in replies if row.get('op') == 'reply']
+            assert response['result'] == {'accepted': False, 'effect': 'none', 'configurationRequired': True}
+            return response['result']
+
+        manager._admit = AsyncMock(side_effect=admit)
+        manager._reply = reply
+        manager._start_for_input = AsyncMock(side_effect=AssertionError('No new runtime'))
+        manager._request = AsyncMock(side_effect=AssertionError('No resubmission'))
+        app.runtime.send = manager.send
+        with pytest.raises(AppError, match='File permissions are awaiting application') as error:
+            await app.dispatch(action, {'sessionId':source['id'], **extra}, command_id='new-input')
+        assert error.value.code == 'worker_startup_failed'
+        assert error.value.receipt['delivery'] == 'failed'
+        assert not native.accepted and native.queued_inputs == 0
+        manager._admit.assert_awaited_once()
+        manager._start_for_input.assert_not_awaited()
+        manager._request.assert_not_awaited()
+    else:
+        with pytest.raises(AppError, match='Finish or stop existing child'):
+            await app.dispatch(action, {'sessionId':source['id'], **extra}, command_id='new-input')
+    assert source['fileAccessPending'] and source['configurationPending']
     assert not app.runtime.calls
     app.runtime.stop_worker = AsyncMock(return_value={'stopped':True})
     await app.dispatch('worker.stop', {'sessionId':source['id'],'id':'persistent'}, command_id='stop-child')

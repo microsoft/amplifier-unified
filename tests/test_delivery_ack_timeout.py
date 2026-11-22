@@ -1,5 +1,6 @@
 """An unacknowledged follow-up is not proof that the live turn stopped."""
 import asyncio
+import copy
 import json
 import sys
 
@@ -11,7 +12,7 @@ from amplifier_web.updates import UpdateManager
 
 
 WORKER = r'''
-import json, os, sys
+import json, os, sys, time
 pending = None
 def emit(value): print(json.dumps(value), flush=True)
 for line in sys.stdin:
@@ -21,6 +22,9 @@ for line in sys.stdin:
     elif data['op'] == 'send':
         with open(sys.argv[1], 'a') as log: log.write(data['input_id'] + '\n')
         if data['text'] == 'original':
+            emit({'type': 'generation.started', 'generation_id': 'original-generation',
+                  'initial_input_id': data['input_id'], 'input_ids': [data['input_id']],
+                  'interruptionRevision': data['interruptionRevision'], 'observedAt': time.time()})
             emit({'op': 'reply', 'id': data['id'], 'result': {'accepted': True, 'inputId': data['input_id']}})
             emit({'type': 'input.delivered', 'input_id': data['input_id']})
         else:
@@ -47,7 +51,10 @@ async def running(tmp_path, monkeypatch):
     await service.dispatch('session.create', {})
     await service.dispatch('conversation.send', {'text': 'original'}, command_id='original-input')
     async with asyncio.timeout(2):
-        while service._session()['status'] != 'working':
+        while (service._session()['status'] != 'working'
+               or (service._session().get('collaborationGeneration') or {}).get('inputIds') != ['original-input']
+               or not any(turn.get('generationId') == 'original-generation' and turn.get('runtimeOwnerId')
+                          for turn in service._session().get('execution', {}).get('turns', []))):
             await asyncio.sleep(0)
     original_wait = asyncio.wait_for
 
@@ -82,10 +89,13 @@ async def test_timeout_preserves_live_turn_draft_and_unknown_delivery(running):
     await service.dispatch('view.update', {'patch': {'draft': 'new unsent draft'}})
     message = await timed_out_followup(service)
     session = service._session()
+    turn, = session['execution']['turns']
+    assert turn['id'] == 'original-input' and turn['phase'] == 'running'
+    assert turn['generationId'] == 'original-generation'
+    assert turn['runtimeOwnerId'] == service.runtime.workers[session['id']]['runtimeOwnerId']
     assert message['delivery']['status'] == 'unknown'
     assert session['status'] == 'working'
     assert not session.get('error')
-    assert all(turn['phase'] != 'error' for turn in session['execution']['turns'])
     assert service.state['view']['draft'] == 'new unsent draft'
     assert UpdateManager(service).busy()
     await service.on_runtime_event('runtime.status', {'sessionId': session['id'], 'status': 'working',
@@ -104,9 +114,11 @@ async def test_late_ack_reconciles_exact_input_without_restarting_turn(running, 
     if settled:
         await service.on_runtime_event('runtime.status', {'sessionId': session['id'], 'status': 'idle'})
     status = session['status']
+    turns = copy.deepcopy(session['execution']['turns'])
     await release(service)
     assert message['delivery']['status'] == 'accepted'
     assert session['status'] == status
+    assert session['execution']['turns'] == turns
     duplicate = await service.dispatch('conversation.send', {'text': 'follow-up'}, command_id='followup-input')
     assert duplicate['duplicate'] and duplicate['delivery'] == 'accepted'
     assert inputs.read_text().splitlines() == ['original-input', 'followup-input']
@@ -275,16 +287,18 @@ for line in sys.stdin:
 async def test_worker_captures_original_error_before_string_reply(monkeypatch, outer):
     from amplifier_web.runtime_worker import Worker
     from amplifier_web.worker_diagnostics import validate_command_failure_facts
-    from unittest.mock import AsyncMock
+    from unittest.mock import Mock
     replies = []
     monkeypatch.setattr('amplifier_web.runtime_worker.publish', replies.append)
     worker = Worker()
     if outer:
-        worker.acquire_for_mutation = AsyncMock(side_effect=PermissionError(13, 'PRIVATE', '/secret/path'))
+        monkeypatch.setattr(worker, 'bind_activation',
+                            Mock(side_effect=PermissionError(13, 'PRIVATE', '/secret/path')))
         await worker.command({'op': 'send', 'id': 'failure-fixture'})
+        worker.bind_activation.assert_called_once_with()
     else:
         await worker._command_serial({'op': 'unknown-fixture', 'id': 'failure-fixture'})
-    reply = next(row for row in replies if row.get('op') == 'reply')
+    reply, = [row for row in replies if row.get('op') == 'reply']
     facts = validate_command_failure_facts(reply['failureFacts'])
     assert facts is not None
     # The inner path rejects an unstarted worker before interpreting its op.

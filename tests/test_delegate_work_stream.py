@@ -284,6 +284,9 @@ async def test_registered_browser_reads_recorded_delegate_exchange_without_body_
                       'toolCallId', 'toolObservationId')
     expected_placements = [tuple(row[key] for key in placement_keys)
                            for row in session['execution']['nodes'] if row.get('kind') == 'tool']
+    identity_keys = ('admissionInputId', 'generationId', 'purpose')
+    expected_identities = [{key: row[key] for key in identity_keys if key in row}
+                           for row in session['execution']['nodes'] if row.get('kind') == 'tool']
     assert len(expected_placements) == trailing_tools + 1
 
     def assert_saved_placement():
@@ -292,8 +295,10 @@ async def test_registered_browser_reads_recorded_delegate_exchange_without_body_
         rows = session['execution']['nodes']
         assert len(rows) == trailing_tools + 1
         assert [tuple(row[key] for key in placement_keys) for row in rows] == expected_placements
+        assert [{key: row[key] for key in identity_keys if key in row}
+                for row in rows] == expected_identities
         assert all(row.get('liveObservation') is True for row in rows)
-        allowed = {*placement_keys, 'parentId', 'kind', 'phase', 'label', 'tool',
+        allowed = {*placement_keys, *identity_keys, 'parentId', 'kind', 'phase', 'label', 'tool',
                    'revision', 'startedAt', 'endedAt', 'runId', 'lifecycle', 'liveObservation'}
         assert all(set(row) <= allowed for row in rows)
         assert all(not set(row) & {'input', 'output', 'exchange', 'delegate'} for row in rows)

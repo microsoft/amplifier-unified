@@ -676,8 +676,15 @@ async def test_reference_browser_origin_not_supplied_by_payload(reference_app):
     app.clients.attach("terminal-client", kind="tui")
     with pytest.raises(AppError):
         await command(app, "session.select", click(args, record), client="terminal-client")
-    with pytest.raises(AppError):
-        await command(app, "session.select", {**click(args, record), "clientId": "one"})
+    before = deepcopy(app.clients.records["one"])
+    with pytest.raises(AppError, match="must match the attached client"):
+        await command(app, "session.select", {**click(args, record), "clientId": "two"})
+    with pytest.raises(AppError, match="must match the attached client"):
+        await app.dispatch("session.select", {**click(args, record), "clientId": "one"})
+    assert app.clients.records["one"] == before
+    matching = await command(app, "session.select", {**click(args, record), "clientId": "one"})
+    assert matching["accepted"]
+    assert app.clients.records["one"]["selectedSessionId"] == args["targetSessionId"]
 
 
 @pytest.mark.parametrize("cold", [False, True])
