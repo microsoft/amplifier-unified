@@ -92,12 +92,19 @@ class PromptSuggestions:
                 AFTER DELETE ON state_records WHEN OLD.kind='session'
                 BEGIN DELETE FROM suggestion_success_cache WHERE session_id=OLD.id;
                       DELETE FROM suggestion_fresh_completion WHERE session_id=OLD.id; END''')
-            service.db.execute('''CREATE TRIGGER IF NOT EXISTS suggestion_success_session_change
+            # Replace the prior trigger in the constructor's existing commit,
+            # not with executescript (which would commit preceding recovery).
+            if not service.db.in_transaction:
+                service.db.execute('BEGIN')
+            service.db.execute('DROP TRIGGER IF EXISTS suggestion_success_session_change')
+            service.db.execute('''CREATE TRIGGER IF NOT EXISTS suggestion_success_session_change_v2
                 AFTER UPDATE OF value ON state_records WHEN NEW.kind='session' AND (
                     NEW.value='null' OR json_extract(NEW.value,'$.archived')=1 OR
                     json_extract(NEW.value,'$._deleting')=1 OR
-                    COALESCE(json_extract(NEW.value,'$.interruptionRevision'),0) !=
-                    COALESCE(json_extract(OLD.value,'$.interruptionRevision'),0))
+                    CASE WHEN json_valid(OLD.value) THEN
+                        COALESCE(json_extract(NEW.value,'$.interruptionRevision'),0) !=
+                        COALESCE(json_extract(OLD.value,'$.interruptionRevision'),0)
+                    ELSE 1 END)
                 BEGIN DELETE FROM suggestion_success_cache WHERE session_id=NEW.id;
                       DELETE FROM suggestion_fresh_completion WHERE session_id=NEW.id; END''')
         self._trim_cache()
