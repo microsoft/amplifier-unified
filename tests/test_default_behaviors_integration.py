@@ -12,6 +12,8 @@ No provider calls, installs, subprocesses, or desktop operations are performed.
 from __future__ import annotations
 
 import copy
+import base64
+import hashlib
 import importlib
 import importlib.metadata
 import importlib.util
@@ -19,6 +21,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -62,6 +65,78 @@ def _row(rows, module):
     matches = [row for row in rows if row["module"] == module]
     assert len(matches) == 1, (module, matches)
     return matches[0]
+
+
+class DecisionCatalogPreparation:
+    """One real installed metadata discovery, never a runtime spawn exemption."""
+
+    timeout_seconds = 10
+
+    def __init__(self):
+        self.open = False
+        self.launches = 0
+        self.command = None
+        self.environment = None
+        self.evidence = None
+
+    def permits(self, event, args):
+        if not self.open or event != "subprocess.Popen" or self.launches:
+            return False
+        executable, argv, cwd, environment = args
+        if (executable != sys.executable or argv != self.command or cwd is not None
+                or environment != self.environment):
+            return False
+        self.launches += 1
+        return True
+
+    def warm(self):
+        assert self.evidence is None and not self.open and self.launches == 0
+        # This installed lane intentionally has no decision provider adapters.
+        # An empty discovered catalog alone cannot prove that: the production
+        # helper ignores unsupported/failed metadata declarations.
+        entries = list(importlib.metadata.entry_points(group="amplifier.decision_backends"))
+        assert not entries, "Unexpected installed decision adapters"
+        web = _installed("amplifier_web", "amplifier-unified")
+        dist = importlib.metadata.distribution("amplifier-unified")
+        relative = "amplifier_web/decision_account_catalog.py"
+        [record] = [row for row in dist.files or () if str(row) == relative]
+        helper = Path(dist.locate_file(record)).resolve(strict=True)
+        assert helper == Path(web.__file__).resolve().with_name("decision_account_catalog.py")
+        data = helper.read_bytes()
+        digest = hashlib.sha256(data)
+        assert record.hash and record.hash.mode == "sha256"
+        assert record.size == len(data)
+        assert base64.urlsafe_b64encode(digest.digest()).decode().rstrip("=") == record.hash.value
+        accounts = importlib.import_module("amplifier_web.decision_accounts")
+        assert Path(accounts.__file__).resolve().parent == helper.parent
+        assert accounts._catalog_snapshot.cache_info().currsize == 0, "Catalog must start cold"
+        self.command = [sys.executable, "-I", str(helper)]
+        self.environment = {name: value for name, value in os.environ.items()
+                            if name in {"PATH", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL",
+                                        "TZ", "TMPDIR", "TEMP", "TMP"}}
+        before = {name for name in sys.modules if name.startswith("amplifier_module_provider_")}
+        assert not before, "Provider packages must remain cold"
+        original_timeout = accounts._CATALOG_START_SECONDS
+        effective_timeout = min(original_timeout, self.timeout_seconds)
+        assert 0 < effective_timeout <= 10  # Below the 60/90s enclosing probes.
+        try:
+            accounts._CATALOG_START_SECONDS = effective_timeout
+            self.open = True
+            actual = accounts.catalogs()  # Canonical bounded subprocess; run() reaps it.
+        finally:
+            self.open = False
+            accounts._CATALOG_START_SECONDS = original_timeout
+        assert actual == {} and self.launches == 1
+        assert accounts._catalog_snapshot.cache_info().currsize == 1
+        assert accounts.catalogs() == actual  # Must reuse cache with exemption closed.
+        assert not {name for name in sys.modules if name.startswith("amplifier_module_provider_")}
+        assert helper.read_bytes() == data
+        self.evidence = {"helperSha256": digest.hexdigest(), "entryPointCount": len(entries),
+                         "catalog": actual, "launches": self.launches, "cacheReused": True,
+                         "configuredTimeoutSeconds": original_timeout,
+                         "probeTimeoutSeconds": effective_timeout,
+                         "environmentNames": sorted(self.environment), "parentProviderImports": 0}
+        return self.evidence
 
 
 @pytest.fixture
@@ -287,10 +362,11 @@ async def test_real_defaults_are_local_only_and_desktop_is_read_only(offline_def
     assert ci["base_path"] == str(capture_dir(env.workspace, "root").parents[3])
     assert ci["project_slug"] == project_slug(env.workspace)
     assert _row(bundle.tools, "tool-computer-use")["config"]["read_only"] is True
-    # Preserve the real image behavior's declared backend/paid-call policy.
-    # Composition does not instantiate that backend or make an image request.
+    # Preserve the selected image behavior's routed default and paid-call policy.
+    # Composition does not select a provider or make an image request.
     image = _row(bundle.tools, "tool-image")["config"]
-    assert image["backend"] == "images"
+    assert image["model_role"] == "image-gen"
+    assert "backend" not in image
     assert image["allow_paid"] is True
 
 
@@ -308,17 +384,23 @@ async def test_real_defaults_preserve_explicit_ci_desktop_and_routing_policy(
         "base_path": str(env.workspace / "explicit-captures"),
     }
     desktop = {"read_only": False, "gate_writes": True}
+    image = {"backend": "images", "allow_paid": False}
     root_patch = {
         "hooks": [
             {"module": "hook-context-intelligence", "config": ci},
             {"module": "hooks-routing", "config": {"default_matrix": "quality"}},
         ],
-        "tools": [{"module": "tool-computer-use", "config": desktop}],
+        "tools": [
+            {"module": "tool-computer-use", "config": desktop},
+            {"module": "tool-image", "config": image},
+        ],
     }
     original = copy.deepcopy(root_patch)
     _, root_selected, _ = await env.compose(root_patch=root_patch)
     assert _row(root_selected.hooks, "hook-context-intelligence")["config"] == ci
     assert _row(root_selected.tools, "tool-computer-use")["config"] == desktop
+    actual_image = _row(root_selected.tools, "tool-image")["config"]
+    assert all(actual_image[key] == value for key, value in image.items())
     assert _row(root_selected.hooks, "hooks-routing")["config"]["default_matrix"] == "quality"
     assert root_patch == original
 
@@ -328,6 +410,7 @@ async def test_real_defaults_preserve_explicit_ci_desktop_and_routing_policy(
         "overrides": {
             "hook-context-intelligence": {"config": ci},
             "tool-computer-use": {"config": desktop},
+            "tool-image": {"config": image},
         },
         "routing": {"matrix": "economy"},
     }
@@ -338,6 +421,8 @@ async def test_real_defaults_preserve_explicit_ci_desktop_and_routing_policy(
     assert all(actual_ci[key] == value for key, value in ci.items())
     actual_desktop = _row(scoped.tools, "tool-computer-use")["config"]
     assert all(actual_desktop[key] == value for key, value in desktop.items())
+    actual_image = _row(scoped.tools, "tool-image")["config"]
+    assert all(actual_image[key] == value for key, value in image.items())
     assert _row(scoped.hooks, "hooks-routing")["config"]["default_matrix"] == "economy"
 
 
