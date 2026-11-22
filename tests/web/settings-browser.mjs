@@ -157,7 +157,16 @@ try{
  await page.getByRole('dialog',{name:'Model & tools',exact:true}).getByRole('button',{name:'Load configuration',exact:true}).click();
  await page.locator('#filter-loaded-modules').fill('tool-*');
  assert.equal(await page.locator('.a-module-settings .a-collection-row').count(),1);
- await page.getByRole('button',{name:'tool-filesystem tools',exact:true}).click();
+ // Collection rows own a stable module key. The module label and section
+ // remain separate text nodes; their accessible whitespace depends on layout.
+ const filesystemRow=page.getByRole('dialog',{name:'Model & tools',exact:true})
+  .locator('.a-module-settings [data-collection-id="tools:0"]');
+ const filesystemButton=filesystemRow.locator(':scope > button');
+ await expect(filesystemButton.locator('strong')).toHaveText('tool-filesystem');
+ await expect(filesystemButton.locator('small')).toHaveText('tools');
+ await expect(filesystemButton).toHaveAccessibleName(/^tool-filesystem\s*tools$/);
+ await filesystemButton.click();
+ await expect(page.locator('.a-module-settings .a-collection-detail > h4')).toHaveText('tool-filesystem');
  await page.locator('#module-field-max_bytes').fill('4096');
  assert.ok((await page.locator('#module-field-max_bytes').boundingBox()).width>18,'Numeric fields never inherit choice-input width');
  await page.getByRole('button',{name:'Apply to loaded session',exact:true}).click();
