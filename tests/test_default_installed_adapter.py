@@ -193,15 +193,19 @@ def test_catalog_preparation_admits_only_one_exact_setup_launch(change):
 @pytest.mark.parametrize('change', [
     'none', 'unexpected-entrypoint', 'changed-helper', 'missing-record', 'wrong-origin',
     'warm-cache', 'timeout', 'nonzero', 'malformed-result', 'no-launch', 'second-launch',
-    'parent-provider-import',
+    'parent-provider-import', 'real-child-timeout',
 ])
-def test_catalog_preparation_requires_real_discovery_provenance_and_cache(tmp_path, change):
+def test_catalog_preparation_requires_real_discovery_provenance_and_cache(tmp_path, monkeypatch, change):
     import base64
     from functools import lru_cache
     import hashlib
     from types import SimpleNamespace
     helper = tmp_path / 'decision_account_catalog.py'
-    helper.write_bytes(b'print("{}")\n')
+    started = tmp_path / 'child-started.json'
+    helper.write_text(
+        'import os,json,time\nfrom pathlib import Path\n'
+        f'Path({str(started)!r}).write_text(json.dumps({{"pid":os.getpid()}}))\n'
+        'time.sleep(30)\n' if change == 'real-child-timeout' else 'print("{}")\n')
 
     class Record:
         hash = SimpleNamespace(mode='sha256', value=base64.urlsafe_b64encode(
@@ -239,7 +243,54 @@ def test_catalog_preparation_requires_real_discovery_provenance_and_cache(tmp_pa
         return {'unexpected': 'hooks-fake'} if change == 'malformed-result' else {}
 
     accounts = SimpleNamespace(
-        __file__=str(tmp_path / 'decision_accounts.py'), _catalog_snapshot=snapshot, catalogs=snapshot)
+        __file__=str(tmp_path / 'decision_accounts.py'), _catalog_snapshot=snapshot, catalogs=snapshot,
+        _CATALOG_START_SECONDS=120)
+    children = []
+    canonical = None
+    if change == 'real-child-timeout':
+        import ast
+        import copy
+        import errno
+        import os
+        import sys
+        import time
+        # Run the unchanged canonical launcher and failure translation. The only
+        # synthetic part is a helper that signals startup and then stalls.
+        tree = ast.parse((ROOT / 'amplifier_web/decision_accounts.py').read_text())
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                     and node.name in {'_catalog_snapshot', 'catalogs'}]
+        canonical = {'__file__': accounts.__file__, '_CATALOG_START_SECONDS': 120,
+                     'lru_cache': lru_cache, 'time': time, 'subprocess': subprocess,
+                     'sys': sys, 'Path': Path, 'os': os, 'errno': errno,
+                     'json': json, 'copy': copy}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), '<actual-catalog>', 'exec'), canonical)
+        real_popen = subprocess.Popen
+
+        def observed_popen(argv, **kwargs):
+            assert gate.permits('subprocess.Popen', [
+                argv[0], argv, kwargs.get('cwd'), kwargs['env']])
+            child = real_popen(argv, **kwargs)
+            children.append(child)
+            return child
+
+        monkeypatch.setattr(subprocess, 'Popen', observed_popen)
+        # Attribute writes from warm() update the actual function's globals.
+        class CanonicalAccounts:
+            __file__ = accounts.__file__
+            _catalog_snapshot = staticmethod(canonical['_catalog_snapshot'])
+            catalogs = staticmethod(canonical['catalogs'])
+
+            @property
+            def _CATALOG_START_SECONDS(self):
+                return canonical['_CATALOG_START_SECONDS']
+
+            @_CATALOG_START_SECONDS.setter
+            def _CATALOG_START_SECONDS(self, value):
+                canonical['_CATALOG_START_SECONDS'] = value
+
+        accounts = CanonicalAccounts()
+        fake_sys.executable = sys.executable
+        environment = dict(os.environ)
     if change == 'warm-cache':
         snapshot()
     namespace = {
@@ -254,17 +305,32 @@ def test_catalog_preparation_requires_real_discovery_provenance_and_cache(tmp_pa
             import_module=lambda name: accounts),
     }
     gate = catalog_preparation_class(namespace)()
+    if change == 'real-child-timeout':
+        gate.timeout_seconds = 0.5
     if change == 'none':
         result = gate.warm()
         assert result['catalog'] == {} and result['entryPointCount'] == 0
         assert result['launches'] == 1 and result['cacheReused']
         assert result['environmentNames'] == ['PATH', 'TMPDIR']
+        assert result['configuredTimeoutSeconds'] == 120 and result['probeTimeoutSeconds'] == 10
         assert snapshot.cache_info().hits == 1
     else:
         with pytest.raises((AssertionError, ValueError, subprocess.SubprocessError)):
             gate.warm()
         assert gate.evidence is None
     assert gate.open is False
+    assert accounts._CATALOG_START_SECONDS == 120
+    if change == 'real-child-timeout':
+        assert started.is_file(), 'Require actual child startup, not a pre-launch timeout'
+        assert len(children) == 1 and json.loads(started.read_text())['pid'] == children[0].pid
+        assert children[0].returncode is not None, 'Canonical timeout must wait/reap the child'
+        with pytest.raises(ChildProcessError):
+            os.waitpid(children[0].pid, os.WNOHANG)
+        with pytest.raises(ValueError) as caught:
+            accounts.catalogs()
+        assert caught.value.diagnostic_facts['decisionCatalog']['category'] == 'timeout'
+        assert len(children) == gate.launches == 1
+        assert accounts._catalog_snapshot.cache_info().currsize == 1
 
 
 def test_source_inventory_checks_links_with_explicit_owned_boundary(tmp_path):

@@ -70,6 +70,8 @@ def _row(rows, module):
 class DecisionCatalogPreparation:
     """One real installed metadata discovery, never a runtime spawn exemption."""
 
+    timeout_seconds = 10
+
     def __init__(self):
         self.open = False
         self.launches = 0
@@ -114,11 +116,16 @@ class DecisionCatalogPreparation:
                                         "TZ", "TMPDIR", "TEMP", "TMP"}}
         before = {name for name in sys.modules if name.startswith("amplifier_module_provider_")}
         assert not before, "Provider packages must remain cold"
-        self.open = True
+        original_timeout = accounts._CATALOG_START_SECONDS
+        effective_timeout = min(original_timeout, self.timeout_seconds)
+        assert 0 < effective_timeout <= 10  # Below the 60/90s enclosing probes.
         try:
+            accounts._CATALOG_START_SECONDS = effective_timeout
+            self.open = True
             actual = accounts.catalogs()  # Canonical bounded subprocess; run() reaps it.
         finally:
             self.open = False
+            accounts._CATALOG_START_SECONDS = original_timeout
         assert actual == {} and self.launches == 1
         assert accounts._catalog_snapshot.cache_info().currsize == 1
         assert accounts.catalogs() == actual  # Must reuse cache with exemption closed.
@@ -126,6 +133,8 @@ class DecisionCatalogPreparation:
         assert helper.read_bytes() == data
         self.evidence = {"helperSha256": digest.hexdigest(), "entryPointCount": len(entries),
                          "catalog": actual, "launches": self.launches, "cacheReused": True,
+                         "configuredTimeoutSeconds": original_timeout,
+                         "probeTimeoutSeconds": effective_timeout,
                          "environmentNames": sorted(self.environment), "parentProviderImports": 0}
         return self.evidence
 
