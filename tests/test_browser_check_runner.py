@@ -2873,6 +2873,182 @@ def test_python_log_ring_retains_running_head_and_cursor_then_orders_tail(tmp_pa
     assert path.read_bytes() == b'01234789AB'
 
 
+@pytest.mark.parametrize('ending', [
+    'delayed-eof', 'never-eof', 'overall-deadline', 'case-deadline',
+    'cancelled', 'read-error', 'cleanup-unknown', 'late-eof',
+])
+def test_capture_finalization_observes_pipe_after_leader_exit(tmp_path, monkeypatch, ending):
+    """A completed leader/empty census cannot substitute for read-side EOF."""
+    from types import SimpleNamespace
+    read_fd, write_fd = os.pipe()
+    pipe = os.fdopen(read_fd, 'rb', buffering=0)
+    clock = SimpleNamespace(now=100.0, sleeps=[], writer_open=True, cleanup=False)
+    reads = []
+    real_read = os.read
+    os.write(write_fd, b'leader done\n')
+
+    def read(fd, size):
+        if fd != read_fd:
+            return real_read(fd, size)
+        assert size <= 65536
+        assert len(reads) < 210, 'A busy drain must not avoid clock/deadline checks'
+        if ending == 'late-eof' and len(reads) >= 2 and clock.writer_open:
+            clock.now = 100.6  # Scheduling/I/O delay within the final drain quantum.
+            os.close(write_fd)
+            clock.writer_open = False
+        if ending == 'read-error' and clock.now >= 100.02:
+            raise OSError('synthetic pipe failure')
+        try:
+            value = real_read(fd, size)
+        except BlockingIOError:
+            reads.append(('would-block', clock.now))
+            raise
+        reads.append(('bytes' if value else 'eof', clock.now))
+        return value
+
+    def sleep(seconds):
+        assert 0 < seconds <= .01
+        clock.sleeps.append(seconds)
+        clock.now += seconds
+        assert clock.now <= 100.51, 'Never-EOF must not consume the whole scenario budget'
+        if ending == 'cancelled':
+            runner.signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+        if ending == 'delayed-eof' and clock.now >= 100.03 and clock.writer_open:
+            os.write(write_fd, b'late final bytes\n')
+            os.close(write_fd)
+            clock.writer_open = False
+
+    class CompletedLeader:
+        pid = 12345
+        returncode = 0
+        stdout = pipe
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout):
+            assert clock.cleanup
+            assert ending != 'cleanup-unknown', 'Unknown ownership must not wait on the leader'
+            return 0
+
+    def cleanup(*args, drain):
+        clock.cleanup = True
+        drain()  # The real pipe drains available bytes, then reports EAGAIN.
+        assert reads[-1][0] == 'would-block' and clock.writer_open
+        return {'remaining': ['unknown'] if ending == 'cleanup-unknown' else [], 'terminated': 0}
+
+    monkeypatch.setattr(runner, 'time', SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep))
+    monkeypatch.setattr(runner.os, 'read', read)
+    monkeypatch.setattr(runner, 'process_identities', lambda: {})
+    monkeypatch.setattr(runner.subprocess, 'Popen', lambda *args, **kwargs: CompletedLeader())
+    monkeypatch.setattr(runner, 'retire_group', cleanup)
+    budget = .02 if ending == 'overall-deadline' else 100
+    case_timeout = .02 if ending == 'case-deadline' else 100
+    try:
+        code, report, output = execute(tmp_path, [scenario('capture', 'not actually spawned')],
+                                       budget=budget, case_timeout=case_timeout, log_limit=1024)
+        row, = report['scenarios']
+        assert row['exitCode'] == 0
+        assert reads[0][0] == 'bytes' and any(kind == 'would-block' for kind, _ in reads)
+        if ending == 'delayed-eof':
+            assert row['logCapture']['eof'] and reads[-1][0] == 'eof'
+            assert (output / 'capture.log').read_bytes() == b'leader done\nlate final bytes\n'
+            assert code == 0
+            assert row['reason'] is None
+        elif ending == 'late-eof':
+            assert code == 1 and row['logCapture']['eof']
+            assert row['reason'] == 'log_capture_timeout'
+            assert row['logCapture']['settlement']['status'] == 'deadline'
+            assert not clock.sleeps
+        else:
+            assert code == 1 and not row['logCapture']['eof']
+            assert row['reason'] == {
+                'cancelled': 'cancelled', 'read-error': 'log_capture_failed',
+            }.get(ending, 'log_incomplete')
+        if ending in {'overall-deadline', 'case-deadline'}:
+            assert clock.now <= 100.02
+        if ending == 'cancelled':
+            assert len(clock.sleeps) == 1
+        if ending == 'read-error':
+            assert row['logCapture']['captureError'] == 'OSError'
+            assert len(clock.sleeps) == 2
+        if ending == 'never-eof':
+            assert .49 <= clock.now - 100 <= .5
+        if ending == 'cleanup-unknown':
+            assert not clock.sleeps and row['cleanup']['remaining'] == ['unknown']
+        assert pipe.closed
+    finally:
+        if clock.writer_open:
+            os.close(write_fd)
+        pipe.close()
+
+
+@pytest.mark.parametrize('ending', ['eof', 'flood', 'cancelled', 'expired', 'write-error'])
+def test_capture_settlement_keeps_read_quanta_and_absolute_deadline(tmp_path, monkeypatch, ending):
+    from types import SimpleNamespace
+    read_fd, write_fd = os.pipe()
+    pipe = os.fdopen(read_fd, 'rb', buffering=0)
+    capture = runner.BoundedLog(tmp_path / 'capture.log', 128)
+    capture.attach(pipe)
+    clock = SimpleNamespace(now=100.0, sleeps=0, cancelled=False)
+    calls = []
+    real_read = os.read
+
+    def read(fd, size):
+        if fd != read_fd:
+            return real_read(fd, size)
+        calls.append(clock.sleeps)
+        assert size == 65536 and len(calls) <= 12
+        # Every quantum is at most four reads, even with continuous output.
+        assert calls.count(clock.sleeps) <= 4
+        if ending == 'eof' and len(calls) == 7:
+            return b''
+        return b'x' * size
+
+    def sleep(seconds):
+        assert 0 < seconds <= .01
+        clock.now += seconds
+        clock.sleeps += 1
+        if ending == 'cancelled':
+            clock.cancelled = True
+
+    def fail_write(data):
+        raise OSError('synthetic disk failure')
+
+    monkeypatch.setattr(runner, 'time', SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep))
+    monkeypatch.setattr(runner.os, 'read', read)
+    if ending == 'write-error':
+        monkeypatch.setattr(capture.head, 'write', fail_write)
+    try:
+        capture.settle(100.0 if ending == 'expired' else 100.02, lambda: clock.cancelled)
+        count = len(calls)
+        capture.close(drain=False)
+        assert len(calls) == count  # No extra read after cancellation/deadline.
+        assert clock.now <= 100.02 and clock.sleeps <= 2
+        receipt = capture.receipt()
+        assert receipt['settlement']['status'] == {
+            'eof': 'eof', 'flood': 'deadline', 'cancelled': 'cancelled',
+            'expired': 'deadline', 'write-error': 'capture_error',
+        }[ending]
+        if ending == 'eof':
+            assert receipt['eof'] and len(calls) == 7
+            assert (tmp_path / 'capture.log').read_bytes() == b'x' * 128
+        elif ending == 'expired':
+            assert calls == [] and not receipt['eof']
+        elif ending == 'cancelled':
+            assert len(calls) == 4 and clock.sleeps == 1 and not receipt['eof']
+        elif ending == 'write-error':
+            assert len(calls) == 4 and clock.sleeps == 0
+            assert receipt['captureError'] == 'OSError' and receipt['bytesRetained'] is None
+        else:
+            assert not receipt['eof'] and receipt['truncated']
+    finally:
+        if not capture.head.stream.closed:
+            capture.close(drain=False)
+        os.close(write_fd)
+        pipe.close()
+
+
 def expire_after_progress(monkeypatch, marker):
     # No startup race: the child installs its handler before marking progress.
     original = runner.time.monotonic

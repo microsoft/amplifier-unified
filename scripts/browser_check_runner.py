@@ -472,6 +472,9 @@ def retire_group(group, token, preexisting=None, *, drain=None):
                 'failure': {**detail, 'phase': phase}, 'signalAttempts': attempts}
 
 
+LOG_EOF_GRACE_SECONDS = .5
+
+
 class BoundedLog:
     """Binary head + disk ring tail. Memory/read work is bounded per poll.
 
@@ -495,6 +498,7 @@ class BoundedLog:
         self.pipe = None
         self.error = None
         self.discarded = 0
+        self.settlement = None
 
     def attach(self, pipe):
         self.pipe = pipe
@@ -549,6 +553,31 @@ class BoundedLog:
             except OSError:
                 pass  # Retain first error; drain/discard so cleanup can proceed.
 
+    def settle(self, deadline, cancelled):
+        """Observe EOF after leader exit, with one non-renewing bounded wait."""
+        started = time.monotonic()
+        end = min(deadline, started + LOG_EOF_GRACE_SECONDS)
+        before, polls, expired = self.observed, 0, False
+        while not self.eof and not self.error and not cancelled() and time.monotonic() < end:
+            self.drain()  # Keep the per-poll read/work quantum unchanged.
+            polls += 1
+            if time.monotonic() >= end:
+                expired = True  # A read/write quantum can itself use the remaining time.
+                break
+            if self.eof or self.error or cancelled():
+                break
+            remaining = end - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(.01, remaining))
+        status = ('cancelled' if cancelled() else 'capture_error' if self.error else
+                  'deadline' if expired or not self.eof else 'eof')
+        self.settlement = {
+            'status': status, 'polls': polls, 'bytesBefore': before,
+            'bytesDuring': self.observed - before,
+            'budgetSeconds': max(0, end - started),
+            'elapsedSeconds': round(time.monotonic() - started, 6),
+        }
+
     def receipt(self):
         return {'limitBytes': self.limit, 'bytesObserved': self.observed,
                 'bytesRetained': None if self.error else self.head_bytes + self.tail_bytes,
@@ -557,11 +586,13 @@ class BoundedLog:
                 'format': 'head-tail' if self.finalized else 'head-ring-tail',
                 'tailCheckpointMayLag': not self.finalized,
                 'headBytes': self.head_bytes, 'tailBytes': self.tail_bytes,
-                'tailStart': self.cursor if self.tail_bytes == self.tail_limit else 0}
+                'tailStart': self.cursor if self.tail_bytes == self.tail_limit else 0,
+                **({'settlement': self.settlement} if self.settlement is not None else {})}
 
-    def close(self):
+    def close(self, *, drain=True):
         try:
-            self.drain()
+            if drain:
+                self.drain()
             if self.error:
                 return
             start = self.cursor if self.tail_bytes == self.tail_limit else 0
@@ -961,16 +992,32 @@ def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenan
                         row['exitCode'] = process.returncode
                 if capture:
                     try:
-                        capture.close()
+                        if not cleanup['remaining'] and not row['reason'] and not stopped:
+                            capture.settle(min(deadline, started + case_timeout), lambda: stopped)
+                        else:
+                            capture.drain()  # No extra wait on interruption/unsafe cleanup.
                     except OSError as exc:
                         row['reason'] = row['reason'] or 'log_capture_failed'
                         row['logError'] = type(exc).__name__
+                    finally:
+                        # Do not take another read quantum after the finalization
+                        # deadline, or turn a late EOF into an untested success.
+                        try:
+                            capture.close(drain=False)
+                        except OSError as exc:
+                            row['reason'] = row['reason'] or 'log_capture_failed'
+                            row['logError'] = type(exc).__name__
+                    row['reason'] = row['reason'] or stopped
                     row['logCapture'] = capture.receipt()
                     if capture.error:
                         row['logError'] = capture.error
                         row['reason'] = row['reason'] or 'log_capture_failed'
                     if not capture.eof:
                         row['reason'] = row['reason'] or 'log_incomplete'
+                    elif capture.settlement and capture.settlement['status'] == 'deadline':
+                        # Retain the true EOF observation without accepting it
+                        # as evidence completed within the allowed interval.
+                        row['reason'] = row['reason'] or 'log_capture_timeout'
                 if junit_file:
                     try:
                         junit_file.check()
