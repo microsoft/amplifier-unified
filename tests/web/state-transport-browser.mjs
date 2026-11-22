@@ -13,7 +13,7 @@ import {chromium,expect} from '@playwright/test';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const evidencePath=process.env.AMPLIFIER_PERF_EVIDENCE||root+'output/state-transport-browser/evidence.json';
 const tracePath=evidencePath.replace(/\.json$/,'')+'.trace.zip';
-const errors=[],responses=[],catalogResponses=[],frames=[],initialFrames=[],paint=[],pending=new Map();
+const errors=[],responses=[],catalogResponses=[],frames=[],initialFrames=[],paint=[],preferenceWrites=[],pending=new Map();
 const evidence={status:'running',stage:'fixture',thresholdMs:250,paint,diagnostics:[],rendererUnits:'Seconds except LayoutCount and RecalcStyleCount',errors,modelCalls:0,
  runner:{platform:process.platform,arch:process.arch,node:process.version,parallelism:availableParallelism(),ci:process.env.CI==='true',loadAverage:loadavg()}};
 const persist=async()=>{await mkdir(dirname(evidencePath),{recursive:true});await writeFile(evidencePath,JSON.stringify(evidence,null,2)+'\n')};
@@ -61,21 +61,47 @@ const rendererMetrics=async()=>Object.fromEntries((await cdp.send('Performance.g
 async function measurePaint(kind){
  // Runner/renderer reads and JSON writes stay outside the measured interaction.
  const before=await rendererMetrics(),pendingBefore=pendingActions(),loadBefore=loadavg();
- const sample=await page.evaluate(async kind=>{
-  const root=document.getElementById('amp-one'),button=kind==='appearance'?document.querySelector('input[name="appearance-scheme"][value="dark"]'):null;
+ let sample;
+ if(kind==='appearance'){
+  // Time the real keyboard-generated click, not automation round-trip latency
+  // or a synthetic change event. Capture the exact owner before React can disable it.
+  await page.evaluate(()=>{
+   const button=document.querySelector('input[name="appearance-scheme"][value="dark"]');
+   const describe=node=>node?{tag:node.tagName,id:node.id,name:node.getAttribute('name'),value:node.getAttribute('value')}:null;
+   window.transportAppearanceSample=null;
+   button.addEventListener('click',()=>{
+    const start=performance.now(),focusedBefore=document.activeElement===button,activeBefore=describe(document.activeElement);
+    const gallery={cards:document.querySelectorAll('.a-appearance-card').length,loading:!![...document.querySelectorAll('[role="status"]')].find(node=>node.textContent==='Loading appearances…')};
+    requestAnimationFrame(()=>{
+     const firstFrameMs=performance.now()-start;
+     requestAnimationFrame(()=>{
+      const ms=performance.now()-start,feedback=document.querySelector('[data-feedback-for="scheme"] [role="status"]');
+      const locked=button.disabled||button.getAttribute('aria-disabled')==='true';
+      window.transportLongTasks.record(window.transportLongTasks.observer.takeRecords());
+      window.transportAppearanceSample={kind:'appearance',ms,firstFrameMs,secondFrameMs:ms,gallery,
+       visible:button.checked&&locked&&feedback?.textContent==='Saving…'&&feedback.getClientRects().length>0,
+       longTasks:window.transportLongTasks.rows.filter(row=>row.start<=start+ms&&row.start+row.duration>=start).map(row=>({startMs:row.start-start,durationMs:row.duration})),
+       activation:'keyboard Space',focusedBefore,activeBefore,focused:document.activeElement===button,activeAfter:describe(document.activeElement),
+       nativeDisabled:button.disabled,ariaDisabled:button.getAttribute('aria-disabled'),feedback:feedback?.textContent,
+       rootScheme:document.getElementById('amp-one').style.colorScheme};
+     });
+    });
+   },{capture:true,once:true});
+  });
+  await page.keyboard.press('Space');
+  await page.waitForFunction(()=>window.transportAppearanceSample!==null);
+  sample=await page.evaluate(()=>window.transportAppearanceSample);
+ }else sample=await page.evaluate(async kind=>{
   const gallery={cards:document.querySelectorAll('.a-appearance-card').length,loading:!![...document.querySelectorAll('[role="status"]')].find(node=>node.textContent==='Loading appearances…')};
   let start,firstFrameMs,secondFrameMs;
   start=performance.now();
-  if(kind==='settings')window.pendingSettings=window.amplifier.dispatch('view.update',{patch:{panel:'settings'}});else button.click();
+  window.pendingSettings=window.amplifier.dispatch('view.update',{patch:{panel:'settings'}});
   const clickMs=performance.now()-start;
   await new Promise(resolve=>requestAnimationFrame(()=>{firstFrameMs=performance.now()-start;requestAnimationFrame(()=>{secondFrameMs=performance.now()-start;resolve()})}));
-  const feedback=document.querySelector('[data-feedback-for="scheme"] [role="status"]');
-  const ms=performance.now()-start,visible=kind==='settings'?!!document.querySelector('[role="dialog"]'):
-   button.checked&&button.disabled&&feedback?.textContent==='Saving…'&&feedback.getClientRects().length>0;
+  const ms=performance.now()-start,visible=!!document.querySelector('[role="dialog"]');
   window.transportLongTasks.record(window.transportLongTasks.observer.takeRecords());
   const longTasks=window.transportLongTasks.rows.filter(row=>row.start<=start+ms&&row.start+row.duration>=start).map(row=>({startMs:row.start-start,durationMs:row.duration}));
-  return {kind,ms,visible,clickMs,firstFrameMs,secondFrameMs,gallery,longTasks,
-   ...(kind==='appearance'?{feedback:feedback?.textContent,focused:document.activeElement===button,rootScheme:root.style.colorScheme}:{})};
+  return {kind,ms,visible,clickMs,firstFrameMs,secondFrameMs,gallery,longTasks};
  },kind);
  paint.push(sample);
  const after=await rendererMetrics();
@@ -97,6 +123,7 @@ try{
  });
  page.on('pageerror',error=>errors.push(error.message));
  page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'){
+  if(request.postDataJSON()?.action==='appearance.preferences.update')preferenceWrites.push(request.postDataJSON());
   pending.set(request,{action:String(request.postDataJSON()?.action||'unknown').slice(0,120)});
   // Bind the window at request admission, including bodies that finish later.
   // Settle only after cold paint measurements; never prewarm the gallery.
@@ -154,9 +181,13 @@ try{
  const dark=page.getByRole('radiogroup',{name:'Color mode',exact:true}).getByRole('radio',{name:'Dark',exact:true});await dark.waitFor();
  const savedBefore=await page.evaluate(()=>({scheme:document.getElementById('amp-one').style.colorScheme,
   composition:document.getElementById('amp-one').dataset.appearanceComposition}));
- await dark.focus();
+ await dark.focus();await expect(dark).toBeFocused();
  // Do not wait for gallery/fonts/network idle: keep the existing cold-opening coverage.
  evidence.stage='appearance pending feedback';await measurePaint('appearance');
+ const focusSample=paint.find(row=>row.kind==='appearance');
+ assert.equal(focusSample.focusedBefore,true,'The initiating radio owns focus at the real keyboard click');
+ assert.equal(focusSample.focused,true,'Pending Save retains focus on the initiating radio, never body');
+ await expect(dark).toBeFocused();
  evidence.stage='held persistence';await expect.poll(()=>heldPrepares).toBe(1);
  // Dispatch reads wait behind preceding writes. Observe delivered authoritative
  // state directly while the exact earlier write is deliberately held.
@@ -166,6 +197,19 @@ try{
  assert.deepEqual(evidence.pendingProof.appearance.shared,profileBefore.shared);
  assert.deepEqual(await page.evaluate(()=>({scheme:document.getElementById('amp-one').style.colorScheme,
   composition:document.getElementById('amp-one').dataset.appearanceComposition})),savedBefore,'Pending choice cannot activate before storage');
+ // Real duplicate keyboard input and a conflicting radio attempt must not queue
+ // another preference mutation or change the selected value while Save is held.
+ const light=page.getByRole('radiogroup',{name:'Color mode',exact:true}).getByRole('radio',{name:'Light',exact:true});
+ await page.keyboard.press('Space');await page.keyboard.press('ArrowLeft');
+ await expect(dark).toBeFocused();await expect(dark).toBeChecked();await expect(light).not.toBeChecked();
+ const lightBox=await light.boundingBox();assert.ok(lightBox);
+ await page.mouse.click(lightBox.x+lightBox.width/2,lightBox.y+lightBox.height/2);
+ await expect(dark).toBeChecked();await expect(light).not.toBeChecked();
+ assert.equal(preferenceWrites.length,1,'Held save admits exactly one preference request');
+ evidence.pendingDuplicateProof={actions:['Space','ArrowLeft','pointer Light'],writes:preferenceWrites.length};
+ // A deliberate newer pointer focus, if permitted, must not be stolen by ACK.
+ const focusedBeforeAck=await page.evaluate(()=>({name:document.activeElement?.getAttribute('name'),value:document.activeElement?.getAttribute('value'),tag:document.activeElement?.tagName}));
+ evidence.pendingDuplicateProof.focusedBeforeAck=focusedBeforeAck;
  await persist();
  releasePersistence();
  await expect.poll(()=>heldStorage).toBe(1);
@@ -195,6 +239,8 @@ try{
  assert.deepEqual(confirmed.shared,profileBefore.shared);
  assert.equal(evidence.confirmedPaint.scheme,'dark');assert.equal(evidence.confirmedPaint.composition,confirmed.composition.id);
  await expect(dark).toBeEnabled();
+ assert.equal(preferenceWrites.length,1,'Settlement never releases a queued duplicate choice');
+ assert.deepEqual(await page.evaluate(()=>({name:document.activeElement?.getAttribute('name'),value:document.activeElement?.getAttribute('value'),tag:document.activeElement?.tagName})),focusedBeforeAck,'ACK cannot steal newer focus');
  // Failed persistence keeps the confirmed profile/root and exposes local failure.
  evidence.stage='rejection rollback';await page.unroute('**/api/actions');
  await page.route('**/api/actions',async route=>{if(route.request().postDataJSON()?.action==='appearance.preferences.update'){await new Promise(resolve=>setTimeout(resolve,300));return route.fulfill({status:409,json:{accepted:false,error:'Fixture rejected appearance'}})}await route.continue()});
