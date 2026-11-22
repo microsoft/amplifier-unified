@@ -14,6 +14,12 @@ try{
  await page.goto(base+'/');await page.waitForSelector('#amp-one');
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const advanced=async()=>{const details=page.locator('.a-appearance-more');if(!await details.evaluate(el=>el.open))await details.locator(':scope > summary').click()};
+ const editor=async()=>{
+  await advanced();
+  const details=page.locator('.a-appearance-advanced');
+  if(!await details.evaluate(el=>el.open))await details.locator(':scope > summary').click();
+  await expect(details.getByRole('button',{name:'Save as copy',exact:true})).toBeVisible();
+ };
  const presentation=async(id,value)=>{
   if(id!=='scheme')await advanced();
   const control=id==='scheme'?page.getByRole('radiogroup',{name:'Color mode',exact:true}).getByRole('radio',{name:{dark:'Dark',light:'Light',system:'System'}[value],exact:true}):page.getByRole('combobox',{name:'Layout',exact:true});
@@ -89,14 +95,13 @@ try{
  await openSettingsPage(page,'routing');await openSettingsPage(page,'providers');
  assert.equal(await page.locator('#provider-key').inputValue(),'fixture-unsaved-key');
  assert.ok(!JSON.stringify(await state()).includes('fixture-unsaved-key'));
- await openSettingsPage(page,'appearance');await advanced();
- await page.getByText('Advanced customization',{exact:true}).click();
+ await openSettingsPage(page,'appearance');await editor();
  const beforePreview=await settledAppearance(page);
  await page.locator('#theme-name').fill('Acceptance skin');await page.locator('#theme-css').fill('#amp-one { --a-accent: #6b4dcc; }');
  await page.getByRole('button',{name:'Preview draft',exact:true}).click();
  await expect.poll(async()=>(await readAppearance(page)).preview?.theme?.name).toBe('Acceptance skin');
  assert.deepEqual((await settledAppearance(page)).effective,beforePreview.effective);
- await openSettingsPage(page,'updates');await openSettingsPage(page,'appearance');await advanced();
+ await openSettingsPage(page,'updates');await openSettingsPage(page,'appearance');await editor();
  await expect.poll(async()=>(await readAppearance(page)).preview).toBe(null);
  await expect(page.locator('#theme-name')).toHaveValue('Acceptance skin');
  await expect(page.locator('#theme-css')).toHaveValue('#amp-one { --a-accent: #6b4dcc; }');
@@ -114,7 +119,7 @@ try{
   await route.continue();
  });
  await openSettingsPage(page,'appearance');await presentation('scheme','dark');await presentation('layout','work');
- await page.reload();await page.locator('.a-settings-experience').waitFor();await openSettingsPage(page,'appearance');await advanced();await page.getByText('Advanced customization',{exact:true}).click();await page.locator('#theme-name').waitFor();
+ await page.reload();await page.locator('.a-settings-experience').waitFor();await openSettingsPage(page,'appearance');await editor();await page.locator('#theme-name').waitFor();
  assert.equal(await page.locator('#theme-name').inputValue(),'Acceptance skin');
  // Shell settings hydrate separately from the host's skin controls after reload.
  await expect(page.getByRole('combobox',{name:'Layout',exact:true})).toHaveValue('work');

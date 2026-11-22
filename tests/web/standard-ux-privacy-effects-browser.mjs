@@ -40,8 +40,14 @@ for(const [id,width,height,mode] of variants){
   await surface.getByLabel('Conversation title (optional)',{exact:true}).fill('Imported synthetic privacy proof');
   const rows=[{role:'user',content:'Synthetic imported question'},{role:'assistant',content:'',tool_calls:[{id:'old-call',function:{name:'bash',arguments:'{}'}}]},{role:'tool',tool_call_id:'old-call',content:'Historical tool output, never execute'},{role:'assistant',content:'Synthetic imported answer'}];
   const payload={messages:rows,metadata:{bundle_name:'anchors',jobs:[{command:'must-not-run'}],schedules:[{enabled:true}],parent_id:'untrusted-parent'}};
-  const chooser=page.waitForEvent('filechooser');await activate(surface.getByRole('button',{name:'Choose a conversation',exact:true}));
-  await (await chooser).setFiles({name:'synthetic-conversation.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(payload))});
+  // FileDrop also labels its native file input. Drive the visible trigger,
+  // not that separate input's accessibility node, and observe both promises
+  // immediately so a failed gesture cannot leave a rejected waiter at cleanup.
+  const choose=surface.locator('.a-file-drop button[data-action="history.importFile"]');
+  await expect(choose).toHaveAccessibleName('Choose a conversation');
+  await expect(choose).toBeVisible();await expect(choose).toBeEnabled();
+  const [chooser]=await Promise.all([page.waitForEvent('filechooser'),activate(choose)]);
+  await chooser.setFiles({name:'synthetic-conversation.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(payload))});
   await expect.poll(async()=>(await observe()).imported.length).toBe(1);
   const imported=await observe();const entry=imported.imported[0];assert.notEqual(entry.id,initial.originalId);assert.deepEqual(entry.messages,rows);assert.equal(entry.status,'stopped');assert.equal(entry.jobsReplayed,false);assert.equal(imported.originalPreserved,true);assert.equal(imported.schedules,0);assert.deepEqual(imported.runtimeCalls,[]);
   await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId)).toBe(entry.id);
@@ -57,7 +63,7 @@ for(const [id,width,height,mode] of variants){
   assert.deepEqual(actions.filter(value=>['maintenance.repair','maintenance.reset','conversation.send','session.warm'].includes(value.action)),[]);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
   await page.screenshot({path:out+'/'+id+'.png'});
   row.status='passed';row.claims=[{workflow:'privacy.import',expectedIndices:[0,1,2]},{workflow:'privacy.backup',expectedIndices:[0,1,2,3]}];row.receipt={distinctImport:true,originalRetained:true,historicalToolRowsRetained:true,noExecution:true,noSchedules:true,backupFileMode:completed.backup.fileMode,backupDirectoryMode:completed.backup.directoryMode,backupContainsDatabaseAndImportedTranscript:true};
- }catch(error){row.status='failed';row.error=String(error);if(page)try{await page.screenshot({path:out+'/'+id+'-failure.png'})}catch{}}
+ }catch(error){row.status='failed';row.error=String(error);console.error(id,row.error);if(page)try{await page.screenshot({path:out+'/'+id+'-failure.png'})}catch{}}
  finally{
   try{await browser?.close()}catch(error){row.cleanupError=String(error);row.status='failed'}
   finally{if(fixture&&fixture.exitCode===null){const exited=once(fixture,'exit');fixture.kill('SIGTERM');const timer=setTimeout(()=>fixture.kill('SIGKILL'),5000);try{await exited}finally{clearTimeout(timer)}}await writeFile(out+'/'+id+'-fixture.log',logs);results.push(row);await writeFile(out+'/results.json',JSON.stringify({schemaVersion:1,results},null,2))}
