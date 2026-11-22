@@ -2875,7 +2875,7 @@ def test_python_log_ring_retains_running_head_and_cursor_then_orders_tail(tmp_pa
 
 @pytest.mark.parametrize('ending', [
     'delayed-eof', 'never-eof', 'overall-deadline', 'case-deadline',
-    'cancelled', 'read-error', 'cleanup-unknown',
+    'cancelled', 'read-error', 'cleanup-unknown', 'late-eof',
 ])
 def test_capture_finalization_observes_pipe_after_leader_exit(tmp_path, monkeypatch, ending):
     """A completed leader/empty census cannot substitute for read-side EOF."""
@@ -2892,6 +2892,10 @@ def test_capture_finalization_observes_pipe_after_leader_exit(tmp_path, monkeypa
             return real_read(fd, size)
         assert size <= 65536
         assert len(reads) < 210, 'A busy drain must not avoid clock/deadline checks'
+        if ending == 'late-eof' and len(reads) >= 2 and clock.writer_open:
+            clock.now = 100.6  # Scheduling/I/O delay within the final drain quantum.
+            os.close(write_fd)
+            clock.writer_open = False
         if ending == 'read-error' and clock.now >= 100.02:
             raise OSError('synthetic pipe failure')
         try:
@@ -2951,6 +2955,11 @@ def test_capture_finalization_observes_pipe_after_leader_exit(tmp_path, monkeypa
             assert (output / 'capture.log').read_bytes() == b'leader done\nlate final bytes\n'
             assert code == 0
             assert row['reason'] is None
+        elif ending == 'late-eof':
+            assert code == 1 and row['logCapture']['eof']
+            assert row['reason'] == 'log_capture_timeout'
+            assert row['logCapture']['settlement']['status'] == 'deadline'
+            assert not clock.sleeps
         else:
             assert code == 1 and not row['logCapture']['eof']
             assert row['reason'] == {

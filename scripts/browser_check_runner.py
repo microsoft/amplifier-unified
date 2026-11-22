@@ -557,17 +557,20 @@ class BoundedLog:
         """Observe EOF after leader exit, with one non-renewing bounded wait."""
         started = time.monotonic()
         end = min(deadline, started + LOG_EOF_GRACE_SECONDS)
-        before, polls = self.observed, 0
+        before, polls, expired = self.observed, 0, False
         while not self.eof and not self.error and not cancelled() and time.monotonic() < end:
             self.drain()  # Keep the per-poll read/work quantum unchanged.
             polls += 1
+            if time.monotonic() >= end:
+                expired = True  # A read/write quantum can itself use the remaining time.
+                break
             if self.eof or self.error or cancelled():
                 break
             remaining = end - time.monotonic()
             if remaining > 0:
                 time.sleep(min(.01, remaining))
         status = ('cancelled' if cancelled() else 'capture_error' if self.error else
-                  'eof' if self.eof else 'deadline')
+                  'deadline' if expired or not self.eof else 'eof')
         self.settlement = {
             'status': status, 'polls': polls, 'bytesBefore': before,
             'bytesDuring': self.observed - before,
@@ -1011,6 +1014,10 @@ def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenan
                         row['reason'] = row['reason'] or 'log_capture_failed'
                     if not capture.eof:
                         row['reason'] = row['reason'] or 'log_incomplete'
+                    elif capture.settlement and capture.settlement['status'] == 'deadline':
+                        # Retain the true EOF observation without accepting it
+                        # as evidence completed within the allowed interval.
+                        row['reason'] = row['reason'] or 'log_capture_timeout'
                 if junit_file:
                     try:
                         junit_file.check()
