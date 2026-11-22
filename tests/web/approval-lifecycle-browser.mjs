@@ -295,12 +295,20 @@ try{
  try{
   await dismissButton.evaluate(button=>{button.style.position='relative';button.style.top='8px'});
   clipped=await dismissButton.evaluate(dismissalReachability);
+  await writeFile(join(output,'dismissal-clipped-control.json'),JSON.stringify(clipped,null,2)+'\n');
   assert.equal(clipped.centerHit,true);assert.equal(clipped.textContained,true);assert.ok(clipped.hits.every(Boolean));
   assert.equal(clipped.modeledContained,false);assert.equal(clipped.reachable,false);
  }finally{await dismissButton.evaluate((button,style)=>style===null?button.removeAttribute('style'):button.setAttribute('style',style),savedStyle)}
  try{
-  await dismissButton.evaluate(button=>{button.style.textIndent='500px';button.style.overflow='hidden'});
+  await dismissButton.evaluate(button=>{
+   const box=button.getBoundingClientRect();
+   button.style.width=box.width+'px';button.style.minWidth=box.width+'px';button.style.maxWidth=box.width+'px';
+   button.style.height=box.height+'px';button.style.boxSizing='border-box';
+   button.style.textIndent='500px';button.style.overflow='hidden';
+  });
   textClipped=await dismissButton.evaluate(dismissalReachability);
+  await writeFile(join(output,'dismissal-text-control.json'),JSON.stringify(textClipped,null,2)+'\n');
+  assert.deepEqual(textClipped.box,reachable.box,'Text-only negative must preserve the original target box');
   assert.equal(textClipped.modeledContained,true);assert.ok(textClipped.hits.every(Boolean));
   assert.equal(textClipped.textContained,false);assert.equal(textClipped.reachable,false);
  }finally{await dismissButton.evaluate((button,style)=>style===null?button.removeAttribute('style'):button.setAttribute('style',style),savedStyle)}
