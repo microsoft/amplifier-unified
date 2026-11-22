@@ -143,6 +143,29 @@ def file_identity(path):
     return {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
+def presentation_proof(application, branding, *, size=192, accent=None):
+    """Expected bytes from the fixture's owner, never from an HTTP response."""
+    if type(size) is not int or size not in (32, 180, 192, 512):
+        raise ValueError('Unsupported fixture icon size')
+    if accent is not None and (not isinstance(accent, str) or len(accent) != 6
+                               or any(char not in '0123456789abcdef' for char in accent)):
+        raise ValueError('Use one lowercase six-digit fixture accent')
+    static = application / 'static'
+    document = (static / 'index.html').read_bytes()
+    manifest = (static / 'manifest.webmanifest').read_bytes()
+    return {
+        'branding': branding.snapshot(),
+        'producer': file_identity(application / 'instance_branding.py'),
+        'document': {'inputSha256': hashlib.sha256(document).hexdigest(),
+                     'sha256': hashlib.sha256(branding.document(document.decode('utf-8')).encode()).hexdigest()},
+        'manifest': {'inputSha256': hashlib.sha256(manifest).hexdigest(),
+                     'sha256': hashlib.sha256(json.dumps(branding.manifest(json.loads(manifest), accent)).encode()).hexdigest()},
+        'icon': {'size': size, 'accent': accent,
+                 'markSha256': file_identity(static / 'branding/pwa/pwa-512.png')['sha256'],
+                 'sha256': hashlib.sha256(branding.icon(size, accent)).hexdigest()},
+    }
+
+
 def package_origin(root):
     """Select application origin once, independently of the test's location."""
     installed = os.environ.get('AMPLIFIER_TEST_INSTALLED') == '1'
@@ -743,6 +766,16 @@ async def main(root):
                 'sharedSettings': {'initial': settings_identity, 'current': file_identity(settings)}}
         async def inspect(request):
             return web.json_response(proof(), headers={'Cache-Control': 'no-store'})
+        async def presentation(request):
+            if (set(request.query) - {'size', 'accent'}
+                    or any(len(request.query.getall(key)) != 1 for key in request.query)):
+                raise web.HTTPBadRequest(text='Choose one fixture size and accent')
+            try:
+                value = presentation_proof(application, service.instance_branding,
+                    size=int(request.query.get('size', '192')), accent=request.query.get('accent'))
+            except ValueError as error:
+                raise web.HTTPBadRequest(text=str(error)) from None
+            return web.json_response(value, headers={'Cache-Control': 'no-store'})
         async def arm(request):
             if delayed['phase'] != 'unarmed' or len(calls_at(root / 'calls.jsonl')) != 4:
                 raise web.HTTPConflict(text='Arm only once, after the original four sends')
@@ -757,6 +790,7 @@ async def main(root):
             gate.set()
             return web.json_response(copy.deepcopy(delayed))
         app.router.add_get('/fixture/native-proof', inspect)
+        app.router.add_get('/fixture/presentation', presentation)
         app.router.add_post('/fixture/native-delay/arm', arm)
         app.router.add_post('/fixture/native-delay/release', release)
         runner = web.AppRunner(app)

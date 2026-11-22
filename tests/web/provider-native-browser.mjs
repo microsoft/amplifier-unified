@@ -119,15 +119,62 @@ try{
   JSON.parse(await readFile(process.env.PROVIDER_SELECTION_STATIC_MANIFEST,'utf8')):
   await sourceStatic(checkout+'/amplifier_web/static');
  await save('expected-static.json',staticManifest);
+ const presentationResponse=await page.request.get(url+'/fixture/presentation');
+ assert.equal(presentationResponse.status(),200);
+ const presentation=await presentationResponse.json();
+ assert.equal(presentation.document.inputSha256,staticManifest['amplifier_web/static/index.html']);
+ assert.equal(presentation.manifest.inputSha256,staticManifest['amplifier_web/static/manifest.webmanifest']);
+ assert.equal(presentation.icon.markSha256,staticManifest['amplifier_web/static/branding/pwa/pwa-512.png']);
+ const producer=installed?JSON.parse(await readFile(process.env.AMPLIFIER_TEST_INSTALLED_IDENTITY,'utf8')).files['amplifier_web/instance_branding.py']:
+  createHash('sha256').update(await readFile(checkout+'/amplifier_web/instance_branding.py')).digest('hex');
+ assert.equal(presentation.producer.sha256,producer);
+ await save('expected-presentation.json',presentation);
+ const presentations=new Map([['192:',Promise.resolve(presentation)]]),negativeAssets=new Set();
+ const assertBytes=(bytes,expected,path)=>{
+  assert.ok(expected,'Unmanifested static response '+path);
+  const sha256=createHash('sha256').update(bytes).digest('hex');assert.equal(sha256,expected,path);return sha256;
+ };
  const assetPromises=[];let assetWrites=Promise.resolve();
  page.on('response',response=>{
   const address=new URL(response.url());if(address.origin!==new URL(url).origin)return;
-  const path=address.pathname==='/'?'index.html':address.pathname.slice(1),expected=staticManifest['amplifier_web/static/'+path];
-  if(!expected&&!path.startsWith('assets/')&&(path.startsWith('api/')||!['script','stylesheet','image','font','media'].includes(response.request().resourceType())))return;
+  const path=address.pathname==='/'?'index.html':address.pathname.slice(1),staticExpected=staticManifest['amplifier_web/static/'+path];
+  const icon=/^instance-icon\/(32|180|192|512)\.png$/.exec(path);
+  if(!staticExpected&&!icon&&!path.startsWith('assets/')&&(path.startsWith('api/')||!['script','stylesheet','image','font','media'].includes(response.request().resourceType())))return;
   assetPromises.push((async()=>{
-   assert.ok(expected,'Unmanifested static response '+path);assert.equal(response.status(),200);
-   const sha256=createHash('sha256').update(await bounded(response.body(),10000,'Static '+path)).digest('hex');
-   assert.equal(sha256,expected,path);return{path,sha256};
+   let expected=staticExpected,kind='static',owner=null;
+   if(path==='index.html'){expected=presentation.document.sha256;kind='branded-document';owner=presentation}
+   if(icon||path==='manifest.webmanifest'){
+    assert.ok([...address.searchParams.keys()].every(key=>['v','accent'].includes(key)),'Unexpected presentation query');
+    for(const key of ['v','accent'])assert.ok(address.searchParams.getAll(key).length<=1,'Ambiguous presentation query');
+    if(icon)assert.equal(address.searchParams.get('v'),presentation.branding.revision,'Icon belongs to this fixture listener');
+    const accent=address.searchParams.get('accent'),size=icon?Number(icon[1]):192;
+    assert.ok(accent===null||/^[0-9a-f]{6}$/.test(accent),'Invalid fixture accent');
+    const key=`${size}:${accent||''}`;
+    if(!presentations.has(key))presentations.set(key,(async()=>{
+     const response=await page.request.get(url+'/fixture/presentation?'+new URLSearchParams({size:String(size),...(accent?{accent}:{})}));
+     assert.equal(response.status(),200);const result=await response.json();
+     assert.deepEqual(result.branding,presentation.branding);
+     assert.deepEqual(result.producer,presentation.producer);
+     assert.equal(result.icon.markSha256,presentation.icon.markSha256);
+     assert.equal(result.manifest.inputSha256,presentation.manifest.inputSha256);
+     assert.equal(result.icon.size,size);assert.equal(result.icon.accent,accent);return result;
+    })());
+    owner=await bounded(presentations.get(key),10000,'Presentation identity');
+    expected=icon?owner.icon.sha256:owner.manifest.sha256;kind=icon?'listener-icon':'listener-manifest';
+    assert.equal(response.headers()['cache-control'],'no-store');
+   }
+   assert.equal(response.status(),200);
+   const bytes=await bounded(response.body(),10000,'Static '+path),sha256=assertBytes(bytes,expected,path);
+   if(icon)assert.match(response.headers()['content-type'],/^image\/png\b/);
+   if(path==='index.html')assert.match(response.headers()['content-type'],/^text\/html\b/);
+   if(path==='manifest.webmanifest')assert.match(response.headers()['content-type'],/^application\/manifest\+json\b/);
+   if(!negativeAssets.has(kind)){
+    assert.ok(bytes.length);const changed=Buffer.from(bytes);changed[changed.length-1]^=1;
+    assert.throws(()=>assertBytes(changed,expected,path),{code:'ERR_ASSERTION'});
+    assert.throws(()=>assertBytes(bytes,undefined,'assets/unmanifested-fixture.js'),{code:'ERR_ASSERTION'});
+    negativeAssets.add(kind);
+   }
+   return{path,query:address.search,kind,sha256,expected,owner,changedBytesRejected:true};
   })().catch(error=>({path,error:error.message})).then(row=>{
    assets.push(row);assetWrites=assetWrites.then(()=>appendFile(evidence+'/consumed-assets.jsonl',JSON.stringify(row)+'\n'));return row;
   }));
@@ -138,6 +185,7 @@ try{
   await bounded(Promise.all(responses),12000,'Observed action receipts');await eventWrites;
   await bounded(Promise.all(assetPromises),12000,'Consumed assets');await assetWrites;
   await save('actions.json',actions);await save('consumed-assets.json',assets);
+  await save('asset-negative-controls.json',[...negativeAssets]);
  };
  proof=async()=>{
   const response=await page.request.get(url+'/fixture/native-proof',{timeout:10000});assert.equal(response.status(),200);return response.json();
@@ -524,6 +572,12 @@ try{
  const alternateSession=await send(ALT);
  assert.ok(!sessionIds.includes(alternateSession));sessionIds.push(alternateSession);
  await flush();assert.deepEqual(pageErrors,[]);assert.deepEqual(evidenceErrors,[]);assert.deepEqual(assets.filter(row=>row.error),[]);
+ assert.ok(assets.some(row=>row.kind==='branded-document')&&assets.some(row=>row.kind==='listener-icon'),
+  'The actual browser must consume both the branded bootstrap and its listener icon');
+ for(const extension of ['.js','.css'])assert.ok(assets.some(row=>row.kind==='static'&&row.path.endsWith(extension)),
+  'Actual bundled scripts and styles must retain byte-exact attestation');
+ for(const kind of ['static','branded-document','listener-icon'])assert.ok(negativeAssets.has(kind),
+  'Changed bytes must fail through the same asset verifier: '+kind);
  const final=await proof();assert.equal(final.calls.length,5);
  assert.equal(final.sessions.find(row=>row.id===alternateSession).bundle,alternate);
  assert.ok(final.calls[4].atNs>readyProbe.finishedAtNs);
@@ -619,4 +673,4 @@ try{
 }
 if(primary){console.error(JSON.stringify({primary:primary.message,cleanupErrors}));throw primary}
 await save('result.json',{...journey,cleanupErrors,fixtureClosed:true});
-console.log('Native provider boundary passed: shared A -> same-worker B -> shared A -> shared A -> delayed root-local native-alt; real preparation, production probe and provider entry.');
+ console.log('Native provider boundary passed: shared A -> same-worker B -> shared A -> shared A -> delayed alternate-root default; real preparation, production probe and provider entry.');

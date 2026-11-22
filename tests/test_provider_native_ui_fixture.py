@@ -124,6 +124,47 @@ async def test_metadata_provider_cannot_complete(synthetic_provider):
 
 
 @pytest.fixture
+def presentation_owner(tmp_path):
+    import amplifier_web
+    from amplifier_web.deployment import DEFAULT_SERVER
+    from amplifier_web.instance_branding import InstanceBranding
+    spec = importlib.util.spec_from_file_location('native_fixture_presentation', FIXTURE)
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    return fixture, Path(amplifier_web.__file__).parent, InstanceBranding(tmp_path, DEFAULT_SERVER)
+
+
+def test_presentation_proof_binds_templates_producer_and_exact_generated_bytes(presentation_owner, tmp_path):
+    fixture, application, branding = presentation_owner
+    before = list(tmp_path.rglob('*'))
+    first = fixture.presentation_proof(application, branding)
+    accented = fixture.presentation_proof(application, branding, size=192, accent='abcdef')
+    assert first['document']['inputSha256'] == fixture.file_identity(application / 'static/index.html')['sha256']
+    assert first['document']['sha256'] == hashlib.sha256(
+        branding.document((application / 'static/index.html').read_text()).encode()).hexdigest()
+    assert first['document'] == accented['document']
+    assert first['producer'] == fixture.file_identity(application / 'instance_branding.py')
+    assert first['icon']['markSha256'] == accented['icon']['markSha256']
+    assert first['icon']['sha256'] != accented['icon']['sha256']
+    assert accented['icon']['sha256'] == hashlib.sha256(branding.icon(192, 'abcdef')).hexdigest()
+    manifest = json.loads((application / 'static/manifest.webmanifest').read_text())
+    assert accented['manifest']['sha256'] == hashlib.sha256(
+        json.dumps(branding.manifest(manifest, 'abcdef')).encode()).hexdigest()
+    assert first == fixture.presentation_proof(application, branding)
+    assert list(tmp_path.rglob('*')) == before, 'Expected-byte reads must not write listener settings'
+
+
+@pytest.mark.parametrize('options', [
+    {'size': 0}, {'size': 193}, {'size': True}, {'size': '192'},
+    {'accent': ''}, {'accent': 'ABCDEF'}, {'accent': 'abcdef&v=other'}, {'accent': ['abcdef']},
+])
+def test_presentation_proof_rejects_unbounded_or_ambiguous_inputs(presentation_owner, options):
+    fixture, application, branding = presentation_owner
+    with pytest.raises(ValueError):
+        fixture.presentation_proof(application, branding, **options)
+
+
+@pytest.fixture
 def isolated_catalog(tmp_path):
     if sys.platform != 'linux':
         pytest.skip('The native browser fixture requires Linux process identity')
