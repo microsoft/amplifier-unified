@@ -271,14 +271,20 @@ async function checkReadingAnchor(page,operation) {
     const describe=el=>el?{tag:el.tagName,id:el.id,role:el.getAttribute('role'),
       name:el.getAttribute('aria-label'),nodeId:el.closest('[data-node-id]')?.dataset.nodeId}:null;
     const rect=el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};
-    const record=(phase,event)=>{
+    const savedPosition=()=>{
+      try{
+        const row=JSON.parse(sessionStorage.getItem('amplifier.chat-reading.v1')||'{}')[pane.dataset.sessionId];
+        return row?{messageId:row.messageId,offset:row.offset,top:row.top,submittedId:row.submittedId}:null;
+      }catch{return {unavailable:true}}
+    };
+    const record=(phase,event,detail={})=>{
       if(rows.length>=160)return;
       const top=pane.getBoundingClientRect().top;
       rows.push({phase,at:performance.now(),type:event?.type,trusted:event?.isTrusted,
         target:describe(event?.target),active:describe(document.activeElement),
         deltaY:event?.deltaY,scrollTop:pane.scrollTop,scrollHeight:pane.scrollHeight,
         clientHeight:pane.clientHeight,pane:rect(pane),button:rect(trigger),
-        padding:getComputedStyle(pane).padding,inspector:!!document.querySelector('#work-step-inspector'),
+        padding:getComputedStyle(pane).padding,inspector:!!document.querySelector('#work-step-inspector'),savedPosition:savedPosition(),...detail,
         messages:[...pane.querySelectorAll('[data-message-id]')].slice(0,4).map(row=>({
           id:row.dataset.messageId,offset:row.getBoundingClientRect().top-top}))});
     };
@@ -288,9 +294,28 @@ async function checkReadingAnchor(page,operation) {
     };
     const event=e=>{record('event',e);if(e.type==='click'&&(e.target===trigger||trigger.contains(e.target)))sampleFrames()};
     const types=['scroll','focusin','pointerdown','click','wheel','keydown','input'];
+    // Intercept only this pane instance; delegate unchanged to the browser's
+    // native accessor. A later native scroll with no write record is distinct
+    // from a scheduled application write. Never change the prototype or goal.
+    const ownScrollTop=Object.getOwnPropertyDescriptor(pane,'scrollTop');
+    let owner=pane,scrollTop;
+    while(owner&&!scrollTop){scrollTop=Object.getOwnPropertyDescriptor(owner,'scrollTop');owner=Object.getPrototypeOf(owner)}
+    if(!scrollTop?.get||!scrollTop?.set)throw Error('Native scrollTop accessor unavailable');
+    Object.defineProperty(pane,'scrollTop',{configurable:true,enumerable:scrollTop.enumerable,
+      get(){return scrollTop.get.call(this)},
+      set(value){
+        const stack=new Error('Observed scrollTop write').stack?.slice(0,1600);
+        record('scrollTop-write-before',null,{value,stack});
+        scrollTop.set.call(this,value);
+        record('scrollTop-write-after',null,{value});
+      }});
     for(const type of types)document.addEventListener(type,event,{capture:true,passive:true});
     record('installed');
-    return {record,finish(){for(const type of types)document.removeEventListener(type,event,true);for(const id of frames)cancelAnimationFrame(id);return rows}};
+    return {record,finish(){
+      if(ownScrollTop)Object.defineProperty(pane,'scrollTop',ownScrollTop);else delete pane.scrollTop;
+      for(const type of types)document.removeEventListener(type,event,true);
+      for(const id of frames)cancelAnimationFrame(id);return rows;
+    }};
   });
   try{
   const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
