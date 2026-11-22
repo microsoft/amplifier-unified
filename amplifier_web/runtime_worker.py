@@ -1006,6 +1006,20 @@ class Worker:
                 return result
         return ObservedHost()
 
+    def install_execution_observation(self):
+        coordinator = self.session.coordinator
+        original = coordinator.get_capability("live.host")
+        observed = self.execution_host(original)
+        # Children installs its explicit adapter ahead of the loop's inherited
+        # ContextVar. Keep the registry on the same observed preparation path.
+        children = coordinator.get_capability("live.children")
+        if children is not None and children.host_adapter is original:
+            children.host_adapter = observed
+        coordinator.register_capability("live.host", observed)
+        coordinator.register_capability("web.activity.install",
+            lambda current: self.install_activity(current,
+                observe_providers=current.get_capability("live.child_mode") != "persistent"))
+
     async def commit_replacement(self, replacement, *, deferred, stop_revision):
         if deferred:
             await self.bridge('configuration.nextMessage.admit', {})
@@ -1177,14 +1191,10 @@ class Worker:
                 root_coordinator = self.session.coordinator
                 self.computer_episodes.install(root_coordinator, lambda: self.computer_execution(root_coordinator))
                 self.install_collaboration_checkpoint(self.session.coordinator)
-            original_host = self.session.coordinator.get_capability("live.host")
             # loop-live propagates this host through its existing ContextVar to
             # delegated sessions. Observe their public lifecycle without changing
             # spawning, provider routing, approvals, or execution ownership.
-            self.session.coordinator.register_capability("live.host", self.execution_host(original_host))
-            self.session.coordinator.register_capability("web.activity.install",
-                lambda coordinator: self.install_activity(coordinator,
-                    observe_providers=coordinator.get_capability("live.child_mode") != "persistent"))
+            self.install_execution_observation()
             self.session.coordinator.register_capability("live.activation", self.activation_gate)
             self.session.coordinator.register_capability("web.context_recovery.epoch", lambda: self.stop_revision)
             self.session.coordinator.register_capability("web.context_transition.input", self.transition_input)

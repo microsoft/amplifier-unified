@@ -27,15 +27,17 @@ def no_network(monkeypatch):
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
 
 
-async def session_with_media(tmp_path, *, model="gpt-6.1-terra", enabled=True):
+async def session_with_media(tmp_path, *, model="gpt-6.1-terra", enabled=True,
+                             session_id="native-media-registration", with_media=True):
     original = OpenAIProvider(api_key="synthetic-only", config={"default_model": model})
     plan = {"session": {"orchestrator": {"module": "loop-live", "config": {
                 "configured_bundle": True, "native_provider": enabled}},
             "context": {"module": "context-simple"}},
         "providers": [{"module": "provider-openai", "config": {"default_model": model}}]}
-    session = AmplifierSession(plan, session_id="native-media-registration")
+    session = AmplifierSession(plan, session_id=session_id)
     session.coordinator.loader = ActualConsumerLoader(original)
-    media.bind_media(session, SessionStore(tmp_path / "sessions"))
+    if with_media:
+        media.bind_media(session, SessionStore(tmp_path / "sessions"))
     await session.initialize()
     async def checkpoint():
         return []
@@ -215,3 +217,61 @@ async def test_actual_loop_issued_view_is_exact_and_expires(tmp_path, monkeypatc
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         await session.cleanup()
+
+
+@pytest.mark.parametrize("mode", ["native", "ordinary", "finite"])
+async def test_children_install_retains_observed_adapter(tmp_path, monkeypatch, mode):
+    """The real registry installs its explicit adapter, not an inherited fallback."""
+    from amplifier_module_loop_live.runtime import Runtime
+    from amplifier_web.host.children import Children
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path / "app"))
+    monkeypatch.setattr("amplifier_web.runtime_worker.publish", lambda event: None)
+    root, _, worker = await session_with_media(tmp_path / "root", session_id="parent")
+    child, original, _ = await session_with_media(tmp_path / "child", session_id="child",
+        model="gpt-5.4" if mode == "ordinary" else "gpt-6.1-terra", with_media=False)
+    task = None
+    try:
+        registry = Children(worker.runtime, SessionStore(tmp_path / "children"), None)
+        root.coordinator.register_capability("live.children", registry)
+        root.coordinator.register_capability("live.host", registry.host_adapter)
+        worker.install_execution_observation()
+        c = child.coordinator
+        c.register_capability("live.child_mode", "finite" if mode == "finite" else "persistent")
+        c.register_capability("web.worker_run", "child-run")
+        # This is the actual inherited callback used before Children.install.
+        install = root.coordinator.get_capability("web.activity.install")
+        c.register_capability("web.activity.install", install)
+        install(c)
+        assert bool(getattr(original, "_amplifier_web_observed", False)) is (mode == "finite")
+        await registry.install(child, SimpleNamespace())
+        assert c.get_capability("live.host") is root.coordinator.get_capability("live.host")
+        assert c.get_capability("live.host") is registry.host_adapter
+        if mode == "finite":
+            # Custom finite loops need no late preparation for observation.
+            assert original._amplifier_web_observed
+            assert c.get_capability("web.native_provider") is None
+            return
+        ready = asyncio.get_running_loop().create_future()
+        def observe(event):
+            if event["type"] == "session.ready" and not ready.done():
+                ready.set_result(event)
+        runtime = Runtime(session_id=child.session_id, observer=observe)
+        c.register_capability("live.runtime", runtime)
+        task = asyncio.create_task(child.execute(""))
+        done, _ = await asyncio.wait((task, ready), timeout=5,
+                                     return_when=asyncio.FIRST_COMPLETED)
+        if task in done:
+            task.result()
+        assert ready in done
+        native = c.get_capability("web.native_provider")
+        assert ready.result()["native"] is (mode == "native")
+        mounted = c.get("providers")["offline"]
+        assert mounted._amplifier_web_observed
+        assert (mounted is native.provider) if mode == "native" else (mounted is original)
+        assert original._client is None and mounted._client is None
+    finally:
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await child.cleanup()
+        await root.cleanup()
