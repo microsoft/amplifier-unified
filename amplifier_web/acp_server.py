@@ -202,21 +202,29 @@ class HostAgent:
         service = getattr(self.owner, 'service', None)
         if not service or not hasattr(service, 'management'):
             return []
-        session = service._session(identity, hydrate=False)
-        catalog = service.state.get('runtimeControl', {}).get(identity, {}).get('configuration.catalog') or {}
-        if (catalog.get('phase') != 'ready' or
-                catalog.get('configurationRevision') != service.state.get('configurationRevision', 0) or
-                catalog.get('nextMessageRevision') != session.get('nextMessageRevision', 0)):
+        def current_catalog():
+            session = service._session(identity, hydrate=False)
+            catalog = service.state.get('runtimeControl', {}).get(identity, {}).get('configuration.catalog') or {}
+            if (catalog.get('phase') == 'ready' and
+                    catalog.get('configurationRevision') == service.state.get('configurationRevision', 0) and
+                    catalog.get('nextMessageRevision') == session.get('nextMessageRevision', 0)):
+                return catalog
+
+        catalog = current_catalog()
+        if catalog is None:
+            self.option_snapshots.pop(identity, None)
             try:
-                await browse(service.management, session, include_history=False)
+                await browse(service.management, service._session(identity, hydrate=False), include_history=False)
             except (OSError, AppError, ValueError):
-                self.option_snapshots.pop(identity, None)
+                return []
+            catalog = current_catalog()
+            if catalog is None:
                 return []
         self.owner.require_attachment(identity)
         if self.owner.attachment_guard:
             self.owner.attachment_guard(identity)
-        options, changes = advertised(service, session)
-        self.option_snapshots[identity] = (session.get('nextMessageRevision', 0), service.state.get('configurationRevision', 0), changes)
+        options, changes = advertised(service, service._session(identity, hydrate=False))
+        self.option_snapshots[identity] = (catalog['nextMessageRevision'], catalog['configurationRevision'], changes)
         return options
 
     async def set_config_option(self, config_id, session_id, value, **kwargs):

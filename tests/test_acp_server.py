@@ -425,6 +425,14 @@ async def test_agent_options_target_exact_attachment_and_use_cached_choices(host
             assert next(row for row in options if row['id']==key)['currentValue'] == value
         assert service._session(sid)['pendingModelSelection'] == {'instance':'b','model':'second','effort':'high'}
         assert not service._session(foreign).get('pendingModelSelection')
+        # A settings edit can invalidate discovery before its catalog is published.
+        async def superseded(_, session, *, include_history):
+            service.state['configurationRevision'] = service.state.get('configurationRevision', 0) + 1
+        monkeypatch.setattr('amplifier_web.conversation_models.browse', superseded)
+        updated = await peer.call('session/set_config_option', sessionId=sid, configId='effort', value='low')
+        assert updated['result']['configOptions'] == []
+        assert 'error' in await peer.call('session/set_config_option', sessionId=sid, configId='model', value='first')
+        assert service._session(sid)['pendingModelSelection'] == {'instance':'b','model':'second','effort':'low'}
         assert not runtime.sent
     finally:
         await peer.socket.close()
