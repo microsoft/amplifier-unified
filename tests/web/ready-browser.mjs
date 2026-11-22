@@ -414,8 +414,16 @@ try{
  const draft='Keep this synthetic unsent draft across READY appearance and navigation.';
  await input.fill(draft);
  const beforeApply=await preferences(),priorAppearance=await settledAppearance(page);
+ assert.ok(priorAppearance.theme.css&&priorAppearance.theme.css!==css);
+ const stylePresent=expected=>page.evaluate(expected=>[...document.querySelectorAll('#amp-one > style')].some(node=>node.textContent===expected),expected);
+ const restoredStyle=async()=>{
+  await expect.poll(()=>stylePresent(priorAppearance.theme.css)).toBe(true);
+  await expect.poll(()=>stylePresent(css)).toBe(false);
+ };
  phase('candidate-apply');
  const preview=await previewAppearance(page,{name:ready.name,css:ready.css});
+ assert.equal(preview.preview.theme.name,ready.name);assert.equal(preview.preview.theme.css,css);
+ assert.equal(preview.preview.theme.fingerprint,report.cssSha256);
  assert.deepEqual(preview.effective,priorAppearance.effective);
  assert.deepEqual(preview.shared,priorAppearance.shared);assert.deepEqual(preview.local,priorAppearance.local);
  await page.waitForFunction(css=>[...document.querySelectorAll('#amp-one > style')].some(node=>node.textContent===css),css);
@@ -424,7 +432,9 @@ try{
  const cancelled=await cancelAppearancePreview(page);
  assert.deepEqual(cancelled.theme,priorAppearance.theme);assert.equal(cancelled.preview,null);
  assert.deepEqual(cancelled.effective,priorAppearance.effective);
- // The fresh fixture selects Global explicitly; Undo is its exact whole-profile
+ assert.deepEqual(cancelled.shared,priorAppearance.shared);assert.deepEqual(cancelled.local,priorAppearance.local);
+ await restoredStyle();assert.deepEqual(await preferences(),beforeApply);await expect(input).toHaveDraft(draft);
+ // The fresh fixture starts on Global; Undo is its exact whole-profile
  // CAS, not a deterministic theme hash or a fabricated browser storage receipt.
  assert.equal(priorAppearance.activeScope,'shared');assert.equal(Object.hasOwn(priorAppearance.effective,'accent'),false);
  const appliedReply=page.waitForResponse(response=>{
@@ -438,16 +448,22 @@ try{
  assert.equal(applied.theme.css,css);assert.equal(applied.theme.fingerprint,report.cssSha256);assert.equal(applied.theme.available,true);
  assert.equal(applied.preview,null);
  assert.deepEqual(applied.effective,{...priorAppearance.effective,appearanceId:ready.id});
+ assert.deepEqual(applied.local,priorAppearance.local);
+ await expect.poll(()=>stylePresent(css)).toBe(true);
  assert.deepEqual(await preferences(),beforeApply);
  await action('appearance.preferences.undo',{clientId:applied.clientId,undoId:envelope.result.undoId});
  await expect.poll(async()=>(await readAppearance(page)).shared.revision).toBe(applied.shared.revision+1);
  const reverted=await settledAppearance(page);
  assert.deepEqual(reverted.effective,priorAppearance.effective);assert.deepEqual(reverted.theme,priorAppearance.theme);
  assert.equal(reverted.preview,null);assert.deepEqual(await preferences(),beforeApply);
+ assert.deepEqual(reverted.local,priorAppearance.local);
+ assert.equal(reverted.activeScope,priorAppearance.activeScope);assert.equal(reverted.generation,priorAppearance.generation);
+ await restoredStyle();
  await expect(input).toHaveDraft(draft);
  const reapplied=await updateAppearance(page,{appearanceId:ready.id});
  assert.deepEqual(reapplied.theme,applied.theme,'Reselect restores the exact candidate for the matrix');
  assert.deepEqual(reapplied.effective,applied.effective);assert.equal(reapplied.preview,null);
+ assert.deepEqual(reapplied.local,priorAppearance.local);
  assert.deepEqual(await preferences(),beforeApply);
  await expect(input).toHaveDraft(draft);
  await page.waitForFunction(css=>[...document.querySelectorAll('#amp-one > style')].some(node=>node.textContent===css),css);
@@ -594,14 +610,22 @@ try{
  await expect(pane.locator('.a-message.a-assistant')).toHaveCount(1);await end('Short transcript',{short:true});
  await action('session.select',{id:longId});await enter('chat');await expect(input).toHaveDraft(draft);
  phase('restore-and-final-readback');
- const compositionBeforeRestore=await page.evaluate(()=>window.amplifier.getShellState().effectiveComposition);
+ const compositionBeforeRestore=(await action('shell.inspect',{clientId:reapplied.clientId})).result.effectiveComposition;
  const restored=await updateAppearance(page,{scheme:originalPresentation.scheme,decorations:originalPresentation.decorations});
  assert.deepEqual(restored.effective,originalPresentation);
+ assert.deepEqual(restored.renderedPreferences,originalPresentation);
+ assert.deepEqual(restored.local,priorAppearance.local);
  assert.equal(restored.theme.id,ready.id);assert.equal(restored.theme.css,css);assert.equal(restored.preview,null);
- const compositionAfterRestore=await page.evaluate(()=>window.amplifier.getShellState().effectiveComposition);
+ await expect(app).toHaveAttribute('data-appearance-composition',restored.composition.id);
+ const expectedScheme=originalPresentation.scheme==='system'?'dark':originalPresentation.scheme;
+ await expect(app).toHaveAttribute('data-theme-scheme',expectedScheme);
+ await expect(app).toHaveAttribute('data-decorations',originalPresentation.decorations?'on':'off');
+ await expect.poll(()=>stylePresent(css)).toBe(true);
+ const compositionAfterRestore=(await action('shell.inspect',{clientId:restored.clientId})).result.effectiveComposition;
+ const {appearanceId,...expectedPresentation}=originalPresentation;
  snapshot('presentation-restoration',{before:compositionBeforeRestore.presentation,expected:originalPresentation,
   after:compositionAfterRestore.presentation,source:restored.source,observedCompositionId:restored.observedCompositionId});
- assert.deepEqual(compositionAfterRestore.presentation,originalPresentation,
+ assert.deepEqual(compositionAfterRestore.presentation,expectedPresentation,
   'Scheme/decorations changes were temporary fixture presentation only');
  const {presentation:beforePresentation,...otherBeforeRestore}=compositionBeforeRestore;
  const {presentation:afterPresentation,...otherAfterRestore}=compositionAfterRestore;
