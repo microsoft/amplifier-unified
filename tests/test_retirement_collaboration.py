@@ -1,13 +1,15 @@
 """Actual process/host transport; scripted native endpoint, no provider calls."""
 import asyncio
+import copy
 import json
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 from amplifier_web.runtime import RuntimeManager
 from amplifier_web.service import AppService
-from test_collaborative_workspaces import agent_action, generation, settled
+from test_collaborative_workspaces import app, agent_action, generation, settled
 
 
 SCRIPT = r'''
@@ -277,3 +279,163 @@ async def test_queued_peer_cannot_strand_stop_settlement(tmp_path, monkeypatch, 
                 assert not pending, 'Stop cleanup remains unsettled'
         finally:
             await app.close()
+
+
+@pytest.mark.parametrize('stage', ['before-runtime', 'during-runtime'])
+@pytest.mark.parametrize('change', [
+    'new-owner', 'new-preparation', 'new-runtime', 'new-generation',
+    'admitted-input', 'new-stop', 'human-then-peer',
+])
+async def test_old_stop_cannot_cross_replacement_or_admission(app, monkeypatch, stage, change):
+    source, target = app.state['sessions']
+    sid, runtime = target['id'], app.runtime
+    runtime.workers = {}
+    runtime._preparations = {}
+    await generation(app, target, 'original-generation', ['original-input'])
+    entered, release = asyncio.Event(), asyncio.Event()
+    captured, stopped = [], []
+    drain = app.collaboration.drain
+
+    async def held_drain(identity):
+        if identity == sid and stage == 'before-runtime':
+            captured.append(asyncio.current_task())
+            entered.set()
+            await release.wait()
+            return
+        await drain(identity)
+
+    async def held_stop(identity):
+        stopped.append(identity)
+        captured.append(asyncio.current_task())
+        entered.set()
+        if stage == 'during-runtime':
+            await release.wait()
+
+    monkeypatch.setattr(app.collaboration, 'drain', held_drain)
+    monkeypatch.setattr(runtime, 'stop', held_stop)
+    await app.dispatch('conversation.stop', {'sessionId': sid},
+                       command_id='original-stop', include_state=False)
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        if change == 'new-owner':
+            runtime.workers[sid] = {'runtimeOwnerId': 'replacement'}
+        elif change == 'new-preparation':
+            runtime._preparations[sid] = {'runtimeOwnerId': 'replacement-preparation'}
+        elif change == 'new-runtime':
+            app.runtime = SimpleNamespace(workers={}, _preparations={}, close=runtime.close)
+        elif change == 'new-generation':
+            await generation(app, target, 'replacement-generation', ['new-input'], interruption_revision=1)
+        elif change == 'admitted-input':
+            await app.on_runtime_event('runtime.status', {
+                'sessionId': sid, 'status': 'working', 'event': 'input.delivered', 'inputId': 'new-input'})
+        elif change == 'new-stop':
+            # Simulate the second already-committed Stop while the first is held.
+            target['interruptionRevision'] = 2
+            target['lastInterruption'] = {'commandId': 'new-stop', 'at': 2, 'origin': 'ui'}
+        else:
+            app._message(target, 'user', 'A genuinely new human input.', inputId='human', inputOrigin='ui')
+            await agent_action(app, source, 'coordination.send', {
+                'sessionId': sid, 'mode': 'queue', 'text': 'Peer after human.'}, 'queued-after-human')
+        before = copy.deepcopy({key: target.get(key) for key in
+                                ('status', 'lastInterruption', 'collaborationGeneration')})
+        release.set()
+        done, pending = await asyncio.wait({captured[0]}, timeout=3)
+        assert not pending
+        for task in done:
+            task.result()
+        assert {key: target.get(key) for key in before} == before
+        assert stopped == ([] if stage == 'before-runtime' else [sid])
+        assert not runtime.inputs
+    finally:
+        release.set()
+        app.runtime = runtime
+        runtime.workers.clear()
+        runtime._preparations.clear()
+
+
+@pytest.mark.parametrize('change', [
+    'none', 'missing-receipt', 'wrong-message', 'wrong-target', 'submitting',
+    'unknown', 'admitted', 'human-resume',
+])
+async def test_stop_exempts_only_exact_unadmitted_peer_receipts(app, monkeypatch, change):
+    source, target = app.state['sessions']
+    sid = target['id']
+    entered, release = asyncio.Event(), asyncio.Event()
+    stop_tasks = []
+    async def held_stop(identity):
+        assert identity == sid
+        stop_tasks.append(asyncio.current_task())
+        entered.set()
+        await release.wait()
+    monkeypatch.setattr(app.runtime, 'stop', held_stop)
+    await app.dispatch('conversation.stop', {'sessionId': sid},
+                       command_id='receipt-stop', include_state=False)
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        for identity in ('queued-one', 'queued-two'):
+            await agent_action(app, source, 'coordination.send', {
+                'sessionId': sid, 'mode': 'queue', 'text': 'Retained peer input.'}, identity)
+        receipt = app.collaboration.receipt('queued-one')
+        if change == 'missing-receipt':
+            app.db.execute('DELETE FROM commands WHERE id=?', ('queued-one',))
+            app.db.commit()
+        elif change != 'none':
+            if change == 'wrong-message':
+                receipt['messageId'] = 'another-message'
+            elif change == 'wrong-target':
+                receipt['target']['sessionId'] = source['id']
+            elif change in {'submitting', 'unknown'}:
+                receipt['delivery'] = change
+            elif change == 'admitted':
+                receipt['admittedAt'] = 1
+            else:
+                receipt['humanResume'] = {'sourceMessageId': 'not-authorized'}
+            app.collaboration.save('queued-one', receipt)
+            app.db.commit()
+        release.set()
+        done, pending = await asyncio.wait({stop_tasks[0]}, timeout=3)
+        assert not pending
+        for task in done:
+            task.result()
+        assert target['status'] == ('stopped' if change == 'none' else 'stopping')
+        if change == 'none':
+            for identity in ('queued-one', 'queued-two'):
+                assert app.collaboration.receipt(identity)['delivery'] == 'suppressed'
+        assert not app.runtime.inputs
+        assert target['interruptionRevision'] == 1
+    finally:
+        release.set()
+
+
+async def test_failed_stop_with_queued_peer_stays_unconfirmed(app, monkeypatch):
+    source, target = app.state['sessions']
+    sid = target['id']
+    entered, release = asyncio.Event(), asyncio.Event()
+    stop_tasks = []
+    async def failed_stop(identity):
+        assert identity == sid
+        stop_tasks.append(asyncio.current_task())
+        entered.set()
+        await release.wait()
+        raise RuntimeError('Synthetic Stop did not confirm retirement')
+    monkeypatch.setattr(app.runtime, 'stop', failed_stop)
+    await app.dispatch('conversation.stop', {'sessionId': sid},
+                       command_id='failed-stop', include_state=False)
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        await agent_action(app, source, 'coordination.send', {
+            'sessionId': sid, 'mode': 'queue', 'text': 'Cannot resume uncertain Stop.'}, 'held-peer')
+        release.set()
+        done, pending = await asyncio.wait({stop_tasks[0]}, timeout=3)
+        assert not pending
+        for task in done:
+            task.result()
+        assert target['status'] == 'error'
+        assert target['lastInterruption']['commandId'] == 'failed-stop'
+        assert target['lastInterruption']['outcome'] == 'unconfirmed'
+        assert 'Stop could not be confirmed' in target['error']
+        await app.collaboration.drain(sid)
+        assert app.collaboration.receipt('held-peer')['delivery'] == 'suppressed'
+        assert not app.runtime.inputs
+    finally:
+        release.set()
