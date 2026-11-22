@@ -108,6 +108,12 @@ async def _emit_resident_calls(service, split):
     # These are all real resident host observations, not authored inline bodies.
     assert all('input' not in row and 'output' not in row for row in nodes)
     await service._flush_pending_progress()
+    # session.create queues an app:action capture even when runtime tool capture
+    # belongs to the synthetic producer. Settle that real writer before opening
+    # signed Work windows; progress publication alone does not drain Diagnostics.
+    await service.diagnostics.flush()
+    assert not service.diagnostics.storage_error
+    assert not service.diagnostics.pending
     return session, expected, final['id']
 
 
