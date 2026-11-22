@@ -193,6 +193,9 @@ async def test_runtime_computer_read_only_denies_writes_before_backend_effects(
     class FakeBackend:
         name = "runtime-safety-fake"
         is_remote = False
+        # Current backend contract checks this explicit capability even when
+        # no coexistence guard is active; the fake never delivers real input.
+        type_text_guarded = False
 
         def __init__(self):
             self.calls = []

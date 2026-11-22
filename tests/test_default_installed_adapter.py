@@ -333,6 +333,95 @@ def test_catalog_preparation_requires_real_discovery_provenance_and_cache(tmp_pa
         assert accounts._catalog_snapshot.cache_info().currsize == 1
 
 
+@pytest.mark.parametrize('automatic', [False, True])
+@pytest.mark.parametrize('change', [
+    'none', 'missing', 'noop', 'late', 'initializes', 'missing-host-policy', 'wrong-fallback',
+])
+def test_routing_observer_checks_composed_callback_effects_without_repair(automatic, change):
+    import ast
+    import asyncio
+    import copy
+    from types import SimpleNamespace
+    tree = ast.parse((ROOT / 'tests/fixtures/default_routing_probe.py').read_text())
+    node = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef)
+                and n.name == 'observe_early_routing')
+    scope = {'copy': copy}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), '<routing-observer>', 'exec'), scope)
+    capabilities = {}
+    hooks = [{'module': 'hooks-routing', 'config': {'default_matrix': 'balanced'}}]
+    session = SimpleNamespace(initialized=change == 'late', coordinator=SimpleNamespace(
+        config={'hooks': hooks}, get_capability=capabilities.get))
+    calls = []
+
+    async def composed_host_callback(child):
+        calls.append(child)
+        if change == 'noop':
+            return
+        capabilities['routing.defer_agent_resolution'] = True
+        if change != 'missing-host-policy':
+            capabilities['web.default_routing_policy'] = True
+        if automatic:
+            capabilities['web.default_routing_fallback'] = {'hooks': copy.deepcopy(hooks)}
+        if change == 'wrong-fallback':
+            capabilities['web.default_routing_fallback'] = {'hooks': []}
+        if change == 'initializes':
+            child.initialized = True
+
+    callback = None if change == 'missing' else composed_host_callback
+    if change == 'none':
+        asyncio.run(scope['observe_early_routing'](callback, session, automatic))
+        assert calls == [session]
+    else:
+        with pytest.raises(AssertionError):
+            asyncio.run(scope['observe_early_routing'](callback, session, automatic))
+        assert calls == ([] if change in {'missing', 'late'} else [session])
+        if change in {'missing', 'late', 'noop'}:
+            assert capabilities == {}, 'The observer must never supply missing policy'
+
+
+@pytest.mark.parametrize('change', [
+    'none', 'same-binding', 'name', 'anchor-path', 'missing-state', 'uri', 'state-path',
+    'conflicting-binding',
+])
+def test_foundation_resource_anchor_requires_exact_loaded_provenance(tmp_path, change):
+    import ast
+    from types import SimpleNamespace
+    tree = ast.parse((ROOT / 'tests/fixtures/default_mount_probe.py').read_text())
+    node = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                and n.name == 'bind_foundation_resource_anchor')
+    scope = {'Path': Path}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), '<resource-anchor>', 'exec'), scope)
+    root, other = tmp_path / 'foundation', tmp_path / 'other'
+    root.mkdir()
+    other.mkdir()
+    loaded = SimpleNamespace(source_base_paths={'other': other})
+    anchor = SimpleNamespace(name='foundation', base_path=root)
+    state = SimpleNamespace(uri='git+https://github.com/microsoft/amplifier-foundation@main',
+                            local_path=root)
+    if change == 'same-binding':
+        loaded.source_base_paths['foundation'] = root
+    elif change == 'name':
+        anchor.name = 'other'
+    elif change == 'anchor-path':
+        anchor.base_path = other
+    elif change == 'missing-state':
+        state = None
+    elif change == 'uri':
+        state.uri = 'git+https://example.invalid/other@main'
+    elif change == 'state-path':
+        state.local_path = other
+    elif change == 'conflicting-binding':
+        loaded.source_base_paths['foundation'] = other
+    before = dict(loaded.source_base_paths)
+    if change in {'none', 'same-binding'}:
+        scope['bind_foundation_resource_anchor'](loaded, anchor, state, root)
+        assert loaded.source_base_paths == {'other': other, 'foundation': root}
+    else:
+        with pytest.raises(AssertionError):
+            scope['bind_foundation_resource_anchor'](loaded, anchor, state, root)
+        assert loaded.source_base_paths == before
+
+
 def test_source_inventory_checks_links_with_explicit_owned_boundary(tmp_path):
     root = tmp_path / '.venv'
     root.mkdir()

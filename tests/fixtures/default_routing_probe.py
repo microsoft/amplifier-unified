@@ -122,6 +122,21 @@ def emit(value):
     print(PREFIX + json.dumps(value, sort_keys=True), flush=True)
 
 
+async def observe_early_routing(original, session, automatic):
+    """Check the supplied host callback's effects, not its wrapper identity."""
+    assert callable(original), "Host omitted early initialization callback"
+    assert not session.initialized, "Routing policy was installed after initialization"
+    await original(session)
+    assert not session.initialized, "Host callback initialized before routing observation"
+    assert session.coordinator.get_capability("routing.defer_agent_resolution") is True
+    assert session.coordinator.get_capability("web.default_routing_policy") is True
+    fallback = session.coordinator.get_capability("web.default_routing_fallback")
+    expected = {"hooks": copy.deepcopy([
+        row for row in session.coordinator.config.get("hooks", [])
+        if row.get("module") == "hooks-routing"])} if automatic else None
+    assert fallback == expected, "Host supplied incorrect automatic routing provenance"
+
+
 def offline_guard(catalog):
     """Tripwire, not an OS sandbox; never allow a swallowed attempt to pass."""
     attempts = []
@@ -387,18 +402,13 @@ async def run(paths, warmed_paths, routing_root, distribution, attempts, decisio
             # Do not repair a missing callback here: the real host child/resume
             # path must supply it. Observers only record lifecycle evidence.
             original = kwargs.pop("before_initialize", None)
-            assert ((original is prepare_default_routing and not self.automatic_policy) or (
-                isinstance(original, partial) and original.func is prepare_default_routing
-                and original.args == () and original.keywords == {"automatic": self.automatic_policy}
-            )), "Host omitted expected early default-routing policy"
+            assert callable(original), "Host omitted early initialization callback"
             audit = {"session_id": kwargs.get("session_id"), "parent_id": kwargs.get("parent_id"),
                      "resumed": kwargs.get("is_resumed", False), "lifecycle": [],
                      "matrix_events": [], "failures": []}
 
             async def before_initialize(session):
-                assert not session.initialized, "Routing policy was installed after initialization"
-                await original(session)
-                assert session.coordinator.get_capability("routing.defer_agent_resolution") is True
+                await observe_early_routing(original, session, self.automatic_policy)
 
                 async def observe(event, data):
                     if event in {"session:start", "session:resume"}:
