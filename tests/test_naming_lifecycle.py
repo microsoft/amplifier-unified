@@ -13,8 +13,17 @@ from amplifier_web.host.prompt_events import install
 from amplifier_web.host.storage import SessionStore
 
 
+class Coordinator:
+    """Session-local identity, like Core's coordinator (not value equality)."""
+    def __init__(self, hooks, rows):
+        self.hooks, self.config, self.session_state = hooks, {'hooks': rows}, {}
+
+    async def mount(self, mount_point, module, name=None):
+        raise AssertionError('This naming fixture does not load additional modules')
+
+
 def coordinator(hooks, rows):
-    return SimpleNamespace(hooks=hooks, config={'hooks': rows}, session_state={})
+    return Coordinator(hooks, rows)
 
 
 def row(instance=None):

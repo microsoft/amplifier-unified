@@ -52,12 +52,13 @@ def mounted_host(tmp_path, monkeypatch):
     registry = SimpleNamespace(list_registered=lambda: {}, find=lambda _: None, register=Mock(), save=Mock(),
                                load=AsyncMock(return_value=loaded))
     configurator = SimpleNamespace(apply_saved_settings=AsyncMock(), take_snapshot=Mock())
-    monkeypatch.setitem(sys.modules, "amplifier_foundation", SimpleNamespace(
-        BundleRegistry=lambda *, persist=True, read_persisted=True, **_: registry, SessionConfigurator=lambda *_: configurator))
+    import amplifier_foundation
+    monkeypatch.setattr(amplifier_foundation, "BundleRegistry",
+        lambda *, persist=True, read_persisted=True, **_: registry)
+    monkeypatch.setattr(amplifier_foundation, "SessionConfigurator", lambda *_: configurator)
     monkeypatch.setitem(sys.modules, "amplifier_module_loop_live.runtime", SimpleNamespace(Runtime=lambda: runtime))
     monkeypatch.setitem(sys.modules, "amplifier_module_loop_live.job_store", SimpleNamespace(
         JobStore=lambda _: SimpleNamespace(rows=[], close=Mock())))
-    monkeypatch.setitem(sys.modules, "amplifier_core", SimpleNamespace(HookResult=lambda: None))
     monkeypatch.setitem(sys.modules, "amplifier_web.host.children", SimpleNamespace(
         install_children=AsyncMock(), StandaloneHostAdapter=lambda: object()))
     monkeypatch.setattr(host, "compose_configured_bundle", AsyncMock(return_value=loaded))
@@ -84,6 +85,55 @@ def mounted_host(tmp_path, monkeypatch):
 
 def snapshot(messages):
     return {"messages": copy.deepcopy(messages), "metadata": {}, "bundle": "anchors"}
+
+
+@pytest.fixture
+async def constructing_host(mounted_host):
+    """Use real Core construction when exercising before_initialize policies."""
+    from amplifier_core import AmplifierSession
+    # Load the real media boundary regardless of the surrounding collection.
+    from amplifier_foundation.session.media_host import SessionMediaBinding
+
+    h = mounted_host
+    loop = h.session.coordinator.get("orchestrator")
+    provider = h.session.coordinator.get("providers")["fixture"]
+    loop.execute = AsyncMock(side_effect=AssertionError("Initialization must not execute"))
+    provider.complete = AsyncMock(side_effect=AssertionError("Initialization must not call a provider"))
+    provider.parse_tool_calls = lambda response: []
+    h.prepared.mount_plan = {
+        "session": {"orchestrator": {"module": "loop-fixture"},
+                    "context": {"module": "context-fixture"}},
+        "providers": [{"module": "provider-fixture"}],
+    }
+
+    class Loader:
+        async def load(self, module_id, config, **kwargs):
+            async def mount(coordinator):
+                point, module, name = {
+                    "loop-fixture": ("orchestrator", loop, None),
+                    "context-fixture": ("context", h.context, None),
+                    "provider-fixture": ("providers", provider, "fixture"),
+                }[module_id]
+                await coordinator.mount(point, module, name=name)
+            return mount
+
+        def get_on_session_ready_queue(self):
+            return []
+
+        def clear_on_session_ready_queue(self):
+            pass
+
+    h.session = AmplifierSession(copy.deepcopy(h.prepared.mount_plan),
+                                session_id=h.runtime.session_id, is_resumed=True)
+    h.session.coordinator.loader = Loader()
+    h.cleanup = AsyncMock()
+    h.session.coordinator.register_cleanup(h.cleanup)
+    h.executed, h.provider_called = loop.execute, provider.complete
+    h.media_binding_type = SessionMediaBinding
+    try:
+        yield h
+    finally:
+        await h.session.cleanup()
 
 
 async def test_host_retains_agent_definitions_before_saved_settings_disable_them(mounted_host):
@@ -425,29 +475,34 @@ async def test_missing_saved_connection_publishes_choices_without_changing_histo
 
 
 @pytest.mark.parametrize("failure", [RuntimeError, asyncio.CancelledError])
-async def test_initialization_failure_keeps_cleanup_ownership_before_session_returns(mounted_host, failure):
-    h = mounted_host
+async def test_initialization_failure_keeps_cleanup_ownership_before_session_returns(constructing_host, failure):
+    h = constructing_host
     h.store.save("native-root", [{"role": "user", "content": "Retained work"}], {"bundle": "anchors"})
     before = h.path.read_bytes()
     async def create(**kwargs):
         await kwargs["before_initialize"](h.session)
+        assert isinstance(h.session.coordinator.get_capability("web.media.construction"), h.media_binding_type)
+        assert not h.session.initialized
         raise failure("Later account failed during initialization")
     h.prepared.create_session.side_effect = create
     with pytest.raises(failure, match="Later account failed during initialization"):
         await h.prepare()
-    h.session.cleanup.assert_awaited_once()
-    h.session.execute.assert_not_called()
+    h.cleanup.assert_awaited_once()
+    h.executed.assert_not_called()
+    h.provider_called.assert_not_called()
     assert h.path.read_bytes() == before
 
 
-async def test_root_routing_observes_isolated_decision_accounts_before_mount(mounted_host, monkeypatch):
+async def test_root_routing_observes_isolated_decision_accounts_before_mount(constructing_host, monkeypatch):
     from amplifier_web import decision_accounts, provider_isolation
     from amplifier_web.host import model_selection
 
-    h = mounted_host
+    h = constructing_host
     phases = []
     async def isolate(session):
         assert session is h.session
+        assert isinstance(session.coordinator.get_capability("web.media.construction"), h.media_binding_type)
+        assert not session.initialized and session.coordinator.get("orchestrator") is None
         phases.append("isolated")
     async def accounts_ready(session):
         assert session is h.session and phases == ["isolated"]
@@ -467,12 +522,15 @@ async def test_root_routing_observes_isolated_decision_accounts_before_mount(mou
         await kwargs["before_initialize"](h.session)
         assert phases == ["isolated", "accounts", "routed"]
         adapter.require_complete.assert_not_called()
+        await h.session.initialize()
         return h.session
     h.prepared.create_session.side_effect = create
 
     await h.prepare()
     adapter.require_complete.assert_called_once_with()
-    h.session.execute.assert_not_called()
+    assert h.session.initialized
+    h.executed.assert_not_called()
+    h.provider_called.assert_not_called()
 
 
 async def test_native_only_resume_keeps_complete_history_and_repairs_receipt_without_replay(mounted_host, monkeypatch):

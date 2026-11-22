@@ -23,7 +23,9 @@ from next_message_native_probe import PROVIDER, until
 async def completed_native_input(target, runtime, home, workspace, identity, wait):
     """Observe completion and saved native history while the idle writer lives."""
     from amplifier_foundation.session import SharedSessionStore, SessionBusyError
+    from amplifier_operations.coordination import fingerprint
     from amplifier_web.host.storage import SessionStore
+    from amplifier_web.native_message_projection import display_message
 
     sid = target["id"]
     await wait(lambda: identity in target.get("collaborationGeneration", {}).get("inputIds", [])
@@ -41,12 +43,23 @@ async def completed_native_input(target, runtime, home, workspace, identity, wai
     assert store.has_transcript(native_id)
     history, metadata = store.load(native_id)
     assert metadata["session_id"] == native_id
-    assert metadata["status"] == "completed", metadata
     positions = [index for index, message in enumerate(history)
                  if (message.get("metadata") or {}).get("amplifier_input", {}).get("id") == identity]
     assert len(positions) == 1, positions
     assert positions[0] < len(history) - 1
     assert history[-1]["role"] == "assistant" and not history[-1].get("tool_calls")
+    # Session metadata remains in_progress while loop-live awaits more input.
+    # The generation's terminal anchor is emitted only after the native save;
+    # join it to the exact persisted response rather than inventing a status.
+    terminal, = [event for event in target["generations"]
+                 if event.get("event") == "generation.finished"
+                 and identity in event.get("input_ids", [])]
+    native = display_message(history[-1], len(history) - 1, {"id": native_id})
+    assert terminal["nativeTerminal"] == {
+        "messageId": native["id"], "nativeIndex": native["nativeIndex"],
+        "rootSessionId": native_id, "generationId": terminal["generation_id"],
+        "nativeText": native["text"], "textDigest": fingerprint(terminal["text"]),
+    }
     # Check the actual Foundation lock, not just a historical runtime.ready row.
     writer = worker["native_writer"]
     assert writer["pid"] == worker["native_worker_pid"]
