@@ -240,7 +240,64 @@ try{
   return samples;
  });
  await writeFile(join(output,'dismissal-geometry.json'),JSON.stringify(dismissalGeometry,null,2)+'\n');
- assert.equal(dismissalGeometry[0].reachable,true,'Narrow dismissal is visible and hit-testable after scrolling: '+JSON.stringify(dismissalGeometry));
+ // scrollHeight/clientHeight are integer CSS pixels but layout edges can be
+ // fractional. Compare occupied device-pixel centers, not an arbitrary epsilon;
+ // additionally require all label text and real interior hit targets to fit.
+ // This is a geometry model, not physical screenshot/raster qualification.
+ const dismissalReachability=button=>{
+  const box=button.getBoundingClientRect(),scale=devicePixelRatio*(visualViewport?.scale||1);
+  const clip={left:0,top:0,right:innerWidth,bottom:innerHeight},clips=[];
+  for(let node=button.parentElement;node;node=node.parentElement){
+   const style=getComputedStyle(node),r=node.getBoundingClientRect();
+   if(style.transform!=='none'||style.clipPath!=='none')throw Error('Unsupported transformed or shaped dismissal clip');
+   const x=style.overflowX!=='visible',y=style.overflowY!=='visible';
+   if(!x&&!y)continue;
+   const inner={left:r.left+parseFloat(style.borderLeftWidth),right:r.right-parseFloat(style.borderRightWidth),
+    top:r.top+parseFloat(style.borderTopWidth),bottom:r.bottom-parseFloat(style.borderBottomWidth)};
+   if(x){clip.left=Math.max(clip.left,inner.left);clip.right=Math.min(clip.right,inner.right)}
+   if(y){clip.top=Math.max(clip.top,inner.top);clip.bottom=Math.min(clip.bottom,inner.bottom)}
+   clips.push({tag:node.tagName,class:node.className,x,y,inner});
+  }
+  const pixels=(start,end)=>[Math.ceil(scale*start-.5),Math.ceil(scale*end-.5)-1];
+  const inside=(start,end,low,high)=>{
+   const [first,last]=pixels(start,end),[clipFirst,clipLast]=pixels(low,high);
+   return first<=last&&first>=clipFirst&&last<=clipLast;
+  };
+  const modeledContained=inside(box.left,box.right,clip.left,clip.right)&&inside(box.top,box.bottom,clip.top,clip.bottom);
+  const texts=[],walker=document.createTreeWalker(button,NodeFilter.SHOW_TEXT);
+  while(walker.nextNode())if(walker.currentNode.textContent.trim()){
+   const range=document.createRange();range.selectNodeContents(walker.currentNode);
+   for(const r of range.getClientRects())texts.push({left:r.left,right:r.right,top:r.top,bottom:r.bottom});
+  }
+  const textContained=texts.length>0&&texts.every(r=>r.left>=clip.left&&r.right<=clip.right&&r.top>=clip.top&&r.bottom<=clip.bottom);
+  const hits=[];
+  for(const x of [.25,.5,.75])for(const y of [.25,.5,.75])
+   hits.push(button.contains(document.elementFromPoint(box.left+box.width*x,box.top+box.height*y)));
+  return {scale,box:box.toJSON(),clip,clips,texts,modeledContained,textContained,hits,
+   centerHit:hits[4],reachable:modeledContained&&textContained&&hits.every(Boolean)};
+ };
+ const reachable=await dismissButton.evaluate(dismissalReachability);
+ assert.equal(reachable.reachable,true,JSON.stringify(reachable));
+ // Reject a genuinely clipped target even while its center is still usable.
+ const savedStyle=await dismissButton.getAttribute('style');
+ let clipped,occluded;
+ try{
+  await dismissButton.evaluate(button=>{button.style.transform='translateY(8px)'});
+  clipped=await dismissButton.evaluate(dismissalReachability);
+  assert.equal(clipped.centerHit,true);assert.equal(clipped.modeledContained,false);assert.equal(clipped.reachable,false);
+ }finally{await dismissButton.evaluate((button,style)=>style===null?button.removeAttribute('style'):button.setAttribute('style',style),savedStyle)}
+ const cover=await dismissButton.evaluateHandle(button=>{
+  const r=button.getBoundingClientRect(),cover=document.createElement('div');
+  Object.assign(cover.style,{position:'fixed',left:r.left+r.width/2-5+'px',top:r.top+r.height/2-5+'px',
+   width:'10px',height:'10px',zIndex:'2147483647',background:'black',pointerEvents:'auto'});
+  document.body.append(cover);return cover;
+ });
+ try{
+  occluded=await dismissButton.evaluate(dismissalReachability);
+  assert.equal(occluded.modeledContained,true);assert.equal(occluded.centerHit,false);assert.equal(occluded.reachable,false);
+ }finally{await cover.evaluate(node=>node.remove());await cover.dispose()}
+ assert.equal((await dismissButton.evaluate(dismissalReachability)).reachable,true);
+ await writeFile(join(output,'dismissal-reachability.json'),JSON.stringify({reachable,clipped,occluded},null,2)+'\n');
  await page.screenshot({path:join(output,'narrow-actions.png'),animations:'disabled'});
  await current.getByRole('button',{name:'Dismiss old request'}).click();
  await expect(current).toHaveCount(0);
