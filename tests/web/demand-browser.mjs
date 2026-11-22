@@ -4,7 +4,7 @@ import {readComposerDraft} from './composer-test-helpers.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const fixture=spawn(fixturePython(process.env.UNIFIED_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url))),[fileURLToPath(new URL('../../tests/fixtures/demand_ui_server.py',import.meta.url))],{stdio:'inherit'});
 const stopFixture=ownFixture(fixture,{label:'Demand fixture'});
@@ -35,8 +35,12 @@ try{
  await third.getByRole('button',{name:'Load earlier steps'}).click();await third.locator('[data-node-id="bulk-0"]').waitFor();
  assert.equal(await third.locator('.a-execution-node').count(),126);
  await third.locator('[data-node-id="bulk-0"] button.a-execution-action-line').click();
- await page.waitForFunction(()=>document.querySelector('[data-node-id="bulk-0"]')?.textContent.includes('large result '.repeat(30)));
+ const inspector=page.locator('#work-step-inspector');
+ await expect(inspector).toBeVisible();
+ await expect(inspector).toContainText('large result '.repeat(30).trim());
  assert.ok(reads.some(url=>new URL(url).searchParams.get('field')==='output'));
+ await inspector.getByRole('button',{name:'Close step details',exact:true}).click();
+ await expect(inspector).toHaveCount(0);
  await toggle.click();assert.equal(await third.locator('.a-execution-node').count(),0);
  // A late response after closing must neither render nor retain hidden steps.
  await page.unroute('**/api/conversation/detail?**');let release,started;

@@ -349,17 +349,24 @@ try{
  assert.equal(await waiting.locator('.a-progress-spinner').count(),0);
  await page.screenshot({path:out+'/one-desktop.png'});
  const columns=await nav.evaluate(el=>{
-  const measure=selector=>{const node=el.querySelector(selector),r=node.getBoundingClientRect();return {x:r.x,width:r.width,height:r.height}};
+  const measure=selector=>{const node=el.querySelector(selector),r=node.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};
   return {chat:measure('.a-nav-chat .a-nav-chat-label'),workspace:measure('.a-workspace-label'),
-          chatIcon:measure('.a-nav-chat .a-navigation-status'),workspaceIcon:measure('.a-workspace-row .a-navigation-status')};
+          chatIcon:measure('.a-nav-chat .a-navigation-status'),workspaceIcon:measure('.a-workspace-identity'),
+          folder:measure('.a-workspace-identity>svg'),badge:measure('.a-workspace-identity>.a-navigation-status')};
  });
  observations.push({id:'shared-columns',columns});
- // The semantic follow-up does not change the separately evolved workspace
- // badge layout. Keep the original alignment qualification as its own scope.
- if(!process.env.AMPLIFIER_TEST_DEPENDENCY_SEMANTICS){
-  assert.ok(Math.abs(columns.chat.x-columns.workspace.x)<1,JSON.stringify(columns));
-  assert.ok(Math.abs(columns.chatIcon.x-columns.workspaceIcon.x)<1,JSON.stringify(columns));
- }
+ // Pinned workspaces retain folder identity with a secondary status badge.
+ // Align primary origins and the same label gap, not the overlaid badge.
+ assert.ok(Math.abs(columns.chatIcon.x-columns.workspaceIcon.x)<1,JSON.stringify(columns));
+ for(const [label,icon] of [[columns.chat,columns.chatIcon],[columns.workspace,columns.workspaceIcon]])
+  assert.ok(Math.abs(label.x-icon.x-icon.width-8)<1,JSON.stringify(columns));
+ assert.equal(columns.workspaceIcon.width,21);assert.equal(columns.workspaceIcon.height,23);
+ assert.equal(columns.folder.width,17);assert.equal(columns.folder.height,17);
+ assert.equal(columns.badge.width,12);assert.equal(columns.badge.height,12);
+ assert.ok(Math.abs(columns.badge.x+columns.badge.width-columns.workspaceIcon.x-columns.workspaceIcon.width-3)<1);
+ assert.ok(Math.abs(columns.badge.y+columns.badge.height-columns.workspaceIcon.y-columns.workspaceIcon.height-2)<1);
+ await expect(nav.locator('.a-workspace-identity>svg')).toBeVisible();
+ await expect(nav.locator('.a-workspace-identity>.a-navigation-status')).toHaveAttribute('aria-label',/\S+/);
  assert.equal(await page.locator('.a-workspace-pin-mark').count(),0);
  const passive=async(before,receipt)=>{
   assert.deepEqual(actions.slice(before),[],'Inspection/focus/expansion must not dispatch actions');

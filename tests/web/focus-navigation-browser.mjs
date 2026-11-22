@@ -38,6 +38,7 @@ try{
  const filters=page.getByRole('group',{name:'Filter work'});
  const home=async()=>{await page.getByRole('navigation',{name:'Site navigation'}).getByRole('button',{name:'Home',exact:true}).click();await ready()};
  await page.goto(`http://127.0.0.1:${port}`);await ready();
+ const branding=(await state()).instanceBranding;assert.ok(branding?.name);
  await page.getByRole('group',{name:'Work view'}).getByRole('button',{name:'Focus',exact:true}).click();
  await expect(card).toHaveCount(1);await expect(previous).toBeDisabled();
  const initial=await info(),selected=(await state()).selectedSessionId,first=await identity();
@@ -83,7 +84,7 @@ try{
  await expect(page.locator('.a-nav-chat.is-selected')).toHaveCount(0);
  await expect(page.locator('.a-nav-chat-select[aria-current=page]')).toHaveCount(0);
  await expect(page.locator('header')).not.toContainText('Home');
- await expect(page).toHaveTitle('Amplifier');
+ await expect(page).toHaveTitle(branding.name);
  assert.equal((await state()).selectedSessionId,retained);
  assert.equal((await state()).view.draft,'Keep this draft while browsing Focus');
  await card.locator('.a-work-card-open').click();await expect(composer).toContainText('Keep this draft while browsing Focus');

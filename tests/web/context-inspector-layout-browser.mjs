@@ -161,9 +161,16 @@ try{
    assert.ok(g.reader.bottom<=g.panel.bottom+1,'reader bounded by pane');
    assert.ok(g.pre.height<=g.pre.scrollHeight+1&&g.pre.overflowY==='visible','no inner pre scroller');
    const chrome=await page.locator('#workspace-canvas .a-canvas-head').evaluate(el=>{
-    const r=el.getBoundingClientRect(),tab=el.querySelector('[role=tab][aria-selected=true]'),t=tab.getBoundingClientRect(),strip=tab.closest('.a-canvas-document-tabs').getBoundingClientRect();
-    return {height:r.height,overflow:el.scrollWidth-el.clientWidth,tabWidth:t.width,visibleWidth:Math.min(t.right,strip.right)-Math.max(t.left,strip.left)};
+    const r=el.getBoundingClientRect(),mode=el.closest('#workspace-canvas').dataset.navigation;
+    const control=mode==='compact'?el.querySelector('.a-open-documents'):el.querySelector('[role=tab][aria-selected=true]');
+    const t=control.getBoundingClientRect(),strip=mode==='compact'?r:control.closest('.a-canvas-document-tabs').getBoundingClientRect();
+    return {mode,height:r.height,overflow:el.scrollWidth-el.clientWidth,controlWidth:t.width,visibleWidth:Math.min(t.right,strip.right)-Math.max(t.left,strip.left),label:control.getAttribute('aria-label')};
    });
+   assert.ok(['compact','tabs'].includes(chrome.mode));
+   if(chrome.mode==='compact'){
+    assert.match(chrome.label,/^Open documents, \d+ open, Context inspector$/);
+    await expect(page.locator('#workspace-canvas .a-canvas-document-tabs')).toBeHidden();
+   }else assert.equal(chrome.label,'Context inspector');
    assert.ok(chrome.height<=56&&chrome.overflow<=1,JSON.stringify(chrome));assert.ok(chrome.visibleWidth>=85,JSON.stringify(chrome));
    report.geometry.push({name:name+'-chrome',...chrome});
   };

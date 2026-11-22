@@ -30,6 +30,7 @@ const viewports=mobileOnly?[['mobile',mobile]]:[['desktop',desktop],['mobile',mo
 const navigationEntries=[];
 const layoutChecks=[],apiFailures=[],transitionChecks=[];
 const appearanceScopeChecks=[];
+const readingAnchorChecks=[];
 const diagnostics=delegateStreamDiagnostics();
 const lookupEvents=[],lookupRequests=new Map();
 const nodeEvidence=node=>node?{
@@ -273,26 +274,32 @@ async function checkReadingAnchor(page,operation) {
     const row=[...el.querySelectorAll('[data-message-id]')].find(row=>row.getBoundingClientRect().bottom>top);
     return row?{id:row.dataset.messageId,offset:row.getBoundingClientRect().top-top}:null;
   });
-  const checkPosition=async anchor=>{
+  const checkPosition=async(anchor,phase)=>{
     assert.ok(anchor,'Reading-position check needs an actual message anchor');
+    const evidence={phase,viewport:page.viewportSize(),anchor,samples:[]};readingAnchorChecks.push(evidence);
     // Docking changes responsive padding. At either scroll limit the exact
     // prior offset may be physically unreachable; require the closest one.
-    await expect.poll(()=>pane.evaluate((el,{id,offset})=>{
+    try{await expect.poll(async()=>{
+     const measured=await pane.evaluate((el,{id,offset})=>{
       const row=[...el.querySelectorAll('[data-message-id]')].find(row=>row.dataset.messageId===id);
-      if(!row)return Infinity;
+      if(!row)return {missing:true};
       const delta=row.getBoundingClientRect().top-el.getBoundingClientRect().top-offset;
       const target=Math.min(el.scrollHeight-el.clientHeight,Math.max(0,el.scrollTop+delta));
-      return Math.abs(el.scrollTop-target);
-    },anchor)).toBeLessThanOrEqual(1);
+      const top=el.getBoundingClientRect().top,first=[...el.querySelectorAll('[data-message-id]')].find(row=>row.getBoundingClientRect().bottom>top);
+      return {delta,target,scrollTop:el.scrollTop,scrollHeight:el.scrollHeight,clientHeight:el.clientHeight,paneWidth:el.clientWidth,first:first?{id:first.dataset.messageId,offset:first.getBoundingClientRect().top-top}:null,padding:getComputedStyle(el).padding,error:Math.abs(el.scrollTop-target)};
+     },anchor);
+     evidence.samples.push(measured);return measured.missing?Infinity:measured.error;
+    }).toBeLessThanOrEqual(1)}
+    finally{writeFileSync(artifact('delegate-work-stream-reading-anchors.json'),JSON.stringify(readingAnchorChecks,null,2))}
   };
   const inspect=async anchor=>{
     await button.click();
     const inspector=page.locator('#work-step-inspector');
     await expect(inspector).toBeVisible();
-    await checkPosition(anchor);
+    await checkPosition(anchor,'open');
     await inspector.getByRole('button',{name:'Close step details'}).click();
     await expect(button).toBeFocused();
-    await checkPosition(anchor);
+    await checkPosition(anchor,'close');
   };
   await inspect(await capture());
   // Deliberately read inside the scroll range as well as at its edge.
@@ -303,9 +310,9 @@ async function checkReadingAnchor(page,operation) {
   await inspect(anchor);
   const viewport=page.viewportSize();
   await page.setViewportSize({...viewport,width:viewport.width+12});
-  await checkPosition(anchor);
+  await checkPosition(anchor,'resize-wider');
   await page.setViewportSize(viewport);
-  await checkPosition(anchor);
+  await checkPosition(anchor,'resize-return');
 }
 async function enterStreamConversation(page,expectedSessionId,stage) {
   // Keep the shared Home-to-chat setup and desktop pinned preference intact.

@@ -92,11 +92,11 @@ try{
  report.checks.push('Six unlabeled native tick stops work with pointer and keyboard, 14d is canonical; saved 1y remains truthful through reload and arrows choose 90d/All');
  const inspectFooter=async(name)=>{
   await options.click();await expect(menu).toBeVisible();
-  for(const label of ['Automation','Activity','Settings','Send feedback','What the agent sees'])await expect(menu.getByRole('button',{name:new RegExp('^'+label)})).toBeVisible();
+  for(const label of ['Automations','Activity','Settings','Send feedback','What agents see'])await expect(menu.getByRole('button',{name:new RegExp('^'+label+'(?: \\d+ unread items)?$')})).toBeVisible();
   const box=await menu.boundingBox(),footerBox=await sidebar.locator('.a-work-footer').boundingBox();
   assert.ok(box.y>=0&&box.y+box.height<=footerBox.y+footerBox.height&&box.x>=0);
   assert.ok(await menu.evaluate(node=>{const r=node.getBoundingClientRect();return node.contains(document.elementFromPoint(r.left+r.width/2,r.top+10))}));
-  assert.ok(await menu.getByRole('button',{name:'What the agent sees',exact:true}).evaluate(node=>{const r=node.getBoundingClientRect();return node.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))}));
+  assert.ok(await menu.getByRole('button',{name:'What agents see',exact:true}).evaluate(node=>{const r=node.getBoundingClientRect();return node.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))}));
   await page.screenshot({path:join(output,name+'.png')});
   await page.keyboard.press('Escape');await expect(menu).toHaveCount(0);await expect(options).toBeFocused();
  };

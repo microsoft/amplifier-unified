@@ -186,7 +186,7 @@ try{
  const panel=page.locator('#workspace-canvas'),history=panel.locator('[data-overview-section="permissions"]');
  const closeHistory=async()=>{
   const before=await state(),response=responseFor(command=>command.action==='canvas.visibility'&&command.args.open===false);
-  await panel.getByRole('button',{name:'Close canvas panel',exact:true}).click();
+  await page.locator('#canvas-toggle').click();
   await expect(panel).toBeHidden();
   const received=await response;if(received.error)throw received.error;
   const request=received.response.request();
@@ -262,7 +262,7 @@ try{
  await expect(touch.locator('#workspace-canvas [data-permission-history-id="capability:later"]')).toContainText('Permission denied');
  assert.equal(await touch.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
  await touch.screenshot({path:join(output,'history-touch.png'),animations:'disabled'});
- await touch.getByRole('button',{name:'Close canvas panel',exact:true}).tap();
+ await touch.locator('#canvas-toggle').tap();
  await expect(touch.locator('#workspace-canvas')).toBeHidden();await touchContext.close();
  // Pending cards must complete the ordinary guarded path while a different,
  // read-only history reveal is held. Releasing history cannot make this pass.
@@ -418,7 +418,7 @@ try{
  await historyEntry().click();
  await expect.poll(()=>historyHeld).toBe(true);
  const closing=responseFor(command=>command.action==='canvas.visibility'&&command.args.open===false);
- await panel.getByRole('button',{name:'Close canvas panel',exact:true}).click();
+ await page.locator('#canvas-toggle').click();
  await expect(panel).toBeHidden();
  checks.push({name:'Newer Close hides immediately before either receipt',serverStillOpen:(await serverSnapshot(beforeClose.client.id)).canvas.open});
  releaseHeld();

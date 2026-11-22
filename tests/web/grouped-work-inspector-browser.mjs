@@ -34,7 +34,13 @@ try{
  const headers={Authorization:'Bearer fixture-detail-token','Content-Type':'application/json'};
  async function control(body){
   const response=await fetch(base+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)});
-  assert.equal(response.ok,true,'Fixture control '+body.op+' returned '+response.status);
+  // Fixture-only endpoint, synthetic input; retain a bounded failure fact before
+  // Chromium starts rather than losing the cause behind an HTTP status.
+  if(!response.ok){
+   const fact={op:body.op,status:response.status,body:(await response.text()).slice(0,2000)};
+   if(output){await mkdir(output,{recursive:true});await writeFile(join(output,'fixture-control-error.json'),JSON.stringify(fact,null,2)+'\n')}
+   assert.fail('Fixture control failed: '+JSON.stringify(fact));
+  }
   return response.json();
  }
  await control({op:'bounded-provider-records',retention:true,largeResponse:true});
