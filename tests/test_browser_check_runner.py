@@ -2873,6 +2873,102 @@ def test_python_log_ring_retains_running_head_and_cursor_then_orders_tail(tmp_pa
     assert path.read_bytes() == b'01234789AB'
 
 
+@pytest.mark.parametrize('ending', [
+    'delayed-eof', 'never-eof', 'overall-deadline', 'case-deadline',
+    'cancelled', 'read-error', 'cleanup-unknown',
+])
+def test_capture_finalization_observes_pipe_after_leader_exit(tmp_path, monkeypatch, ending):
+    """A completed leader/empty census cannot substitute for read-side EOF."""
+    from types import SimpleNamespace
+    read_fd, write_fd = os.pipe()
+    pipe = os.fdopen(read_fd, 'rb', buffering=0)
+    clock = SimpleNamespace(now=100.0, sleeps=[], writer_open=True, cleanup=False)
+    reads = []
+    real_read = os.read
+    os.write(write_fd, b'leader done\n')
+
+    def read(fd, size):
+        if fd != read_fd:
+            return real_read(fd, size)
+        assert size <= 65536
+        if ending == 'read-error' and clock.now >= 100.02:
+            raise OSError('synthetic pipe failure')
+        try:
+            value = real_read(fd, size)
+        except BlockingIOError:
+            reads.append(('would-block', clock.now))
+            raise
+        reads.append(('bytes' if value else 'eof', clock.now))
+        return value
+
+    def sleep(seconds):
+        assert 0 < seconds <= .01
+        clock.sleeps.append(seconds)
+        clock.now += seconds
+        assert clock.now <= 100.51, 'Never-EOF must not consume the whole scenario budget'
+        if ending == 'cancelled':
+            runner.signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+        if ending in {'delayed-eof', 'cleanup-unknown'} and clock.now >= 100.03 and clock.writer_open:
+            os.write(write_fd, b'late final bytes\n')
+            os.close(write_fd)
+            clock.writer_open = False
+
+    class CompletedLeader:
+        pid = 12345
+        returncode = 0
+        stdout = pipe
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout):
+            assert clock.cleanup
+            return 0
+
+    def cleanup(*args, drain):
+        clock.cleanup = True
+        drain()  # The real pipe drains available bytes, then reports EAGAIN.
+        assert reads[-1][0] == 'would-block' and clock.writer_open
+        return {'remaining': ['unknown'] if ending == 'cleanup-unknown' else [], 'terminated': 0}
+
+    monkeypatch.setattr(runner, 'time', SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep))
+    monkeypatch.setattr(runner.os, 'read', read)
+    monkeypatch.setattr(runner, 'process_identities', lambda: {})
+    monkeypatch.setattr(runner.subprocess, 'Popen', lambda *args, **kwargs: CompletedLeader())
+    monkeypatch.setattr(runner, 'retire_group', cleanup)
+    budget = .02 if ending == 'overall-deadline' else 100
+    case_timeout = .02 if ending == 'case-deadline' else 100
+    try:
+        code, report, output = execute(tmp_path, [scenario('capture', 'not actually spawned')],
+                                       budget=budget, case_timeout=case_timeout, log_limit=1024)
+        row, = report['scenarios']
+        assert row['exitCode'] == 0
+        assert reads[0][0] == 'bytes' and any(kind == 'would-block' for kind, _ in reads)
+        if ending in {'delayed-eof', 'cleanup-unknown'}:
+            assert row['logCapture']['eof'] and reads[-1][0] == 'eof'
+            assert (output / 'capture.log').read_bytes() == b'leader done\nlate final bytes\n'
+            assert code == (1 if ending == 'cleanup-unknown' else 0)
+            assert row['reason'] is None
+        else:
+            assert code == 1 and not row['logCapture']['eof']
+            assert row['reason'] == {
+                'cancelled': 'cancelled', 'read-error': 'log_capture_failed',
+            }.get(ending, 'log_incomplete')
+        if ending in {'overall-deadline', 'case-deadline'}:
+            assert clock.now <= 100.02
+        if ending == 'cancelled':
+            assert len(clock.sleeps) == 1
+        if ending == 'read-error':
+            assert row['logCapture']['captureError'] == 'OSError'
+        if ending == 'never-eof':
+            assert .49 <= clock.now - 100 <= .5
+        assert pipe.closed
+    finally:
+        if clock.writer_open:
+            os.close(write_fd)
+        pipe.close()
+
+
 def expire_after_progress(monkeypatch, marker):
     # No startup race: the child installs its handler before marking progress.
     original = runner.time.monotonic
