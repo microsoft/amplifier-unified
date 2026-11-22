@@ -429,6 +429,13 @@ try{
  await expect(setupJourney).toBeHidden();
  await settleManagedDraft();
  const initial=await proof();await save('native-initial.json',initial);assert.equal(initial.calls.length,0);assert.equal(initial.readiness.importsReady,true);
+ const savedConnections=initial.discovery.setup.providers;
+ assert.deepEqual(savedConnections.map(row=>row.id).sort(),['native-a','native-alt','native-b'],
+  'Every connection used by the journey must belong to the saved browsing inventory');
+ assert.equal(Object.hasOwn(savedConnections.find(row=>row.id==='native-alt').config,'priority'),false,
+  'The shared alternate connection must leave its root-specific priority unset');
+ assert.deepEqual(initial.discovery.draftDefaults[managedKey].providers.map(row=>[row.id,row.priority]),
+  [['native-a',1],['native-b',20],['native-alt',100]]);
  const originalSession=await send(A);
  await model.click();await showComposerOption(page,'provider');
  const configurePromise=page.waitForResponse(response=>{
@@ -464,8 +471,8 @@ try{
   const id=await send(A);assert.ok(!sessionIds.includes(id));sessionIds.push(id);
  }
  const four=await proof();assert.equal(four.calls.length,4);await save('four-send-complete.json',four);
- // A distinct ordinary root adds native-alt at priority 0. Shared A=1/B=20
- // stay unchanged; no draft pin. Hold only this test's resolution boundary.
+ // The alternate root gives the saved native-alt connection priority 0.
+ // Shared A=1/B=20 stay unchanged; no draft pin. Hold only resolution.
  assert.equal((await action('session.draft')).accepted,true);
  await settleManagedDraft();await visible(A);
  const alternate=four.readiness.alternateBundle.path;
@@ -508,6 +515,9 @@ try{
   assert.equal(process.command.at(-1),resolved.readiness.sources['draft_defaults_probe.py'].path);
  }
  assert.equal(readyProbe.result.bundle,alternate);assert.equal(readyProbe.result.globalOnly,true);
+ assert.deepEqual(readyProbe.result.providers.map(row=>[row.id,row.priority]),
+  [['native-alt',0],['native-a',1],['native-b',20]],
+  'Actual composed priorities, not a UI pin or settings rewrite, change the default');
  assert.deepEqual(tuple(readyProbe.result.effective),ALT);
  assert.equal(resolved.calls.length,4,'Readiness must not perform inference');
  await visible(ALT);await save('delayed-ready.json',resolved);

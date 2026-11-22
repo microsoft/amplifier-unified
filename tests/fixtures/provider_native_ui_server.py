@@ -555,9 +555,9 @@ async def main(root):
         save(bundle, root_definition)
         alternate_definition = copy.deepcopy(root_definition)
         alternate_definition['bundle']['name'] = 'provider-native-alternate'
-        # A distinct root-local connection leaves shared A/B priorities intact.
-        # Shared settings override matching IDs, so do not pretend a root B=0
-        # would override the shared B=20 declaration.
+        # Discovery lists saved connections, not a root's private declarations.
+        # Save native-alt below too, without a shared priority: its ordinary
+        # default is 100, while this root supplies 0. A/B stay at 1/20.
         alternate_definition['providers'] = [{
             'module': 'provider-native-fixture', 'id': 'native-alt',
             'label': 'Native alternate',
@@ -571,10 +571,12 @@ async def main(root):
             'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)}, 'sources': {'modules': paths},
             'config': {'providers': [
                 {'module': 'provider-native-fixture', 'id': identity, 'label': label, 'config': {
-                    'display_name': label, 'priority': priority, 'default_model': 'native-model',
+                    'display_name': label, **({'priority': priority} if priority is not None else {}),
+                    'default_model': 'native-model',
                     'reasoning_effort': effort, 'proof_sink': str(root / 'calls.jsonl')}}
                 for identity, label, priority, effort in (
-                    ('native-a', 'Native A', 1, 'low'), ('native-b', 'Native B', 20, 'high'))]}})
+                    ('native-a', 'Native A', 1, 'low'), ('native-b', 'Native B', 20, 'high'),
+                    ('native-alt', 'Native alternate', None, 'high'))]}})
         settings_identity = file_identity(settings)
         control_token_path(root / 'app').write_text('fixture-browser-control-token\n')
         # Same local prepared-interpreter seam as bundle_switch_probe; real probes.
