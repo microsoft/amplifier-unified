@@ -185,13 +185,18 @@ async def test_snapshot_precedes_effect_and_missing_prepare_identity_never_launc
     assert not raw.get('backendAdmitted')
 
 
-async def test_changed_backend_cleanup_uses_retained_config_but_new_execution_does_not(app, backend, monkeypatch):
+async def test_changed_backend_execution_and_cleanup_use_retained_config_but_new_start_does_not(app, backend, monkeypatch):
     row = (await start(app))['resource']
     old = owner.configuration(app)[0]
     new = {**old, 'dockerHost': 'unix:///new/docker.sock'}
     monkeypatch.setattr(owner, 'configuration', lambda app: (new, 'ready', 'new backend'))
     monkeypatch.setattr(owner, 'SUPPORTED_HOST', True)
-    monkeypatch.setattr(owner, 'validate_configuration_value', lambda app, value: (old, 'ready', 'old qualified'))
+    qualified = []
+    def qualify(app, value):
+        assert value == {key: item for key, item in old.items() if key not in {'python', 'admissionRoot'}}
+        qualified.append(value)
+        return old, 'ready', 'old qualified'
+    monkeypatch.setattr(owner, 'validate_configuration_value', qualify)
     seen, invoke = [], owner.invoke
     def exact(config, home, resource, action, args):
         seen.append((action, config))
@@ -200,13 +205,22 @@ async def test_changed_backend_cleanup_uses_retained_config_but_new_execution_do
     page = (await app.dispatch('workspace.environments.read', scope(app)))['result']
     row = page['items'][0]
     assert row['recovery']['available'] is True
-    rejected = await act(app, 'execute', row, 'wrong-backend-command', command='do-not-run')
-    assert rejected['request']['state'] == 'failed'
-    assert seen == [('read', old)]
-    stopped = await act(app, 'stop', row, 'stop-old')
+    executed = await act(app, 'execute', row, 'retained-backend-command', command='synthetic-check')
+    assert executed['request']['state'] == 'completed'
+    assert executed['request']['result']['result']['exit_code'] == 0
+    assert seen == [('read', old), ('execute', old)]
+    stopped = await act(app, 'stop', executed['resource'], 'stop-old')
     removed = await act(app, 'remove', stopped['resource'], 'remove-old')
+    assert stopped['request']['state'] == removed['request']['state'] == 'completed'
     assert removed['resource']['status'] == 'removed'
-    assert seen == [('read', old), ('stop', old), ('remove', old)]
+    assert seen == [('read', old), ('execute', old), ('stop', old), ('remove', old)]
+    assert qualified
+    fresh = await start(app, 'new-backend-start')
+    assert fresh['request']['state'] == 'completed'
+    assert fresh['resource']['id'] != row['id']
+    raw = owner.get(app.data_dir, fresh['resource']['sessionId'], fresh['resource']['id'])
+    assert raw['backendKey'] == owner.config_key(new) != owner.config_key(old)
+    assert seen[-2:] == [('prepare', new), ('start', owner.capacity_settings.apply(app, new))]
 
 
 @pytest.mark.parametrize('verified', [False, True])
@@ -418,13 +432,14 @@ async def test_legacy_remove_host_journal_preserves_unknown_with_untrusted_files
     folder = Path(row['retention']['path'])
     (folder / 'source.tar').write_bytes(b'synthetic snapshot')
     original = owner.invoke
-    destroyed = []
+    destroyed, trace = [], []
     def lost_destroy(identity, **kwargs):
         destroyed.append(identity)  # External effect may have happened.
         raise Failure('lost acknowledgement')
     lib.destroy = lost_destroy
     monkeypatch.setattr(worker, 'docker_json', lambda *args: {'ID':'owned-daemon'})
     def invoke(config, home, raw, action, args):
+        trace.append({'action': action, 'requestId': args['requestId']})
         if action == 'remove':
             value = worker.execute_call({
                 'action':'remove', 'root':str(folder), 'rootOwner':raw['sessionId'],
@@ -434,6 +449,7 @@ async def test_legacy_remove_host_journal_preserves_unknown_with_untrusted_files
                 'resourceId':raw['id'], 'resourceRevision':raw['revision'],
                 'admissionRevision':args['expectedRevision'],
                 'backendKey':raw['backendKey'], 'snapshot':raw['snapshot']})
+            trace[-1]['result'] = copy.deepcopy(value)
             # Model the older helper's published envelope, not a new phase proof.
             return {key:item for key, item in value.items() if key != 'removal'}
         if action == 'reconcile':
@@ -442,7 +458,8 @@ async def test_legacy_remove_host_journal_preserves_unknown_with_untrusted_files
     monkeypatch.setattr(owner, 'invoke', invoke)
     failed = await act(app, 'remove', row, 'legacy-remove')
     unknown = copy.deepcopy(failed['request'])
-    assert unknown['state'] == 'outcome_unknown' and destroyed == ['owned-universe']
+    assert (unknown['state'], destroyed) == ('outcome_unknown', ['owned-universe']), {
+        'request': unknown, 'calls': trace, 'effects': effects}
     directory, = folder.glob('retained-*')
     if evidence != 'missing':
         (directory / 'untrusted-phase.json').write_text(json.dumps({
