@@ -2,7 +2,7 @@ import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {readComposerDraft} from './composer-test-helpers.mjs';
 import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.mjs';
 import {readAppearance,settledAppearance,updateAppearance,previewAppearance,cancelAppearancePreview} from './settings-fixture.mjs';
-import {once} from 'node:events';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -10,7 +10,8 @@ import {chromium,expect} from '@playwright/test';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
-let browser,releaseShell;
+const stop=ownFixture(fixture,{label:'Reference delta fixture'});
+let browser,releaseShell,failure;
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}}catch{}})});
  browser=await chromium.launch({headless:true});
@@ -98,13 +99,7 @@ try{
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft(savedDraft);
  assert.deepEqual(errors,[]);
  console.log('Format-2 Reference delta preview/cancel/save/select, decoration toggle, system appearance, reload first-paint preference and draft preservation passed.');
-}finally{
+}catch(error){failure=error;throw error}finally{
  releaseShell?.();
- try{await browser?.close()}finally{
-  if(fixture.exitCode===null&&fixture.signalCode===null){
-   const exited=once(fixture,'exit');fixture.kill('SIGTERM');
-   const timer=setTimeout(()=>fixture.kill('SIGKILL'),10000);
-   try{const [code,signal]=await exited;assert.equal(code,0,'Fixture cleanup completed');assert.equal(signal,null)}finally{clearTimeout(timer)}
-  }
- }
+ await finishFixture({label:'Reference delta fixture',close:[['Reference delta browser',()=>browser?.close()]],stop,originalError:failure});
 }

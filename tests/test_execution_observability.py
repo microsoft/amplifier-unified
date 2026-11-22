@@ -47,7 +47,7 @@ async def test_metric_preferences_survive_restart_with_explicit_scope_without_us
             assert app.appearance.shared() == shared
         else:
             assert receipt['status'] == 'saved' and receipt['stored'] and not receipt['activated']
-            assert app.appearance.read('browser-one')['command'] is None
+            assert app.appearance.read('browser-one').get('command') is None
         assert app.appearance.read('independent-local')['effective'] == independent
         assert app.state['sessions'] == before
         confirmed = app.appearance.read('browser-one')

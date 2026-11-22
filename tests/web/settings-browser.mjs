@@ -1,5 +1,5 @@
 import {finishFixture} from './fixture-lifecycle.mjs';
-import {showComposerOption} from './composer-options-helpers.mjs';
+import {showComposerOption,composerOptionsPanel} from './composer-options-helpers.mjs';
 import {openChatAdvancedPage} from './browser-chat-pages.mjs';
 import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.mjs';
 import {startSettingsFixture,readAppearance,settledAppearance,updateAppearance} from './settings-fixture.mjs';
@@ -167,7 +167,7 @@ try{
  await options.click({force:true});await composer.press('x');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),previousChat);
  assert.equal(await composer.innerText(),previousText);
- assert.equal(await page.getByRole('dialog',{name:'Chat options',exact:true}).count(),0);
+ await expect(composerOptionsPanel(page)).toHaveCount(0);
  assert.equal(mutations.some(row=>row.action==='conversation.configure'||Object.hasOwn(row.args?.patch||{},'draft')),false);
  releaseDraft();await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId===null&&!window.amplifier.getState().draftNavigationPending);
  await page.unroute('**/api/actions',holdDraft);
