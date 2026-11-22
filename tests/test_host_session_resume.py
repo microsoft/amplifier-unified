@@ -38,11 +38,13 @@ def mounted_host(tmp_path, monkeypatch):
     loop = SimpleNamespace(_select_provider=lambda _: provider, load_failures=[])
     capabilities = {}
     mounted_config = {}
-    coordinator = SimpleNamespace(get=lambda key: {"context": context, "orchestrator": loop,
+    coordinator = SimpleNamespace(session_id=runtime.session_id, session_state={},
+        get=lambda key: {"context": context, "orchestrator": loop,
         "providers": {"fixture": provider}, "tools": {}}.get(key), get_capability=capabilities.get,
         register_capability=lambda key, value: capabilities.update({key: value}),
         hooks=SimpleNamespace(register=Mock()), register_cleanup=Mock(), config=mounted_config)
-    session = SimpleNamespace(coordinator=coordinator, config=mounted_config, cleanup=AsyncMock(), execute=AsyncMock())
+    session = SimpleNamespace(session_id=runtime.session_id, coordinator=coordinator,
+        config=mounted_config, cleanup=AsyncMock(), execute=AsyncMock())
     prepared = SimpleNamespace(mount_plan={"session": {"orchestrator": {"module": "loop-live"}}},
                                create_session=AsyncMock(return_value=session))
     loaded = SimpleNamespace(hooks=[], to_mount_plan=lambda: copy.deepcopy(prepared.mount_plan),
@@ -431,7 +433,7 @@ async def test_initialization_failure_keeps_cleanup_ownership_before_session_ret
         await kwargs["before_initialize"](h.session)
         raise failure("Later account failed during initialization")
     h.prepared.create_session.side_effect = create
-    with pytest.raises(failure):
+    with pytest.raises(failure, match="Later account failed during initialization"):
         await h.prepare()
     h.session.cleanup.assert_awaited_once()
     h.session.execute.assert_not_called()

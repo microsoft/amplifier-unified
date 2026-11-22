@@ -14,7 +14,7 @@ from amplifier_web.host.storage import SessionStore
 
 
 def coordinator(hooks, rows):
-    return SimpleNamespace(hooks=hooks, config={'hooks': rows})
+    return SimpleNamespace(hooks=hooks, config={'hooks': rows}, session_state={})
 
 
 def row(instance=None):
@@ -180,7 +180,11 @@ async def test_worker_rejects_uncontrolled_naming_before_execute(tmp_path, monke
     session.execute.assert_not_awaited()
     assert worker.execution is None and worker.shutdown.is_set()
     assert not any(event['type'] == 'runtime.ready' for event in events)
-    assert any(event['type'] == 'runtime.error' and 'recognized lifecycle' in event['error'] for event in events)
+    errors = [event['error'] for event in events if event['type'] == 'runtime.error']
+    assert errors == [
+        'ValueError: This pinned naming module does not expose a recognized lifecycle. '
+        'Update it before using app naming.'
+    ]
 
 
 async def test_actual_mounted_parent_late_result_preserves_manual_rename(native_home, community):

@@ -57,7 +57,7 @@ MANAGER = r'''
 
 async def restart_and_consume(root):
     """A genuine fresh target input, never a replay of the abandoned operation."""
-    from amplifier_web.host.storage import SessionStore
+    from bundle_migration_matrix_probe import completed_native_input
     from amplifier_web.management import Management
     from amplifier_web.runtime import RuntimeManager
     from amplifier_web.service import AppService
@@ -101,21 +101,16 @@ async def restart_and_consume(root):
             'text': 'RECOVERY_NEXT', 'expectedConfigurationRevision': 1},
             command_id='fresh-input-after-cancel', include_state=False)
         assert receipt['accepted']
-        await base.until(lambda: 'fresh-input-after-cancel' in
-            target.get('collaborationGeneration', {}).get('inputIds', [])
-            and target['collaborationGeneration'].get('terminal'), seconds=60)
-        turn = next(row for row in target['execution']['turns'] if row['id'] == 'fresh-input-after-cancel')
-        report['freshTurn'] = copy.deepcopy(turn)
+        turn, history = await completed_native_input(
+            target, runtime, app.data_dir, root / 'workspace', 'fresh-input-after-cancel',
+            lambda predicate: base.until(predicate, seconds=60))
+        report['freshTurn'] = turn
         report['freshTargetStatus'] = target.get('status')
         report['freshTargetError'] = target.get('error')
         report['freshCalls'] = [json.loads(line) for line in calls.read_text().splitlines()][before_calls:]
-        assert turn['phase'] == 'completed', {'turn': turn, 'error': target.get('error')}
-        await base.until(lambda: runtime.workers.get(sid, {}).get('parked'), seconds=60)
         processes = [row['process'] for row in runtime.workers.values()]
         assert target['bundle'] == data['nextBundle'] and target['appliedConfigurationRevision'] == 1
         assert not target.get('pendingBundleSelection') and suppress_input(target, old_request)
-        native_id = runtime.workers[sid]['runtime_id']
-        history = SessionStore.for_app(app.data_dir, root / 'workspace').load(native_id)[0]
         ids = [(row.get('metadata') or {}).get('amplifier_input', {}).get('id') for row in history]
         assert ids.count('fresh-input-after-cancel') == 1
         assert ids.count('native-original-input') == 1
