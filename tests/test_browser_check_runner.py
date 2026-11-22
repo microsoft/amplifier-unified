@@ -2908,7 +2908,7 @@ def test_capture_finalization_observes_pipe_after_leader_exit(tmp_path, monkeypa
         assert clock.now <= 100.51, 'Never-EOF must not consume the whole scenario budget'
         if ending == 'cancelled':
             runner.signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
-        if ending in {'delayed-eof', 'cleanup-unknown'} and clock.now >= 100.03 and clock.writer_open:
+        if ending == 'delayed-eof' and clock.now >= 100.03 and clock.writer_open:
             os.write(write_fd, b'late final bytes\n')
             os.close(write_fd)
             clock.writer_open = False
@@ -2944,10 +2944,10 @@ def test_capture_finalization_observes_pipe_after_leader_exit(tmp_path, monkeypa
         row, = report['scenarios']
         assert row['exitCode'] == 0
         assert reads[0][0] == 'bytes' and any(kind == 'would-block' for kind, _ in reads)
-        if ending in {'delayed-eof', 'cleanup-unknown'}:
+        if ending == 'delayed-eof':
             assert row['logCapture']['eof'] and reads[-1][0] == 'eof'
             assert (output / 'capture.log').read_bytes() == b'leader done\nlate final bytes\n'
-            assert code == (1 if ending == 'cleanup-unknown' else 0)
+            assert code == 0
             assert row['reason'] is None
         else:
             assert code == 1 and not row['logCapture']['eof']
@@ -2962,6 +2962,8 @@ def test_capture_finalization_observes_pipe_after_leader_exit(tmp_path, monkeypa
             assert row['logCapture']['captureError'] == 'OSError'
         if ending == 'never-eof':
             assert .49 <= clock.now - 100 <= .5
+        if ending == 'cleanup-unknown':
+            assert not clock.sleeps and row['cleanup']['remaining'] == ['unknown']
         assert pipe.closed
     finally:
         if clock.writer_open:
