@@ -86,13 +86,15 @@ try{
  await panel.getByText('Advanced',{exact:true}).click();await expect(panel.locator('details')).toHaveJSProperty('open',false);await expect(panel.getByLabel('Registered root bundles',{exact:true})).toBeHidden();
  for(const name of ['Connection','Conversation model'])await expect(panel.getByRole('combobox',{name,exact:true})).toBeVisible();
  await expect(panel.getByRole('combobox',{name:'Conversation model',exact:true})).toHaveValue('chosen-model');
- const effort=panel.getByRole('slider',{name:'Reasoning effort high',exact:true});
- await expect(effort).toBeHidden();
+ const effort=panel.getByRole('slider',{name:'Effort high',exact:true});
+ await expect(effort).toBeVisible();await expect(effort).toHaveAttribute('aria-valuetext','high');
  await panel.getByText('Advanced',{exact:true}).press('Enter');
+ await expect(panel.getByLabel('Registered root bundles',{exact:true})).toBeVisible();
  await expect(effort).toBeVisible();await expect(effort).toHaveAttribute('aria-valuetext','high');
  await effort.scrollIntoViewIfNeeded();await expect(effort).toBeInViewport({ratio:1});await assertPanelFits();
  await panel.getByText('Advanced',{exact:true}).click();
- await expect(effort).toBeHidden();await expect(composer).toHaveDraft('Do the planned work');await assertPanelFits();await page.screenshot({path:out+`/compact-options-${width}.png`});await panel.getByRole('button',{name:'Close chat options',exact:true}).click();
+ await expect(panel.getByLabel('Registered root bundles',{exact:true})).toBeHidden();
+ await expect(effort).toBeVisible();await expect(composer).toHaveDraft('Do the planned work');await assertPanelFits();await page.screenshot({path:out+`/compact-options-${width}.png`});await panel.getByRole('button',{name:'Close chat options',exact:true}).click();
  }
  await page.setViewportSize({width:1280,height:900});await action('view.update',{patch:{navPinned:true}});
  await page.getByRole('button',{name:'Send message',exact:true}).click();await page.getByText('Synthetic first response',{exact:true}).waitFor();

@@ -40,3 +40,11 @@ def test_history_measurement_bound_to_installed_native_only_checkpoint():
     record['installedCandidate'] = 'sha'
     summary['message']['metadata']['context-managed:portable-summary'] = True
     assert ContextContinuity.native_history_input(c, 'work', 'sol') is None
+
+
+def test_context_summary_matches_measured_model_and_omits_private_fields():
+    from amplifier_web.next_message_impact import context_summary, observation
+    usage = observation({'model':'small','provider':'test','usage':{'inputTokens':75},
+                         'promptCostBasis':{'modelWindow':100,'instance':'one','private':'hidden'}})
+    assert context_summary(usage) == {'model':'small','instance':'one','inputTokens':75,'modelWindow':100}
+    assert context_summary({}) is None

@@ -268,7 +268,7 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
             if event.get('phase') == 'completed' and isinstance(event.get('promptCostBasis'), dict):
                 from .next_message_impact import observation
                 seen = observation(event)
-                public['promptCostBasis'] = {k: seen[k] for k in ('instance','traits','portableHistoryTokens') if k in seen}
+                public['promptCostBasis'] = {k: seen[k] for k in ('instance','traits','portableHistoryTokens','modelWindow') if k in seen}
         if event.get("phase") == "running" and event.get("incompleteHistoryDispatched") is True:
             public["incompleteHistoryDispatched"] = True
         from .tool_observations import metadata as tool_metadata

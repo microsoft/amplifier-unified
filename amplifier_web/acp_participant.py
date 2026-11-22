@@ -140,8 +140,12 @@ class ACPParticipant:
             else:
                 created = await self.connection.new_session(cwd=self.cwd, mcp_servers=servers, **instance)
                 identity = created.session_id
+            self._save_options = save_binding
             self.session_id = identity
-            saved = {'sessionId': identity, 'capabilities': self.capabilities}
+            from .participant_options import visible_options, revision
+            options = visible_options(getattr(created, 'config_options', None))
+            saved = {'sessionId': identity, 'capabilities': self.capabilities,
+                     'configOptions': options, 'optionRevision': revision(options)}
             if instance:
                 receipt = (created.field_meta or {}).get(AGENT_INSTANCE, {})
                 if (not isinstance(receipt, dict) or receipt.get('agentId') != agent_id
@@ -246,7 +250,12 @@ class ACPParticipant:
         if session_id != self.session_id:
             return
         value = update.model_dump(mode='json', by_alias=True, exclude_none=True)
-        await self.update(value)
+        if value.get('sessionUpdate') == 'config_option_update':
+            from .participant_options import visible_options, revision
+            options = visible_options(value.get('configOptions'))
+            await self._save_options({'configOptions': options, 'optionRevision': revision(options)})
+        else:
+            await self.update(value)
 
     async def request_permission(self, session_id, tool_call, options, **_kwargs):
         if session_id != self.session_id:

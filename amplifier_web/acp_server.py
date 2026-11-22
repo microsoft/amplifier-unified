@@ -127,6 +127,7 @@ class HostAgent:
     def __init__(self, owner):
         self.owner = owner
         self.initialized = False
+        self.option_snapshots = {}
         self.creation = asyncio.Lock()
         self.instance = None
 
@@ -195,6 +196,59 @@ class HostAgent:
             raise ValueError('The negotiated public agent requires source metadata.')
         return value
 
+    async def config_options(self, identity):
+        from .participant_options import advertised
+        from .conversation_models import browse
+        service = getattr(self.owner, 'service', None)
+        if not service or not hasattr(service, 'management'):
+            return []
+        def current_catalog():
+            session = service._session(identity, hydrate=False)
+            catalog = service.state.get('runtimeControl', {}).get(identity, {}).get('configuration.catalog') or {}
+            if (catalog.get('phase') == 'ready' and
+                    catalog.get('configurationRevision') == service.state.get('configurationRevision', 0) and
+                    catalog.get('nextMessageRevision') == session.get('nextMessageRevision', 0)):
+                return catalog
+
+        catalog = current_catalog()
+        if catalog is None:
+            self.option_snapshots.pop(identity, None)
+            try:
+                await browse(service.management, service._session(identity, hydrate=False), include_history=False)
+            except (OSError, AppError, ValueError):
+                return []
+            catalog = current_catalog()
+            if catalog is None:
+                return []
+        self.owner.require_attachment(identity)
+        if self.owner.attachment_guard:
+            self.owner.attachment_guard(identity)
+        options, changes = advertised(service, service._session(identity, hydrate=False))
+        self.option_snapshots[identity] = (catalog['nextMessageRevision'], catalog['configurationRevision'], changes)
+        return options
+
+    async def set_config_option(self, config_id, session_id, value, **kwargs):
+        from acp.schema import SetSessionConfigOptionResponse
+        self.require_initialized()
+        service = self.owner.service
+        def check():
+            self.owner.require_attachment(session_id)
+            if self.owner.attachment_guard:
+                self.owner.attachment_guard(session_id)
+            if service.state.get('configurationRevision', 0) != settings_revision:
+                raise ValueError('Connection settings changed. Refresh the agent options.')
+        try:
+            revision, settings_revision, changes = self.option_snapshots.get(session_id, (None, None, {}))
+            check()
+            patch = changes.get((config_id, value))
+            if not patch:
+                raise ValueError('Choose an advertised value for this session.')
+            await service.dispatch('conversation.configure', {'sessionId': session_id,
+                'expectedRevision': revision, **patch}, origin=self.owner.origin, include_state=False, admission_check=check)
+            return SetSessionConfigOptionResponse(config_options=await self.config_options(session_id))
+        except (AppError, ValueError) as exc:
+            raise RequestError(_REQUEST_FAILED, str(exc)) from None
+
     async def new_session(self, cwd, mcp_servers=None, **kwargs):
         self.require_initialized()
         async with self.creation:
@@ -208,7 +262,7 @@ class HostAgent:
                     identity = await self.owner.create(cwd, mcp_servers=servers)
             except (AppError, ValueError, OSError) as error:
                 raise RequestError(_REQUEST_FAILED, str(error)) from None
-        return NewSessionResponse(session_id=identity, field_meta=(
+        return NewSessionResponse(session_id=identity, config_options=await self.config_options(identity) or None, field_meta=(
             {agent_instance.NAMESPACE: info} if metadata is not None else None))
 
     async def resume_session(self, session_id, cwd, mcp_servers=None, **kwargs):
@@ -228,7 +282,7 @@ class HostAgent:
                 raise RequestError(_REQUEST_FAILED, str(error)) from None
             if identity != session_id:
                 raise RequestError.internal_error({'details': 'Owner did not attach the exact saved identity.'})
-        return ResumeSessionResponse(field_meta=(
+        return ResumeSessionResponse(config_options=await self.config_options(session_id) or None, field_meta=(
             {agent_instance.NAMESPACE: info} if metadata is not None else None))
 
     async def prompt(self, session_id, prompt, **kwargs):
@@ -313,6 +367,16 @@ class HostAgent:
                 self.instance.bound(session_id, metadata)
             if result.get('text') and not streamed:
                 await text(result['text'])
+            if result['outcome'] == 'completed' and session_id in self.option_snapshots:
+                # A failure to publish optional controls cannot change a completed prompt's disposition.
+                from acp.schema import ConfigOptionUpdate
+                previous = self.option_snapshots[session_id]
+                try:
+                    options = await self.config_options(session_id)
+                    if previous != self.option_snapshots.get(session_id):
+                        await self.client.session_update(session_id=session_id, update=ConfigOptionUpdate(config_options=options))
+                except (RequestError, OSError, AppError, RuntimeError, ValueError):
+                    self.option_snapshots.pop(session_id, None)
             return PromptResponse(stop_reason='end_turn' if result['outcome'] == 'completed' else 'cancelled',
                 field_meta=({agent_instance.NAMESPACE: await self.instance.inspect_input(session_id, metadata)}
                             if metadata is not None else None))
@@ -345,6 +409,8 @@ class HostAgent:
         try:
             async with self.creation:
                 disposition = await self.owner.retire(params['sessionId'])
+                if disposition == 'retired':
+                    self.option_snapshots.pop(params['sessionId'], None)
         except (AppError, ValueError, RuntimeError) as error:
             raise RequestError(_REQUEST_FAILED, str(error)) from None
         return {'sessionId': params['sessionId'], 'disposition': disposition}
