@@ -400,10 +400,11 @@ async def test_actual_large_media_publication_when_maintenance_is_due(media_app,
         # Observe the atomic large write by final filename AND canonical content.
         # Temporary-file opens and ordinary small state publication are distinct.
         if Path(path) == large_path:
-            assert text == expected.text
-            writes.append((str(path), len(text.encode()), threading.get_ident()))
+            assert isinstance(text, bytes) and text == expected.encoded
+            writes.append((str(path), len(text), threading.get_ident()))
         elif Path(path).parent == directory:
-            small_writes.append((Path(path).name, len(text.encode()), threading.get_ident()))
+            encoded = text.encode() if isinstance(text, str) else text
+            small_writes.append((Path(path).name, len(encoded), threading.get_ident()))
         return real_atomic(path, text)
 
     def loaded(text, *values, **kwargs):
@@ -732,6 +733,7 @@ async def test_media_index_conflict_recaptures_fresh_proof_and_warm_descriptor(
     from amplifier_foundation.session import history as foundation_history
     from amplifier_foundation.session.jsonl import TranscriptIndex
     from amplifier_web import automatic_history, media_message_identity, media_saved_aliases
+    from amplifier_web import native_message_projection
     app = media_app
     task = getattr(app, '_storage_maintenance_task', None)
     if task:
@@ -748,7 +750,7 @@ async def test_media_index_conflict_recaptures_fresh_proof_and_warm_descriptor(
     owner = threading.get_ident()
     revisions, hashes, proofs = [], [], []
     real_revision, real_hash, real_resolve = (
-        automatic_history.revision, automatic_history.display_identity, media_message_identity.resolve)
+        automatic_history.revision, native_message_projection.display_identity, media_message_identity.resolve)
 
     def revision(value):
         assert threading.get_ident() != owner
@@ -756,10 +758,12 @@ async def test_media_index_conflict_recaptures_fresh_proof_and_warm_descriptor(
         revisions.append(result)
         return result
 
-    def display_identity(*args):
-        assert threading.get_ident() != owner
-        hashes.append(threading.get_ident())
-        return real_hash(*args)
+    def display_identity(value, index, role, text):
+        thread = threading.get_ident()
+        assert thread != owner
+        identity = real_hash(value, index, role, text)
+        hashes.append((thread, index, role, identity))
+        return identity
 
     def resolve(*args):
         proof = real_resolve(*args)
@@ -772,7 +776,9 @@ async def test_media_index_conflict_recaptures_fresh_proof_and_warm_descriptor(
     acquired, conflicts = invalidate_media_indexes(
         monkeypatch, lambda attempt: append_media_unrelated(directory, attempt), boundary=boundary)
     monkeypatch.setattr(automatic_history, 'revision', revision)
-    monkeypatch.setattr(automatic_history, 'display_identity', display_identity)
+    # display_message calls its owning projection module, not the history
+    # module's re-export. Observe the actual full-text hash on each cold pass.
+    monkeypatch.setattr(native_message_projection, 'display_identity', display_identity)
     monkeypatch.setattr(media_message_identity, 'resolve', resolve)
     monkeypatch.setattr(automatic_history, 'read_transcript', no_bodies)
     monkeypatch.setattr(TranscriptIndex, 'read_positions', no_bodies)
@@ -799,7 +805,11 @@ async def test_media_index_conflict_recaptures_fresh_proof_and_warm_descriptor(
             assert (await app.outputs.media.describe(session['id'], requested))['items'] == []
         assert len(acquired) == 3 and acquired[2] is acquired[1] and len(conflicts) == 1
         assert proofs[1] == proof
-    assert hashes and owner not in hashes
+    assert hashes and all(thread != owner for thread, *_ in hashes)
+    assert any((index, role, identity) == (1, 'assistant', old)
+               for _, index, role, identity in hashes)
+    assert any((index, role, identity) == (240, 'user', appended_id)
+               for _, index, role, identity in hashes)
     assert dict.get(session, 'messages') == resident
     assert corpus[1]['role'] == 'assistant'
 
@@ -1191,11 +1201,13 @@ async def test_old_canonical_media_restart_reopen_preserves_origin_without_displ
     import copy
     from pathlib import Path
     from amplifier_web.service import AppService
+    from amplifier_web.transcript_windows import INITIAL_MESSAGES
     from test_service import Runtime
     app = media_app
-    session, _, _, directory, old = canonical_corpus(app)
+    session, corpus, _, directory, old = canonical_corpus(app)
     args = {**media_args_without_hydration(session), 'messageId': old}
     saved = (await app.outputs.media.attach(args, 'ui', 'canonical-reopen-attach'))['result']
+    original_record = copy.deepcopy(app.outputs.record(session['id'], saved['id']))
     sid, workspace, data_dir = session['id'], session['workspace'], app.data_dir
     raw = (directory / 'transcript.jsonl').read_bytes()
     Path(workspace, args['path']).unlink()
@@ -1208,14 +1220,62 @@ async def test_old_canonical_media_restart_reopen_preserves_origin_without_displ
             await reopened.history.refresh_session(sid)
             source = reopened._session(sid, hydrate=False)
             shown = reopened.history.windows.project(source)
-            assert len(shown['messages']) == 100
+            assert len(shown['messages']) == INITIAL_MESSAGES
+            assert [row['text'] for row in shown['messages']] == [
+                row['content'] for row in corpus[-INITIAL_MESSAGES:]]
             assert shown['messageWindow']['coverage']['kind'] == 'native-saved'
+            assert shown['messageWindow']['hasEarlier'] and shown['messageWindow']['before']
+            assert shown['messageWindow']['globalInputUniqueness'] == 'unknown'
             assert all(row['displayOnly'] for row in shown['messages'])
+            assert old not in {row['id'] for row in shown['messages']}
             markers = copy.deepcopy(dict.get(source, '_coldFields', {}))
             resident_messages = copy.deepcopy(dict.get(source, 'messages', []))
             items = (await reopened.outputs.media.describe(sid, old))['items']
             assert len(items) == 1 and items[0]['id'] == saved['id']
             assert await reopened.outputs.media.bytes({**items[0], 'messageId': old}) == gif()
+            current_record = reopened.outputs.record(sid, saved['id'])
+            assert current_record['origin'] == original_record['origin'] == {
+                'source': 'ui', 'messageId': old}
+            for field in ('body', 'sha256', 'bytes', 'media'):
+                assert current_record[field] == original_record[field]
+            # The disposable tail is not canonical completeness. Explicit
+            # bounded pages still reach the original long assistant without
+            # replacing the selected tail or hydrating resident messages.
+            window, page_sizes = shown['messageWindow'], []
+            display = list(shown['messages'])
+            cursors = set()
+            for _ in range(3):
+                cursor = window['before']
+                assert window['hasEarlier'] and cursor and cursor not in cursors
+                cursors.add(cursor)
+                window = await reopened.history.windows.read(sid, before=cursor)
+                page_sizes.append(len(window['items']))
+                assert window['coverage']['kind'] == 'native-saved'
+                assert not window['unavailableRanges']
+                assert all(row['displayOnly'] for row in window['items'])
+                display = [*window['items'], *display]
+            assert page_sizes == [100, 100, 20]
+            assert not window['hasEarlier'] and window['before'] is None
+            assert len({row['id'] for row in display}) == len(corpus) == 240
+            assert [row['role'] for row in display] == [row['role'] for row in corpus]
+            assert [row['text'] for row in display] == [row['content'][:4096] for row in corpus]
+            detail = display[1]['textDetail']
+            assert detail['digest'] == hashlib.sha256(corpus[1]['content'].encode()).hexdigest()
+            assert detail['id'] != old, 'Disposable display IDs do not replace the canonical media origin'
+            pieces, offset = [], 0
+            for _ in range(32):
+                part = await reopened.history.windows.read_text(
+                    sid, {**detail, 'offset': offset, 'limit': 4096})
+                assert len(part['value']) <= 4096
+                pieces.append(part['value'])
+                if part['nextOffset'] is None:
+                    break
+                assert part['nextOffset'] > offset
+                offset = part['nextOffset']
+            else:
+                pytest.fail('Original assistant text did not complete within its fixture bound')
+            assert ''.join(pieces) == corpus[1]['content']
+            assert reopened.history.windows.project(source) == shown
             if 'messages' in markers:
                 assert not dict.__contains__(source, 'messages')
                 assert dict.get(source, '_coldFields', {}).get('messages') == markers['messages']
