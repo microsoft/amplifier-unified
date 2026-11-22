@@ -323,8 +323,8 @@ try{
  await page.locator('#amp-one').evaluate(node=>{for(const name of ['--a-text-base','--a-text-sm','--a-text-xs'])node.style.removeProperty(name)});
  await choose('Brief');await page.setViewportSize({width:390,height:844});await page.screenshot({path:join(output,'phone-workspaces.png')});
  await allChats();if(await sidebar.isVisible())await page.locator('#navigation-toggle').click();await page.screenshot({path:join(output,'phone-chats.png')});
- await page.emulateMedia({forcedColors:'active'});await openSidebar();
- await homeButton.focus();await page.keyboard.press('Enter');
+ await page.emulateMedia({forcedColors:'active'});await expect(sidebar).toBeHidden();
+ await homeButton.focus();await expect(homeButton).toBeFocused();await page.keyboard.press('Enter');
  await expect(landing).toHaveAttribute('data-landing','home');await expect(sidebar).toBeHidden();
  await page.screenshot({path:join(output,'phone-home-forced-colors.png')});
  await page.emulateMedia({forcedColors:'none'});await page.setViewportSize({width:1440,height:1000});

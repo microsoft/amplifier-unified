@@ -373,7 +373,7 @@ try{
  assert.equal(selected.selectedSessionId,sid);assert.equal(selected.canvas.id,newerDocumentId);
  assert.equal(selected.view.canvasDraft.library,false);
  assert.ok(selected.revision>=(selectedRow.body.stateRevision??selectedRow.body.revision));
- await expect(history).toBeHidden();await expect(newerTab).toBeFocused();
+ await expect(history).toBeHidden();await expect(documentControl).toBeFocused();
  checks.push({name:'Held history/newer document wins',opened:openedRow,selected:selectedRow,server:selected});
  await page.screenshot({path:join(output,'newer-document-retained.png'),animations:'disabled'});
  await action('canvas.select',{id:unfinishedId});
@@ -381,6 +381,7 @@ try{
  const source='export default ({React})=>function Editor({host}){const [text,setText]=React.useState("");const [mount]=React.useState(()=>crypto.randomUUID());const [dirty,setDirty]=React.useState("unrequested");return React.createElement("label",null,"Retained local edit",React.createElement("input",{"data-mount":mount,"data-dirty-settlement":dirty,value:text,onChange:event=>{setText(event.target.value);setDirty("pending");host.setDirty(true).then(result=>setDirty(JSON.stringify(result)),error=>setDirty("error: "+error.message))}}))}';
  const staged=await action('shell.packages.stage',{manifest,source}),digest=staged.result.digest;
  assert.equal((await action('shell.packages.validate',{digest})).result.status,'passed');
+ await panel.locator('summary[aria-label="More canvas options"]').click();
  await panel.getByRole('button',{name:'Canvas details',exact:true}).click();
  await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(digest);
  const edit=page.getByLabel('Retained local edit', {exact:true});
