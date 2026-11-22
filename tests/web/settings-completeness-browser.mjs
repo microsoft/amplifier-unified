@@ -166,33 +166,45 @@ try{
      // The route paints optimistically while diagnostics config is still
      // demand-loaded. Hold that one real navigation to distinguish route entry
      // from content readiness, without injecting config or replaying navigation.
-     const observation={width,scheme};diagnosticNavigation.push(observation);
+     const observation={width,scheme,matchingRequests:0};diagnosticNavigation.push(observation);
+     let navigationRequest;
      const gate=new Promise(resolve=>{releaseDiagnostics=resolve});
      const hold=async route=>{
       const request=route.request(),body=request.method()==='POST'?request.postDataJSON():null;
-      if(body?.action==='view.update'&&body.args?.patch?.settingsExpanded?.includes('diagnostics')){
-       observation.requestId=body.id;await gate;
+      if(body?.action==='view.update'&&Array.isArray(body.args?.patch?.settingsExpanded)&&body.args.patch.settingsExpanded.includes('diagnostics')){
+       observation.matchingRequests++;
+       if(!navigationRequest){
+        navigationRequest=request;observation.requestId=body.id;await gate;
+       }
       }
       await route.continue();
      };
      await page.route('**/api/actions',hold);
      const response=page.waitForResponse(reply=>{
-      const request=reply.request(),body=request.method()==='POST'?request.postDataJSON():null;
-      return new URL(reply.url()).pathname==='/api/actions'&&body?.action==='view.update'&&body.args?.patch?.settingsExpanded?.includes('diagnostics');
+      return reply.request()===navigationRequest;
      },{timeout:10000}).then(value=>({value}),error=>({error}));
      try{
       await openSettingsPage(page,id);
-      await expect.poll(()=>!!observation.requestId,{timeout:5000}).toBe(true);
+      await expect.poll(()=>!!navigationRequest,{timeout:5000}).toBe(true);
+      const submitted=navigationRequest.postDataJSON();
+      assert.equal(typeof submitted.id,'string');assert.ok(submitted.id.length>0&&submitted.id.length<=200);
+      assert.equal(submitted.args.patch.panel,'settings');
+      assert.equal(submitted.args.patch.settingsSection,'maintenance');
+      assert.deepEqual(submitted.args.patch.settingsExpanded,['diagnostics']);
+      assert.equal(observation.matchingRequests,1,'One gesture submits one Diagnostics navigation');
       observation.beforeReceipt=await diagnosticSnapshot();
       console.log(JSON.stringify({diagnosticNavigation:observation}));
       releaseDiagnostics();
       const settled=await response;if(settled.error)throw settled.error;
       const receipt=await settled.value.json();
-      observation.receipt={requestId:observation.requestId,status:settled.value.status(),accepted:receipt.accepted,stateRevision:receipt.revision??receipt.state?.revision??null};
+      const replied=settled.value.request().postDataJSON();
+      assert.equal(replied.id,submitted.id);
+      observation.receipt={requestId:replied.id,status:settled.value.status(),accepted:receipt.accepted,stateRevision:receipt.revision??receipt.state?.revision??null};
       assert.equal(receipt.accepted,true,'Diagnostics navigation accepted');
       await expect.poll(()=>page.evaluate(()=>!!window.amplifier.getState().diagnostics?.config),{timeout:5000}).toBe(true);
       await expect(page.locator('.a-settings-page-content:not([hidden])'),id).toBeVisible({timeout:5000});
       observation.afterReceipt=await diagnosticSnapshot();
+      assert.equal(observation.matchingRequests,1,'Diagnostics navigation was not repeated during settlement');
       console.log(JSON.stringify({diagnosticNavigation:observation}));
      }finally{releaseDiagnostics();await page.unroute('**/api/actions',hold)}
     }else{
