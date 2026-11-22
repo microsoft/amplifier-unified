@@ -103,7 +103,8 @@ try{
   return {display:getComputedStyle(label).display,direction:getComputedStyle(label).flexDirection,
    width:a.width,height:a.height,hitHeight:b.height,before:a.right<=first.left,
    delta:Math.abs(a.top+a.height/2-first.top-first.height/2),
-   textFits:lines.every(rect=>rect.left>=b.left&&rect.right<=b.right+1),
+   lineCount:lines.length,
+   textFits:lines.every(rect=>rect.left>=b.left&&rect.right<=b.right+1&&rect.top>=b.top&&rect.bottom<=b.bottom+1),
    labelFits:label.scrollWidth<=label.clientWidth};
  });
  const assertChoice=row=>{
@@ -128,6 +129,14 @@ try{
  const rect=await page.locator('.a-dialog').boundingBox();assert.equal(rect.x,0);assert.equal(rect.y,0);assert.equal(rect.width,390);assert.equal(rect.height,844);
  assert.equal(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
  assertChoice(await choiceGeometry());
+ // Exercise actual wrapping rather than inferring it from a narrow viewport.
+ // Only bound available width; the native control, text and layout rules remain.
+ const choice=page.locator('.a-update-options label:has(>input[type=checkbox])');
+ const priorMaxWidth=await choice.evaluate(label=>{const prior=label.style.maxWidth;label.style.maxWidth='180px';return prior});
+ try{
+  const wrapped=await choiceGeometry();assert.ok(wrapped.lineCount>1,'The wrapping control must render multiple text lines');
+  assertChoice(wrapped);console.log(JSON.stringify({updateChoiceGeometry:{at680:aligned,wrappedAt390:wrapped},assertionNegativeControls:6}));
+ }finally{await choice.evaluate((label,value)=>{label.style.maxWidth=value},priorMaxWidth)}
  await page.getByRole('region',{name:'Changelog',exact:true}).scrollIntoViewIfNeeded();
  await page.screenshot({animations:'disabled',path:'/tmp/amplifier-changelog-mobile.png'});
  await page.screenshot({animations:'disabled',path:'/tmp/amplifier-settings-mobile.png'});
