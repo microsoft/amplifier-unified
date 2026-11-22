@@ -1,10 +1,12 @@
 """Subprocess checks for the browser fixture's isolated metadata boundary."""
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import types
 import venv
 
 import filelock
@@ -78,6 +80,45 @@ def catalog():
             'backends': [{'decision_only': True}],
             'runtime': {'kind': 'hook', 'module': 'hooks-catalog-fixture'}}
 '''
+
+
+@pytest.fixture
+def synthetic_provider(monkeypatch):
+    spec = importlib.util.spec_from_file_location('native_fixture_metadata', FIXTURE)
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    module = types.ModuleType('amplifier_module_provider_native_fixture')
+    exec(compile(fixture.PROVIDER, str(FIXTURE) + ':PROVIDER', 'exec'), module.__dict__)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    return module.NativeFixtureProvider
+
+
+async def test_synthetic_provider_models_and_defaults_use_canonical_probe(synthetic_provider):
+    from amplifier_web.provider_probe import query
+    result = await query({'action': 'providers.models', 'module': 'provider-native-fixture',
+                          'config': {'default_model': 'native-model', 'reasoning_effort': 'high'}})
+    assert result['models'] == [{'id': 'native-model', 'display_name': 'Native model'}]
+    assert result['modelsSupported'] is True
+    assert result['modelsProvenance'] == 'simulated'
+    assert result['modelListInfo'] == {'version': 1, 'source': 'simulated'}
+    assert result['supports'] == {'test': False}
+    assert result['info']['defaults'] == {'model': 'native-model', 'reasoning_effort': 'high'}
+    assert result['configSchema']['fields'] == [{
+        'id': 'reasoning_effort', 'field_type': 'choice',
+        'choices': ['low', 'high', 'xhigh'], 'required': False}]
+
+
+async def test_synthetic_catalog_does_not_claim_real_provider_test(synthetic_provider):
+    from amplifier_web.provider_probe import query
+    from amplifier_web.probe_diagnostics import HostProbeFailure
+    with pytest.raises(HostProbeFailure) as caught:
+        await query({'action': 'providers.test', 'module': 'provider-native-fixture', 'config': {}})
+    assert caught.value.code == 'not-verifiable'
+
+
+async def test_metadata_provider_cannot_complete(synthetic_provider):
+    with pytest.raises(RuntimeError, match='Metadata-only provider must not execute inference'):
+        await synthetic_provider().complete(None)
 
 
 @pytest.fixture

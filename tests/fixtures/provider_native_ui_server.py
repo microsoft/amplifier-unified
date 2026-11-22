@@ -84,6 +84,9 @@ class NativeFixtureProvider:
     def get_config_schema(self):
         return {'fields':[{'id':'reasoning_effort','field_type':'choice',
                           'choices':['low','high','xhigh'],'required':False}]}
+    def get_model_list_info(self):
+        # The local list is synthetic, not evidence of a remote catalog request.
+        return {'version': 1, 'source': 'simulated'}
     async def list_models(self):
         return [{'id':'native-model','display_name':'Native model'}]
     def parse_tool_calls(self, response):
