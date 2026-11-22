@@ -43,6 +43,9 @@ def observation(receipt):
     if type(tokens) is not int or not all(isinstance(v, str) and 0 < len(v) <= 160 for v in (model, family)):
         return {}
     result = {'model': model, 'provider': family, 'inputTokens': tokens}
+    window = basis.get('modelWindow') or (receipt.get('limits') or {}).get('modelWindow')
+    if type(window) is int and window > 0:
+        result['modelWindow'] = window
     if isinstance(instance, str) and 0 < len(instance) <= 160:
         result['instance'] = instance
     traits = basis.get('traits')
@@ -116,3 +119,9 @@ def impact(previous, choices, mounted=()):
             if covered:
                 result['portableHistoryTokens'] = covered
     return result if tokens >= LARGE_INPUT or 'portableHistoryTokens' in result else None
+
+
+def context_summary(usage):
+    if not usage or 'inputTokens' not in usage:
+        return None
+    return {k: usage[k] for k in ('model', 'instance', 'inputTokens', 'modelWindow') if k in usage}

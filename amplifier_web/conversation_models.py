@@ -54,7 +54,7 @@ def publish_catalogs(management, entries):
     return changed
 
 
-async def browse(management, session, *, refresh=False, instance=None):
+async def browse(management, session, *, refresh=False, instance=None, include_history=True):
     from .draft_defaults import resolve_defaults
     service = management.service
     sid = session['id']
@@ -81,7 +81,7 @@ async def browse(management, session, *, refresh=False, instance=None):
         global_only=session.get('location',{}).get('kind')=='managed')
     from .next_message_impact import impact, observation, prior_request
     archived = None
-    if '_lastPromptUsage' not in session:
+    if include_history and '_lastPromptUsage' not in session:
         archived = await asyncio.to_thread(prior_request, service.data_dir, session)
     async with service.lock:
         if (revision != service.state.get('configurationRevision', 0)
@@ -95,7 +95,9 @@ async def browse(management, session, *, refresh=False, instance=None):
                       nextMessageRevision=desired_revision)
         control = service.state.setdefault('runtimeControl', {}).setdefault(sid, {})
         if archived and '_lastPromptUsage' not in current:
+            from .next_message_impact import context_summary
             current['_lastPromptUsage'] = observation(archived)
+            current['lastRequestContext'] = context_summary(current['_lastPromptUsage'])
         mounted = (current.get('runtimeReport') or {}).get('provider_choices', ())
         hint = impact(current.get('_lastPromptUsage'), result.get('providers', ()), mounted)
         hint_changed = current.get('nextMessageImpact') != hint

@@ -125,7 +125,7 @@ class SharedConversations:
         sid = session['id']
         for delivery in self.room(session)['deliveries']:
             key = (sid, delivery['agentId'])
-            if delivery['state'] != 'pending' or key in self.turns or key in self.owner.retirements:
+            if delivery['state'] != 'pending' or key in self.turns or key in self.owner.retirements or key in self.owner.editing:
                 continue
             source = self.message(session, delivery['sourceMessageId'])
             if source is None:

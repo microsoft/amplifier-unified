@@ -13,7 +13,7 @@ let browser;
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});
- const page=await browser.newPage({viewport:{width:390,height:844},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
+ const page=await browser.newPage({viewport:{width:390,height:844},hasTouch:true,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
  await page.goto(url);await showFixtureConversation(page);const composer=page.getByRole('textbox',{name:'Message Amplifier'}),options=page.getByRole('button',{name:'Model and reasoning settings',exact:true}),menu=page.getByRole('dialog',{name:'Model for this chat',exact:true});
  const actionResponse=(action,matches)=>page.waitForResponse(response=>{
@@ -68,7 +68,7 @@ try{
  await expect(menu.locator('#chat-provider')).toBeFocused();
  await expect(menu.getByRole('button',{name:/^(Choose model|Choose provider|Choose reasoning effort|Back to chat options)$/})).toHaveCount(0);
  for(const section of ['provider','model'])await showComposerOption(page,section);
- await expect(menu.locator('#chat-effort')).toBeHidden();
+ await expect(menu.locator('[data-composer-page="effort"]')).toBeVisible();
  const bundle=menu.locator('#composer-options-bundle');
  await expect(bundle).toBeHidden();await showComposerOption(page,'effort');await showComposerOption(page,'bundle');
  const bundleSaved=actionResponse('view.update',args=>args?.patch?.newSessionDraft?.bundle==='work');

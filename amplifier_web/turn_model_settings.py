@@ -47,7 +47,7 @@ def public_receipt(value, model):
     return result
 
 
-def record(session, receipt):
+def record(session, receipt, configuration_revision=None):
     """Join the first foreground request to its exact admitted native turn."""
     # A hook-only request can precede a wrapped call that carries real settings.
     # Its completion, however, proves that an otherwise unverified turn occurred.
@@ -91,13 +91,43 @@ def record(session, receipt):
     latest = session['previousTurnSettings'] = {'selection': selection}
     witness = captured.get('bindingProof')
     if witness and session.get('bundle'):
-        latest.update(inputId=input_id, generationId=generation, bundle=session['bundle'])
+        latest.update(inputId=input_id, generationId=generation, bundle=session['bundle'],
+                      configurationRevision=configuration_revision)
         session['_previousTurnBinding'] = {'proof': witness, 'pinned': captured['pinned'],
             'sessionId': session['id'], 'target': target(session),
             'appliedRevision': session.get('appliedConfigurationRevision', 0)}
 
 
-def restore(service, session, input_id, generation, authority):
+def avoidable(service, session):
+    """Show a shortcut only when the prior measured route remains reusable."""
+    from .next_message_configuration import target
+    from .provider_catalog import configured_binding
+    previous = session.get('previousTurnSettings') or {}
+    selected = session.get('pendingModelSelection') or {}
+    old = previous.get('selection') or {}
+    hint = session.get('nextMessageImpact') or {}
+    private = session.get('_previousTurnBinding') or {}
+    if (not previous.get('inputId') or not selected or not hint.get('source') or
+            previous.get('configurationRevision') != service.state.get('configurationRevision', 0) or
+            previous.get('restorePending') or session.get('pendingBundleSelection') or
+            session.get('bundle') != previous.get('bundle') or private.get('target') != target(session) or
+            private.get('appliedRevision') != session.get('appliedConfigurationRevision', 0) or
+            any(session.get(k) for k in ('configurationBusy', 'configurationPending','pendingConfiguration','bundleReplacement')) or
+            hint['source'] != {k: old.get(k) for k in ('model', 'instance')}):
+        return False
+    cold = (selected.get('instance') in hint.get('coldConnections', []) or
+            selected.get('instance') == old['instance'] and selected.get('model') != old['model'] and hint.get('coldModels'))
+    if not cold:
+        return False
+    try:
+        binding = configured_binding(service.data_dir, session['workspace'], old['instance'],
+                                     global_only=session.get('location', {}).get('kind') == 'managed')
+    except (ValueError, OSError):
+        return False
+    return bool(private.get('proof') and binding_proof(previous['inputId'], binding) == private['proof'])
+
+
+def restore(service, session, input_id, generation, authority, *, keep_independent_edits=False):
     """Undo only a pending model or bundle edit, with the normal configuration lock held."""
     from .errors import AppError
     from .next_message_configuration import pending_input, target
@@ -124,23 +154,26 @@ def restore(service, session, input_id, generation, authority):
     session.pop('pendingModelSelection', None)
     session.pop('pendingChoiceAuthority', None)
     session.pop('bundlePreview', None)
-    if private['pinned']:
+    retained = private.get('retainedSelection') if keep_independent_edits else None
+    if retained:
+        choice = retained
+    if private['pinned'] or retained:
         session['selection'] = choice.copy()
         session['modelConnectionKey'] = binding
-        if queued:
+        if queued or retained:
             session['pendingModelSelection'] = choice.copy()
             if authority and 'operatorConfiguration' in authority:
                 session['pendingChoiceAuthority'] = authority
     else:
         session['selection'] = None
         session.pop('modelConnectionKey', None)
-    if queued and (bundle_pending or not private['pinned'] or previous['bundle'] != session.get('bundle')):
-        session['pendingBundleSelection'] = {'bundle': previous['bundle'], 'resetModel': not private['pinned'],
+    if queued and (bundle_pending or not (private['pinned'] or retained) or previous['bundle'] != session.get('bundle')):
+        session['pendingBundleSelection'] = {'bundle': previous['bundle'], 'resetModel': not bool(private['pinned'] or retained),
                                             'authority': authority, 'target': target(session)}
-    if queued:
+    if queued or retained:
         previous['restorePending'] = True
     session['nextMessageRevision'] = session.get('nextMessageRevision', 0) + 1
-    session['nextMessageStatus'] = 'saved' if queued else 'applied'
+    session['nextMessageStatus'] = 'saved' if queued or retained else 'applied'
     session.pop('nextMessageError', None)
     session.pop('nextMessageFailure', None)
     return {'revision': session['nextMessageRevision'], 'status': session['nextMessageStatus'],

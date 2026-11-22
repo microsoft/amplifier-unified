@@ -21,8 +21,16 @@ ACTIVE = {'starting', 'working', 'running', 'stopping'}
 
 
 def summary(session):
-    return {**{key: session[key] for key in SUMMARY_FIELDS if key in session},
-            'messages': [], 'workers': [], 'approvals': []}
+    result = {**{key: session[key] for key in SUMMARY_FIELDS if key in session},
+              'messages': [], 'workers': [], 'approvals': []}
+    if 'externalAgent' in result:
+        def slim(binding):
+            return {k: v for k, v in binding.items() if k not in ('configOptions', 'optionRevision')}
+        external = slim(result['externalAgent'])
+        if 'participants' in external:
+            external['participants'] = [slim(row) for row in external['participants']]
+        result['externalAgent'] = external
+    return result
 
 
 def direct_child(row, parent):
