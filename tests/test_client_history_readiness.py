@@ -52,7 +52,7 @@ async def test_terminal_history_follows_stream_target_until_disconnect(tmp_path)
         await service.close()
 
 
-@pytest.mark.parametrize('web_observer', [False, True])
+@pytest.mark.parametrize('web_observer', [False, True, 'bound'])
 async def test_terminal_http_stream_reads_only_its_cold_target(tmp_path, authenticated_client, web_observer):
     paths = [native_session(tmp_path / 'workspace', name)
              for name in ('terminal-chat', 'saved-selection', 'unrelated')]
@@ -75,8 +75,8 @@ async def test_terminal_http_stream_reads_only_its_cold_target(tmp_path, authent
     assert not set(ids.values()) & {row['id'] for row in service._state['sessions']}
     # The real terminal adapter resolves/loads before subscribing. This is
     # transport coverage, not a replacement for the cold direct-demand case.
-    response = await client.get(f"/api/sessions/{ids['terminal-chat']}/events",
-                                params={'clientId': 'terminal'})
+    response = await asyncio.wait_for(
+        client.get(f"/api/sessions/{ids['terminal-chat']}/events", params={'clientId': 'terminal'}), 2)
     web_queue = None
     try:
         assert response.status == 200
@@ -94,7 +94,11 @@ async def test_terminal_http_stream_reads_only_its_cold_target(tmp_path, authent
         with (paths[0] / 'transcript.jsonl').open('a') as stream:
             stream.write(json.dumps({'role': 'assistant', 'content': 'Connected append'}) + '\n')
         appended = files_snapshot(paths[0])
-        await service.history.refresh()
+        if web_observer == 'bound':
+            with service.clients.bind('browser'):
+                await service.history.refresh()
+        else:
+            await service.history.refresh()
         async def appended_snapshot():
             while True:
                 kind, payload = await read_event(response)

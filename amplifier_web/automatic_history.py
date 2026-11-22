@@ -938,6 +938,13 @@ class AutomaticHistory:
                         if exc.status == 404:
                             continue
                         raise
+            if session_id in self.service.queue_sessions.values():
+                # A simultaneous web observer needs a display window, but must
+                # not redirect a terminal stream away from canonical messages.
+                # This remains canonical even during a web-bound refresh.
+                await self.load(selected['id'], only_if_changed=True, canonical=True)
+                if not self.windows.observed(selected['id']):
+                    continue
             if self.windows.observed(selected['id']):
                 await self.load(selected['id'], only_if_changed=True, display=True)
                 continue
