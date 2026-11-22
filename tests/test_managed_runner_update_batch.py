@@ -135,8 +135,11 @@ async def test_components_activate_with_runner_pending_and_keep_owned_attempt(ap
 async def test_continuing_component_check_retains_install_intent_and_excludes_owned_runner(app, monkeypatch, selection):
     from amplifier_web import update_checks, update_sequence
     manager = app.update_manager
+    # Put both rows in the exercised tier: a later-tier short circuit must not
+    # make the owned-runner exclusion assertions pass without that exclusion.
     source = {'id': 'runner', 'kind': 'smart tool', 'runnerKind': runner.KIND,
-              'url': 'https://example.invalid/runner', 'ref': 'main', 'eligible': True}
+              'url': 'https://example.invalid/runner', 'ref': 'main', 'eligible': True,
+              'updateTier': 'included'}
     pending = [{**item(), 'runnerSource': source}]
     component = {'id': 'component', 'kind': 'runtime dependency', 'label': 'component',
                  'url': 'https://example.invalid/component', 'ref': 'main', 'current': 'a' * 40,
