@@ -422,6 +422,39 @@ def test_foundation_resource_anchor_requires_exact_loaded_provenance(tmp_path, c
         assert loaded.source_base_paths == before
 
 
+@pytest.mark.parametrize('shape', [
+    'quoted-dashes', 'block-dashes', 'crlf', 'missing-open', 'missing-close', 'malformed', 'scalar',
+])
+def test_export_probe_parses_complete_frontmatter_without_truncating_instructions(shape):
+    import ast
+    tree = ast.parse((ROOT / 'tests/fixtures/default_mount_probe.py').read_text())
+    node = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                and n.name == 'exported_frontmatter')
+    scope = {'yaml': yaml}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), '<export-frontmatter>', 'exec'), scope)
+    instruction = 'Before --- divider\n\n---\nAfter with retained ending\n'
+    document = {'bundle': {'name': 'test'}, 'agents': {'operator': {'instruction': instruction}}}
+    body = yaml.safe_dump(document, default_style='"' if shape == 'quoted-dashes' else '|')
+    content = '---\n' + body + '---\n\nBody --- stays outside YAML\n'
+    if shape == 'crlf':
+        content = content.replace('\n', '\r\n')
+    elif shape == 'missing-open':
+        content = content[4:]
+    elif shape == 'missing-close':
+        content = '---\n' + body
+    elif shape == 'malformed':
+        content = '---\nbundle: [unterminated\n---\n'
+    elif shape == 'scalar':
+        content = '---\njust-text\n---\n'
+    if shape in {'quoted-dashes', 'block-dashes', 'crlf'}:
+        assert scope['exported_frontmatter'](content) == document
+        # The old parser stops inside the instruction, not at the closing fence.
+        assert len(content.split('---', 2)[1]) < len(body)
+    else:
+        with pytest.raises((AssertionError, yaml.YAMLError)):
+            scope['exported_frontmatter'](content)
+
+
 def test_source_inventory_checks_links_with_explicit_owned_boundary(tmp_path):
     root = tmp_path / '.venv'
     root.mkdir()

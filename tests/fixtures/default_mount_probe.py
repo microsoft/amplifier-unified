@@ -663,6 +663,18 @@ def check_routing(mounted):
     return expected
 
 
+def exported_frontmatter(content):
+    """Read document fences, not dashes inside serialized agent instructions."""
+    lines = content.splitlines(keepends=True)
+    assert lines and lines[0].rstrip("\r\n") == "---", "Missing opening frontmatter fence"
+    closing = next((i for i, line in enumerate(lines[1:], 1)
+                    if line.rstrip("\r\n") == "---"), None)
+    assert closing is not None, "Missing closing frontmatter fence"
+    document = yaml.safe_load("".join(lines[1:closing]))
+    assert isinstance(document, dict), "Expected exported bundle mapping"
+    return document
+
+
 @pytest.mark.asyncio
 async def test_mount(mounted):
     expected = check_routing(mounted)
@@ -694,7 +706,7 @@ async def test_export(mounted):
     assert {"unified", "imagegen", "computer-use", "context-intelligence",
             "routing-matrix", "foundation"} <= namespaces
     assert set(mounted.prepared.bundle.context) <= {row["name"] for row in resources["context"]}, resources["warnings"]
-    document = yaml.safe_load(exported["content"].split("---", 2)[1])
+    document = exported_frontmatter(exported["content"])
     assert exported["includes"] == [] and "includes" not in document
     routing = _support._row(document["hooks"], "hooks-routing")["config"]
     assert routing["default_matrix"] == "balanced" and "custom_routing_dirs" not in routing
