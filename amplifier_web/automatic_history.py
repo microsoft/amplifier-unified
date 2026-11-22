@@ -916,11 +916,28 @@ class AutomaticHistory:
         # Browsers have independent selections. Refresh only connected
         # views, not every historical client record retained on disk.
         from .history_demand import subscribed_sessions
+        from .errors import AppError
         selected_ids = subscribed_sessions(self.service)
         by_id = (self.service.projections.sessions(self.service.state).by_id
                  if hasattr(self.service, 'projections') else
                  {row['id']: row for row in self.service.state['sessions']})
-        for selected in [by_id[key] for key in selected_ids if key in by_id]:
+        for session_id in selected_ids:
+            selected = by_id.get(session_id)
+            if selected is None:
+                if not session_id or getattr(self.service, 'directory', None) is None:
+                    continue
+                async with self.service.lock:
+                    # An explicit stream may name a catalog-only owner without
+                    # changing selection. Admit only that live demand, not every
+                    # dormant history; it may have disconnected while we waited.
+                    if session_id not in subscribed_sessions(self.service):
+                        continue
+                    try:
+                        selected = self.service._session(session_id, hydrate=False)
+                    except AppError as exc:
+                        if exc.status == 404:
+                            continue
+                        raise
             if self.windows.observed(selected['id']):
                 await self.load(selected['id'], only_if_changed=True, display=True)
                 continue
