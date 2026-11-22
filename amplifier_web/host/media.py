@@ -274,14 +274,16 @@ class SourcePolicy:
         self.store = None
 
     def artwork(self):
+        name = "codex_artwork"
+        tool = (self.coordinator.get("tools") or {}).get(name)
+        if tool is None:
+            return None
         try:
             from amplifier_module_provider_openai_chatgpt.artwork import CodexArtwork
         except ImportError:
             return None
-        name = "codex_artwork"
-        tool = (self.coordinator.get("tools") or {}).get(name)
         unwrap = self.coordinator.get_capability("web.work_inspect_tool")
-        if tool is not None and callable(unwrap):
+        if callable(unwrap):
             try:
                 tool = unwrap(name, tool)
             except ValueError:
@@ -411,6 +413,7 @@ def acknowledge_media(coordinator, store, session_id, canonical):
         # A text-only session can save historical refs without opening their
         # files or accepting new media on behalf of an unverified tool chain.
         policy.pending.clear()
+        policy.generating.clear()
         return
     if any(NAMESPACE in (row.get("metadata") or {}) for row in canonical):
         store.acknowledge_media(session_id, canonical, media)

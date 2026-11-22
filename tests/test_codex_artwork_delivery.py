@@ -4,6 +4,7 @@ import base64
 import hashlib
 import io
 import json
+import os
 
 import httpx
 import pytest
@@ -19,6 +20,7 @@ def png(color):
     return out.getvalue()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Work binds durable media on POSIX")
 @pytest.mark.asyncio
 async def test_generated_preview_and_reference_edit_in_one_work_turn(
     tmp_path, monkeypatch
