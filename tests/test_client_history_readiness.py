@@ -3,6 +3,8 @@ import asyncio
 import copy
 import json
 
+import pytest
+
 from amplifier_web.server import create_app
 from amplifier_web.service import AppService
 from test_automatic_history import ObservedRuntime, files_snapshot, native_session
@@ -50,7 +52,8 @@ async def test_terminal_history_follows_stream_target_until_disconnect(tmp_path)
         await service.close()
 
 
-async def test_terminal_http_stream_reads_only_its_cold_target(tmp_path, authenticated_client):
+@pytest.mark.parametrize('web_observer', [False, True])
+async def test_terminal_http_stream_reads_only_its_cold_target(tmp_path, authenticated_client, web_observer):
     paths = [native_session(tmp_path / 'workspace', name)
              for name in ('terminal-chat', 'saved-selection', 'unrelated')]
     originals = [files_snapshot(path) for path in paths]
@@ -74,6 +77,7 @@ async def test_terminal_http_stream_reads_only_its_cold_target(tmp_path, authent
     # transport coverage, not a replacement for the cold direct-demand case.
     response = await client.get(f"/api/sessions/{ids['terminal-chat']}/events",
                                 params={'clientId': 'terminal'})
+    web_queue = None
     try:
         assert response.status == 200
         kind, payload = await asyncio.wait_for(read_event(response), 2)
@@ -82,6 +86,11 @@ async def test_terminal_http_stream_reads_only_its_cold_target(tmp_path, authent
         assert [row['text'] for row in payload['session']['messages']] == [
             'Saved CLI question', 'Saved CLI answer']
         assert [files_snapshot(path) for path in paths] == originals
+        if web_observer:
+            service.clients.attach('browser')
+            with service.clients.bind('browser'):
+                service.state['selectedSessionId'] = ids['terminal-chat']
+                web_queue = service.subscribe()
         with (paths[0] / 'transcript.jsonl').open('a') as stream:
             stream.write(json.dumps({'role': 'assistant', 'content': 'Connected append'}) + '\n')
         appended = files_snapshot(paths[0])
@@ -100,8 +109,42 @@ async def test_terminal_http_stream_reads_only_its_cold_target(tmp_path, authent
         assert runtime.started == runtime.sent == runtime.stopped == []
         assert files_snapshot(paths[0]) == appended
         assert [files_snapshot(path) for path in paths[1:]] == originals[1:]
+        if web_observer:
+            projected = service.history.windows.project(service._session(ids['terminal-chat'], hydrate=False))
+            assert projected['messages'][-1]['text'] == 'Connected append'
     finally:
+        if web_queue is not None:
+            service.unsubscribe(web_queue)
         response.close()
+
+
+async def test_cold_stream_disconnected_before_admission_stays_nonresident(tmp_path):
+    native_session(tmp_path / 'workspace', 'disconnected')
+    service = AppService(tmp_path / 'app', ObservedRuntime(), workspace=tmp_path)
+    queue = task = None
+    try:
+        await service.history.refresh()
+        sid = service.directory.resolve('disconnected')['id']
+        assert not service._state['sessions']
+        service.clients.attach('terminal', kind='tui')
+        with service.clients.bind('terminal'):
+            queue = service.subscribe(session_id=sid)
+        async with service.lock:
+            task = asyncio.create_task(service.history._refresh_selected_history())
+            await asyncio.sleep(0)  # The cold reader now waits on admission.
+            assert not task.done()
+            service.unsubscribe(queue)
+            queue = None
+        await asyncio.wait_for(task, 2)
+        assert not service._state['sessions']
+        assert service.runtime.started == service.runtime.sent == []
+    finally:
+        if queue is not None:
+            service.unsubscribe(queue)
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await service.close()
 
 
 async def test_refresh_follows_connected_clients_not_inactive_saved_views(tmp_path):
