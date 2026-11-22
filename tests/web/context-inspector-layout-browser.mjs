@@ -267,7 +267,8 @@ try{
   await capture('mobile-unknown-window');
   await expect.poll(()=>scrollTop(list)).toBeLessThan(2);
   await panel.locator('.a-context-evidence summary').click();
-  await expect(panel.locator('.a-context-evidence')).toContainText('No matching preflight');
+  await expect(panel.locator('.a-context-evidence')).toContainText('No preflight observation was retained in this provider/task interval. Its cause was not captured.');
+  await expect(panel.locator('.a-context-evidence')).not.toContainText('Preflight was observed in this provider/task interval');
   await capture('mobile-limit-evidence');
   await panel.locator('.a-context-evidence summary').click();
   await page.setViewportSize({width:1440,height:1000});
