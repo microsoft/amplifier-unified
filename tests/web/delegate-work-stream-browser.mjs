@@ -266,6 +266,33 @@ async function checkLatest(page,work,label) {
 }
 async function checkReadingAnchor(page,operation) {
   const button=operation.locator(':scope > button');
+  const trace=await button.evaluateHandle(trigger=>{
+    const pane=trigger.closest('[data-part="messages"]'),rows=[],frames=new Set();
+    const describe=el=>el?{tag:el.tagName,id:el.id,role:el.getAttribute('role'),
+      name:el.getAttribute('aria-label'),nodeId:el.closest('[data-node-id]')?.dataset.nodeId}:null;
+    const rect=el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};
+    const record=(phase,event)=>{
+      if(rows.length>=160)return;
+      const top=pane.getBoundingClientRect().top;
+      rows.push({phase,at:performance.now(),type:event?.type,trusted:event?.isTrusted,
+        target:describe(event?.target),active:describe(document.activeElement),
+        deltaY:event?.deltaY,scrollTop:pane.scrollTop,scrollHeight:pane.scrollHeight,
+        clientHeight:pane.clientHeight,pane:rect(pane),button:rect(trigger),
+        padding:getComputedStyle(pane).padding,inspector:!!document.querySelector('#work-step-inspector'),
+        messages:[...pane.querySelectorAll('[data-message-id]')].slice(0,4).map(row=>({
+          id:row.dataset.messageId,offset:row.getBoundingClientRect().top-top}))});
+    };
+    const sampleFrames=(remaining=8)=>{
+      const id=requestAnimationFrame(()=>{frames.delete(id);record('after-click-frame-'+(9-remaining));if(remaining>1)sampleFrames(remaining-1)});
+      frames.add(id);
+    };
+    const event=e=>{record('event',e);if(e.type==='click'&&(e.target===trigger||trigger.contains(e.target)))sampleFrames()};
+    const types=['scroll','focusin','pointerdown','click','wheel','keydown','input'];
+    for(const type of types)document.addEventListener(type,event,{capture:true,passive:true});
+    record('installed');
+    return {record,finish(){for(const type of types)document.removeEventListener(type,event,true);for(const id of frames)cancelAnimationFrame(id);return rows}};
+  });
+  try{
   const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
   const originalDraft=await readComposerDraft(composer);
   const draft='Keep this private draft through step inspection';
@@ -281,7 +308,9 @@ async function checkReadingAnchor(page,operation) {
       version:s.canvas?.selectedVersion,open:s.canvas?.open};
   });
   const beforeIdentity=await identity();
+  await trace.evaluate(t=>t.record('before-scroll-into-view'));
   await button.scrollIntoViewIfNeeded();
+  await trace.evaluate(t=>t.record('after-scroll-into-view'));
   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   const pane=page.locator('[data-part="messages"]');
   const capture=()=>pane.evaluate(el=>{
@@ -308,7 +337,9 @@ async function checkReadingAnchor(page,operation) {
     finally{writeFileSync(artifact('delegate-work-stream-reading-anchors.json'),JSON.stringify(readingAnchorChecks,null,2))}
   };
   const inspect=async anchor=>{
+    await trace.evaluate(t=>t.record('before-inspector-click'));
     await button.click();
+    await trace.evaluate(t=>t.record('after-inspector-click'));
     const inspector=page.locator('#work-step-inspector');
     await expect(inspector).toBeVisible();
     await checkPosition(anchor,'open');
@@ -357,6 +388,11 @@ async function checkReadingAnchor(page,operation) {
   await retained.dispose();
   await clearComposer(composer);if(originalDraft)await composer.fill(originalDraft);
   await expect(composer).toHaveDraft(originalDraft);
+  }finally{
+    const rows=await trace.evaluate(t=>t.finish());
+    writeFileSync(artifact('delegate-work-stream-anchor-events-'+page.viewportSize().width+'.json'),JSON.stringify(rows,null,2));
+    await trace.dispose();
+  }
 }
 async function enterStreamConversation(page,expectedSessionId,stage) {
   // Keep the shared Home-to-chat setup and desktop pinned preference intact.
