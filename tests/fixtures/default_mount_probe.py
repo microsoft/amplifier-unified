@@ -148,11 +148,14 @@ def guarded_environment(request, monkeypatch, tmp_path):
     if absent:
         missing(absent)
     attempts, git_reads, blocked_platform_probes = [], [], []
+    catalog = _support.DecisionCatalogPreparation()
     active = True
     phase = "fixture/imports"
 
     def audit(event, args):
         if not active:
+            return
+        if catalog.permits(event, args):
             return
         if event == "socket.bind" and args[-1] == ("::1", 0):
             frames = traceback.extract_stack(limit=6)
@@ -202,6 +205,9 @@ def guarded_environment(request, monkeypatch, tmp_path):
 
     sys.addaudithook(audit)
     try:
+        # The canonical isolated metadata helper is a preparation prerequisite,
+        # not permission for subprocesses during composition/mount/export.
+        catalog.warm()
         # Install the guard BEFORE the existing fixture imports product code.
         env = request.getfixturevalue("offline_defaults")
         monkeypatch.chdir(env.workspace)
@@ -217,6 +223,7 @@ def guarded_environment(request, monkeypatch, tmp_path):
         monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
         yield SimpleNamespace(env=env, repositories=repositories, attempts=attempts,
                               git_reads=git_reads, blocked_platform_probes=blocked_platform_probes,
+                              decision_catalog=catalog.evidence,
                               phase=set_phase)
     finally:
         active = False
@@ -443,6 +450,7 @@ async def inputs(guarded_environment, monkeypatch):
 @pytest.mark.asyncio
 async def test_preflight(inputs):
     emit({"status": "ready", "apis": inputs.signatures,
+          "decisionCatalog": inputs.state.decision_catalog,
           "declared_modules": inputs.declared, "prepared_commits": inputs.commits,
           "expected_module_paths": {key: str(path) for key, path in inputs.expected_paths.items()},
           "skill_substitutions": inputs.substitutions,
@@ -610,6 +618,7 @@ async def mounted(inputs, monkeypatch):
             assert_origin(row, Path(row["installed"]), required=True)
         if report:
             emit({"status": "passed", **report, "forbidden_effects": [],
+                  "decisionCatalog": data.state.decision_catalog,
                   "real_mounts": dict(required), "validator_mounts": dict(validation),
                   "prepared_module_paths": {key: str(path) for key, path in data.expected_paths.items()},
                   "loaded_package_origins": {

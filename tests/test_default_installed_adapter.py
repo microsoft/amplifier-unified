@@ -139,6 +139,134 @@ def test_direct_dependency_markers_use_target_python_without_optional_extras(tmp
         adapter.check_direct_requirements([wheel], ['amplifier-bundle-ui-use'], '3.13.16')
 
 
+def catalog_preparation_class(namespace=None):
+    # Test the exact shared probe helper without importing the application or
+    # collecting the installed-only composition tests in this adapter process.
+    import ast
+    import sys
+    tree = ast.parse((ROOT / 'tests/test_default_behaviors_integration.py').read_text())
+    node = next(n for n in tree.body if isinstance(n, ast.ClassDef)
+                and n.name == 'DecisionCatalogPreparation')
+    scope = {'sys': sys, **(namespace or {})}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), '<catalog-preparation>', 'exec'), scope)
+    return scope['DecisionCatalogPreparation']
+
+
+@pytest.mark.parametrize('change', [
+    'none', 'closed', 'repeated', 'executable', 'extra-arg', 'missing-isolated',
+    'script', 'cwd', 'credentials', 'pythonpath', 'inherit-environment', 'spawn', 'network',
+])
+def test_catalog_preparation_admits_only_one_exact_setup_launch(change):
+    import sys
+    gate = catalog_preparation_class()()
+    gate.open = change != 'closed'
+    gate.command = [sys.executable, '-I', '/installed/decision_account_catalog.py']
+    gate.environment = {'PATH': '/owned/bin', 'TMPDIR': '/owned/tmp'}
+    args = [sys.executable, list(gate.command), None, dict(gate.environment)]
+    event = 'subprocess.Popen'
+    if change == 'repeated':
+        assert gate.permits(event, args)
+    elif change == 'executable':
+        args[0] = '/other/python'
+    elif change == 'extra-arg':
+        args[1].append('--anything')
+    elif change == 'missing-isolated':
+        args[1].remove('-I')
+    elif change == 'script':
+        args[1][-1] = '/other/decision_account_catalog.py'
+    elif change == 'cwd':
+        args[2] = '/other'
+    elif change in {'credentials', 'pythonpath'}:
+        args[3]['API_KEY' if change == 'credentials' else 'PYTHONPATH'] = 'not-allowed'
+    elif change == 'inherit-environment':
+        args[3] = None
+    elif change == 'spawn':
+        event = 'os.posix_spawn'
+    elif change == 'network':
+        event = 'socket.connect'
+    assert gate.permits(event, args) is (change == 'none')
+    gate.open = False
+    assert not gate.permits('subprocess.Popen', [
+        sys.executable, gate.command, None, gate.environment])
+
+
+@pytest.mark.parametrize('change', [
+    'none', 'unexpected-entrypoint', 'changed-helper', 'missing-record', 'wrong-origin',
+    'warm-cache', 'timeout', 'nonzero', 'malformed-result', 'no-launch', 'second-launch',
+    'parent-provider-import',
+])
+def test_catalog_preparation_requires_real_discovery_provenance_and_cache(tmp_path, change):
+    import base64
+    from functools import lru_cache
+    import hashlib
+    from types import SimpleNamespace
+    helper = tmp_path / 'decision_account_catalog.py'
+    helper.write_bytes(b'print("{}")\n')
+
+    class Record:
+        hash = SimpleNamespace(mode='sha256', value=base64.urlsafe_b64encode(
+            hashlib.sha256(helper.read_bytes()).digest()).decode().rstrip('='))
+        size = helper.stat().st_size
+
+        def __str__(self):
+            return 'amplifier_web/decision_account_catalog.py'
+
+    if change == 'changed-helper':
+        helper.write_bytes(b'changed\n')
+    dist = SimpleNamespace(files=[] if change == 'missing-record' else [Record()],
+                           locate_file=lambda row: helper)
+    modules = {}
+    fake_sys = SimpleNamespace(executable='/owned/python', modules=modules)
+    environment = {'PATH': '/owned/bin', 'TMPDIR': '/owned/tmp', 'API_KEY': 'must-not-cross'}
+    gate = None
+
+    @lru_cache(maxsize=1)
+    def snapshot():
+        if change == 'warm-cache':
+            return {}
+        if change != 'no-launch':
+            assert gate.permits('subprocess.Popen', [
+                fake_sys.executable, gate.command, None, gate.environment])
+        if change == 'second-launch':
+            assert gate.permits('subprocess.Popen', [
+                fake_sys.executable, gate.command, None, gate.environment]), 'Second launch refused'
+        if change == 'timeout':
+            raise subprocess.TimeoutExpired('catalog', 120)
+        if change == 'nonzero':
+            raise subprocess.CalledProcessError(1, 'catalog')
+        if change == 'parent-provider-import':
+            modules['amplifier_module_provider_unexpected'] = object()
+        return {'unexpected': 'hooks-fake'} if change == 'malformed-result' else {}
+
+    accounts = SimpleNamespace(
+        __file__=str(tmp_path / 'decision_accounts.py'), _catalog_snapshot=snapshot, catalogs=snapshot)
+    if change == 'warm-cache':
+        snapshot()
+    namespace = {
+        'sys': fake_sys, 'os': SimpleNamespace(environ=environment), 'Path': Path,
+        'hashlib': hashlib, 'base64': base64,
+        '_installed': lambda *args: SimpleNamespace(__file__=str(
+            tmp_path / ('other/__init__.py' if change == 'wrong-origin' else '__init__.py'))),
+        'importlib': SimpleNamespace(
+            metadata=SimpleNamespace(
+                entry_points=lambda **kwargs: [object()] if change == 'unexpected-entrypoint' else [],
+                distribution=lambda name: dist),
+            import_module=lambda name: accounts),
+    }
+    gate = catalog_preparation_class(namespace)()
+    if change == 'none':
+        result = gate.warm()
+        assert result['catalog'] == {} and result['entryPointCount'] == 0
+        assert result['launches'] == 1 and result['cacheReused']
+        assert result['environmentNames'] == ['PATH', 'TMPDIR']
+        assert snapshot.cache_info().hits == 1
+    else:
+        with pytest.raises((AssertionError, ValueError, subprocess.SubprocessError)):
+            gate.warm()
+        assert gate.evidence is None
+    assert gate.open is False
+
+
 def test_source_inventory_checks_links_with_explicit_owned_boundary(tmp_path):
     root = tmp_path / '.venv'
     root.mkdir()

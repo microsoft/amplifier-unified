@@ -12,6 +12,8 @@ No provider calls, installs, subprocesses, or desktop operations are performed.
 from __future__ import annotations
 
 import copy
+import base64
+import hashlib
 import importlib
 import importlib.metadata
 import importlib.util
@@ -19,6 +21,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -62,6 +65,69 @@ def _row(rows, module):
     matches = [row for row in rows if row["module"] == module]
     assert len(matches) == 1, (module, matches)
     return matches[0]
+
+
+class DecisionCatalogPreparation:
+    """One real installed metadata discovery, never a runtime spawn exemption."""
+
+    def __init__(self):
+        self.open = False
+        self.launches = 0
+        self.command = None
+        self.environment = None
+        self.evidence = None
+
+    def permits(self, event, args):
+        if not self.open or event != "subprocess.Popen" or self.launches:
+            return False
+        executable, argv, cwd, environment = args
+        if (executable != sys.executable or argv != self.command or cwd is not None
+                or environment != self.environment):
+            return False
+        self.launches += 1
+        return True
+
+    def warm(self):
+        assert self.evidence is None and not self.open and self.launches == 0
+        # This installed lane intentionally has no decision provider adapters.
+        # An empty discovered catalog alone cannot prove that: the production
+        # helper ignores unsupported/failed metadata declarations.
+        entries = list(importlib.metadata.entry_points(group="amplifier.decision_backends"))
+        assert not entries, "Unexpected installed decision adapters"
+        web = _installed("amplifier_web", "amplifier-unified")
+        dist = importlib.metadata.distribution("amplifier-unified")
+        relative = "amplifier_web/decision_account_catalog.py"
+        [record] = [row for row in dist.files or () if str(row) == relative]
+        helper = Path(dist.locate_file(record)).resolve(strict=True)
+        assert helper == Path(web.__file__).resolve().with_name("decision_account_catalog.py")
+        data = helper.read_bytes()
+        digest = hashlib.sha256(data)
+        assert record.hash and record.hash.mode == "sha256"
+        assert record.size == len(data)
+        assert base64.urlsafe_b64encode(digest.digest()).decode().rstrip("=") == record.hash.value
+        accounts = importlib.import_module("amplifier_web.decision_accounts")
+        assert Path(accounts.__file__).resolve().parent == helper.parent
+        assert accounts._catalog_snapshot.cache_info().currsize == 0, "Catalog must start cold"
+        self.command = [sys.executable, "-I", str(helper)]
+        self.environment = {name: value for name, value in os.environ.items()
+                            if name in {"PATH", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL",
+                                        "TZ", "TMPDIR", "TEMP", "TMP"}}
+        before = {name for name in sys.modules if name.startswith("amplifier_module_provider_")}
+        assert not before, "Provider packages must remain cold"
+        self.open = True
+        try:
+            actual = accounts.catalogs()  # Canonical bounded subprocess; run() reaps it.
+        finally:
+            self.open = False
+        assert actual == {} and self.launches == 1
+        assert accounts._catalog_snapshot.cache_info().currsize == 1
+        assert accounts.catalogs() == actual  # Must reuse cache with exemption closed.
+        assert not {name for name in sys.modules if name.startswith("amplifier_module_provider_")}
+        assert helper.read_bytes() == data
+        self.evidence = {"helperSha256": digest.hexdigest(), "entryPointCount": len(entries),
+                         "catalog": actual, "launches": self.launches, "cacheReused": True,
+                         "environmentNames": sorted(self.environment), "parentProviderImports": 0}
+        return self.evidence
 
 
 @pytest.fixture
