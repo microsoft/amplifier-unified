@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import copy
 from contextlib import AsyncExitStack, asynccontextmanager, nullcontext
+from contextvars import ContextVar
 import hashlib
 import json
 import logging
@@ -24,6 +25,9 @@ from .managed_chats import LOCATION
 from .attachments import MAX_ENCODED_BYTES
 from .performance_diagnostics import PerformanceDiagnostics, measure, measured, TimedLock
 from .action_schema import schema, string
+
+
+_STOP_OBSERVATION = ContextVar('unified_stop_observation', default=None)
 
 
 def settle_stream(session):
@@ -4536,9 +4540,9 @@ class AppService:
             sid = args[0].get("id") if args and isinstance(args[0], dict) else args[0] if args else None
             if fn == self._stop:
                 from .worker_diagnostics import diagnostic_reference
-                await self.on_runtime_event('runtime.error', {'sessionId': sid, 'event': 'stop.failed',
+                await self._observe_stop('runtime.error', {'sessionId': sid, 'event': 'stop.failed',
                     'stopBoundary': args[1], 'errorType': type(exc).__name__, 'error': str(exc),
-                    **diagnostic_reference(exc)}, stop_guard=args[2] if len(args) > 2 else None)
+                    **diagnostic_reference(exc)}, args[2] if len(args) > 2 else None)
                 return
             if isinstance(exc, AppError) and exc.code == 'session_busy':
                 return  # The rejected admission already published its ownership state.
@@ -5070,13 +5074,14 @@ class AppService:
                     return False
                 try:
                     receipt = self.collaboration.receipt(identity)
-                except (AppError, ValueError, KeyError):
+                except (AppError, ValueError, KeyError, AttributeError):
                     return False
                 if (not isinstance(receipt, dict)
                         or receipt.get('commandAction') != 'coordination.send'
                         or receipt.get('protocol') != PROTOCOL
                         or receipt.get('inputId') != identity or receipt.get('requestId') != identity
                         or receipt.get('messageId') != message.get('id')
+                        or not isinstance(receipt.get('target'), dict)
                         or receipt.get('target', {}).get('sessionId') != sid
                         or receipt.get('interruptionRevision') != boundary['interruptionRevision']
                         or receipt.get('mode') != 'queue'
@@ -5087,6 +5092,15 @@ class AppService:
                     return False
             return last_input is None
         return current
+
+    async def _observe_stop(self, kind, payload, current):
+        # Preserve the two-argument event sink and execution-observer chain.
+        # This task-local binding is not serializable worker/event authority.
+        token = _STOP_OBSERVATION.set((self, asyncio.current_task(), kind, payload, current))
+        try:
+            await self.on_runtime_event(kind, payload)
+        finally:
+            _STOP_OBSERVATION.reset(token)
 
     async def _stop(self, sid, boundary=None, current=None):
         if current is not None and not current():
@@ -5100,8 +5114,8 @@ class AppService:
             return
         if self.runtime:
             await self.runtime.stop(sid)
-        await self.on_runtime_event("runtime.status", {"sessionId": sid, "status": "stopped",
-            **({'stopBoundary': boundary} if boundary is not None else {})}, stop_guard=current)
+        await self._observe_stop("runtime.status", {"sessionId": sid, "status": "stopped",
+            **({'stopBoundary': boundary} if boundary is not None else {})}, current)
         # Once the exact Stop has settled, ordinary queued input can be examined
         # by the existing stopped-recipient guard, never admitted to unstick it.
         if (current is None or current()) and self._session(sid, hydrate=False)['status'] == 'stopped':
@@ -5288,7 +5302,7 @@ class AppService:
                 raise
             self._publish(session_ids=changed, record_only=True, detail_only=detail_only)
 
-    async def on_runtime_event(self, kind, payload, *, stop_guard=None):
+    async def on_runtime_event(self, kind, payload):
         if kind == 'runtime.timing':
             # Disposable diagnostics must not hydrate a session, acquire its
             # state lock, dirty progress or trigger another durable publication.
@@ -5308,6 +5322,10 @@ class AppService:
         async with self.lock:
             # A host closure from the admitted Stop, never a worker payload.
             # Recheck after all runtime awaits and while publication is locked.
+            observation = _STOP_OBSERVATION.get()
+            stop_guard = (observation[4] if observation is not None
+                          and observation[0] is self and observation[1] is asyncio.current_task()
+                          and observation[2] == kind and observation[3] is payload else None)
             if stop_guard is not None and not stop_guard():
                 return
             try:

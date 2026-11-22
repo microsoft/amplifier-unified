@@ -355,7 +355,7 @@ async def test_old_stop_cannot_cross_replacement_or_admission(app, monkeypatch, 
 
 @pytest.mark.parametrize('change', [
     'none', 'missing-receipt', 'wrong-message', 'wrong-target', 'submitting',
-    'unknown', 'admitted', 'human-resume',
+    'unknown', 'admitted', 'human-resume', 'null-receipt', 'list-receipt', 'null-target',
 ])
 async def test_stop_exempts_only_exact_unadmitted_peer_receipts(app, monkeypatch, change):
     source, target = app.state['sessions']
@@ -379,6 +379,10 @@ async def test_stop_exempts_only_exact_unadmitted_peer_receipts(app, monkeypatch
         if change == 'missing-receipt':
             app.db.execute('DELETE FROM commands WHERE id=?', ('queued-one',))
             app.db.commit()
+        elif change in {'null-receipt', 'list-receipt'}:
+            app.db.execute('UPDATE commands SET receipt=? WHERE id=?',
+                           ('null' if change == 'null-receipt' else '[]', 'queued-one'))
+            app.db.commit()
         elif change != 'none':
             if change == 'wrong-message':
                 receipt['messageId'] = 'another-message'
@@ -388,6 +392,8 @@ async def test_stop_exempts_only_exact_unadmitted_peer_receipts(app, monkeypatch
                 receipt['delivery'] = change
             elif change == 'admitted':
                 receipt['admittedAt'] = 1
+            elif change == 'null-target':
+                receipt['target'] = None
             else:
                 receipt['humanResume'] = {'sourceMessageId': 'not-authorized'}
             app.collaboration.save('queued-one', receipt)
@@ -407,9 +413,20 @@ async def test_stop_exempts_only_exact_unadmitted_peer_receipts(app, monkeypatch
         release.set()
 
 
-async def test_failed_stop_with_queued_peer_stays_unconfirmed(app, monkeypatch):
+@pytest.mark.parametrize('wrapped', [False, True])
+@pytest.mark.parametrize('failed', [False, True])
+async def test_stop_with_queued_peer_preserves_observers_and_failure(app, monkeypatch, wrapped, failed):
     source, target = app.state['sessions']
     sid = target['id']
+    observed = []
+    if wrapped:
+        from amplifier_web.execution_owner import ensure_observers
+        class Observer:
+            async def observe(self, kind, payload):
+                if payload.get('sessionId') == sid and 'stopBoundary' in payload:
+                    json.dumps(payload)  # No host closures in the public event.
+                    observed.append((kind, target['status'], copy.deepcopy(payload)))
+        ensure_observers(app).attachments.add(Observer())
     entered, release = asyncio.Event(), asyncio.Event()
     stop_tasks = []
     async def failed_stop(identity):
@@ -417,7 +434,8 @@ async def test_failed_stop_with_queued_peer_stays_unconfirmed(app, monkeypatch):
         stop_tasks.append(asyncio.current_task())
         entered.set()
         await release.wait()
-        raise RuntimeError('Synthetic Stop did not confirm retirement')
+        if failed:
+            raise RuntimeError('Synthetic Stop did not confirm retirement')
     monkeypatch.setattr(app.runtime, 'stop', failed_stop)
     await app.dispatch('conversation.stop', {'sessionId': sid},
                        command_id='failed-stop', include_state=False)
@@ -430,10 +448,18 @@ async def test_failed_stop_with_queued_peer_stays_unconfirmed(app, monkeypatch):
         assert not pending
         for task in done:
             task.result()
-        assert target['status'] == 'error'
+        assert target['status'] == ('error' if failed else 'stopped')
         assert target['lastInterruption']['commandId'] == 'failed-stop'
-        assert target['lastInterruption']['outcome'] == 'unconfirmed'
-        assert 'Stop could not be confirmed' in target['error']
+        if failed:
+            assert target['lastInterruption']['outcome'] == 'unconfirmed'
+            assert 'Stop could not be confirmed' in target['error']
+        else:
+            assert not target.get('error')
+        if wrapped:
+            assert len(observed) == 1
+            assert observed[0][:2] == (('runtime.error', 'error') if failed else ('runtime.status', 'stopped'))
+        from amplifier_web.service import _STOP_OBSERVATION
+        assert _STOP_OBSERVATION.get() is None
         await app.collaboration.drain(sid)
         assert app.collaboration.receipt('held-peer')['delivery'] == 'suppressed'
         assert not app.runtime.inputs
