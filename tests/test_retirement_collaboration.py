@@ -143,6 +143,13 @@ async def test_peer_request_after_idle_retirement_needs_no_human_relay(tmp_path,
             await generation(app, source, 'fresh-source-turn', ['new-authorized-input'])
         if boundary == 'user-stopped':
             await app.dispatch('conversation.stop', {'sessionId': target_id}, command_id='explicit-stop', include_state=False)
+            # Stop admission schedules its settlement. This case sends AFTER
+            # a user-stopped boundary, not concurrently with the pending Stop.
+            async with asyncio.timeout(3):
+                while target['status'] != 'stopped':
+                    await asyncio.sleep(0)
+            assert target_id not in runtime.workers
+            assert target['interruptionRevision'] == 1
 
         args = {'sessionId': target_id, 'mode': 'queue', 'text': 'Continue with the next check.'}
         await agent_action(app, source, 'coordination.send', args, 'new-peer-request')
