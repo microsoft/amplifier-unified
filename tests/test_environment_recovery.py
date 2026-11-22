@@ -422,12 +422,15 @@ def test_real_helper_receives_identity_and_retention_override_only_for_remove(tm
 
 
 @pytest.mark.parametrize('evidence', ['missing', 'forged', 'stale'])
-async def test_legacy_remove_host_journal_preserves_unknown_with_untrusted_files(app, backend, library, monkeypatch, evidence):
+async def test_legacy_remove_host_journal_preserves_unknown_with_untrusted_files(app, backend, library, monkeypatch, evidence, record_property):
+    """Host preservation only, NOT a phase-proof consumer/validator test."""
     current=(await app.dispatch('testing.execution.read',{}))['result']
     await app.dispatch('testing.execution.save',{'expectedRevision':current['revision'],'queue':{},'profiles':{},'concurrency':{'maxEnvironmentsPerChat':1}})
-    """Host preservation only, NOT a phase-proof consumer/validator test."""
-    row = (await start(app))['resource']
-    row = (await act(app, 'stop', row, 'legacy-stop'))['resource']
+    started = await start(app)
+    assert started['request']['state'] == 'completed', started['request']
+    stopped = await act(app, 'stop', started['resource'], 'legacy-stop')
+    assert stopped['request']['state'] == 'completed', stopped['request']
+    row = stopped['resource']
     lib, effects = library
     folder = Path(row['retention']['path'])
     (folder / 'source.tar').write_bytes(b'synthetic snapshot')
@@ -458,8 +461,13 @@ async def test_legacy_remove_host_journal_preserves_unknown_with_untrusted_files
     monkeypatch.setattr(owner, 'invoke', invoke)
     failed = await act(app, 'remove', row, 'legacy-remove')
     unknown = copy.deepcopy(failed['request'])
-    assert (unknown['state'], destroyed) == ('outcome_unknown', ['owned-universe']), {
-        'request': unknown, 'calls': trace, 'effects': effects}
+    diagnostic = {
+        'evidence': evidence, 'request': unknown, 'calls': trace,
+        'destroyed': destroyed, 'effects': [name for name, _, _ in effects]}
+    # Preserve finite synthetic facts on passing runs too. The old nightly
+    # failure had only a state comparison, hiding whether destroy was reached.
+    record_property('legacy_remove_trace', json.dumps(diagnostic, sort_keys=True))
+    assert (unknown['state'], destroyed) == ('outcome_unknown', ['owned-universe']), diagnostic
     directory, = folder.glob('retained-*')
     if evidence != 'missing':
         (directory / 'untrusted-phase.json').write_text(json.dumps({
