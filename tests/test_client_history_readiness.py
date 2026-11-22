@@ -151,6 +151,31 @@ async def test_cold_stream_disconnected_before_admission_stays_nonresident(tmp_p
         await service.close()
 
 
+async def test_non_native_terminal_demand_does_not_read_native_history(tmp_path, monkeypatch):
+    from amplifier_web import automatic_history
+    service = AppService(tmp_path / 'app', ObservedRuntime(), workspace=tmp_path)
+    queue = None
+    try:
+        await service.dispatch('session.create', {})
+        session = service._session()
+        assert not session.get('nativeProject')
+        before = copy.deepcopy(session)
+        service.clients.attach('terminal', kind='tui')
+        with service.clients.bind('terminal'):
+            queue = service.subscribe(session_id=session['id'])
+        def forbidden(*args, **kwargs):
+            raise AssertionError('Non-native stream attempted a native transcript read')
+        monkeypatch.setattr(automatic_history, 'revision', forbidden)
+        monkeypatch.setattr(automatic_history, 'read_transcript', forbidden)
+        await service.history._refresh_selected_history()
+        assert session == before
+        assert service.runtime.started == service.runtime.sent == []
+    finally:
+        if queue is not None:
+            service.unsubscribe(queue)
+        await service.close()
+
+
 async def test_refresh_follows_connected_clients_not_inactive_saved_views(tmp_path):
     paths = [native_session(tmp_path / 'workspace', name) for name in ('first', 'second', 'inactive')]
     originals = [files_snapshot(path) for path in paths]

@@ -938,7 +938,8 @@ class AutomaticHistory:
                         if exc.status == 404:
                             continue
                         raise
-            if session_id in self.service.queue_sessions.values():
+            if (selected.get('nativeProject')
+                    and session_id in self.service.queue_sessions.values()):
                 # A simultaneous web observer needs a display window, but must
                 # not redirect a terminal stream away from canonical messages.
                 # This remains canonical even during a web-bound refresh.
