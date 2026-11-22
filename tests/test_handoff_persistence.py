@@ -81,6 +81,34 @@ async def test_recovery_preflight_failure_retains_fence_and_explicit_reconciliat
         await app.close()
 
 
+async def test_source_choice_does_not_reconcile_without_confirmed_release(tmp_path, monkeypatch):
+    app, runtime, root, sid = await fixture(tmp_path, monkeypatch)
+    target, record = await completed(app, sid)
+    record.update(phase='unknown')
+    app.worktrees.save(record)
+    app.worktrees.changed()
+    runtime.quiesce_for_handoff.reset_mock()
+    runtime.quiesce_for_handoff.return_value = {'quiesced': False}
+    runtime.collaboration_input = AsyncMock()
+    try:
+        response = await app.dispatch('worktree.reconcile', {
+            'sessionId': sid, 'id': record['id'], 'expectedRevision': record['revision'],
+            'destination': 'source', 'evidence': 'The folder exists, but writer release is not confirmed.',
+        }, command_id='unconfirmed-reconcile')
+        await settle(app)
+        assert app.worktrees.read(sid, response['result']['id'])['phase'] == 'unknown'
+        assert app.worktrees.read(sid, record['id']) == record
+        assert app.worktrees.execution_state(sid)['fenced']
+        owner = app.worktrees.saved_owner(sid, durable=True)
+        assert owner['workingDirectory'] == target['path'] and owner['executionRevision'] == 1
+        assert (root / 'a.txt').read_text() == 'original\n'
+        runtime.quiesce_for_handoff.assert_awaited_once()
+        runtime.collaboration_input.assert_not_awaited()
+        assert app._session(sid)['messages'] == []
+    finally:
+        await app.close()
+
+
 @pytest.mark.parametrize('failure', ['before-placement-commit', 'after-placement-commit', 'notification'])
 async def test_only_committed_placement_survives_later_delivery_failure(tmp_path, monkeypatch, failure):
     app, runtime, root, sid = await fixture(tmp_path, monkeypatch)

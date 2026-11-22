@@ -287,6 +287,8 @@ async def test_registered_browser_reads_recorded_delegate_exchange_without_body_
     identity_keys = ('admissionInputId', 'generationId', 'purpose')
     expected_identities = [{key: row[key] for key in identity_keys if key in row}
                            for row in session['execution']['nodes'] if row.get('kind') == 'tool']
+    assert all(row['admissionInputId'] == 'turn' and row['generationId'] is None
+               for row in expected_identities)
     assert len(expected_placements) == trailing_tools + 1
 
     def assert_saved_placement():

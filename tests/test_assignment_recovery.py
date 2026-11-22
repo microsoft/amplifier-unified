@@ -51,7 +51,8 @@ async def test_unbound_or_foreign_exit_cannot_settle_assignment(app, ended_owner
     await stop(app, source, ended_owner=ended_owner)
     before = copy.deepcopy(app.assignments.current(source))
     assert not source['collaborationGeneration']['terminal']
-    assert source['execution']['turns'][-1]['phase'] == 'running'
+    # A status-only Stop settles presentation, not native generation authority.
+    assert source['execution']['turns'][-1]['phase'] == 'stopped'
     with pytest.raises(AppError, match='settle'):
         await resume(app, source)
     assert app.assignments.current(source) == before

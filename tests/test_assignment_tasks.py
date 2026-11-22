@@ -283,6 +283,7 @@ async def test_worker_observation_is_live_but_never_changes_claim_or_readiness(a
     projected = observed['result']['tasks'][0]
     assert observed['changed'] and not observed['timedOut']
     assert projected['worker']['label'] == label
+    assert projected['worker']['attention'] is (state in {'error', 'approval'})
     assert projected['worker']['blockedReason'] == ('Waiting for owner decision' if state == 'blocked' else '')
     assert projected['status'] == 'claimed' and projected['readiness'] == 'ready'
     assert projected['claim'] == claimed['claim']
