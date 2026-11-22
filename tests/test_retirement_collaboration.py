@@ -176,3 +176,104 @@ async def test_peer_request_after_idle_retirement_needs_no_human_relay(tmp_path,
     finally:
         if sweep: await asyncio.gather(sweep, return_exceptions=True)
         await app.close()
+
+
+@pytest.mark.parametrize('ordering', ['stop-then-peer', 'peer-during-stop'])
+async def test_queued_peer_cannot_strand_stop_settlement(tmp_path, monkeypatch, ordering):
+    """Same retired owner and commands; only the Stop/queue ordering differs."""
+    from amplifier_web.message_delivery import execution_boundary
+
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'native'))
+    log = tmp_path / 'race-admitted.jsonl'
+    runtime = RuntimeManager(command=[sys.executable, '-c', SCRIPT, str(log)])
+    runtime.retention.wake = lambda: None
+    app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    runtime.app_bridge = app.app_bridge
+    entered, release = asyncio.Event(), asyncio.Event()
+    stop_task = None
+    original_stop = runtime.stop
+    try:
+        source, target = [app._new_session({'title': title}) for title in ('Manager', 'Retired member')]
+        app.state['sessions'] = [source, target]
+        app.state['selectedSessionId'] = source['id']
+        sid = target['id']
+        await generation(app, source, 'source-turn', ['authorized-source-input'])
+        app._message(target, 'assistant', 'Previous work is preserved.')
+        await runtime.prewarm(target, app.on_runtime_event)
+        async with asyncio.timeout(3):
+            while target['status'] != 'idle':
+                await asyncio.sleep(0)
+        row = runtime.workers[sid]
+        owner, process = row['runtimeOwnerId'], row['process']
+        row['update_pending'] = True
+        await asyncio.wait_for(runtime.retention.sweep(), 3)
+        assert process.returncode == 0 and sid not in runtime.workers
+        assert target['status'] == 'idle' and target['preparation']['status'] == 'cold'
+
+        async def hold_stop(identity, **kwargs):
+            nonlocal stop_task
+            assert identity == sid
+            stop_task = asyncio.current_task()
+            entered.set()
+            await release.wait()
+            return await original_stop(identity, **kwargs)
+
+        monkeypatch.setattr(runtime, 'stop', hold_stop)
+        await app.dispatch('conversation.stop', {'sessionId': sid},
+                           command_id='held-stop', include_state=False)
+        await asyncio.wait_for(entered.wait(), 3)
+        assert target['status'] == 'stopping' and target['interruptionRevision'] == 1
+        stopped_boundary = execution_boundary(target)
+
+        async def finish_stop():
+            release.set()
+            done, pending = await asyncio.wait({stop_task}, timeout=3)
+            assert not pending, 'The held Stop task did not settle after its barrier was released'
+            for completed in done:
+                completed.result()
+
+        if ordering == 'stop-then-peer':
+            await finish_stop()
+            assert target['status'] == 'stopped'
+        args = {'sessionId': sid, 'mode': 'queue', 'text': 'New peer observation, not a human resume.'}
+        await agent_action(app, source, 'coordination.send', args, 'race-peer')
+        # Exercise the ordinary queue reducer while Stop is held; do not
+        # manufacture a delivery receipt or move the message into the worker.
+        await app.collaboration.drain(sid)
+        before_release = {'status': target['status'], 'boundary': execution_boundary(target),
+                          'delivery': app.collaboration.receipt('race-peer')['delivery']}
+        if ordering == 'peer-during-stop':
+            assert not stop_task.done()
+            await finish_stop()
+        await app.collaboration.drain(sid)
+        receipt = app.collaboration.receipt('race-peer')
+        # An exact duplicate is a receipt read, never a second input admission.
+        await agent_action(app, source, 'coordination.send', args, 'race-peer')
+        await app.collaboration.drain(sid)
+        assert app.collaboration.receipt('race-peer') == receipt
+        rows = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+        observed = {'ordering': ordering, 'originalOwner': owner,
+                    'originalPid': process.pid, 'originalExit': process.returncode,
+                    'stopBoundary': stopped_boundary, 'beforeRelease': before_release,
+                    'afterRelease': {'status': target['status'], 'boundary': execution_boundary(target),
+                                     'delivery': receipt['delivery'], 'detail': receipt.get('detail'),
+                                     'receiptInterruptionRevision': receipt['interruptionRevision']},
+                    'stopTaskDone': stop_task.done(), 'workerPresent': sid in runtime.workers,
+                    'admittedInputs': [row['inputId'] for row in rows]}
+        print('STOP_QUEUE_BOUNDARY ' + json.dumps(observed, sort_keys=True))
+        assert not rows and sid not in runtime.workers
+        assert target['interruptionRevision'] == receipt['interruptionRevision'] == 1
+        assert target['messages'][0]['text'] == 'Previous work is preserved.'
+        peer, = [message for message in target['messages'] if message.get('inputId') == 'race-peer']
+        assert peer['inputOrigin'] == 'peer' and 'humanResume' not in peer['peerEnvelope']
+        assert not [message for message in target['messages'] if message.get('inputOrigin') == 'ui']
+        assert target['status'] == 'stopped', observed
+        assert receipt['delivery'] == 'suppressed', observed
+    finally:
+        release.set()
+        try:
+            if stop_task is not None and not stop_task.done():
+                done, pending = await asyncio.wait({stop_task}, timeout=3)
+                assert not pending, 'Stop cleanup remains unsettled'
+        finally:
+            await app.close()
