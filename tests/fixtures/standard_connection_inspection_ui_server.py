@@ -23,19 +23,23 @@ async def main(home):
         from amplifier_web import draft_defaults
         rows = [
             {'id': 'test-provider', 'module': 'provider-test', 'info': {'display_name': 'Effort provider', 'defaults': {'model': 'first'}}, 'configSchema': {'fields': [{'id': 'reasoning_effort', 'choices': ['low', 'high']}]}},
-            {'id': 'no-effort', 'module': 'provider-test', 'info': {'display_name': 'Simple provider', 'defaults': {'model': 'simple'}}, 'configSchema': {'fields': []}},
+            {'id': 'no-effort', 'module': 'provider-simple', 'info': {'display_name': 'Simple provider', 'defaults': {'model': 'simple'}}, 'configSchema': {'fields': []}},
         ]
+        from amplifier_web.host.config import write_private
+        write_private(home/'shared-settings/settings.yaml', json.dumps({'config': {'providers': [
+            {'id': row['id'], 'module': row['module'], 'label': row['info']['display_name'],
+             'config': row['info']['defaults'], 'enabled': True} for row in rows
+        ]}}))
         async def defaults(*args, **kwargs):
             calls.append({'action':'configuration.defaults'})
             await defaults_gate.wait()
             return {'bundle': 'work', 'effective': {'instance': 'test-provider', 'model': 'first'}, 'providers': rows}
         async def catalog(self, action, args, workspace):
-            provider = next(row for row in rows if row['id'] == args['id'])
-            calls.append({'action': action, 'id': args['id']})
-            return {'modelsProviderId': args['id'], 'models': [{'id': provider['info']['defaults']['model']}], 'providerMetadata': provider}
+            provider = next(row for row in rows if row['id'] == args.get('id') or (not args.get('id') and row['module'] == args.get('module')))
+            calls.append({'action': action, 'id': provider['id']})
+            return {'modelsSupported': True, 'modelsProvenance': 'provider-api', 'models': [{'id': provider['info']['defaults']['model']}], 'providerMetadata': provider}
         draft_defaults.resolve_defaults = defaults
-        SetupManager.cached_probe = catalog
-        SetupManager.provider_rows=lambda self, workspace:[{'id':row['id'],'module':'provider-test','config':{'model':row['info']['defaults']['model']},'enabled':True}for row in rows]
+        SetupManager.probe = catalog
         runtime=base.Runtime()
         app=await create_app(home/'app',workspace=str(workspace),runtime=runtime,voice=False,background_updates=False)
         app['control_token']='fixture-browser-control-token';runtime.service=app['service']
