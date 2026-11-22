@@ -140,8 +140,10 @@ try{
  await expect(body.getByRole('button',{name:'Scoped B.txt',exact:true})).toBeVisible();
  checks.push({staleSearchIgnored:true,loadingBeforeFirstPage:true});
  await body.getByRole('button',{name:'Chats',exact:true}).click();await waitCoverage(['workHome']);
- await expect(body.locator('[data-session-id]').getByRole('button',{name:'Scoped B chat',exact:true})).toBeVisible();
- await expect(body.locator('[data-session-id]').getByRole('button',{name:'Scoped A chat',exact:true})).toHaveCount(0);
+ const workspaceChat=body.locator(`.a-work-card[data-session-id="${chats[1]}"]`);
+ await expect(workspaceChat.getByRole('heading',{name:'Scoped B chat',exact:true})).toBeVisible();
+ await expect(workspaceChat.getByRole('button',{name:'Scoped B chat Continue chat',exact:true})).toBeVisible();
+ await expect(body.locator(`[data-session-id="${chats[0]}"]`)).toHaveCount(0);
  await body.getByRole('button',{name:'Details',exact:true}).click();await waitCoverage([]);await expect(body.getByText(workspaces[1].path,{exact:true})).toBeVisible();
  await body.getByRole('button',{name:'Files',exact:true}).click();await waitCoverage([]);await expect(body.getByRole('button',{name:'Scoped B.txt',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Search chats',exact:true}).click();await waitCoverage(['sidebarSearch']);

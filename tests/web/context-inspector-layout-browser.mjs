@@ -216,7 +216,9 @@ try{
   await expect(panel.locator('.a-context-item').filter({hasText:'source-01.md'})).toBeFocused();
   await expect(panel.getByRole('searchbox')).toHaveValue('source-01');
   await panel.getByRole('searchbox').fill('');await keyEnd(list);await capture('mobile-list-end');
-  await keyStart(list);await panel.locator('.a-context-item').filter({hasText:'source-01.md'}).click();await keyEnd(reader);
+  await keyStart(list);await panel.locator('.a-context-item').filter({hasText:'source-01.md'}).click();
+  await expect(panel.locator('.a-context-pagination small')).toContainText('1–6000 of');
+  await keyEnd(reader);
   await panel.getByRole('button',{name:'Next page',exact:true}).click();
   report.checks.push('320/390 mobile has one active content scroll, explicit Back, reachable pagination and retained search');
   // The exact selection/page survives an unrelated document visit.
@@ -232,11 +234,18 @@ try{
   await panel.getByRole('button',{name:'Back to items'}).click();
   await expect(panel.locator('.a-context-item').filter({hasText:'source-01.md'})).toBeFocused();
   await panel.locator('.a-context-item').filter({hasText:'source-01.md'}).click();
+  // Selecting an item starts a fresh asynchronous body read. Its completion
+  // resets scroll and focuses the heading: wait for the exact page before
+  // sending the next keyboard gesture, not merely for the reader container.
+  await expect(panel.locator('.a-context-pagination small')).toContainText('1–6000 of');
   for(let i=0;i<5;i++){
    await keyEnd(reader);
    const next=panel.getByRole('button',{name:'Next page',exact:true});
    if(await next.isDisabled())break;
+   const range=await panel.locator('.a-context-pagination small').innerText();
+   const endOffset=Number(range.match(/–(\d+) of/)[1]);
    await next.click();
+   await expect(panel.locator('.a-context-pagination small')).toContainText(`${endOffset+1}–`);
   }
   await keyEnd(reader);await expect(panel.getByRole('button',{name:'Next page',exact:true})).toBeDisabled();
   await capture('mobile-final-page');
