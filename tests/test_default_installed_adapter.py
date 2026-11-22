@@ -12,6 +12,7 @@ from pathlib import Path
 import subprocess
 import tarfile
 import tomllib
+from urllib.parse import parse_qs, urlsplit
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -47,6 +48,48 @@ def test_selected_ci_client_direct_dependency_must_be_pinned(tmp_path):
         'missing-library @ https://example.invalid/library ; extra == "client"'])
     with pytest.raises(ValueError, match='Undeclared active'):
         adapter.check_direct_requirements([wheel], ['amplifier-bundle-context-intelligence'], '3.13.16')
+
+
+@pytest.mark.parametrize('omitted', [
+    None, 'amplifier-bundle-ui-use', 'amplifier-bundle-context-intelligence',
+    'amplifier-foundation', 'amplifier-memory', 'amplifier-module-hooks-session-naming',
+])
+def test_current_host_direct_dependency_packages_are_in_qualification_manifest(tmp_path, omitted):
+    data = adapter.pins(ROOT / 'scripts/default-installed-pins.json')
+    lock = tomllib.loads((ROOT / 'uv.lock').read_text())
+    # The lock maps distribution names to source packages (memory's distribution
+    # differs from its repository). Historical qualification revisions may differ;
+    # every active host direct dependency must still have an explicit build.
+    selected = {('https://github.com/microsoft/' + row['name'], package)
+                for row in data['repositories'] for package in row['packages']}
+    names = ['amplifier-unified', 'amplifier-core']
+    for row in lock['package']:
+        if 'git' not in row['source']:
+            continue
+        source = urlsplit(row['source']['git'])
+        package = parse_qs(source.query).get('subdirectory', ['.'])[0]
+        if (source._replace(query='', fragment='').geturl(), package) in selected:
+            names.append(adapter.canonical(row['name']))
+    requirements = tomllib.loads((ROOT / 'pyproject.toml').read_text())['project']['dependencies']
+    wheel = fake_wheel(tmp_path / 'host.whl', 'amplifier-unified', requirements)
+    if omitted is None:
+        adapter.check_direct_requirements([wheel], names, data['python'])
+    else:
+        assert omitted in names
+        names.remove(omitted)
+        with pytest.raises(ValueError, match='Undeclared active direct dependency: ' + omitted):
+            adapter.check_direct_requirements([wheel], names, data['python'])
+
+
+def test_ui_use_installed_input_matches_required_host_lock():
+    data = adapter.pins(ROOT / 'scripts/default-installed-pins.json')
+    [baseline] = [row for row in data['repositories'] if row['name'] == 'amplifier-bundle-ui-use']
+    lock = tomllib.loads((ROOT / 'uv.lock').read_text())
+    [package] = [row for row in lock['package'] if row['name'] == 'amplifier-bundle-ui-use']
+    assert package['source']['git'] == (
+        'https://github.com/microsoft/amplifier-bundle-ui-use?rev=main#' + baseline['commit'])
+    assert baseline['packages'] == ['.']
+    assert package.get('dependencies', []) == []
 
 
 def test_source_inventory_checks_links_with_explicit_owned_boundary(tmp_path):
