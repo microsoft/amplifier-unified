@@ -220,7 +220,8 @@ async def test_duplicate_resume_cannot_reopen_a_later_stop(app):
     assert not app.runtime.inputs
 
 
-async def test_resume_preserves_separate_budget_pause_until_explicit_budget_edit(app, monkeypatch):
+@pytest.mark.parametrize('local_limit', [30, 100])
+async def test_resume_rechecks_current_budget_without_erasing_denial_or_usage(app, monkeypatch, local_limit):
     from test_task_continuity import controls
     from amplifier_web.capacity import saved_policy
     from amplifier_web.execution import ingest
@@ -234,15 +235,37 @@ async def test_resume_preserves_separate_budget_pause_until_explicit_budget_edit
         row = call(source,'retained-usage', endedAt=1, usage={'totalTokens':30})
         row['phase'] = 'completed'
         assert (await admission(app,source['id'],{'call':row}))['allowed']
+        if local_limit == 30:
+            await worker.perform('capacity.set', {
+                'commandId': 'reached-local-budget', 'expectedRevision': 1, 'maxTotalTokens': 30})
         await stop(app,source)
         with pytest.raises(ValueError,match='assignment was stopped'):
             await worker.capacity.guard(call(source,'stopped-call'))
         before = saved_policy(app,source['id'])
+        denial = copy.deepcopy(worker.capacity.last_denial)
         await resume(app,source)
         assert saved_policy(app,source['id']) == before
-        assert not (await admission(app,source['id'],{'call':call(source,'still-paused')}))['allowed']
-        # Existing control owner and revision-bound edit clear only its denial.
-        await worker.perform('capacity.set', {'commandId':'reviewed-local-budget', 'expectedRevision':1, 'maxTotalTokens':100})
+        assert worker.capacity.last_denial == denial
+        probe = call(source, 'current-budget-check')
+        if local_limit == 30:
+            # A separate reached local limit survives assignment resume.
+            with pytest.raises(ValueError, match='limit reached'):
+                await worker.capacity.guard(probe)
+            assert worker.capacity.last_denial['callId'] == probe['id']
+        else:
+            # A historical Stop refusal is evidence, not a permanent budget hold.
+            # Only a fresh authoritative admission clears it, not resume itself.
+            await worker.capacity.guard(probe)
+            assert worker.capacity.last_denial is None
+            ingest(source, {**probe, 'phase': 'completed', 'endedAt': 2,
+                            'revision': 2, 'usage': {'totalTokens': 0}})
+        assert app.assignments.usage(app.assignments.current(source))['metrics']['grossTotalTokens']['value'] == 30
+        # A revision-bound explicit edit can raise the real local limit, without
+        # resetting consumption or replaying either refused call.
+        await worker.perform('capacity.set', {
+            'commandId': 'reviewed-local-budget', 'expectedRevision': 2 if local_limit == 30 else 1,
+            'maxTotalTokens': 100})
+        assert worker.capacity.last_denial is None
         assert saved_policy(app,source['id'])['maxTotalTokens'] == 100
         row=call(source,'new-call')
         assert (await admission(app,source['id'],{'call':row}))['allowed']
