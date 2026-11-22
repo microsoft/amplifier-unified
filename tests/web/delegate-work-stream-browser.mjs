@@ -266,6 +266,21 @@ async function checkLatest(page,work,label) {
 }
 async function checkReadingAnchor(page,operation) {
   const button=operation.locator(':scope > button');
+  const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
+  const originalDraft=await readComposerDraft(composer);
+  const draft='Keep this private draft through step inspection';
+  await composer.fill(draft);await expect(composer).toHaveDraft(draft);
+  const retained=await page.evaluateHandle(()=>({
+    pane:document.querySelector('[data-part="messages"]'),
+    composer:document.querySelector('[role="textbox"][contenteditable="true"]'),
+    messages:[...document.querySelectorAll('[data-message-id]')],
+  }));
+  const identity=()=>page.evaluate(()=>{
+    const s=window.amplifier.getState();
+    return {session:s.selectedSessionId,workspace:s.selectedWorkspaceId,canvas:s.canvas?.id,
+      version:s.canvas?.selectedVersion,open:s.canvas?.open};
+  });
+  const beforeIdentity=await identity();
   await button.scrollIntoViewIfNeeded();
   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   const pane=page.locator('[data-part="messages"]');
@@ -313,6 +328,32 @@ async function checkReadingAnchor(page,operation) {
   await checkPosition(anchor,'resize-wider');
   await page.setViewportSize(viewport);
   await checkPosition(anchor,'resize-return');
+  // A docked inspector leaves the transcript available for real newer input.
+  // Modal narrow panes deliberately make it inert; their round trips above
+  // remain covered without forcing input through the modal boundary.
+  if(viewport.width>900){
+    await button.click();
+    const inspector=page.locator('#work-step-inspector');
+    await expect(inspector).toBeVisible();await expect(inspector).not.toHaveAttribute('aria-modal','true');
+    const beforeScroll=await pane.evaluate(el=>el.scrollTop);
+    const box=await pane.boundingBox();
+    await page.mouse.move(box.x+box.width/2,box.y+box.height/2);
+    await page.mouse.wheel(0,120);
+    await expect.poll(()=>pane.evaluate(el=>el.scrollTop)).toBeGreaterThan(beforeScroll+40);
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    const latest=await capture();assert.notDeepEqual(latest,anchor);
+    await inspector.getByRole('button',{name:'Close step details',exact:true}).click();
+    await checkPosition(latest,'close-after-newer-wheel');
+    await expect(button).toBeFocused();
+  }
+  assert.deepEqual(await identity(),beforeIdentity,'Inspection preserves chat and retained Canvas selection');
+  assert.ok(await retained.evaluate(saved=>saved.pane===document.querySelector('[data-part="messages"]')
+    &&saved.composer===document.querySelector('[role="textbox"][contenteditable="true"]')
+    &&saved.messages.every(node=>node.isConnected)),'Messages and composer remain mounted');
+  await expect(composer).toHaveDraft(draft);
+  await retained.dispose();
+  await clearComposer(composer);if(originalDraft)await composer.fill(originalDraft);
+  await expect(composer).toHaveDraft(originalDraft);
 }
 async function enterStreamConversation(page,expectedSessionId,stage) {
   // Keep the shared Home-to-chat setup and desktop pinned preference intact.
