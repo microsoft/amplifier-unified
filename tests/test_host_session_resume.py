@@ -101,7 +101,7 @@ async def constructing_host(mounted_host):
     provider.complete = AsyncMock(side_effect=AssertionError("Initialization must not call a provider"))
     provider.parse_tool_calls = lambda response: []
     h.prepared.mount_plan = {
-        "session": {"orchestrator": {"module": "loop-fixture"},
+        "session": {"orchestrator": {"module": "loop-live"},
                     "context": {"module": "context-fixture"}},
         "providers": [{"module": "provider-fixture"}],
     }
@@ -110,7 +110,7 @@ async def constructing_host(mounted_host):
         async def load(self, module_id, config, **kwargs):
             async def mount(coordinator):
                 point, module, name = {
-                    "loop-fixture": ("orchestrator", loop, None),
+                    "loop-live": ("orchestrator", loop, None),
                     "context-fixture": ("context", h.context, None),
                     "provider-fixture": ("providers", provider, "fixture"),
                 }[module_id]
