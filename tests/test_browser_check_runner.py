@@ -2891,6 +2891,7 @@ def test_capture_finalization_observes_pipe_after_leader_exit(tmp_path, monkeypa
         if fd != read_fd:
             return real_read(fd, size)
         assert size <= 65536
+        assert len(reads) < 210, 'A busy drain must not avoid clock/deadline checks'
         if ending == 'read-error' and clock.now >= 100.02:
             raise OSError('synthetic pipe failure')
         try:
@@ -2923,6 +2924,7 @@ def test_capture_finalization_observes_pipe_after_leader_exit(tmp_path, monkeypa
 
         def wait(self, timeout):
             assert clock.cleanup
+            assert ending != 'cleanup-unknown', 'Unknown ownership must not wait on the leader'
             return 0
 
     def cleanup(*args, drain):
@@ -2960,6 +2962,7 @@ def test_capture_finalization_observes_pipe_after_leader_exit(tmp_path, monkeypa
             assert len(clock.sleeps) == 1
         if ending == 'read-error':
             assert row['logCapture']['captureError'] == 'OSError'
+            assert len(clock.sleeps) == 2
         if ending == 'never-eof':
             assert .49 <= clock.now - 100 <= .5
         if ending == 'cleanup-unknown':
@@ -2968,6 +2971,72 @@ def test_capture_finalization_observes_pipe_after_leader_exit(tmp_path, monkeypa
     finally:
         if clock.writer_open:
             os.close(write_fd)
+        pipe.close()
+
+
+@pytest.mark.parametrize('ending', ['eof', 'flood', 'cancelled', 'expired', 'write-error'])
+def test_capture_settlement_keeps_read_quanta_and_absolute_deadline(tmp_path, monkeypatch, ending):
+    from types import SimpleNamespace
+    read_fd, write_fd = os.pipe()
+    pipe = os.fdopen(read_fd, 'rb', buffering=0)
+    capture = runner.BoundedLog(tmp_path / 'capture.log', 128)
+    capture.attach(pipe)
+    clock = SimpleNamespace(now=100.0, sleeps=0, cancelled=False)
+    calls = []
+    real_read = os.read
+
+    def read(fd, size):
+        if fd != read_fd:
+            return real_read(fd, size)
+        calls.append(clock.sleeps)
+        assert size == 65536 and len(calls) <= 12
+        # Every quantum is at most four reads, even with continuous output.
+        assert calls.count(clock.sleeps) <= 4
+        if ending == 'eof' and len(calls) == 7:
+            return b''
+        return b'x' * size
+
+    def sleep(seconds):
+        assert 0 < seconds <= .01
+        clock.now += seconds
+        clock.sleeps += 1
+        if ending == 'cancelled':
+            clock.cancelled = True
+
+    def fail_write(data):
+        raise OSError('synthetic disk failure')
+
+    monkeypatch.setattr(runner, 'time', SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep))
+    monkeypatch.setattr(runner.os, 'read', read)
+    if ending == 'write-error':
+        monkeypatch.setattr(capture.head, 'write', fail_write)
+    try:
+        capture.settle(100.0 if ending == 'expired' else 100.02, lambda: clock.cancelled)
+        count = len(calls)
+        capture.close(drain=False)
+        assert len(calls) == count  # No extra read after cancellation/deadline.
+        assert clock.now <= 100.02 and clock.sleeps <= 2
+        receipt = capture.receipt()
+        assert receipt['settlement']['status'] == {
+            'eof': 'eof', 'flood': 'deadline', 'cancelled': 'cancelled',
+            'expired': 'deadline', 'write-error': 'capture_error',
+        }[ending]
+        if ending == 'eof':
+            assert receipt['eof'] and len(calls) == 7
+            assert (tmp_path / 'capture.log').read_bytes() == b'x' * 128
+        elif ending == 'expired':
+            assert calls == [] and not receipt['eof']
+        elif ending == 'cancelled':
+            assert len(calls) == 4 and clock.sleeps == 1 and not receipt['eof']
+        elif ending == 'write-error':
+            assert len(calls) == 4 and clock.sleeps == 0
+            assert receipt['captureError'] == 'OSError' and receipt['bytesRetained'] is None
+        else:
+            assert not receipt['eof'] and receipt['truncated']
+    finally:
+        if not capture.head.stream.closed:
+            capture.close(drain=False)
+        os.close(write_fd)
         pipe.close()
 
 
