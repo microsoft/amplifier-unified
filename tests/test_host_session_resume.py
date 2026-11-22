@@ -481,7 +481,8 @@ async def test_initialization_failure_keeps_cleanup_ownership_before_session_ret
     before = h.path.read_bytes()
     async def create(**kwargs):
         await kwargs["before_initialize"](h.session)
-        assert isinstance(h.session.coordinator.get_capability("web.media.construction"), h.media_binding_type)
+        binding = h.session.coordinator.get_capability("web.media.construction")
+        assert isinstance(binding, h.media_binding_type) if os.name == "posix" else binding is None
         assert not h.session.initialized
         raise failure("Later account failed during initialization")
     h.prepared.create_session.side_effect = create
@@ -501,7 +502,8 @@ async def test_root_routing_observes_isolated_decision_accounts_before_mount(con
     phases = []
     async def isolate(session):
         assert session is h.session
-        assert isinstance(session.coordinator.get_capability("web.media.construction"), h.media_binding_type)
+        binding = session.coordinator.get_capability("web.media.construction")
+        assert isinstance(binding, h.media_binding_type) if os.name == "posix" else binding is None
         assert not session.initialized and session.coordinator.get("orchestrator") is None
         phases.append("isolated")
     async def accounts_ready(session):
