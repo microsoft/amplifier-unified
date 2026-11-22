@@ -6,12 +6,16 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import sys
 
 import pytest
 
 
-@pytest.fixture
-def media(monkeypatch):
+def load_media(monkeypatch):
+    # Source-mode fixture imports prepend their checkout. Keep that precedence
+    # local to this test, including when module execution fails.
+    monkeypatch.setattr(sys, 'path', sys.path.copy())
+    monkeypatch.setenv('INLINE_MEDIA_MODE', 'source')
     spec = importlib.util.spec_from_file_location(
         'inline_media_fixture_test', Path(__file__).parent / 'fixtures/inline_media_server.py')
     module = importlib.util.module_from_spec(spec)
@@ -19,6 +23,21 @@ def media(monkeypatch):
     monkeypatch.setattr(module, 'COUNTERS', Counter())
     monkeypatch.setattr(module, 'ERRORS', [])
     return module
+
+
+@pytest.fixture
+def media(monkeypatch):
+    return load_media(monkeypatch)
+
+
+def test_fixture_import_restores_python_path():
+    original, entries = sys.path, sys.path.copy()
+    with pytest.MonkeyPatch.context() as patch:
+        load_media(patch)
+        assert sys.path is not original
+        assert sys.path[0] == str(Path(__file__).resolve().parents[1])
+    assert sys.path is original
+    assert sys.path == entries
 
 
 @pytest.fixture
