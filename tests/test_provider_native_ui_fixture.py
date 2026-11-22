@@ -71,7 +71,9 @@ else:
         raise AssertionError('Direct spawn must not reach the helper')
     if operation == 'changed-helper':
         helper.write_text('raise SystemExit("changed helper must not run")')
-    subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=environment, check=True)
+    flags = {'creationflags-nonzero': 1, 'creationflags-bool': False, 'creationflags-string': '0'}
+    options = {'creationflags': flags[operation]} if operation in flags else {}
+    subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=environment, check=True, **options)
 '''
 METADATA = '''
 def catalog():
@@ -214,7 +216,10 @@ def test_isolated_catalog_matches_installed_editable_baseline(isolated_catalog):
     assert 'OPENAI_API_KEY' not in catalogs[0]['environmentNames']
 
 
-@pytest.mark.parametrize('operation', ['credentials', 'pythonpath', 'extra-argument', 'other-program', 'direct-bootstrap', 'direct-posix-bootstrap'])
+@pytest.mark.parametrize('operation', [
+    'credentials', 'pythonpath', 'extra-argument', 'other-program', 'direct-bootstrap',
+    'direct-posix-bootstrap', 'creationflags-nonzero', 'creationflags-bool', 'creationflags-string',
+])
 def test_catalog_exception_does_not_admit_other_launches(isolated_catalog, operation):
     run, root, _ = isolated_catalog
     result = run(operation)

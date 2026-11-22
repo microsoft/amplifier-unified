@@ -278,7 +278,11 @@ def observe_account_catalog(root, policy):
             if catalog:
                 # Preserve the production environment, pipes and isolation. A
                 # changed launch contract needs review, not a permissive fallback.
-                if (positional or set(kwargs) != {'stdout', 'stderr', 'env'}
+                # The cross-platform caller explicitly supplies zero on Linux.
+                # Admit that no-op only, never arbitrary process creation flags.
+                if (positional or set(kwargs) - {'creationflags'} != {'stdout', 'stderr', 'env'}
+                        or type(kwargs.get('creationflags', 0)) is not int
+                        or kwargs.get('creationflags', 0) != 0
                         or kwargs['stdout'] != subprocess.PIPE or kwargs['stderr'] != subprocess.DEVNULL
                         or not isinstance(kwargs['env'], dict)
                         or not set(kwargs['env']).issubset(CATALOG_ENVIRONMENT)):
