@@ -92,6 +92,53 @@ def test_ui_use_installed_input_matches_required_host_lock():
     assert package.get('dependencies', []) == []
 
 
+def test_image_input_matches_host_lock_after_pillow_13_upgrade():
+    data = adapter.pins(ROOT / 'scripts/default-installed-pins.json')
+    [baseline] = [row for row in data['repositories'] if row['name'] == 'amplifier-bundle-imagegen']
+    lock = tomllib.loads((ROOT / 'uv.lock').read_text())
+    [package] = [row for row in lock['package'] if row['name'] == 'amplifier-module-tool-image']
+    assert package['source']['git'].rsplit('#', 1)[1] == baseline['commit']
+    assert baseline['packages'] == ['modules/tool-image']
+    # The replaced ad077 input required Pillow<13 while the host requires >=13.
+    # The selected accepted wheel must still satisfy the real resolver and pip
+    # check during installed preparation; a name-only closure check is not that.
+    assert any(row['name'] == 'pillow' for row in package['dependencies'])
+
+
+@pytest.mark.parametrize('declared', [False, True])
+def test_selected_wheels_require_transitive_direct_dependency_closure(tmp_path, declared):
+    root = fake_wheel(tmp_path / 'host.whl', 'amplifier-unified', [
+        'selected-tool @ https://example.invalid/tool'])
+    tool = fake_wheel(tmp_path / 'tool.whl', 'selected-tool', [
+        'support-library @ https://example.invalid/library'])
+    wheels, names = [root, tool], ['amplifier-unified', 'selected-tool']
+    if declared:
+        wheels.append(fake_wheel(tmp_path / 'library.whl', 'support-library'))
+        names.append('support-library')
+        adapter.check_direct_requirements(wheels, names, '3.13.16')
+    else:
+        with pytest.raises(ValueError, match='Undeclared active direct dependency: support-library'):
+            adapter.check_direct_requirements(wheels, names, '3.13.16')
+
+
+@pytest.mark.parametrize('marker,active', [
+    ('python_version >= "3.13"', True),
+    ('python_version < "3.13"', False),
+    ('python_full_version == "3.13.16"', True),
+    ('python_full_version > "3.13.16"', False),
+    ('extra == "decisions"', False),
+    ('extra == "browser"', False),
+])
+def test_direct_dependency_markers_use_target_python_without_optional_extras(tmp_path, marker, active):
+    wheel = fake_wheel(tmp_path / 'ui.whl', 'amplifier-bundle-ui-use', [
+        'conditional-library @ https://example.invalid/library ; ' + marker])
+    if active:
+        with pytest.raises(ValueError, match='Undeclared active direct dependency: conditional-library'):
+            adapter.check_direct_requirements([wheel], ['amplifier-bundle-ui-use'], '3.13.16')
+    else:
+        adapter.check_direct_requirements([wheel], ['amplifier-bundle-ui-use'], '3.13.16')
+
+
 def test_source_inventory_checks_links_with_explicit_owned_boundary(tmp_path):
     root = tmp_path / '.venv'
     root.mkdir()

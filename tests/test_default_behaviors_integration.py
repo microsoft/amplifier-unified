@@ -287,10 +287,11 @@ async def test_real_defaults_are_local_only_and_desktop_is_read_only(offline_def
     assert ci["base_path"] == str(capture_dir(env.workspace, "root").parents[3])
     assert ci["project_slug"] == project_slug(env.workspace)
     assert _row(bundle.tools, "tool-computer-use")["config"]["read_only"] is True
-    # Preserve the real image behavior's declared backend/paid-call policy.
-    # Composition does not instantiate that backend or make an image request.
+    # Preserve the selected image behavior's routed default and paid-call policy.
+    # Composition does not select a provider or make an image request.
     image = _row(bundle.tools, "tool-image")["config"]
-    assert image["backend"] == "images"
+    assert image["model_role"] == "image-gen"
+    assert "backend" not in image
     assert image["allow_paid"] is True
 
 
@@ -308,17 +309,23 @@ async def test_real_defaults_preserve_explicit_ci_desktop_and_routing_policy(
         "base_path": str(env.workspace / "explicit-captures"),
     }
     desktop = {"read_only": False, "gate_writes": True}
+    image = {"backend": "images", "allow_paid": False}
     root_patch = {
         "hooks": [
             {"module": "hook-context-intelligence", "config": ci},
             {"module": "hooks-routing", "config": {"default_matrix": "quality"}},
         ],
-        "tools": [{"module": "tool-computer-use", "config": desktop}],
+        "tools": [
+            {"module": "tool-computer-use", "config": desktop},
+            {"module": "tool-image", "config": image},
+        ],
     }
     original = copy.deepcopy(root_patch)
     _, root_selected, _ = await env.compose(root_patch=root_patch)
     assert _row(root_selected.hooks, "hook-context-intelligence")["config"] == ci
     assert _row(root_selected.tools, "tool-computer-use")["config"] == desktop
+    actual_image = _row(root_selected.tools, "tool-image")["config"]
+    assert all(actual_image[key] == value for key, value in image.items())
     assert _row(root_selected.hooks, "hooks-routing")["config"]["default_matrix"] == "quality"
     assert root_patch == original
 
@@ -328,6 +335,7 @@ async def test_real_defaults_preserve_explicit_ci_desktop_and_routing_policy(
         "overrides": {
             "hook-context-intelligence": {"config": ci},
             "tool-computer-use": {"config": desktop},
+            "tool-image": {"config": image},
         },
         "routing": {"matrix": "economy"},
     }
@@ -338,6 +346,8 @@ async def test_real_defaults_preserve_explicit_ci_desktop_and_routing_policy(
     assert all(actual_ci[key] == value for key, value in ci.items())
     actual_desktop = _row(scoped.tools, "tool-computer-use")["config"]
     assert all(actual_desktop[key] == value for key, value in desktop.items())
+    actual_image = _row(scoped.tools, "tool-image")["config"]
+    assert all(actual_image[key] == value for key, value in image.items())
     assert _row(scoped.hooks, "hooks-routing")["config"]["default_matrix"] == "economy"
 
 
