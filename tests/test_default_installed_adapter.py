@@ -176,6 +176,64 @@ packages = ["pkg"]
         adapter.verify_candidate_wheel(wheel, source)
 
 
+@pytest.mark.parametrize('change', [
+    'none', 'unflattened', 'changed-license', 'missing-license', 'original-license',
+    'extra', 'duplicate', 'missing-source', 'missing-package', 'unsupported-exclude',
+    'directory-exclude', 'sources', 'collision',
+])
+def test_wheel_package_mapping_and_rehomed_license_remain_exact(tmp_path, change):
+    source = tmp_path / 'candidate'
+    package = source / 'components/delivery/pkg'
+    package.mkdir(parents=True)
+    (package / '__init__.py').write_text('value=1\n')
+    (package / 'LICENSE').write_text('license bytes\n')
+    (source / 'resource.txt').write_text('resource bytes\n')
+    exclusion = '/components/delivery/pkg/LICENSE'
+    if change == 'unsupported-exclude':
+        exclusion = '/components/**/LICENSE'
+    elif change == 'directory-exclude':
+        exclusion = '/components/delivery/pkg'
+    manifest = f'''[tool.hatch.build.targets.wheel]
+packages = ["components/delivery/pkg"]
+exclude = ["{exclusion}"]
+'''
+    if change == 'sources':
+        manifest += 'sources = {"components/delivery" = "other"}\n'
+    destination = 'pkg/__init__.py' if change == 'collision' else 'pkg/license.txt'
+    manifest += f'''[tool.hatch.build.targets.wheel.force-include]
+"components/delivery/pkg/LICENSE" = "{destination}"
+"resource.txt" = "pkg/resource.txt"
+'''
+    (source / 'pyproject.toml').write_text(manifest)
+    payload = {'pkg/__init__.py': 'value=1\n', 'pkg/license.txt': 'license bytes\n',
+               'pkg/resource.txt': 'resource bytes\n'}
+    if change == 'unflattened':
+        payload['components/delivery/pkg/__init__.py'] = payload.pop('pkg/__init__.py')
+    elif change == 'changed-license':
+        payload['pkg/license.txt'] = 'wrong\n'
+    elif change in {'missing-license', 'missing-source'}:
+        payload.pop('pkg/license.txt')
+        if change == 'missing-source':
+            (package / 'LICENSE').unlink()
+    elif change == 'missing-package':
+        (source / 'pyproject.toml').write_text(manifest.replace(
+            'packages = ["components/delivery/pkg"]', 'packages = ["absent"]'))
+    elif change in {'original-license', 'extra'}:
+        payload['pkg/LICENSE' if change == 'original-license' else 'pkg/extra'] = 'extra\n'
+    wheel = fake_wheel(tmp_path / 'candidate.whl', 'example', payload=payload)
+    if change == 'duplicate':
+        with zipfile.ZipFile(wheel, 'a') as archive, pytest.warns(UserWarning, match='Duplicate'):
+            archive.writestr('pkg/__init__.py', 'value=1\n')
+    if change == 'none':
+        actual = adapter.verify_candidate_wheel(wheel, source)
+        assert len(actual) == 3
+        assert actual['pkg/license.txt'] == adapter.digest(package / 'LICENSE')
+        assert actual['pkg/resource.txt'] == adapter.digest(source / 'resource.txt')
+    else:
+        with pytest.raises(ValueError):
+            adapter.verify_candidate_wheel(wheel, source)
+
+
 def test_pins_require_exact_sources(tmp_path):
     data = json.loads((ROOT / 'scripts/default-installed-pins.json').read_text())
     assert adapter.pins(ROOT / 'scripts/default-installed-pins.json')['core']['version'] == '2.0.2'
