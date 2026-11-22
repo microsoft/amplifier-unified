@@ -38,7 +38,23 @@ for(const scenario of (process.argv.length>2?process.argv.slice(2):['native','or
   const composer=page.getByRole('textbox',{name:'Message Amplifier'});
   await composer.fill('ORIGINAL_HELD_MODEL');
   await page.getByRole('button',{name:'Send message',exact:true}).click();
-  await expect.poll(async()=>{const v=await inspect();if(v.session.status==='error')throw Error(JSON.stringify(v.session.failure||v.session.error));return scenario==='ordinary'?v.wire.some(r=>r.kind==='ordinary-request'):v.wire.some(r=>r.kind==='wire'&&r.payload.type==='response.create')},{timeout:45000}).toBe(true);
+  await expect.poll(async()=>{const v=await inspect();if(v.session.status==='error')throw Error(JSON.stringify(v.session.failure||v.session.error));return v.wire.some(r=>r.kind==='ordinary-request'||r.kind==='wire'&&r.payload.type==='response.create')},{timeout:45000}).toBe(true);
+  const routeBefore=await inspect(),statusResponse=await page.request.get(ready.url+'/fixture/native-status');
+  assert.equal(statusResponse.status(),200);
+  const nativeStatus=await statusResponse.json(),routeAfter=await inspect();
+  if(output)writeFileSync(output+'/'+scenario+'-transport.json',JSON.stringify({nativeStatus,wire:routeAfter.wire},null,2)+'\n');
+  assert.deepEqual(routeAfter.wire,routeBefore.wire,'Native status must not dispatch a provider request');
+  assert.equal(nativeStatus.model,scenario==='ordinary'?'gpt-5.4':'gpt-6.1-terra');
+  if(scenario==='ordinary'){
+   assert.equal(nativeStatus.steering,'request_boundary');
+   assert.equal(routeAfter.wire.filter(r=>r.kind==='ordinary-request').length,1);
+   assert.equal(routeAfter.wire.filter(r=>r.kind==='wire').length,0);
+  }else{
+   assert.equal(nativeStatus.supported,true,JSON.stringify(nativeStatus));
+   assert.equal(nativeStatus.steering,'native',JSON.stringify(nativeStatus));
+   assert.equal(routeAfter.wire.filter(r=>r.kind==='ordinary-request').length,0,'Native scenarios cannot pass on ordinary HTTP');
+   assert.equal(routeAfter.wire.filter(r=>r.kind==='wire'&&r.payload.type==='response.create').length,1);
+  }
   if(scenario==='tool')await expect.poll(async()=>(await inspect()).toolRunning,{timeout:15000}).toBe(true);
   await expect.poll(async()=>(await inspect()).session.collaborationGeneration?.terminal).toBe(false);
   const original=await inspect(),parent=original.session.collaborationGeneration.id;
