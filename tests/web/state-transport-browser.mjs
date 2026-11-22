@@ -158,7 +158,9 @@ try{
  // Do not wait for gallery/fonts/network idle: keep the existing cold-opening coverage.
  evidence.stage='appearance pending feedback';await measurePaint('appearance');
  evidence.stage='held persistence';await expect.poll(()=>heldPrepares).toBe(1);
- evidence.pendingProof={heldPrepares,persistenceReleased,appearance:await readAppearance(page)};
+ // Dispatch reads wait behind preceding writes. Observe delivered authoritative
+ // state directly while the exact earlier write is deliberately held.
+ evidence.pendingProof={heldPrepares,persistenceReleased,appearance:await page.evaluate(()=>window.amplifier.getState().appearance)};
  assert.equal(persistenceReleased,false);
  assert.deepEqual(evidence.pendingProof.appearance.effective,profileBefore.effective);
  assert.deepEqual(evidence.pendingProof.appearance.shared,profileBefore.shared);
@@ -167,7 +169,7 @@ try{
  await persist();
  releasePersistence();
  await expect.poll(()=>heldStorage).toBe(1);
- const awaitingAck=await readAppearance(page);
+ const awaitingAck=await page.evaluate(()=>window.amplifier.getState().appearance);
  assert.deepEqual(awaitingAck.effective,profileBefore.effective);
  assert.deepEqual(awaitingAck.shared,profileBefore.shared);
  assert.deepEqual(await page.evaluate(()=>({scheme:document.getElementById('amp-one').style.colorScheme,
@@ -187,7 +189,8 @@ try{
  });
  releaseStorage();
  const confirmed=await settledAppearance(page);
- evidence.confirmedPaint=await page.evaluate(()=>window.confirmedAppearancePaint);
+ evidence.confirmedPaint={...await page.evaluate(()=>window.confirmedAppearancePaint),
+  measurement:'Storage ACK release through confirmed root paint; includes ACK/network/state delivery, not renderer-only latency'};
  assert.equal(confirmed.effective.scheme,'dark');assert.equal(confirmed.local.storageVersion,stored.version);
  assert.deepEqual(confirmed.shared,profileBefore.shared);
  assert.equal(evidence.confirmedPaint.scheme,'dark');assert.equal(evidence.confirmedPaint.composition,confirmed.composition.id);
