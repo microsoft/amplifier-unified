@@ -18,6 +18,7 @@ for line in sys.stdin:
     data = json.loads(line); op = data['op']; result = {}
     if op == 'start':
         print(json.dumps({'type': 'runtime.ready'}), flush=True)
+        print(json.dumps({'type': 'session.idle'}), flush=True)
         continue
     if op == 'stop':
         print(json.dumps({'type': 'session.closed'}), flush=True)
@@ -115,6 +116,12 @@ async def test_peer_request_after_idle_retirement_needs_no_human_relay(tmp_path,
         await generation(app, source, 'source-turn', ['existing-authorized-input'])
         app._message(target, 'assistant', 'Previous work is preserved.')
         await runtime.prewarm(target, app.on_runtime_event)
+        # Process readiness completes prewarm before the loop's idle event is
+        # necessarily projected. Retirement needs that actual lifecycle, not a
+        # status inferred from having a prepared worker.
+        async with asyncio.timeout(3):
+            while target['status'] != 'idle':
+                await asyncio.sleep(0)
         assert target['status'] == 'idle'
         original = runtime.workers[target_id]['process']
         # Version refresh also retires an otherwise retained idle worker.
@@ -148,6 +155,8 @@ async def test_peer_request_after_idle_retirement_needs_no_human_relay(tmp_path,
         if boundary == 'user-stopped':
             assert not rows
             assert target['interruptionRevision'] == 1
+            assert target['status'] == 'stopped'
+            assert target_id not in runtime.workers
         else:
             assert len(rows) == 1 and rows[0]['inputId'] == 'new-peer-request'
             assert rows[0]['pid'] != original.pid
