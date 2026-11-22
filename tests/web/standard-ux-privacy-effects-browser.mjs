@@ -1,4 +1,5 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {openSettingsSection} from '../../.build/web-client/tests/browser-settings.mjs';
 // Actual synthetic file import and private backup through public Settings controls.
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
@@ -26,21 +27,10 @@ for(const [id,width,height,mode] of variants){
   await page.goto(boot.url);await showFixtureConversation(page);await page.waitForSelector('#amp-one');
   const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});await expect(composer).toBeEditable();await composer.fill('Keep this unsent privacy draft');
   await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view?.draft)).toBe('Keep this unsent privacy draft');
-  const settings=page.getByRole('button',{name:/^Settings(?: \d+ unread items)?$/});
-  if(!await settings.isVisible())await activate(page.getByRole('button',{name:'Open navigation',exact:true}));
-  await activate(settings);await expect(page.locator('.a-settings-experience')).toBeVisible();
-  await page.waitForFunction(()=>{const el=document.querySelector('.a-settings-experience');return el&&el.dataset.compact===String((el.closest('.a-overlay')||el).clientWidth<960)});
   const panel=page.locator('.a-settings-experience');
-  for(let depth=0;await panel.getAttribute('data-compact')==='true'&&await panel.getAttribute('data-settings-index')!=='true';depth++){
-   if(depth>=6)throw Error('Settings Back did not reach index');const previous=await panel.getAttribute('data-settings-route');
-   await activate(panel.locator('.a-settings-mobile-head button').first());await expect(panel).not.toHaveAttribute('data-settings-route',previous);
-  }
   const privacy=async()=>{
-   for(let depth=0;await panel.getAttribute('data-compact')==='true'&&await panel.getAttribute('data-settings-index')!=='true';depth++){
-    if(depth>=6)throw Error('Privacy Back did not reach index');const previous=await panel.getAttribute('data-settings-route');
-    await activate(panel.locator('.a-settings-mobile-head button').first());await expect(panel).not.toHaveAttribute('data-settings-route',previous);
-   }
-   await activate(page.locator('[data-settings-section="privacy"]'));await expect(panel).toHaveAttribute('data-settings-page','privacy');
+   await openSettingsSection(page,'privacy',{activate:(_label,control)=>activate(control)});
+   await expect(panel).toHaveAttribute('data-settings-page','privacy');
   };
   const observe=async()=>{const response=await page.request.get(boot.url+'/api/fixture/privacy-observations');assert.equal(response.status(),200);return response.json()};
   const initial=await observe();assert.equal(initial.originalPreserved,true);assert.deepEqual(initial.runtimeCalls,[]);assert.equal(initial.schedules,0);

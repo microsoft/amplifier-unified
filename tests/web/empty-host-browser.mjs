@@ -106,6 +106,12 @@ try{
   assert.equal(createAttempts,1,'Checking delivery must not retry conversation creation');
   assert.equal(sendAttempts,0,'Checking delivery must not send the message');
   await page.getByRole('button',{name:'Retry original submission',exact:true}).click();
+  const confirmation=page.getByRole('alert').filter({hasText:'The earlier attempt may have run'});
+  await expect(confirmation).toBeVisible();
+  assert.equal(createAttempts,1,'Opening the retry confirmation must not create a conversation');
+  assert.equal(sendAttempts,0,'Opening the retry confirmation must not send');
+  await expect(composer).toHaveDraft('Next draft while the first delivery is pending');
+  await confirmation.getByRole('button',{name:'Send this message again',exact:true}).click();
  }
  release();
  if(process.argv.includes('--lost-create')){

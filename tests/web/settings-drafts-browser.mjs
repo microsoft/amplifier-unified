@@ -62,6 +62,7 @@ try{
  await showComposerOption(page,'provider');
  // The compact panel manages connections through the canonical Settings entry.
  await expect(page.getByRole('combobox',{name:/^Connection/})).toBeVisible();
+  await page.getByRole('dialog',{name:'Chat options',exact:true}).getByText('Advanced',{exact:true}).click();
  await page.getByRole('button',{name:'Manage connections',exact:true}).click();
  await expect(page.locator('[data-part=ai-connections]')).toBeVisible();
  }

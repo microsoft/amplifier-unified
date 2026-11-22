@@ -29,8 +29,21 @@ test('recovery observer requires the exact fixture origin and action endpoint',(
  assert.equal(observer.snapshot().postRequests,0);
 });
 
+test('camelCase catalog and mutation names remain recorded, not silently exempted',()=>{
+ const actions=[],observer=recoveryRequestObserver('http://127.0.0.1:9000',actions);
+ for(const action of ['externalAgents.list','externalAgents.save','configuration.operation.resume']){
+  observer.record(observedRequest('POST',{action,args:{},id:'exact-command'}),0);
+ }
+ observer.assertHealthy();
+ assert.deepEqual(actions.map(row=>row.action),['externalAgents.list','externalAgents.save','configuration.operation.resume']);
+ assert.equal(observer.snapshot().recordedActions,3);
+});
+
 test('null or malformed POST bodies stay explicit failures rather than recorded actions',()=>{
- for(const body of [null,[],{},'text',{action:7},{action:''},{action:'configuration.operation.resume',args:null},{action:'configuration.operation.resume',id:[]} ]){
+ for(const body of [null,[],{},'text',{action:7},{action:''},
+  ...['externalAgents..list','.externalAgents.list','externalAgents.list.','externalAgents/list','externalAgents.list\n','x'.repeat(81)].map(action=>({action})),
+  {action:'externalAgents.save',args:null},{action:'externalAgents.save',args:[]},{action:'externalAgents.save',id:''},
+  {action:'configuration.operation.resume',args:null},{action:'configuration.operation.resume',id:[]} ]){
   const actions=[],observer=recoveryRequestObserver('http://127.0.0.1:9000',actions);
   assert.doesNotThrow(()=>observer.record(observedRequest('POST',body),0));
   assert.deepEqual(actions,[]);
