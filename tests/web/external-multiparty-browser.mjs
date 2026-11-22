@@ -80,13 +80,16 @@ try{
   const panel=editor.getByRole('dialog',{name:'Agent settings',exact:true});
   const input=editor.getByRole('textbox',{name:'Message Amplifier',exact:true});
   await expect(settings).toBeVisible();
+  const centerY=async locator=>{const {y,height}=await locator.boundingBox();return y+height/2};
+  assert.ok(Math.abs(await centerY(settings.locator('span'))-await centerY(settings))<=1,'Trigger text is vertically centered');
+  assert.ok(Math.abs(await centerY(settings)-await centerY(editor.locator('.a-compose-add')))<=2,'Settings and Add share a center line');
   const before=await input.boundingBox();
   await settings.click();
   await panel.getByLabel('Agent',{exact:true}).selectOption(identity);
   await expect(panel.getByLabel('Connection')).toHaveValue('one');
   const after=await input.boundingBox();
   assert.deepEqual(after,before);
-  for(const [label,value] of [['Connection','two'],['Model','review'],['Reasoning effort','high']]){
+  for(const [label,value] of [['Connection','two'],['Model','review'],['Effort','high']]){
    const selector=panel.getByLabel(label,{exact:true});
    await selector.selectOption(value);
    await expect(selector).toHaveValue(value);
@@ -100,7 +103,11 @@ try{
   assert.deepEqual(changes.at(-1).settings,{provider:'two',model:'review',effort:'high'});
   if(identity==='alpha')assert.equal(snapshot.peers.beta.filter(row=>row.kind==='configure').length,0);
   if(artifacts)await editor.screenshot({path:join(artifacts,'agent-settings-'+width+'.png')});
-  await panel.getByRole('button',{name:'Close agent settings'}).click();
+  await expect(panel.getByText('Agent settings',{exact:true})).toHaveCount(0);
+  await expect(panel.getByRole('button',{name:/close|dismiss/i})).toHaveCount(0);
+  if(phone)await input.tap();else await editor.keyboard.press('Escape');
+  await expect(panel).toBeHidden();
+  if(!phone)await expect(settings).toBeFocused();
   }finally{await phone?.close()}
  }
  await page.setViewportSize({width:1280,height:950});

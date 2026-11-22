@@ -97,7 +97,7 @@ def advertised(service, session):
     efforts = [e for e in efforts if isinstance(e, str) and e and e != 'default']
     if efforts and (not effective.get('effort') or effective['effort'] in efforts):
         values = {'default': 'Provider default', **{e:e.title() for e in efforts}}
-        add('effort', 'Reasoning effort', 'thought_level', effective.get('effort') or 'default', values)
+        add('effort', 'Effort', 'thought_level', effective.get('effort') or 'default', values)
         for value in values:
             changes['effort', value] = {'selection': {'instance': instance, 'model': model,
                 **({'effort': value} if value != 'default' else {})}}

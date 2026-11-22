@@ -149,7 +149,7 @@ async function verifyReopenedChat(seed) {
     await page.keyboard.press('Enter');
     const effort = dialog(page).locator('[data-composer-page="effort"]');
     await expect(effort).toBeVisible();
-    await expect(effort).toContainText(/(?:Saved effort: |Reasoning effort\s*)low/i);
+    await expect(effort).toContainText(/(?:Saved effort: |Effort\s*)low/i);
     await page.reload();
     await openChat(page);
     await checkDividers(page,'after restore and reload');
