@@ -6,7 +6,7 @@ import {isAbsolute,relative,resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
-import {showComposerOption} from './composer-options-helpers.mjs';
+import {composerOptionsPanel,showComposerOption} from './composer-options-helpers.mjs';
 import {discoveryProblems,listRequestProblems} from './provider-native-readiness.mjs';
 
 const root=process.env.AMPLIFIER_TEST_ARTIFACTS;
@@ -146,7 +146,7 @@ try{
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const model=page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true});
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
- const dialog=page.getByRole('dialog',{name:'Chat options',exact:true});
+ const dialog=composerOptionsPanel(page);
  const A={instance:'native-a',model:'native-model',effort:'low'};
  const B={instance:'native-b',model:'native-model',effort:'high'};
  const ALT={instance:'native-alt',model:'native-model',effort:'high'};
@@ -286,7 +286,9 @@ try{
   await showComposerOption(page,'effort');const effort=dialog.locator('#chat-effort');
   await expect(effort).toBeVisible();await expect(effort).toHaveAttribute('aria-valuetext',expected.effort,{timeout});
   row.effort=await effort.getAttribute('aria-valuetext');await close();
-  await expect(model.locator(':scope > span')).toHaveText(`${expected.model} (${expected.effort})`,{timeout});
+  // The compact chip shows explicit effort only. These scenarios inherit
+  // low/high from the connection; the picker and actual calls prove that value.
+  await expect(model.locator(':scope > span')).toHaveText(expected.model,{timeout});
   row.chip=await model.locator(':scope > span').innerText();row.dismissed=true;
   await save('visible.json',boundaries);return row;
  }
@@ -433,11 +435,20 @@ try{
   const request=response.request();if(request.method()!=='POST'||new URL(request.url()).pathname!=='/api/actions')return false;
   const command=request.postDataJSON();return command.action==='conversation.configure'&&command.args.sessionId===originalSession&&command.args.selection?.instance==='native-b';
  },{timeout:15000});
+ const callsBeforeChoice=(await proof()).calls.length,choicesBefore=actions.length;
  await dialog.locator('#chat-provider').selectOption('native-b');
+ await showComposerOption(page,'model');
+ await expect(dialog.locator('#chat-model')).toHaveValue('');
+ assert.equal(actions.slice(choicesBefore).filter(row=>row.command.action==='conversation.configure').length,0,
+  'Choosing a connection stages its model, without committing a guess');
+ assert.equal((await proof()).calls.length,callsBeforeChoice,'Connection browsing cannot send a model request');
+ await dialog.locator('#chat-model').selectOption('native-model');
  const configured=await configurePromise,configureCommand=configured.request().postDataJSON(),configureReceipt=await bounded(configured.json(),10000,'Configuration receipt');
  await save('existing-chat-choice.json',{command:configureCommand,status:configured.status(),receipt:configureReceipt});
  assert.equal(configured.status(),200);assert.equal(configureReceipt.accepted,true);
  assert.equal(configureReceipt.result.revision,configureCommand.args.expectedRevision+1);
+ assert.deepEqual(configureCommand.args.selection,{instance:B.instance,model:B.model},
+  'The explicit model choice must not pin the inherited connection effort');
  acceptedConfiguration={revision:configureReceipt.result.revision,command:configureCommand,receipt:configureReceipt};
  await close();await visible(B);
  // Same-model/effort negative uses the SAME visible observer; no extra send.

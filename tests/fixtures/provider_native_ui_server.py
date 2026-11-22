@@ -560,6 +560,7 @@ async def main(root):
         # would override the shared B=20 declaration.
         alternate_definition['providers'] = [{
             'module': 'provider-native-fixture', 'id': 'native-alt',
+            'label': 'Native alternate',
             'source': paths['provider-native-fixture'],
             'config': {'display_name': 'Native alternate', 'priority': 0,
                        'default_model': 'native-model', 'reasoning_effort': 'high',
@@ -569,7 +570,7 @@ async def main(root):
         save(settings, {'bundle': {'active': str(bundle), 'app': []},
             'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)}, 'sources': {'modules': paths},
             'config': {'providers': [
-                {'module': 'provider-native-fixture', 'id': identity, 'config': {
+                {'module': 'provider-native-fixture', 'id': identity, 'label': label, 'config': {
                     'display_name': label, 'priority': priority, 'default_model': 'native-model',
                     'reasoning_effort': effort, 'proof_sink': str(root / 'calls.jsonl')}}
                 for identity, label, priority, effort in (
