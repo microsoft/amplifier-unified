@@ -156,12 +156,13 @@ def prepare(app, source, target, value, lineage, boundary):
     # and the existing native ownership probe proves no writer remains.
     interrupted = target.get('status') == 'interrupted'
     if interrupted or target.get('status') == 'error':
+        from .session_health import current_terminal_failure
         failure = target.get('failure') or {}
         active = target.get('collaborationGeneration') or {}
         evidence = retained_terminal_evidence(target)
         prove = getattr(app.runtime, 'stopped_boundary', None)
         if ((not interrupted and not evidence
-                and (not failure.get('generationId') or failure['generationId'] != active.get('id')))
+                and (not failure.get('generationId') or not current_terminal_failure(target)))
                 or not active.get('id') or not active.get('terminal') or not callable(prove)
                 or target.get('configurationBusy')
                 or any(w.get('status') in {'queued', 'starting', 'running', 'working', 'stopping'}
@@ -229,6 +230,13 @@ def guard(app, receipt, source, target):
         return 'The interrupted recipient changed before recovery.'
     if target.get('status') == 'error' and (not recovered or recovered['failure'] != target.get('failure')):
         return 'The recipient failure changed before recovery.'
+    if recovered and not recovered.get('terminalEvidence'):
+        from .session_health import current_terminal_failure
+        # Warming can change status to ready without admitting a new input.
+        # Recheck the same canonical root/generation/input binding at delivery,
+        # not just the saved failure dict or the earlier preparation snapshot.
+        if recovered['failure'] != target.get('failure') or not current_terminal_failure(target):
+            return 'The failed terminal generation changed before recovery.'
     if recovered and recovered.get('terminalEvidence') and (
             recovered['failure'] != target.get('failure')
             or retained_terminal_evidence(target) != {
