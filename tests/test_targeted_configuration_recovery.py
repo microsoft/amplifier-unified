@@ -391,7 +391,27 @@ async def test_targeted_saved_resume_never_rewrites_or_wakes(process_boundary, m
     seal = receipt_path(saved['attempts'][0]).read_bytes()
     # A remount emits readiness and legitimately reconsiders the queue. Observe
     # the real drain and its input boundary instead of replacing the guard.
-    drain = AsyncMock(wraps=b.app.collaboration.drain)
+    original_drain = b.app.collaboration.drain
+    original_owner = b.runtime.workers[b.owner['id']]['runtimeOwnerId']
+    readiness_drained = asyncio.get_running_loop().create_future()
+    async def observe_drain(sid):
+        worker = b.runtime.workers.get(sid) or {}
+        # A reentrant drain only requests another pass; it is not completion
+        # evidence for the readiness-triggered pass we need to exercise.
+        ready_owner = (worker.get('runtimeOwnerId')
+            if sid == b.owner['id'] and b.owner['status'] == 'ready'
+            and sid not in b.app.collaboration.draining else None)
+        observe_readiness = ready_owner and ready_owner != original_owner
+        try:
+            result = await original_drain(sid)
+        except BaseException as exc:
+            if observe_readiness and not readiness_drained.done():
+                readiness_drained.set_exception(exc)
+            raise
+        if observe_readiness and not readiness_drained.done():
+            readiness_drained.set_result(ready_owner)
+        return result
+    drain = AsyncMock(side_effect=observe_drain)
     monkeypatch.setattr(b.app.collaboration, 'drain', drain)
     peer_input = AsyncMock(wraps=b.runtime.collaboration_input)
     monkeypatch.setattr(b.runtime, 'collaboration_input', peer_input)
@@ -424,8 +444,11 @@ async def test_targeted_saved_resume_never_rewrites_or_wakes(process_boundary, m
     assert b.owner['id'] not in b.runtime.workers  # Read never warms.
     await invoke(b, source, 'resume', identity='operator-absent-resume')
     task = b.app.management.pending_config_tasks.get(b.owner['id'])
-    if task:
-        await asyncio.wait_for(task, 12)
+    async with asyncio.timeout(12):
+        if task:
+            await task
+        drained_owner = await readiness_drained
+    assert b.runtime.workers[b.owner['id']]['runtimeOwnerId'] == drained_owner
     final = operation(b)
     assert final['state']['phase'] == 'ready' and final['state']['effect'] == 'mounted'
     assert final['request'] == saved['request'] and final['requestHash'] == saved['requestHash']
@@ -439,8 +462,9 @@ async def test_targeted_saved_resume_never_rewrites_or_wakes(process_boundary, m
     assert b.owner['status'] in {'idle', 'ready'}
     assert final['recoveryNoInput'] is True
     assert suppress_input(b.owner, queued)
-    # Exercise the post-mount drain even if its scheduled readiness callback
-    # has not run yet. Neither route may admit the retained input or a new turn.
+    # The readiness pass completed above. Also exercise the post-mount boundary
+    # after configurationBusy cleared; neither route may admit this old input.
+    assert b.owner['id'] not in b.app.collaboration.draining
     await b.app.collaboration.drain(b.owner['id'])
     drain.assert_awaited_with(b.owner['id'])
     peer_input.assert_not_awaited()
