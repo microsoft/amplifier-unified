@@ -226,10 +226,21 @@ try{
  await page.screenshot({path:join(output,'narrow.png'),animations:'disabled'});
  const dismissButton=current.getByRole('button',{name:'Dismiss old request'});
  await dismissButton.scrollIntoViewIfNeeded();
- assert.equal(await dismissButton.evaluate(button=>{
-  const bounds=button.getBoundingClientRect(),container=button.closest('[data-part="approvals"]').getBoundingClientRect();
-  return bounds.top>=container.top&&bounds.bottom<=container.bottom&&button.contains(document.elementFromPoint(bounds.x+bounds.width/2,bounds.y+bounds.height/2));
- }),true,'Narrow dismissal is visible and hit-testable after scrolling');
+ const dismissalGeometry=await dismissButton.evaluate(async button=>{
+  const samples=[],card=button.closest('[data-part="approvals"]');
+  for(let frame=0;frame<4;frame++){
+   const bounds=button.getBoundingClientRect(),container=card.getBoundingClientRect();
+   const hit=document.elementFromPoint(bounds.x+bounds.width/2,bounds.y+bounds.height/2);
+   samples.push({frame,button:bounds.toJSON(),container:container.toJSON(),scrollTop:card.scrollTop,
+    clientHeight:card.clientHeight,scrollHeight:card.scrollHeight,viewport:{width:innerWidth,height:innerHeight},
+    hit:hit?{tag:hit.tagName,id:hit.id,class:hit.className,name:hit.getAttribute('aria-label')}:null,
+    reachable:bounds.top>=container.top&&bounds.bottom<=container.bottom&&button.contains(hit)});
+   if(frame<3)await new Promise(resolve=>requestAnimationFrame(resolve));
+  }
+  return samples;
+ });
+ await writeFile(join(output,'dismissal-geometry.json'),JSON.stringify(dismissalGeometry,null,2)+'\n');
+ assert.equal(dismissalGeometry[0].reachable,true,'Narrow dismissal is visible and hit-testable after scrolling: '+JSON.stringify(dismissalGeometry));
  await page.screenshot({path:join(output,'narrow-actions.png'),animations:'disabled'});
  await current.getByRole('button',{name:'Dismiss old request'}).click();
  await expect(current).toHaveCount(0);
