@@ -60,6 +60,11 @@ try{
    return Object.fromEntries(Object.keys(patch).map(key=>[key,actual?.[key]]));
   },patch)).toEqual(patch);
  };
+ const responsiveReady=target=>target.waitForFunction(()=>{
+  const layout=document.querySelector('[data-part="workspace"]');
+  return layout?.dataset.narrow===String(matchMedia('(max-width:900px)').matches)
+   &&layout.dataset.navigationNarrow===String(matchMedia('(max-width:640px)').matches);
+ });
  const measure=async(target=surface)=>target.evaluate(el=>{
   const rect=node=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height}};
   const input=el.querySelector('[role=textbox]'),style=getComputedStyle(el),form=el.closest('form'),help=document.getElementById(input.getAttribute('aria-describedby'));
@@ -90,6 +95,8 @@ try{
   near(m.writing.width,right-left,'Writing row spans full width');
   near(m.input.x,m.writing.x,'Editor uses the writing row');
   near(m.input.width,m.writing.width,'Editor spans the full writing width');
+  near(m.input.y,m.writing.y,'Editor starts in the writing row');
+  assert.ok(m.input.y+m.input.height<=m.writing.y+m.writing.height+.5,'Editor stays inside its writing row');
   near(m.writing.y,m.surface.y+1+padY,'No blank area above writing');
   if(idle){near(m.input.height,44,'Mounted idle editor has its effective 44px minimum');near(m.writing.height,m.input.height,'No blank writing-row spacer')}
   assert.equal(m.configurationInside,true,'Settings belong inside the composer surface');
@@ -126,7 +133,7 @@ try{
   assert.ok(m.help.width<=1&&m.help.height<=1,'User-requested visible hint is absent');
  };
  for(const width of [900,520,390,320]){
-  await page.setViewportSize({width,height:900});await clearComposer(input);
+  await page.setViewportSize({width,height:900});await responsiveReady(page);await clearComposer(input);
   for(const scheme of ['light','dark'])for(const interfaceDetail of ['minimal','standard','detailed']){
    await presentation({scheme,interfaceDetail,executionDetail:interfaceDetail});await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',scheme);await expect(surface).toBeVisible();
    const m=await measure();assert.equal(m.fine,true,'Narrow viewport does not imply coarse input');
@@ -155,6 +162,7 @@ try{
  await negative('settings overlaps writing',surface.locator('.a-compose-configuration'),{'grid-area':'writing'},/belongs below writing|Writing row|spacer|row has native/);
  await negative('blank spacer between rows',surface,{'row-gap':'20px'},/belongs below writing/);
  await negative('writing loses half its width',input,{width:'50%'},/full writing width/);
+ await negative('editor overlaps actions vertically',input,{transform:'translateY(8px)'},/Editor starts in the writing row/);
  await negative('action hit area is too small',surface.locator('.a-compose-add>button'),{width:'24px','min-width':'24px',height:'24px','min-height':'24px'},/Add belongs below writing|native pointer height|Native pointer hit area/);
  await negative('editor overflows its surface',input,{'min-width':'1000px'},/full writing width|overflow/);
  const cover=await primary.evaluateHandle(button=>{
@@ -173,7 +181,7 @@ try{
   const touchSurface=touch.locator('[data-part="composer-surface"]');
   await expect(touchSurface).toBeVisible();
   for(const width of [900,520,390,320]){
-   await touch.setViewportSize({width,height:900});
+   await touch.setViewportSize({width,height:900});await responsiveReady(touch);
    const m=await measure(touchSurface);assert.equal(m.coarse,true,'Touch context really selects coarse pointer CSS');
    evidence.coarseGeometry.push({width,...m});checkIdle(m);
   }
