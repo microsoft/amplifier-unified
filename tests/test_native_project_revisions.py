@@ -137,16 +137,31 @@ def test_repeated_probe_metadata_notifications_do_not_invalidate_chat_facts(tmp_
         token, _ = index.scan_changes()
         before = index._catalog.generations()
         slug = project_slug(workspace)
+        real_chat = index._catalog.get(slug, 'real-chat')
+        prior_token = token
         monkeypatch.setattr(index, '_invalidations', lambda: (True, {(slug, 'runtime-probe', 'metadata')}))
         for number in range(3):
             write_json(probe / 'metadata.json', {'working_dir': str(workspace), 'probe_sequence': number})
             token, changed = index.scan_changes(since=token)
             assert changed['sessions'] == []
-            assert changed['removed'] == [(slug, 'runtime-probe')]
-        assert delta(index._catalog, before) == dict(revision=3, observation_sessions=0,
+            # A metadata-only directory never entered the chat catalog. Its
+            # continued absence is not an explicit catalog repair/removal.
+            assert changed['removed'] == [] and changed['workspaces'] == []
+            assert not changed['reset'] and token is prior_token
+        assert delta(index._catalog, before) == dict(revision=0, observation_sessions=0,
                                                     observation_membership=0, navigation=0)
         assert index._catalog.count() == 1
-        assert diagnostics.snapshot()['counters'] == {'catalog.write.row.absent': 3}
+        assert index._catalog.get(slug, 'real-chat') == real_chat
+        assert diagnostics.snapshot()['counters'] == {}
+        # The same identity can later become a chat; quiet discovery must not
+        # turn its earlier absence into a permanent exclusion.
+        (probe / 'transcript.jsonl').write_text('{"role":"user","content":"Now a real chat"}\n')
+        monkeypatch.setattr(index, '_invalidations', lambda: (True, {(slug, 'runtime-probe', 'transcript')}))
+        token, changed = index.scan_changes(since=token)
+        assert [row['nativeIdentity'] for row in changed['sessions']] == ['runtime-probe']
+        assert changed['removed'] == [] and index._catalog.count() == 2
+        assert delta(index._catalog, before) == dict(revision=1, observation_sessions=1,
+                                                    observation_membership=1, navigation=1)
     finally:
         index.close()
 

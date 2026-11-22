@@ -3,6 +3,9 @@ import asyncio
 from copy import deepcopy
 import json
 from pathlib import Path
+import sqlite3
+from types import SimpleNamespace
+import uuid
 from unittest.mock import AsyncMock
 
 import pytest
@@ -346,15 +349,113 @@ async def test_passive_read_bounds_manifest_and_never_decodes_runtime(app, manif
     elif manifest == 'oversized-inline':
         raw['unused'] = 'x' * (1024 * 1024)
     encoded = 'bad-json' if manifest == 'malformed-inline' else json.dumps(raw)
-    app.db.execute("UPDATE state_records SET value=? WHERE kind='session' AND id=?", (encoded, identity))
+    if manifest == 'malformed-inline':
+        # Ordinary updates cannot introduce malformed JSON: the installed
+        # suggestion invalidation trigger rejects it before the passive reader.
+        # Keep that boundary and prove it preserves the previous saved owner.
+        original = app.db.execute("SELECT value FROM state_records WHERE kind='session' AND id=?",
+                                  (identity,)).fetchone()
+        with pytest.raises(sqlite3.OperationalError, match='malformed JSON'):
+            app.db.execute("UPDATE state_records SET value=? WHERE kind='session' AND id=?",
+                           (encoded, identity))
+        assert app.db.execute("SELECT value FROM state_records WHERE kind='session' AND id=?",
+                              (identity,)).fetchone() == original
+        # Plant a distinct retained corrupt row directly, as corruption/legacy
+        # storage rather than a successful production update. Do not disable
+        # triggers or mock the reader: this must reach its real bounded refusal.
+        identity = str(uuid.uuid4())
+        app.db.execute("INSERT INTO state_records VALUES('session',?,?)", (identity, encoded))
+    else:
+        app.db.execute("UPDATE state_records SET value=? WHERE kind='session' AND id=?", (encoded, identity))
     app.db.execute("INSERT OR REPLACE INTO state_records VALUES('runtime',?,?)", (identity, 'invalid-' + 'x' * 2000000))
     app.db.commit()
     app.state['sessions'].remove(target)
-    if manifest == 'valid-session-bad-runtime':
-        assert read(app, {'sessionId': identity})['nextMessageRevision'] == 7
-    else:
-        with pytest.raises(AppError, match='bounded|legacy'):
-            read(app, {'sessionId': identity})
+    changes = app.db.total_changes
+    statements = []
+    app.db.set_trace_callback(statements.append)
+    try:
+        if manifest == 'valid-session-bad-runtime':
+            assert read(app, {'sessionId': identity})['nextMessageRevision'] == 7
+        else:
+            with pytest.raises(AppError, match='bounded|legacy') as error:
+                read(app, {'sessionId': identity})
+            assert error.value.status == 409
+    finally:
+        app.db.set_trace_callback(None)
+    assert app.db.total_changes == changes
+    assert len(statements) == 1 and "WHERE kind='session'" in statements[0]
+    assert app.db.execute("SELECT value FROM state_records WHERE kind='session' AND id=?",
+                          (identity,)).fetchone() == (encoded,)
+    assert app.db.execute("SELECT value FROM state_records WHERE kind='runtime' AND id=?",
+                          (identity,)).fetchone() == ('invalid-' + 'x' * 2000000,)
+
+
+@pytest.mark.parametrize('legacy_trigger', [False, True])
+def test_retained_malformed_settings_repair_keeps_claims_and_transaction(tmp_path, legacy_trigger):
+    from amplifier_web.prompt_suggestions import PromptSuggestions
+    from amplifier_web.conversation_configuration import saved_session
+
+    db = sqlite3.connect(tmp_path / 'repair.sqlite3')
+    try:
+        db.execute('CREATE TABLE state_records(kind TEXT,id TEXT,value TEXT,PRIMARY KEY(kind,id))')
+        service = SimpleNamespace(db=db, state={'sessions': []})
+        PromptSuggestions(service)
+        if legacy_trigger:
+            # Retain the exact prior trigger to exercise the on-start upgrade,
+            # not just a new installation with the corrected definition.
+            db.execute('DROP TRIGGER IF EXISTS suggestion_success_session_change_v2')
+            db.execute('DROP TRIGGER IF EXISTS suggestion_success_session_change')
+            db.execute('''CREATE TRIGGER suggestion_success_session_change
+                AFTER UPDATE OF value ON state_records WHEN NEW.kind='session' AND (
+                    NEW.value='null' OR json_extract(NEW.value,'$.archived')=1 OR
+                    json_extract(NEW.value,'$._deleting')=1 OR
+                    COALESCE(json_extract(NEW.value,'$.interruptionRevision'),0) !=
+                    COALESCE(json_extract(OLD.value,'$.interruptionRevision'),0))
+                BEGIN DELETE FROM suggestion_success_cache WHERE session_id=NEW.id;
+                      DELETE FROM suggestion_fresh_completion WHERE session_id=NEW.id; END''')
+        db.execute("INSERT INTO state_records VALUES('session','damaged','bad-json')")
+        db.execute("INSERT INTO state_records VALUES('session','other',?)", ('{"id":"other"}',))
+        for sid in ('damaged', 'other'):
+            db.execute('INSERT INTO suggestion_success_cache VALUES(?,?,?,?,?)',
+                       ('owner', sid, 'input-' + sid, '{"status":"empty","suggestion":null}', 1))
+            db.execute('INSERT INTO suggestion_fresh_completion VALUES(?,?,?)', (sid, 'prior-proof', 1))
+            db.execute('INSERT INTO suggestion_requests VALUES(?,?)', ('request-' + sid, 'paid-' + sid))
+        db.commit()
+        tables = ('suggestion_requests', 'suggestion_cache_policy',
+                  'suggestion_success_cache', 'suggestion_fresh_completion')
+        def snapshot():
+            return {table: list(db.execute(f'SELECT * FROM {table} ORDER BY 1,2')) for table in tables}
+        before = snapshot()
+        owner = PromptSuggestions(service)
+        assert snapshot() == before  # Startup observes no new completion/inference.
+        with pytest.raises(AppError, match='bounded'):
+            saved_session(service, 'damaged')
+        assert db.execute("SELECT value FROM state_records WHERE id='damaged'").fetchone() == ('bad-json',)
+
+        # An invalid proposed replacement is still refused without losing the
+        # last saved value, cached result or paid/uncertain request claims.
+        with pytest.raises(sqlite3.OperationalError, match='malformed JSON'):
+            db.execute("UPDATE state_records SET value='still-bad' WHERE id='damaged'")
+        assert snapshot() == before
+        repaired = '{"id":"damaged","bundle":"anchors","interruptionRevision":0}'
+        db.execute("UPDATE state_records SET value=? WHERE id='damaged'", (repaired,))
+        assert db.in_transaction
+        assert db.execute("SELECT session_id FROM suggestion_success_cache").fetchall() == [('other',)]
+        assert db.execute("SELECT session_id FROM suggestion_fresh_completion").fetchall() == [('other',)]
+        db.rollback()
+        assert snapshot() == before
+        assert db.execute("SELECT value FROM state_records WHERE id='damaged'").fetchone() == ('bad-json',)
+        db.execute("UPDATE state_records SET value=? WHERE id='damaged'", (repaired,))
+        db.commit()
+        assert saved_session(service, 'damaged')['bundle'] == 'anchors'
+        after = snapshot()
+        for table in ('suggestion_requests', 'suggestion_cache_policy'):
+            assert after[table] == before[table]
+        assert db.execute("SELECT session_id FROM suggestion_success_cache").fetchall() == [('other',)]
+        assert db.execute("SELECT session_id FROM suggestion_fresh_completion").fetchall() == [('other',)]
+        assert not owner.jobs and owner._manager is None
+    finally:
+        db.close()
 
 
 @pytest.mark.parametrize('pending', [
