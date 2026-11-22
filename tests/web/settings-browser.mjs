@@ -93,11 +93,41 @@ try{
  const floating=await page.locator('.a-dialog').boundingBox();assert.equal(floating.x,0);assert.equal(floating.y,0);assert.equal(floating.width,680);
 
  await page.getByText('Update preferences',{exact:true}).click();
- const aligned=await page.locator('.a-update-options label').first().evaluate(label=>{const input=label.querySelector('input'),a=input.getBoundingClientRect(),b=label.getBoundingClientRect();return {direction:getComputedStyle(label).flexDirection,width:a.width,delta:Math.abs(a.top+a.height/2-b.top-b.height/2)}});
- assert.equal(aligned.direction,'row');assert.equal(aligned.width,18);assert.ok(aligned.delta<3);
+ const choiceGeometry=()=>page.locator('.a-update-options label:has(>input[type=checkbox])').evaluate(label=>{
+  const input=label.querySelector('input'),a=input.getBoundingClientRect(),b=label.getBoundingClientRect();
+  const text=[...label.childNodes].find(node=>node.nodeType===Node.TEXT_NODE&&node.textContent.trim());
+  if(!text)throw Error('Update checkbox must retain its visible label text');
+  const range=document.createRange();range.selectNodeContents(text);
+  const lines=[...range.getClientRects()].filter(rect=>rect.width&&rect.height),first=lines[0];
+  if(!first)throw Error('Update checkbox label has no rendered first line');
+  return {display:getComputedStyle(label).display,direction:getComputedStyle(label).flexDirection,
+   width:a.width,height:a.height,hitHeight:b.height,before:a.right<=first.left,
+   delta:Math.abs(a.top+a.height/2-first.top-first.height/2),
+   textFits:lines.every(rect=>rect.left>=b.left&&rect.right<=b.right+1),
+   labelFits:label.scrollWidth<=label.clientWidth};
+ });
+ const assertChoice=row=>{
+  assert.equal(row.display,'flex');assert.equal(row.direction,'row');
+  assert.equal(row.width,18);assert.equal(row.height,18);assert.ok(row.hitHeight>=48);
+  assert.equal(row.before,true);assert.ok(row.delta<3);assert.equal(row.textFits,true);assert.equal(row.labelFits,true);
+ };
+ // Reference aligns the input with the first line, not the middle of the
+ // enlarged compact label's 48px hit area. Retain the original 3px bound.
+ const aligned=await choiceGeometry();assertChoice(aligned);
+ for(const patch of [{direction:'column'},{width:48},{before:false},{delta:3},{textFits:false},{hitHeight:18}])
+  assert.throws(()=>assertChoice({...aligned,...patch}));
+ const field=await page.locator('#update-frequency').evaluate(select=>{
+  const label=document.querySelector('label[for="update-frequency"]'),a=label.getBoundingClientRect(),b=select.getBoundingClientRect();
+  return {labelDisplay:getComputedStyle(label).display,choiceChildren:label.querySelectorAll('input[type=checkbox],input[type=radio]').length,
+   separate:select.parentElement===label.parentElement&&label.nextElementSibling===select,
+   below:b.top>=a.bottom,width:b.width,height:b.height};
+ });
+ assert.equal(field.labelDisplay,'block');assert.equal(field.choiceChildren,0);assert.equal(field.separate,true);
+ assert.equal(field.below,true);assert.ok(field.width>18&&field.height>18,'A separate label/select is not a native choice row');
  await page.setViewportSize({width:390,height:844});
  const rect=await page.locator('.a-dialog').boundingBox();assert.equal(rect.x,0);assert.equal(rect.y,0);assert.equal(rect.width,390);assert.equal(rect.height,844);
  assert.equal(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+ assertChoice(await choiceGeometry());
  await page.getByRole('region',{name:'Changelog',exact:true}).scrollIntoViewIfNeeded();
  await page.screenshot({animations:'disabled',path:'/tmp/amplifier-changelog-mobile.png'});
  await page.screenshot({animations:'disabled',path:'/tmp/amplifier-settings-mobile.png'});
@@ -120,6 +150,7 @@ try{
  assert.equal(await page.locator('.a-module-settings .a-collection-row').count(),1);
  await page.getByRole('button',{name:'tool-filesystem tools',exact:true}).click();
  await page.locator('#module-field-max_bytes').fill('4096');
+ assert.ok((await page.locator('#module-field-max_bytes').boundingBox()).width>18,'Numeric fields never inherit choice-input width');
  await page.getByRole('button',{name:'Apply to loaded session',exact:true}).click();
  await page.getByText('Changes are applied to the loaded session.',{exact:true}).waitFor();
  assert.equal((await state()).sessions[0].configuration.plan.tools[0].config.max_bytes,4096);
@@ -137,6 +168,7 @@ try{
  await openSettingsPage(page,'app-bundles');
  await openSettingsPage(page,'add-bundles');
  await page.locator('#bundle-source').fill('https://github.com/example/bundles');
+ assert.ok((await page.locator('#bundle-source').boundingBox()).width>18,'Text fields never inherit choice-input width');
  await page.getByRole('button',{name:'Browse',exact:true}).click();
  await page.locator('.a-candidate').first().waitFor();
  const radioInline=await page.locator('.a-candidate').first().evaluate(label=>{const radio=label.querySelector('input').getBoundingClientRect(),text=label.querySelector('strong').getBoundingClientRect();return {direction:getComputedStyle(label).flexDirection,width:radio.width,before:radio.right<=text.left,delta:Math.abs(radio.y-text.y)}});
