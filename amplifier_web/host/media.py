@@ -270,7 +270,23 @@ class SourcePolicy:
         self.coordinator = coordinator
         self.pending = {}
         self.paths = {}
+        self.generating = {}
         self.store = None
+
+    def artwork(self):
+        try:
+            from amplifier_module_provider_openai_chatgpt.artwork import CodexArtwork
+        except ImportError:
+            return None
+        name = "codex_artwork"
+        tool = (self.coordinator.get("tools") or {}).get(name)
+        unwrap = self.coordinator.get_capability("web.work_inspect_tool")
+        if tool is not None and callable(unwrap):
+            try:
+                tool = unwrap(name, tool)
+            except ValueError:
+                return None
+        return tool if type(tool) is CodexArtwork and callable(getattr(tool, "artifact_for_preview", None)) else None
 
     async def observe(self, event, data):
         from amplifier_core import HookResult
@@ -281,11 +297,17 @@ class SourcePolicy:
             source = media_read_source(self.coordinator, arguments["file_path"])
             if source is not None:
                 self.pending[data.get("tool_call_id")] = (arguments["file_path"], source)
+        if data.get("tool_name") == "codex_artwork" and isinstance(arguments, dict):
+            tool = self.artwork()
+            if tool is not None:
+                self.generating[data.get("tool_call_id")] = (tool, tool.generation, arguments.copy())
+                if len(self.generating) > 128:
+                    self.generating.pop(next(iter(self.generating)))
         return HookResult()
 
     def settle(self, canonical):
         from ..read_policy import read_file_call_paths, media_read_source
-        paths = read_file_call_paths(canonical, self.coordinator.session_id)
+        paths = read_file_call_paths(canonical, self.coordinator.session_id, artwork=self.artwork())
         self.paths = paths
         for row in canonical:
             for ref in ((row.get("metadata") or {}).get(NAMESPACE) or {}).get("refs", []):
@@ -293,10 +315,12 @@ class SourcePolicy:
                 path = paths.get(identity)
                 source = media_read_source(self.coordinator, path)
                 if identity in self.pending and (path, source) == self.pending[identity]:
-                    self.store.classify_origin(ref, classification="read-file." + _digest([path, source]))
+                    prefix = "codex-art." if identity in self.generating else "read-file."
+                    self.store.classify_origin(ref, classification=prefix + _digest([path, source]))
         for row in canonical:
             if row.get("role") == "tool":
                 self.pending.pop(row.get("tool_call_id"), None)
+                self.generating.pop(row.get("tool_call_id"), None)
 
     def validate(self, ref, *, purpose):
         from amplifier_foundation.session.media import MediaRefusal
@@ -308,13 +332,32 @@ class SourcePolicy:
         # Publication validates staged bytes before a canonical append exists.
         # This is only the actual observed call; hydration still requires the
         # independent committed-checkpoint proof and the settled relation below.
+        if origin["kind"] == "tool" and origin["session_id"] == self.coordinator.session_id:
+            issuing = self.generating.get(origin["id"])
+            if issuing is not None:
+                tool, started, arguments = issuing
+                if self.artwork() is not tool:
+                    return False
+                original = tool.artifact_for_preview(ref["sha256"], arguments, started)
+                source = media_read_source(self.coordinator, original)
+                if original is None or source is None:
+                    return False
+                self.pending[origin["id"]] = (original, source)
+                return True
         if (origin["kind"] == "tool" and origin["session_id"] == self.coordinator.session_id
                 and origin["id"] in self.pending):
             argument, source = self.pending[origin["id"]]
             return source is not None and media_read_source(self.coordinator, argument) == source
         source = media_read_source(self.coordinator, path)
+        classification = self.store.get_origin_classification(ref)
+        if (path is not None and source is not None and origin["kind"] == "tool"
+                and origin["session_id"] == self.coordinator.session_id
+                and classification == "codex-art." + _digest([path, source])):
+            from pathlib import Path
+            artwork = self.artwork()
+            return artwork is not None and Path(path).parent == artwork.directory
         if not (origin["kind"] == "tool" and origin["session_id"] == self.coordinator.session_id
-                and self.store.get_origin_classification(ref) == "read-file." + _digest([path, source])
+                and classification == "read-file." + _digest([path, source])
                 and path is not None and source is not None):
             raise MediaRefusal("Current read_file source policy is unavailable or refused", code="source_policy")
         return True

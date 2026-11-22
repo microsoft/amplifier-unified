@@ -137,7 +137,7 @@ def media_read_allowed(coordinator, original_path):
     return media_read_source(coordinator, original_path) is not None
 
 
-def read_file_call_paths(canonical, session_id):
+def read_file_call_paths(canonical, session_id, *, artwork=None):
     """Only complete canonical assistant/tool pairs can bind source arguments.
 
     Duplicated IDs, missing results, wrong roles/names and producer-added paths
@@ -204,13 +204,29 @@ def read_file_call_paths(canonical, session_id):
         seen.add(identity)
         name, arguments = calls.get(identity, (None, None))
         refs = ((row.get('metadata') or {}).get(NAMESPACE) or {}).get('refs', [])
-        if (identity not in paired or identity in duplicates or name != 'read_file'
-                or row.get('name', 'read_file') != 'read_file'
-                or not isinstance(arguments, dict) or not isinstance(arguments.get('file_path'), str)
-                or not arguments['file_path'] or 'offset' in arguments or 'limit' in arguments or not refs):
+        if identity not in paired or identity in duplicates or row.get('name', name) != name or not refs:
+            continue
+        if name == 'read_file' and isinstance(arguments, dict):
+            path = arguments.get('file_path')
+            if not isinstance(path, str) or not path or 'offset' in arguments or 'limit' in arguments:
+                continue
+        elif artwork is not None and name == 'codex_artwork':
+            from .output_image_delivery import successful_output
+            import re
+            receipt = successful_output(row.get('content'))
+            if not isinstance(receipt, dict):
+                continue
+            artifact_id = receipt.get('artifact_id')
+            if not isinstance(artifact_id, str) or not re.fullmatch(r'[a-f0-9]{64}', artifact_id):
+                continue
+            path = str(artwork.directory / (artifact_id + '.png'))
+            if (receipt.get('path') != path or len(refs) != 1
+                    or refs[0].get('sha256') != receipt.get('preview_sha256')):
+                continue
+        else:
             continue
         if all((ref.get('provenance') or {}).get('kind') == 'tool'
                and (ref.get('provenance') or {}).get('session_id') == session_id
                and (ref.get('provenance') or {}).get('id') == identity for ref in refs):
-            paths[identity] = arguments['file_path']
+            paths[identity] = path
     return {identity: path for identity, path in paths.items() if identity not in duplicates}
