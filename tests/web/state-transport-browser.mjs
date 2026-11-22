@@ -1,4 +1,5 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {settledAppearance,readAppearance} from './settings-fixture.mjs';
 // Production assets, real HTTP/SSE and a disposable Spark-sized catalog.
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
@@ -53,6 +54,8 @@ function actionResponse({request,body},catalog){
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/active_client_performance_server.py'],{stdio:['ignore','pipe','inherit'],env:{...process.env,AMPLIFIER_TRANSPORT_FIXTURE:'1'}});
 let browser,context,page,cdp,tracing=false,failed=false,measured=false,heldPrepares=0,persistenceReleased=false,initialFrameCount=0,initialMaxBytes=0;
 let releasePersistence;const persistenceGate=new Promise(resolve=>{releasePersistence=()=>{persistenceReleased=true;resolve()}});
+let releaseStorage,heldStorage=0;
+const storageGate=new Promise(resolve=>{releaseStorage=resolve});
 const metricNames=['Timestamp','TaskDuration','ScriptDuration','LayoutDuration','RecalcStyleDuration','LayoutCount','RecalcStyleCount'];
 const rendererMetrics=async()=>Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.filter(row=>metricNames.includes(row.name)).map(row=>[row.name,row.value]));
 async function measurePaint(kind){
@@ -61,18 +64,18 @@ async function measurePaint(kind){
  const sample=await page.evaluate(async kind=>{
   const root=document.getElementById('amp-one'),button=kind==='appearance'?document.querySelector('input[name="appearance-scheme"][value="dark"]'):null;
   const gallery={cards:document.querySelectorAll('.a-appearance-card').length,loading:!![...document.querySelectorAll('[role="status"]')].find(node=>node.textContent==='Loading appearances…')};
-  let start,schemeChangeMs=null,firstFrameMs,secondFrameMs;
-  const observer=new MutationObserver(()=>{if(schemeChangeMs===null&&root.style.colorScheme==='dark')schemeChangeMs=performance.now()-start});
-  if(kind==='appearance')observer.observe(root,{attributes:true,attributeFilter:['style']});
+  let start,firstFrameMs,secondFrameMs;
   start=performance.now();
   if(kind==='settings')window.pendingSettings=window.amplifier.dispatch('view.update',{patch:{panel:'settings'}});else button.click();
   const clickMs=performance.now()-start;
   await new Promise(resolve=>requestAnimationFrame(()=>{firstFrameMs=performance.now()-start;requestAnimationFrame(()=>{secondFrameMs=performance.now()-start;resolve()})}));
-  const ms=performance.now()-start,visible=kind==='settings'?!!document.querySelector('[role="dialog"]'):root.style.colorScheme==='dark';
-  observer.disconnect();
+  const feedback=document.querySelector('[data-feedback-for="scheme"] [role="status"]');
+  const ms=performance.now()-start,visible=kind==='settings'?!!document.querySelector('[role="dialog"]'):
+   button.checked&&button.disabled&&feedback?.textContent==='Saving…'&&feedback.getClientRects().length>0;
   window.transportLongTasks.record(window.transportLongTasks.observer.takeRecords());
   const longTasks=window.transportLongTasks.rows.filter(row=>row.start<=start+ms&&row.start+row.duration>=start).map(row=>({startMs:row.start-start,durationMs:row.duration}));
-  return {kind,ms,visible,clickMs,firstFrameMs,secondFrameMs,schemeChangeMs,gallery,longTasks};
+  return {kind,ms,visible,clickMs,firstFrameMs,secondFrameMs,gallery,longTasks,
+   ...(kind==='appearance'?{feedback:feedback?.textContent,focused:document.activeElement===button,rootScheme:root.style.colorScheme}:{})};
  },kind);
  paint.push(sample);
  const after=await rendererMetrics();
@@ -125,36 +128,79 @@ try{
  Object.assign(evidence,{initialFrames,initialFrameCount,initialMaxBytes,initialCoverageSettled:true});
  assert.ok(evidence.settledBaselineBytes<1_000_000,`Settled baseline should remain bounded: ${evidence.settledBaselineBytes}`);
  assert.ok(initialMaxBytes<1_000_000,JSON.stringify({initialFrameCount,initialMaxBytes}));
+ // Initialize the complete local profile without opening/prewarming Settings.
+ // This is fixture setup; the measured choice below remains an actual radio.
+ const initialAppearance=await settledAppearance(page);
+ const localSelection=await page.evaluate(a=>window.amplifier.dispatch('appearance.preferences.select',{
+  generation:a.generation,activeScope:'client',expectedRevision:a.local.revision,
+  expectedStorageVersion:a.local.storageVersion,expectedSharedRevision:a.shared.revision,
+ }),initialAppearance);
+ assert.equal(localSelection.accepted,true);
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().appearance.activeScope)).toBe('client');
+ const profileBefore=await settledAppearance(page);
  measured=true;
  for(let i=0;i<12;i++)await page.evaluate(value=>window.amplifier.dispatch('view.update',{patch:{navWidth:300+value}}),i);
  // Preserve simulated transport latency; the explicit gate proves persistence is still blocked.
  await page.route('**/api/actions',async route=>{
-  const action=route.request().postDataJSON()?.action;
+  const body=route.request().postDataJSON(),action=body?.action;
   if(['view.update','appearance.preferences.update'].includes(action))await new Promise(resolve=>setTimeout(resolve,500));
   if(action==='appearance.preferences.update'&&!persistenceReleased){heldPrepares++;await persistenceGate}
+  if(action==='appearance.client.report'&&body.args?.status==='stored'){heldStorage++;await storageGate}
   await route.continue();
  });
  evidence.stage='settings paint';await measurePaint('settings');
  await page.evaluate(()=>window.pendingSettings);
  await page.locator('[data-settings-section="appearance"]').click();
  const dark=page.getByRole('radiogroup',{name:'Color mode',exact:true}).getByRole('radio',{name:'Dark',exact:true});await dark.waitFor();
- const savedBefore=await page.evaluate(()=>window.amplifier.getState().appearance.effective.scheme);
+ const savedBefore=await page.evaluate(()=>({scheme:document.getElementById('amp-one').style.colorScheme,
+  composition:document.getElementById('amp-one').dataset.appearanceComposition}));
+ await dark.focus();
  // Do not wait for gallery/fonts/network idle: keep the existing cold-opening coverage.
- evidence.stage='appearance paint';await measurePaint('appearance');
+ evidence.stage='appearance pending feedback';await measurePaint('appearance');
  evidence.stage='held persistence';await expect.poll(()=>heldPrepares).toBe(1);
- evidence.optimisticProof={heldPrepares,persistenceReleased,...await page.evaluate(()=>({localScheme:document.getElementById('amp-one').style.colorScheme,savedScheme:window.amplifier.getState().appearance.effective.scheme}))};
- await persist();assert.ok(!evidence.optimisticProof.persistenceReleased&&evidence.optimisticProof.localScheme==='dark',JSON.stringify(evidence.optimisticProof));
- assert.equal(evidence.optimisticProof.savedScheme,savedBefore,'Optimistic paint must not be mistaken for persistence');
+ evidence.pendingProof={heldPrepares,persistenceReleased,appearance:await readAppearance(page)};
+ assert.equal(persistenceReleased,false);
+ assert.deepEqual(evidence.pendingProof.appearance.effective,profileBefore.effective);
+ assert.deepEqual(evidence.pendingProof.appearance.shared,profileBefore.shared);
+ assert.deepEqual(await page.evaluate(()=>({scheme:document.getElementById('amp-one').style.colorScheme,
+  composition:document.getElementById('amp-one').dataset.appearanceComposition})),savedBefore,'Pending choice cannot activate before storage');
+ await persist();
  releasePersistence();
- await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().appearance.effective.scheme)).toBe('dark');
+ await expect.poll(()=>heldStorage).toBe(1);
+ const awaitingAck=await readAppearance(page);
+ assert.deepEqual(awaitingAck.effective,profileBefore.effective);
+ assert.deepEqual(awaitingAck.shared,profileBefore.shared);
+ assert.deepEqual(await page.evaluate(()=>({scheme:document.getElementById('amp-one').style.colorScheme,
+  composition:document.getElementById('amp-one').dataset.appearanceComposition})),savedBefore);
+ const stored=await page.evaluate(key=>JSON.parse(localStorage.getItem(key)),awaitingAck.namespace);
+ assert.equal(stored.values.scheme,'dark');assert.notEqual(stored.version,profileBefore.local.storageVersion);
+ evidence.storageBeforeAck={heldStorage,storedVersion:stored.version,activeScheme:awaitingAck.effective.scheme};
+ await page.evaluate(()=>{
+  const root=document.getElementById('amp-one'),started=performance.now();
+  window.confirmedAppearancePaint=new Promise(resolve=>{
+   const observer=new MutationObserver(()=>{
+    if(root.style.colorScheme!=='dark')return;
+    observer.disconnect();requestAnimationFrame(()=>requestAnimationFrame(()=>resolve({ms:performance.now()-started,scheme:root.style.colorScheme,composition:root.dataset.appearanceComposition})));
+   });
+   observer.observe(root,{attributes:true,attributeFilter:['style','data-appearance-composition']});
+  });
+ });
+ releaseStorage();
+ const confirmed=await settledAppearance(page);
+ evidence.confirmedPaint=await page.evaluate(()=>window.confirmedAppearancePaint);
+ assert.equal(confirmed.effective.scheme,'dark');assert.equal(confirmed.local.storageVersion,stored.version);
+ assert.deepEqual(confirmed.shared,profileBefore.shared);
+ assert.equal(evidence.confirmedPaint.scheme,'dark');assert.equal(evidence.confirmedPaint.composition,confirmed.composition.id);
  await expect(dark).toBeEnabled();
- assert.equal(await page.evaluate(()=>window.amplifier.getShellState().effectiveComposition.presentation.scheme),'dark');
- // Failed persistence rolls back the preview and retains the saved appearance.
+ // Failed persistence keeps the confirmed profile/root and exposes local failure.
  evidence.stage='rejection rollback';await page.unroute('**/api/actions');
  await page.route('**/api/actions',async route=>{if(route.request().postDataJSON()?.action==='appearance.preferences.update'){await new Promise(resolve=>setTimeout(resolve,300));return route.fulfill({status:409,json:{accepted:false,error:'Fixture rejected appearance'}})}await route.continue()});
  await page.getByRole('radiogroup',{name:'Color mode',exact:true}).getByRole('radio',{name:'Light',exact:true}).check();
  await expect(page.getByText('Fixture rejected appearance',{exact:true})).toBeVisible();
  assert.equal(await page.locator('#amp-one').evaluate(node=>node.style.colorScheme),'dark');evidence.rejectionRollback=true;
+ assert.deepEqual((await readAppearance(page)).effective,confirmed.effective);
+ assert.deepEqual((await readAppearance(page)).local,confirmed.local);
+ assert.deepEqual((await readAppearance(page)).shared,confirmed.shared);
  await page.unroute('**/api/actions');
  measured=false;
  // Parse/hash only after the measured interaction. Merely deferring Promise.all
@@ -194,6 +240,7 @@ try{
 }catch(error){if(page)console.error((await page.locator('body').innerText()).slice(0,3000));failed=true;evidence.status='failed';evidence.failure={name:error.name,message:error.message.slice(0,8000)};throw error}
 finally{
  releasePersistence();
+ releaseStorage();
  try{
   if(tracing){await context.tracing.stop(failed?{path:tracePath}:{});if(failed)evidence.failureTrace=tracePath}
  }catch(error){evidence.traceError=error.message}

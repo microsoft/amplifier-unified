@@ -340,12 +340,19 @@ try{
    assert.equal(rgb(row.outer)[3],0);assert.equal(row.outerImage,'none');
    assert.deepEqual(row.outerBorder,['0px','0px','0px','0px']);
    assert.deepEqual(row.outerPadding,['0px','0px','0px','0px']);assert.equal(row.outerShadow,'none');
-   assert.equal(rgb(row.body)[3],1,'Bubble body owns opaque reading paint');
+   assert.equal(rgb(row.body)[3],row.role==='user'?1:0,'Breadbin user bubble is opaque; assistant reads on the continuous screen');
    assert.equal(rgb(row.footer)[3],0);assert.equal(row.footerImage,'none');assert.equal(row.footerShadow,'none');
    assert.deepEqual(row.footerBorder,['0px','0px','0px','0px']);
    assert.ok(row.footerTop>=row.bodyBottom,'Footer stays outside body paint');
-   if(row.role==='assistant')assert.deepEqual(row.padding,width===390?['12px','12px','12px','12px']:['16px','20px','16px','20px']);
+   if(row.role==='assistant')assert.deepEqual(row.padding,['8px','14px','8px','14px']);
   }
+  const screen=await paint(page.locator('[data-part="conversation"]'));
+  const messages=await paint(pane),assistantPaint=await paint(pane.locator('.a-assistant > .a-message-body'));
+  const screenBacking=backing(screen.ancestors,'Conversation screen');
+  assert.equal(rgb(screen.background)[3],1,'Continuous conversation screen is independently opaque');
+  assert.deepEqual(backing(messages.ancestors,'Messages screen'),screenBacking);
+  assert.deepEqual(backing(assistantPaint.ancestors,'Assistant screen'),screenBacking);
+  assert.ok(ratio(rgb(assistantPaint.color),screenBacking)>=4.5,'Assistant text retains measured contrast on its opaque backing');
   check('bubbles',{rows});
  };
  const artwork=()=>app.evaluate(el=>{
