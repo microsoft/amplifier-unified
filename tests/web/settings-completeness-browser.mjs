@@ -6,7 +6,15 @@ import {startSettingsFixture,readAppearance,settledAppearance} from './settings-
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const {base,stop}=await startSettingsFixture();
-let browser,page,failure;const errors=[];
+let browser,page,failure,releaseDiagnostics;const errors=[],diagnosticNavigation=[];
+const diagnosticSnapshot=()=>page.evaluate(()=>{
+ const root=document.querySelector('.a-settings-experience'),content=root?.querySelector('.a-settings-page-content:not([hidden])');
+ const box=content?.getBoundingClientRect(),style=content&&getComputedStyle(content);
+ return {page:root?.dataset.settingsPage,route:root?.dataset.settingsRoute,compact:root?.dataset.compact,index:root?.dataset.settingsIndex,
+  configPresent:!!window.amplifier.getState().diagnostics?.config,contentCount:root?.querySelectorAll('.a-settings-page-content:not([hidden])').length,
+  box:box?{width:box.width,height:box.height}:null,display:style?.display,visibility:style?.visibility,
+  hiddenAncestor:!!content?.closest('[hidden]')};
+});
 try{
  browser=await chromium.launch({headless:true});
  page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
@@ -154,8 +162,43 @@ try{
   for(const width of [320,390,736,1280]){
    await page.setViewportSize({width,height:900});
    for(const section of settingsSections)for(const [id] of section.pages){
-    await openSettingsPage(page,id);
-    assert.ok(await page.locator('.a-settings-page-content:not([hidden])').isVisible(),id);
+    if(id==='diagnostics'&&!diagnosticNavigation.length){
+     // The route paints optimistically while diagnostics config is still
+     // demand-loaded. Hold that one real navigation to distinguish route entry
+     // from content readiness, without injecting config or replaying navigation.
+     const observation={width,scheme};diagnosticNavigation.push(observation);
+     const gate=new Promise(resolve=>{releaseDiagnostics=resolve});
+     const hold=async route=>{
+      const request=route.request(),body=request.method()==='POST'?request.postDataJSON():null;
+      if(body?.action==='view.update'&&body.args?.patch?.settingsExpanded?.includes('diagnostics')){
+       observation.requestId=body.id;await gate;
+      }
+      await route.continue();
+     };
+     await page.route('**/api/actions',hold);
+     const response=page.waitForResponse(reply=>{
+      const request=reply.request(),body=request.method()==='POST'?request.postDataJSON():null;
+      return new URL(reply.url()).pathname==='/api/actions'&&body?.action==='view.update'&&body.args?.patch?.settingsExpanded?.includes('diagnostics');
+     },{timeout:10000}).then(value=>({value}),error=>({error}));
+     try{
+      await openSettingsPage(page,id);
+      await expect.poll(()=>!!observation.requestId,{timeout:5000}).toBe(true);
+      observation.beforeReceipt=await diagnosticSnapshot();
+      console.log(JSON.stringify({diagnosticNavigation:observation}));
+      releaseDiagnostics();
+      const settled=await response;if(settled.error)throw settled.error;
+      const receipt=await settled.value.json();
+      observation.receipt={requestId:observation.requestId,status:settled.value.status(),accepted:receipt.accepted,stateRevision:receipt.revision??receipt.state?.revision??null};
+      assert.equal(receipt.accepted,true,'Diagnostics navigation accepted');
+      await expect.poll(()=>page.evaluate(()=>!!window.amplifier.getState().diagnostics?.config),{timeout:5000}).toBe(true);
+      await expect(page.locator('.a-settings-page-content:not([hidden])'),id).toBeVisible({timeout:5000});
+      observation.afterReceipt=await diagnosticSnapshot();
+      console.log(JSON.stringify({diagnosticNavigation:observation}));
+     }finally{releaseDiagnostics();await page.unroute('**/api/actions',hold)}
+    }else{
+     await openSettingsPage(page,id);
+     await expect(page.locator('.a-settings-page-content:not([hidden])'),id).toBeVisible({timeout:5000});
+    }
     assert.ok(await page.locator('.a-settings-content').evaluate(el=>el.scrollWidth<=el.clientWidth+1),`${id} overflow at ${width} ${scheme}`);
     assert.ok(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth+1),`${id} dialog overflow at ${width}`);
     layouts++;
@@ -169,7 +212,8 @@ try{
 }catch(error){
  failure=error;
  console.error(error);
+ if(page)try{console.error(JSON.stringify({diagnosticNavigation,currentDiagnosticSnapshot:await diagnosticSnapshot()}))}catch{}
  try{if(page)await page.screenshot({animations:'disabled',path:'/tmp/settings-completeness-failure.png'})}catch(captureError){console.error('Failure screenshot unavailable:',captureError.message)}
  throw error;
 }
-finally{await finishFixture({label:"Settings fixture",close:[["Settings browser",()=>browser?.close()]],stop,originalError:failure})}
+finally{releaseDiagnostics?.();await finishFixture({label:"Settings fixture",close:[["Settings browser",()=>browser?.close()]],stop,originalError:failure})}
