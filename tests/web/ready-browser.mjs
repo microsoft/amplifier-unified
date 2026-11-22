@@ -12,6 +12,7 @@ import './composer-test-helpers.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {readyExecution} from './ready-runtime.mjs';
+import {readAppearance,settledAppearance,updateAppearance,previewAppearance,cancelAppearancePreview} from './settings-fixture.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const python=process.env.AMPLIFIER_TEST_PYTHON,out=process.env.AMPLIFIER_TEST_ARTIFACTS;
@@ -84,7 +85,7 @@ try{
  // Background source/tree/plan provenance remains the canonical runner's
  // results.json, not a synthesized managed execution contract.
  report.sourceSha256={};
- for(const file of ['tests/web/ready-browser.mjs','tests/web/ready-runtime.mjs','tests/web/fixture-lifecycle.mjs',
+ for(const file of ['tests/web/ready-browser.mjs','tests/web/ready-runtime.mjs','tests/web/fixture-lifecycle.mjs','tests/web/settings-fixture.mjs',
   'tests/web/browser-chat-pages.mjs','.build/web-client/tests/composer-test-helpers.mjs',
   'tests/fixtures/empty_host_ui_server.py','.build/web-client/src/chat-presentation.css',
   '.build/web-client/src/conversation-rail.css','amplifier_web/appearances/ready.amplifier.css']){
@@ -144,29 +145,11 @@ try{
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const preferences=()=>page.evaluate(()=>{
   const s=window.amplifier.getState(),shell=window.amplifier.getShellState();
+  const {presentation,...components}=shell.effectiveComposition;
   return {settings:s.settings,view:s.view,selectedSessionId:s.selectedSessionId,selectedWorkspaceId:s.selectedWorkspaceId,
-   presentation:shell.effectiveComposition.presentation};
+   components};
  });
- // Apply owns exactly these two view fields. Keep all other view keys,
- // including editor drafts, in the preservation comparison.
- const unaffectedByApply=({view,...rest})=>{
-  const {themeUndo,themePreview,...unaffectedView}=view;
-  return {...rest,view:unaffectedView};
- };
- const changePresentation=(value,replace)=>page.evaluate(async({value,replace})=>{
-  const s=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
-  const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:s.revision,
-   composition:{...s.effectiveComposition,presentation:replace?value:{...s.effectiveComposition.presentation,...value}}});
-  if(!prepared.accepted)throw Error('Presentation prepare refused: '+JSON.stringify(prepared.error));
-  const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:s.revision,changeId:prepared.result.id});
-  if(!applied.accepted)throw Error('Presentation apply refused: '+JSON.stringify(applied.error));
-  return {changeId:prepared.result.id,baseRevision:s.revision,appliedRevision:applied.result.revision,
-   status:applied.result.status};
- },{value,replace});
- const presentation=patch=>changePresentation(patch,false);
- // Restoration replaces the complete saved presentation, including absent keys.
- // Merging an empty original would retain the temporary scheme/decorations.
- const replacePresentation=value=>changePresentation(value,true);
+ const presentation=patch=>updateAppearance(page,patch);
  const settled=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  const app=page.locator('#amp-one'),pane=page.locator('[data-part="messages"]');
  const input=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
@@ -390,12 +373,16 @@ try{
  await page.goto(url);await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id);
  const servedBuild=await page.request.get(url+'/build.json');assert.equal(servedBuild.status(),200);
  assert.equal(hash(await servedBuild.body()),report.staticBuildIdentity.sha256,'Served exact production build identity');
+ const initialAppearance=await settledAppearance(page);
  const initial=await state(),beforeListing=await preferences(),listing=(await action('theme.list')).result;
  const ready=(await action('theme.read',{id:'builtin:ready'})).result;
  assert.equal(listing.items.filter(row=>row.id==='builtin:ready').length,1);
  assert.equal(ready.name,'Breadbin');assert.equal(ready.source,'built-in');assert.equal(ready.css,css);
+ assert.equal(ready.id,'builtin:ready');assert.equal(ready.base,'reference-v1');assert.equal(ready.readOnly,true);
  assert.equal(ready.fingerprint,report.cssSha256,'Served builtin CSS fingerprint matches exact source resource');
- assert.deepEqual((await state()).theme,initial.theme);assert.deepEqual(await preferences(),beforeListing);
+ const afterListing=await readAppearance(page);
+ for(const key of ['theme','effective','shared','local'])assert.deepEqual(afterListing[key],initialAppearance[key]);
+ assert.deepEqual(await preferences(),beforeListing);
  assert.doesNotMatch(css,/(?:-webkit-)?mask-image\s*:/i,'Candidate inherits the native transcript mask');
  check('library',{id:ready.id,name:ready.name,source:ready.source,resource:'amplifier_web/appearances/ready.amplifier.css',
   servedCssSha256:ready.fingerprint,passive:true});
@@ -426,40 +413,48 @@ try{
  await expect(pane.locator('.a-message.a-assistant')).toHaveCount(1);await expect(input).toHaveDraft('');
  const draft='Keep this synthetic unsent draft across READY appearance and navigation.';
  await input.fill(draft);
- const beforeApply=await preferences(),priorTheme=(await state()).theme;
+ const beforeApply=await preferences(),priorAppearance=await settledAppearance(page);
  phase('candidate-apply');
- await action('theme.apply',{name:ready.name,css:ready.css});
- await expect.poll(async()=>hash((await state()).theme.css)).toBe(report.cssSha256);
+ const preview=await previewAppearance(page,{name:ready.name,css:ready.css});
+ assert.deepEqual(preview.effective,priorAppearance.effective);
+ assert.deepEqual(preview.shared,priorAppearance.shared);assert.deepEqual(preview.local,priorAppearance.local);
  await page.waitForFunction(css=>[...document.querySelectorAll('#amp-one > style')].some(node=>node.textContent===css),css);
- const applied=await state(),appliedPreferences=await preferences();
- assert.deepEqual(applied.theme,{name:ready.name,css:ready.css},'Apply commits the exact candidate name and CSS');
- assert.equal(applied.view.themePreview,false,'Apply ends preview mode');
- assert.deepEqual(unaffectedByApply(appliedPreferences),unaffectedByApply(beforeApply),
-  'Apply preserves every unrelated view field, draft, selection, setting and presentation preference');
- assert.ok(applied.view.themeUndo?.before?.$resource,'Undo retains the prior theme resource');
- assert.match(applied.view.themeUndo.after,/^[a-f0-9]{64}$/,'Undo identifies the applied theme');
+ assert.deepEqual(await preferences(),beforeApply);
  await expect(input).toHaveDraft(draft);
- // Exercise the canonical guard and restoration rather than reproducing the
- // backend fingerprint or trusting that an opaque resource ID is the right one.
- await action('theme.revert');
- const reverted=await state();
- assert.deepEqual(reverted.theme,priorTheme,'Undo restores the exact theme that preceded Apply');
- assert.equal(Object.hasOwn(reverted.view,'themeUndo'),false,'Successful Undo clears its consumed record');
- assert.equal(reverted.view.themePreview,false);
- assert.deepEqual(unaffectedByApply(await preferences()),unaffectedByApply(beforeApply));
+ const cancelled=await cancelAppearancePreview(page);
+ assert.deepEqual(cancelled.theme,priorAppearance.theme);assert.equal(cancelled.preview,null);
+ assert.deepEqual(cancelled.effective,priorAppearance.effective);
+ // The fresh fixture selects Global explicitly; Undo is its exact whole-profile
+ // CAS, not a deterministic theme hash or a fabricated browser storage receipt.
+ assert.equal(priorAppearance.activeScope,'shared');assert.equal(Object.hasOwn(priorAppearance.effective,'accent'),false);
+ const appliedReply=page.waitForResponse(response=>{
+  const request=response.request(),body=request.method()==='POST'?request.postDataJSON():null;
+  return response.url().endsWith('/api/actions')&&body?.action==='appearance.preferences.update'&&
+   body.args.clientId===priorAppearance.clientId&&body.args.generation===priorAppearance.generation&&body.args.patch.appearanceId===ready.id;
+ });
+ const applied=await updateAppearance(page,{appearanceId:ready.id}),envelope=await(await appliedReply).json();
+ assert.equal(envelope.accepted,true);assert.ok(envelope.result.undoId);
+ assert.equal(applied.theme.id,ready.id);assert.equal(applied.theme.name,ready.name);
+ assert.equal(applied.theme.css,css);assert.equal(applied.theme.fingerprint,report.cssSha256);assert.equal(applied.theme.available,true);
+ assert.equal(applied.preview,null);
+ assert.deepEqual(applied.effective,{...priorAppearance.effective,appearanceId:ready.id});
+ assert.deepEqual(await preferences(),beforeApply);
+ await action('appearance.preferences.undo',{clientId:applied.clientId,undoId:envelope.result.undoId});
+ await expect.poll(async()=>(await readAppearance(page)).shared.revision).toBe(applied.shared.revision+1);
+ const reverted=await settledAppearance(page);
+ assert.deepEqual(reverted.effective,priorAppearance.effective);assert.deepEqual(reverted.theme,priorAppearance.theme);
+ assert.equal(reverted.preview,null);assert.deepEqual(await preferences(),beforeApply);
  await expect(input).toHaveDraft(draft);
- await action('theme.apply',{name:ready.name,css:ready.css});
- const reapplied=await state();
- assert.deepEqual(reapplied.theme,applied.theme,'Reapply restores the exact candidate for the matrix');
- assert.equal(reapplied.view.themePreview,false);
- assert.deepEqual(reapplied.view.themeUndo,applied.view.themeUndo,'Undo binds the same prior and applied themes');
- assert.deepEqual(unaffectedByApply(await preferences()),unaffectedByApply(beforeApply));
+ const reapplied=await updateAppearance(page,{appearanceId:ready.id});
+ assert.deepEqual(reapplied.theme,applied.theme,'Reselect restores the exact candidate for the matrix');
+ assert.deepEqual(reapplied.effective,applied.effective);assert.equal(reapplied.preview,null);
+ assert.deepEqual(await preferences(),beforeApply);
  await expect(input).toHaveDraft(draft);
  await page.waitForFunction(css=>[...document.querySelectorAll('#amp-one > style')].some(node=>node.textContent===css),css);
  snapshot('apply-invariance',{selectedSessionId:longId,draft,
-  preferencesSha256:hash(JSON.stringify(unaffectedByApply(beforeApply))),
-  themeBookkeepingChecked:['themeUndo','themePreview'],undoVerifiedBy:'fixture Apply/Revert/Reapply'});
- const originalPresentation=beforeApply.presentation;
+  preferencesSha256:hash(JSON.stringify(beforeApply)),
+  undoVerifiedBy:'appearance.preferences.update/undo/update',previewCancelVerified:true});
+ const originalPresentation=reapplied.effective;
  const user=()=>pane.locator('.a-message.a-user > .a-message-body');
  const assistant=()=>pane.locator('.a-message.a-assistant > .a-message-body');
  const reading=()=>user().locator('p').filter({hasText:'Readable body text with inline code.'});
@@ -600,23 +595,18 @@ try{
  await action('session.select',{id:longId});await enter('chat');await expect(input).toHaveDraft(draft);
  phase('restore-and-final-readback');
  const compositionBeforeRestore=await page.evaluate(()=>window.amplifier.getShellState().effectiveComposition);
- const restoreReceipt=await replacePresentation(originalPresentation);
- assert.ok(Number.isSafeInteger(restoreReceipt.appliedRevision),'Restoration returns an exact committed shell revision');
- snapshot('presentation-restoration-request',{before:compositionBeforeRestore.presentation,
-  expected:originalPresentation,receipt:restoreReceipt});
- // Apply commits before the browser asynchronously refreshes its shell bootstrap.
- // Observe that exact revision before asserting the restored composition.
- await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState().revision),
-  {message:'Browser observes the exact restored shell revision'}).toBe(restoreReceipt.appliedRevision);
+ const restored=await updateAppearance(page,{scheme:originalPresentation.scheme,decorations:originalPresentation.decorations});
+ assert.deepEqual(restored.effective,originalPresentation);
+ assert.equal(restored.theme.id,ready.id);assert.equal(restored.theme.css,css);assert.equal(restored.preview,null);
  const compositionAfterRestore=await page.evaluate(()=>window.amplifier.getShellState().effectiveComposition);
  snapshot('presentation-restoration',{before:compositionBeforeRestore.presentation,expected:originalPresentation,
-  after:compositionAfterRestore.presentation,receipt:restoreReceipt});
+  after:compositionAfterRestore.presentation,source:restored.source,observedCompositionId:restored.observedCompositionId});
  assert.deepEqual(compositionAfterRestore.presentation,originalPresentation,
   'Scheme/decorations changes were temporary fixture presentation only');
  const {presentation:beforePresentation,...otherBeforeRestore}=compositionBeforeRestore;
  const {presentation:afterPresentation,...otherAfterRestore}=compositionAfterRestore;
  assert.deepEqual(otherAfterRestore,otherBeforeRestore,'Restoring presentation preserves every other composition field');
- const final=await state();assert.equal(final.selectedSessionId,longId);assert.equal(hash(final.theme.css),report.cssSha256);
+ const final=await state();assert.equal(final.selectedSessionId,longId);assert.equal(hash(restored.theme.css),report.cssSha256);
  assert.deepEqual(final.settings,beforeApply.settings,'Settings remain unchanged');
  const libraryIdentity=items=>items.map(({id,name,source,fingerprint})=>({id,name,source,fingerprint}));
  assert.deepEqual(libraryIdentity((await action('theme.list')).result.items),libraryIdentity(listing.items),'No library originals edited');

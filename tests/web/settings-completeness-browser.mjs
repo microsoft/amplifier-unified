@@ -94,7 +94,7 @@ try{
  const beforePreview=await settledAppearance(page);
  await page.locator('#theme-name').fill('Acceptance skin');await page.locator('#theme-css').fill('#amp-one { --a-accent: #6b4dcc; }');
  await page.getByRole('button',{name:'Preview draft',exact:true}).click();
- await expect.poll(async()=>(await readAppearance(page)).preview?.name).toBe('Acceptance skin');
+ await expect.poll(async()=>(await readAppearance(page)).preview?.theme?.name).toBe('Acceptance skin');
  assert.deepEqual((await settledAppearance(page)).effective,beforePreview.effective);
  await openSettingsPage(page,'updates');await openSettingsPage(page,'appearance');await advanced();
  await expect.poll(async()=>(await readAppearance(page)).preview).toBe(null);
