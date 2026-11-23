@@ -219,11 +219,37 @@ def test_explicit_admission_identity_cannot_fall_back_to_display_ancestry():
         assert input_id({'turnId': 'display', 'admissionInputId': invalid}) is None
 
 
-async def test_service_observation_cannot_borrow_fresh_human_resume(app):
-    from amplifier_web.capacity import fresh_human_input
+async def test_service_observation_cannot_borrow_current_human_input(app, providers):
+    from test_assignments import generation
+
+    await start(app)
     source = app.state['sessions'][0]
-    source['collaborationGeneration']['inputIds'] = ['human', 'service']
+    # Current admission no longer has a historical budget-denial override.
+    # An observation still cannot use human display ancestry as input authority.
+    await generation(app, source, 'human-generation', ['human'])
     source['messages'].append({'role': 'user', 'inputId': 'human', 'inputOrigin': 'ui', 'createdAt': 20})
-    call = {'sessionId': source['id'], 'turnId': 'human', 'admissionInputId': 'service'}
-    assert not fresh_human_input(app, source, call, {'at': 10})
-    assert fresh_human_input(app, source, {**call, 'admissionInputId': 'human'}, {'at': 10})
+    item = providers(source)
+    events = item.telemetry
+    events.lifecycle({'type': 'input.delivered', 'input_id': 'service',
+                      'source': 'amplifier-delegate'})
+    assert events.turn_id == 'human'
+    assert events.admission_input(source['id']) == 'service'
+    before = copy.deepcopy(app.assignments.usage(app.assignments.current(source))['receipts'])
+    item.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await item.start('unauthorized-observation')
+    assert not item.called
+    assert item.control.capacity.last_denial is None
+    assert not source.get('modelAdmission')
+    assert app.assignments.usage(app.assignments.current(source))['receipts'] == before
+
+    # Same provider, bridge and host generation, now with the authorized input.
+    events.lifecycle({'type': 'input.delivered', 'input_id': 'human', 'source': 'user'})
+    await item.start('authorized-human')
+    assert item.called == ['authorized-human']
+    rows = [row for row in events.nodes.values() if row['kind'] == 'llm']
+    assert len(rows) == 1
+    assert rows[0]['turnId'] == rows[0]['admissionInputId'] == 'human'
+    assert rows[0]['admittedAt']
+    assert item.control.capacity.last_denial is None
+    assert not source.get('modelAdmission')

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import copy
 from contextlib import AsyncExitStack, asynccontextmanager, nullcontext
+from contextvars import ContextVar
 import hashlib
 import json
 import logging
@@ -24,6 +25,9 @@ from .managed_chats import LOCATION
 from .attachments import MAX_ENCODED_BYTES
 from .performance_diagnostics import PerformanceDiagnostics, measure, measured, TimedLock
 from .action_schema import schema, string
+
+
+_STOP_OBSERVATION = ContextVar('unified_stop_observation', default=None)
 
 
 def settle_stream(session):
@@ -3786,7 +3790,8 @@ class AppService:
                     session["status"] = "stopping"
                 from .input_status import interrupt as interrupt_input_status
                 interrupt_input_status(session)
-                pending.append((self._stop, (session["id"], boundary)))
+                pending.append((self._stop, (session["id"], boundary,
+                                             self._capture_stop_guard(session, boundary))))
             elif action == "worker.spawn":
                 session = self._session(args.get("sessionId"), hydrate=False)
                 text = args["instruction"].strip()
@@ -4535,9 +4540,9 @@ class AppService:
             sid = args[0].get("id") if args and isinstance(args[0], dict) else args[0] if args else None
             if fn == self._stop:
                 from .worker_diagnostics import diagnostic_reference
-                await self.on_runtime_event('runtime.error', {'sessionId': sid, 'event': 'stop.failed',
+                await self._observe_stop('runtime.error', {'sessionId': sid, 'event': 'stop.failed',
                     'stopBoundary': args[1], 'errorType': type(exc).__name__, 'error': str(exc),
-                    **diagnostic_reference(exc)})
+                    **diagnostic_reference(exc)}, args[2] if len(args) > 2 else None)
                 return
             if isinstance(exc, AppError) and exc.code == 'session_busy':
                 return  # The rejected admission already published its ownership state.
@@ -5019,16 +5024,117 @@ class AppService:
             if getattr(self.voice_service, 'call', None) is call:
                 await self.set_voice_status({"status": "error", "id": call.id, "error": str(exc)})
 
-    async def _stop(self, sid, boundary=None):
+    def _capture_stop_guard(self, session, boundary):
+        """This admitted Stop may outlive saved, but never admitted, peer input."""
+        from .collaboration import PROTOCOL
+        runtime, sid = self.runtime, session['id']
+        interruption = copy.deepcopy(session['lastInterruption'])
+        generation = session.get('collaborationGeneration') or {}
+        generation_key = (generation.get('id'), generation.get('interruptionRevision'))
+        generation_inputs = tuple(generation.get('inputIds', ()))
+        worker = getattr(runtime, 'workers', {}).get(sid)
+        worker_key = ((worker or {}).get('runtimeOwnerId'), (worker or {}).get('inputId'))
+        preparation = getattr(runtime, '_preparations', {}).get(sid)
+        preparation_owner = (preparation or {}).get('runtimeOwnerId')
+        # Reader delivery can lag submission. Input already saved when this
+        # Stop was admitted still belongs to its original owner; observing that
+        # delivery later must not cancel the interruption of that same work.
+        saved_inputs = frozenset(message['inputId'] for message in session.get('messages', ())
+                                 if message.get('role') == 'user'
+                                 and isinstance(message.get('inputId'), str))
+        delivery_inputs = saved_inputs if worker_key[0] or preparation_owner else frozenset()
+        last_input = next((row for row in reversed(session.get('messages', ()))
+                           if row.get('role') == 'user'), None)
+        last_message_id = (last_input or {}).get('id')
+        last_input_id = (last_input or {}).get('inputId')
+
+        def saved_delivery(identity):
+            return isinstance(identity, str) and identity in delivery_inputs
+
+        def current():
+            target = self._session(sid, hydrate=False)
+            active = target.get('collaborationGeneration') or {}
+            active_inputs = tuple(active.get('inputIds', ()))
+            row = getattr(runtime, 'workers', {}).get(sid)
+            preparing = getattr(runtime, '_preparations', {}).get(sid)
+            if (self.runtime is not runtime
+                    or target.get('interruptionRevision', 0) != boundary['interruptionRevision']
+                    or any((target.get('lastInterruption') or {}).get(key) != interruption.get(key)
+                           for key in ('commandId', 'at'))
+                    or (active.get('id'), active.get('interruptionRevision')) != generation_key
+                    or active_inputs[:len(generation_inputs)] != generation_inputs
+                    or any(not saved_delivery(identity) for identity in active_inputs[len(generation_inputs):])
+                    or preparing is not None and preparing is not preparation
+                    or preparing is not None and preparing.get('runtimeOwnerId') != preparation_owner
+                    or row is worker and row is not None
+                    and (row.get('runtimeOwnerId') != worker_key[0]
+                         or row.get('inputId') != worker_key[1] and not saved_delivery(row.get('inputId')))
+                    or row is not None and row is not worker
+                    and not (worker is None and preparation_owner
+                             and row.get('runtimeOwnerId') == preparation_owner
+                             and (row.get('inputId') is None or saved_delivery(row.get('inputId'))))):
+                return False
+            # Inspect every intervening user input. A newer human input followed
+            # by a queued peer must not conceal the human's execution boundary.
+            for message in reversed(target.get('messages', ())):
+                if message.get('role') != 'user':
+                    continue
+                if last_input is not None and (
+                        message.get('id') == last_message_id if last_message_id
+                        else message is last_input):
+                    return message.get('inputId') == last_input_id
+                identity = message.get('inputId')
+                if message.get('inputOrigin') != 'peer' or not identity:
+                    return False
+                try:
+                    receipt = self.collaboration.receipt(identity)
+                except (AppError, ValueError, KeyError, AttributeError):
+                    return False
+                if (not isinstance(receipt, dict)
+                        or receipt.get('commandAction') != 'coordination.send'
+                        or receipt.get('protocol') != PROTOCOL
+                        or receipt.get('inputId') != identity or receipt.get('requestId') != identity
+                        or receipt.get('messageId') != message.get('id')
+                        or not isinstance(receipt.get('target'), dict)
+                        or receipt.get('target', {}).get('sessionId') != sid
+                        or receipt.get('interruptionRevision') != boundary['interruptionRevision']
+                        or receipt.get('mode') != 'queue'
+                        or not isinstance(receipt.get('delivery'), str)
+                        or receipt.get('delivery') not in {'queued', 'suppressed', 'expired'}
+                        or any(key in receipt for key in
+                               ('admittedAt', 'admissionOrder', 'admission', 'steering',
+                                'targetGenerationId', 'humanResume', 'resumeHandoff'))):
+                    return False
+            return last_input is None
+        return current
+
+    async def _observe_stop(self, kind, payload, current):
+        # Preserve the two-argument event sink and execution-observer chain.
+        # This task-local binding is not serializable worker/event authority.
+        token = _STOP_OBSERVATION.set((self, asyncio.current_task(), kind, payload, current))
+        try:
+            await self.on_runtime_event(kind, payload)
+        finally:
+            _STOP_OBSERVATION.reset(token)
+
+    async def _stop(self, sid, boundary=None, current=None):
+        if current is not None and not current():
+            return
         if self._session(sid, hydrate=False).get('externalAgent'):
             return await self.external_conversations.stop(sid)
         # The Stop revision is already durable. Release invalidated inbox slots
         # even while the actual worker interruption is slow or unavailable.
         await self.collaboration.drain(sid)
+        if current is not None and not current():
+            return
         if self.runtime:
             await self.runtime.stop(sid)
-        await self.on_runtime_event("runtime.status", {"sessionId": sid, "status": "stopped",
-            **({'stopBoundary': boundary} if boundary is not None else {})})
+        await self._observe_stop("runtime.status", {"sessionId": sid, "status": "stopped",
+            **({'stopBoundary': boundary} if boundary is not None else {})}, current)
+        # Once the exact Stop has settled, ordinary queued input can be examined
+        # by the existing stopped-recipient guard, never admitted to unstick it.
+        if (current is None or current()) and self._session(sid, hydrate=False)['status'] == 'stopped':
+            await self.collaboration.drain(sid)
 
     async def record_voice_usage(self,session_id,call_id,response_id,model,usage,phase='completed', *, transfer_id=None):
         from .voice_usage import normalize_voice_usage
@@ -5229,6 +5335,14 @@ class AppService:
             await attach_completed(self, payload)
             return
         async with self.lock:
+            # A host closure from the admitted Stop, never a worker payload.
+            # Recheck after all runtime awaits and while publication is locked.
+            observation = _STOP_OBSERVATION.get()
+            stop_guard = (observation[4] if observation is not None
+                          and observation[0] is self and observation[1] is asyncio.current_task()
+                          and observation[2] == kind and observation[3] is payload else None)
+            if stop_guard is not None and not stop_guard():
+                return
             try:
                 session = self._session(payload.get("rootSessionId") or payload.get("sessionId"), hydrate=False)
             except AppError:
@@ -5318,7 +5432,7 @@ class AppService:
             elif kind == "runtime.status":
                 if 'stopBoundary' in payload:
                     from .message_delivery import execution_boundary
-                    if payload['stopBoundary'] != execution_boundary(session):
+                    if stop_guard is None and payload['stopBoundary'] != execution_boundary(session):
                         return
                 if payload.get('event') == 'input.delivered' and payload.get('inputId'):
                     self._delivery(session, payload['inputId'], 'accepted')
@@ -5414,7 +5528,8 @@ class AppService:
                     event['scope'] = 'runtime'
                     from .message_delivery import execution_boundary
                     if (session.get('status') == 'stopping' and session.get('lastInterruption')
-                            and payload.get('stopBoundary') == execution_boundary(session)):
+                            and (stop_guard is not None
+                                 or payload.get('stopBoundary') == execution_boundary(session))):
                         session['lastInterruption']['outcome'] = 'unconfirmed'
                         session['status'] = 'error'
                         session['error'] = 'Stop could not be confirmed. Inspect the runtime details before continuing.'

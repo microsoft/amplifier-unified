@@ -165,9 +165,67 @@ async def test_terminal_execution_event_commits_without_rewriting_unrelated_stat
     node = next(row for row in saved['execution']['nodes'] if row['id'] == 'finished-call')
     assert node['phase'] == phase and node['usage'] == event['usage']
     if phase == 'failed':
-        assert saved['failure']['errorType'] == 'FixtureError'
+        # A failed call is durable evidence, not a terminal request failure.
+        assert node['failure'] == event['failure']
+        assert not saved.get('failure')
     assert restored['runtimeControl'][other['id']] == unrelated
     assert restored['revision'] == app.state['revision']
+
+
+@pytest.mark.parametrize('call_scope', ['current', 'old-generation', 'other-input', 'child', 'background'])
+async def test_terminal_generation_binds_only_its_call_failure(app_factory, call_scope):
+    from amplifier_web.runtime import normalize_event
+    from amplifier_web.session_projection import hydrate
+    from amplifier_web.session_health import current_terminal_failure, generation_failure
+
+    app = app_factory()
+    await app.dispatch('session.create', {})
+    session = app._session()
+    sid, input_id, generation_id = session['id'], 'current-input', 'current-generation'
+    await app.on_runtime_event(*normalize_event({
+        'type': 'generation.started', 'generation_id': generation_id,
+        'initial_input_id': input_id}, sid))
+    await app.on_runtime_event(*normalize_event({
+        'type': 'input.delivered', 'input_id': input_id}, sid))
+    event = {'sessionId': sid, 'rootSessionId': sid, 'id': 'failed-call',
+             'kind': 'llm', 'phase': 'failed', 'generationId': generation_id,
+             'admissionInputId': input_id, 'turnId': input_id,
+             'startedAt': 10, 'endedAt': 11,
+             'failure': generation_failure({'error_category': 'provider_unavailable',
+                 'error_type': 'FixtureError', 'error_stage': 'provider_request'})}
+    if call_scope == 'old-generation':
+        event['generationId'] = 'older-generation'
+    elif call_scope == 'other-input':
+        event['admissionInputId'] = 'another-input'
+    elif call_scope == 'child':
+        event['sessionId'] = 'child-session'
+    elif call_scope == 'background':
+        event['lifecycle'] = 'background'
+    await app.on_runtime_event('execution.event', event)
+    assert not session.get('failure'), 'Call telemetry must not fail the current request'
+    await app.on_runtime_event(*normalize_event({
+        'type': 'generation.failed', 'generation_id': generation_id, 'input_ids': [input_id],
+        'error_type': 'FixtureError', 'error_category': 'unknown',
+        'error_stage': 'provider_request'}, sid))
+    # Reload before close or a progress flush can provide accidental durability.
+    import sqlite3
+    with sqlite3.connect(f'file:{app.data_dir / "app.sqlite3"}?mode=ro', uri=True) as db:
+        restored = load_saved_state(db)
+        hydrate(app.data_dir, restored, db)
+    saved = next(row for row in restored['sessions'] if row['id'] == sid)
+    node = next(row for row in saved['execution']['nodes'] if row['id'] == 'failed-call')
+    for key in ('sessionId', 'rootSessionId', 'generationId', 'admissionInputId', 'turnId', 'failure'):
+        assert node[key] == event[key]
+    assert node.get('lifecycle') == event.get('lifecycle')
+    failure = saved['failure']
+    assert failure['category'] == ('provider_unavailable' if call_scope == 'current' else 'unknown')
+    assert failure['errorType'] == 'FixtureError'
+    assert failure['generationId'] == generation_id and failure['inputIds'] == [input_id]
+    assert current_terminal_failure(saved)
+    if call_scope == 'current':
+        assert failure['inputId'] == input_id
+    else:
+        assert 'inputId' not in failure
 
 
 async def test_terminal_execution_event_flushes_pending_global_changes(app_factory):
