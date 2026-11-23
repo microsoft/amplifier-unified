@@ -1,28 +1,50 @@
 """Application updates retain and validate every installed optional feature."""
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from amplifier_web import app_updates
-from test_app_updates import prepared_activation
+from test_app_updates import (
+    prepared_activation, synthetic_release_artifact,
+    synthetic_artifact_graph, synthetic_tool_install,
+)
+
+
+def archive_staging(tmp_path, monkeypatch):
+    """Stage verified offline release bytes, not a request for synthetic v99."""
+    monkeypatch.setattr(app_updates.artifacts, 'prepare', synthetic_release_artifact)
+    async def graph(*args, artifact=None):
+        return synthetic_artifact_graph([
+            {'name':'amplifier-unified','version':'99.0.0',
+             'url':app_updates.SOURCE,'revision':'a'*40}], artifact)
+    monkeypatch.setattr(app_updates.components, 'read_graph', AsyncMock(side_effect=graph))
+    prefix = tmp_path / 'bootstrap'
+    prefix.mkdir()
+    async def target():
+        return '/fixture/uv', '/fixture/launcher', prefix / 'bin/python', {
+            'version':'old', 'source':'file:///actual/previous/source',
+            'installation':str(prefix)}
+    monkeypatch.setattr(app_updates, 'installed_target', target)
+    monkeypatch.setattr(app_updates, 'git_environment', lambda: {})
 
 
 @pytest.mark.parametrize('extras', [[], ['tui'], ['native-desktop'], ['native-desktop', 'tui'],
     ['decisions-jev'], ['decisions-openai', 'tui']])
 async def test_update_stages_and_replaces_the_same_optional_install(tmp_path, monkeypatch, extras):
     service, manager, _ = await prepared_activation(tmp_path, monkeypatch)
+    archive_staging(tmp_path, monkeypatch)
     service.state['updates']['application'] = service.state['updates']['pendingApp']
     calls = []
     monkeypatch.setattr(app_updates, 'installed_extras', lambda: extras)
-    monkeypatch.setattr(app_updates.components, 'read_graph', AsyncMock(return_value=[
-        {'name':'amplifier-unified','version':'99.0.0','url':app_updates.SOURCE,'revision':'a'*40}]))
     monkeypatch.setattr(app_updates.shutil, 'which', lambda _: '/fixture/uv')
     monkeypatch.setattr('amplifier_web.deployment_service.current_process_is_unit_managed', lambda _: True)
 
     async def process(*args, **kwargs):
         calls.append(args)
+        synthetic_tool_install(args, kwargs)
         return '99.0.0' if '-c' in args else ''
 
     monkeypatch.setattr(app_updates, 'process', process)
@@ -30,12 +52,13 @@ async def test_update_stages_and_replaces_the_same_optional_install(tmp_path, mo
         await app_updates.stage(manager)
         marker = manager.directory / 'applications' / ('a' * 40) / service.state['updates']['pendingApp']['generation'] / 'validated.json'
         candidate = marker.parent / 'tools/amplifier-unified/bin/python'
-        candidate.parent.mkdir(parents=True);candidate.touch()
-        assert json.loads(marker.read_text())['extras'] == extras
+        assert candidate.is_file()
+        validated = json.loads(marker.read_text())
+        assert validated['extras'] == extras
         await app_updates.activate(manager)
         installs = [args for args in calls if 'install' in args]
         assert len(installs) == 2 and installs[0][-1] == installs[1][-1]
-        requirement = 'git+' + app_updates.SOURCE + '@' + 'a' * 40
+        requirement = Path(validated['artifact']['path']).as_uri()
         if extras:
             requirement = 'amplifier-unified[' + ','.join(extras) + '] @ ' + requirement
         assert installs[0][-1] == requirement
@@ -53,6 +76,7 @@ async def test_update_stages_and_replaces_the_same_optional_install(tmp_path, mo
     (['native-desktop'], ['native-desktop', 'tui']), (['native-desktop', 'tui'], ['native-desktop'])])
 async def test_changed_extras_can_restage_through_normal_app_command(tmp_path, monkeypatch, previous, current):
     service, manager, _ = await prepared_activation(tmp_path, monkeypatch)
+    archive_staging(tmp_path, monkeypatch)
     service.state['updates']['application'] = service.state['updates']['pendingApp']
     marker = manager.directory / 'applications' / ('a' * 40) / 'validated.json'
     marker.write_text(json.dumps({**json.loads(marker.read_text()), 'extras': previous}))
@@ -79,22 +103,26 @@ async def test_changed_extras_can_restage_through_normal_app_command(tmp_path, m
 
         async def install(*args, **kwargs):
             calls.append(args)
+            synthetic_tool_install(args, kwargs)
             return '99.0.0' if '-c' in args else ''
 
         monkeypatch.setattr(app_updates, 'process', install)
         monkeypatch.setattr(app_updates.shutil, 'which', lambda _: '/fixture/uv')
         monkeypatch.setattr('amplifier_web.deployment_service.current_process_is_unit_managed', lambda _: True)
-        monkeypatch.setattr(manager, 'busy', lambda: True)
+        # App activation has its own idle boundary; the component busy helper
+        # is not the admission check used by manager.app()/activate().
+        monkeypatch.setattr(manager, 'app_busy', lambda: True)
         await manager.app()
         assert json.loads(marker.read_text())['extras'] == previous  # Retained legacy receipt.
         marker = marker.parent / service.state['updates']['pendingApp']['generation'] / 'validated.json'
         assert json.loads(marker.read_text())['extras'] == current
         candidate = marker.parent / 'tools/amplifier-unified/bin/python'
-        candidate.parent.mkdir(parents=True);candidate.touch()
+        assert candidate.is_file()
         assert service.state['updates']['pendingApp']
+        assert not service.state['updates'].get('pendingRestart')
         assert len(calls) == 2  # Candidate install and probe only; work stays open.
         close.assert_not_awaited()
-        monkeypatch.setattr(manager, 'busy', lambda: False)
+        monkeypatch.setattr(manager, 'app_busy', lambda: False)
         await manager.app()
         # Keep the retained host usable until actual shutdown; an installation
         # or restart failure must not strand it with a terminally closed runtime.
