@@ -132,3 +132,12 @@ def test_recent_workspaces_are_bounded_and_sorted_by_conversation_activity():
 def test_invalid_navigation_choices_are_rejected(patch):
     with pytest.raises(ValueError):
         view_patch(patch)
+
+
+def test_observed_step_uses_real_execution_times_over_heartbeats():
+    from amplifier_web.navigation_summary import observed_step
+    activity = {'startedAt': 1, 'lastModelRequestAt': 5, 'updatedAt': 100}
+    assert observed_step(activity) == {'label': 'Model request started', 'at': 5}
+    activity['lastEvent'] = {'tool': 'bash', 'phase': 'post', 'at': 7}
+    assert observed_step(activity) == {'label': 'Tool finished', 'at': 7}
+    assert observed_step({'updatedAt': 100}) is None

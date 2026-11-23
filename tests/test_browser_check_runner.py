@@ -663,7 +663,8 @@ def appearance_lifecycle_browser_addition(rows, readiness_scripts=()):
     script = 'tests/appearance-lifecycle-browser.mjs'
     expected = {
         'id': 'appearance-lifecycle', 'command': ['node', script],
-        'env': {'AMPLIFIER_UNIFIED_ROOT': '{root}',
+        'env': {'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python',
+                'AMPLIFIER_UNIFIED_ROOT': '{root}',
                 'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/appearance-lifecycle'},
         'cwd': '.build/web-client',
     }
@@ -770,7 +771,8 @@ def test_sidebar_responsive_addition_rejects_changed_or_duplicate_owner(fault):
 def test_appearance_lifecycle_addition_rejects_missing_duplicate_or_changed_owner(fault):
     rows = [{
         'id': 'appearance-lifecycle', 'command': ['node', 'tests/appearance-lifecycle-browser.mjs'],
-        'env': {'AMPLIFIER_UNIFIED_ROOT': '{root}',
+        'env': {'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python',
+                'AMPLIFIER_UNIFIED_ROOT': '{root}',
                 'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/appearance-lifecycle'},
         'cwd': '.build/web-client',
     }]

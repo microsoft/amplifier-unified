@@ -1810,7 +1810,9 @@ class AppService:
         session["activity"] = {"phase": phase, "label": label,
             "startedAt": now if reset else previous.get("startedAt", now), "updatedAt": now,
             "activeTools": [] if reset else previous.get("activeTools", []),
-            "lastEvent": None if reset else previous.get("lastEvent")}
+            "lastEvent": None if reset else previous.get("lastEvent"),
+            **({"lastModelRequestAt": previous["lastModelRequestAt"]}
+               if not reset and "lastModelRequestAt" in previous else {})}
         return session["activity"]
 
     def _task(self, coroutine):
@@ -5334,9 +5336,16 @@ class AppService:
             ingest_execution(session,payload)
             from .turn_model_settings import record as record_model_settings
             record_model_settings(session, payload, self.state.get('configurationRevision', 0))
-        if (payload.get('kind') == 'llm' and payload.get('phase') == 'completed' and not payload.get('purpose')
-                and payload.get('lifecycle') != 'background'
-                and payload.get('sessionId') == payload.get('rootSessionId') == session['id']):
+        foreground_model = (payload.get('kind') == 'llm' and not payload.get('purpose')
+                            and payload.get('lifecycle') != 'background'
+                            and payload.get('sessionId') == payload.get('rootSessionId') == session['id'])
+        activity = session.get('activity')
+        if foreground_model and activity and payload.get('phase') in {'running', 'completed'}:
+            from .input_status import timestamp
+            started = timestamp(payload.get('startedAt'))
+            if started and started >= max(activity.get('startedAt') or 0, activity.get('lastModelRequestAt') or 0):
+                activity['lastModelRequestAt'] = started
+        if foreground_model and payload.get('phase') == 'completed':
             from .next_message_impact import impact, observation, context_summary
             previous = session.get('_lastPromptUsage') or {}
             started = payload.get('startedAt', 0)

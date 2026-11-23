@@ -12,11 +12,15 @@ RETIREMENT = 'com.microsoft.amplifier.retirement'
 RETIREMENT_TIMEOUT = 30  # Same bounded operation policy as connection setup.
 
 
+class ProjectWorkspaceError(ValueError):
+    """Public setup guidance; the peer's private diagnostic stays out of chat."""
+
+
 class ACPParticipant:
     """The experience owns messages; this object owns only its ACP connection."""
 
-    def __init__(self, endpoint, cwd, *, update, permission):
-        self.endpoint, self.cwd = endpoint, cwd
+    def __init__(self, endpoint, cwd, *, update, permission, project=None):
+        self.endpoint, self.cwd, self.project = endpoint, cwd, project
         self.update, self.permission = update, permission
         self.connection = self.process = self.context = None
         self.session_id = None
@@ -78,7 +82,7 @@ class ACPParticipant:
             self._active_prompt_id = None
 
     async def connect(self, binding, save_binding, *, room_context=None, source=None):
-        from acp import PROTOCOL_VERSION, spawn_agent_process
+        from acp import PROTOCOL_VERSION, RequestError, spawn_agent_process
         from acp.schema import ClientCapabilities, HttpMcpServer
 
         if self.connection is not None and self.process.returncode is None:
@@ -133,13 +137,23 @@ class ACPParticipant:
                     servers = [HttpMcpServer.model_validate(descriptor)]
                 self.capabilities['roomContext'] = bool(servers)
             identity = binding.get('sessionId')
-            if identity:
-                if not self.capabilities['resume']:
-                    raise ValueError('This agent cannot resume its saved session. The binding was preserved.')
-                created = await self.connection.resume_session(session_id=identity, cwd=self.cwd, mcp_servers=servers, **instance)
-            else:
-                created = await self.connection.new_session(cwd=self.cwd, mcp_servers=servers, **instance)
-                identity = created.session_id
+            if identity and not self.capabilities['resume']:
+                raise ValueError('This agent cannot resume its saved session. The binding was preserved.')
+            if self.project and (not sessions or sessions.additional_directories is None):
+                raise ProjectWorkspaceError('This agent does not support adding the selected project beside its own workspace.')
+            roots = [self.project] if self.project else None
+            try:
+                if identity:
+                    created = await self.connection.resume_session(session_id=identity, cwd=self.cwd,
+                        additional_directories=roots, mcp_servers=servers, **instance)
+                else:
+                    created = await self.connection.new_session(cwd=self.cwd,
+                        additional_directories=roots, mcp_servers=servers, **instance)
+                    identity = created.session_id
+            except RequestError as error:
+                if self.project and error.code == -32602:
+                    raise ProjectWorkspaceError('The agent rejected session setup. Check that the selected project exists at the same path and is allowed on the agent.') from error
+                raise
             self._save_options = save_binding
             self.session_id = identity
             from .participant_options import visible_options, revision
@@ -306,4 +320,7 @@ def endpoint(config, identity):
     for key in ('cwd', 'sessionCwd'):
         if key in selected and (not isinstance(selected[key], str) or not Path(selected[key]).is_absolute()):
             raise ValueError('External agent working directories must be absolute paths.')
-    return {key: selected[key] for key in ('id', 'label', 'command', 'args', 'cwd', 'sessionCwd') if key in selected}
+    if 'includeChatWorkspace' in selected and (type(selected['includeChatWorkspace']) is not bool
+            or (selected['includeChatWorkspace'] and not selected.get('sessionCwd'))):
+        raise ValueError('Sharing the selected project requires a configured agent workspace.')
+    return {key: selected[key] for key in ('id', 'label', 'command', 'args', 'cwd', 'sessionCwd', 'includeChatWorkspace') if key in selected}

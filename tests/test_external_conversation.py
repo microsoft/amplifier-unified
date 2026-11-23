@@ -66,6 +66,64 @@ async def test_host_transcript_identity_rename_pin_and_same_remote_resume_after_
     assert len([row for row in operations(tmp_path) if row['kind'] == 'prompt']) == 2
 
 
+async def test_new_chat_binds_only_selected_project_and_preserves_it_on_resume(app_factory, tmp_path):
+    app = app_factory()
+    project = Path(app.default_workspace)
+    (project / 'marker.txt').write_text('selected fixture')
+    agent = peer(tmp_path)
+    private = tmp_path / 'peer'
+    private.mkdir()
+    agent['sessionCwd'] = str(private)
+    app.server_config = {'externalAgents': [agent]}
+    (private / 'allowed-project').write_text(str(project))
+
+    async def new_chat(command):
+        result = await app.dispatch('session.create', {'workspace': str(project),
+            'externalAgentId': 'fixture'}, command_id=command)
+        return app._session(result['result']['sessionId'])
+
+    legacy = await new_chat('agent-workspace-only')
+    agent['includeChatWorkspace'] = True
+    current = await new_chat('include-selected-project')
+    await send(app, legacy, 'read project marker', 'legacy-read')
+    assert legacy['messages'][-1]['text'] == 'Reply: no project'
+    await send(app, current, 'read project marker', 'first-read')
+    assert current['messages'][-1]['text'] == 'Reply: selected fixture'
+    identity = current['externalAgent']['sessionId']
+    await app.close()
+
+    reopened = app_factory()
+    agent.pop('includeChatWorkspace')
+    reopened.server_config = {'externalAgents': [agent]}
+    restored = reopened._session(current['id'])
+    await send(reopened, restored, 'read project marker', 'resumed-read')
+    assert restored['externalAgent']['sessionId'] == identity
+    assert restored['messages'][-1]['text'] == 'Reply: selected fixture'
+    rows = [op for op in operations(tmp_path) if op['kind'] in {'new', 'resume'}]
+    assert rows[0]['cwd'] == str(private) and 'additionalDirectories' not in rows[0]
+    assert rows[1] == {'kind': 'new', 'sessionId': identity, 'cwd': str(private),
+                       'additionalDirectories': [str(project)]}
+    assert rows[2] == {'kind': 'resume', 'sessionId': identity, 'additionalDirectories': [str(project)]}
+
+
+@pytest.mark.parametrize('advertised', [True, False], ids=['outside-agent-allowlist', 'unsupported'])
+async def test_selected_project_refusal_is_visible_before_any_prompt(app_factory, tmp_path, advertised):
+    app = app_factory()
+    private = tmp_path / 'peer'
+    private.mkdir()
+    if advertised:
+        (private / 'allowed-project').write_text(str(private))
+    app.server_config = {'externalAgents': [{**peer(tmp_path), 'sessionCwd': str(private),
+                                             'includeChatWorkspace': True}]}
+    receipt = await app.dispatch('session.create', {'workspace': app.default_workspace,
+        'externalAgentId': 'fixture'}, command_id='new-project-chat')
+    session = app._session(receipt['result']['sessionId'])
+    await send(app, session, 'read project marker', 'refused-project')
+    assert session['messages'][0]['delivery']['status'] == 'failed'
+    assert 'selected project' in session['error']
+    assert 'sessionId' not in session['externalAgent'] and operations(tmp_path) == []
+
+
 async def test_stop_uses_remote_cancel_preserves_partial_text_and_allows_next_turn(app_factory, tmp_path):
     app = app_factory()
     session = await create(app, tmp_path)

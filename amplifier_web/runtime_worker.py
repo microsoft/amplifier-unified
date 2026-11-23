@@ -145,9 +145,13 @@ class Worker:
                 timeout = max(timeout, wait_ms / 1000 + 5)
         # These fields are host-produced, never accepted from tool arguments.
         args = {key: value for key, value in args.items()
-                if key not in {'_handoffSnapshot', '_handoffDrain', '_nativeChild'}}
+                if key not in {'_handoffSnapshot', '_handoffDrain', '_nativeChild', '_settledCompaction'}}
         if operation == 'capacity.admit':
             from amplifier_web.handoff_drain import witness, native_child
+            from amplifier_web.settled_compaction import origin_for
+            settled = origin_for(args.get('call') or {})
+            if settled:
+                args.update(_settledCompaction=True, _generationId=settled)
             args.update(_handoffDrain=witness(self, args.get('call') or {}),
                         _nativeChild=native_child(self, args.get('call') or {}))
         elif isinstance(args.get('_childOrigin'), dict):
@@ -792,6 +796,9 @@ class Worker:
         # though this worker has no terminal. This advertises transport only;
         # each request still waits for its own explicit client response.
         coordinator.register_capability("approval.interactive", True)
+        if self.telemetry and self.session and coordinator is self.session.coordinator:
+            from amplifier_web.settled_compaction import bind_scheduler
+            bind_scheduler(coordinator.get("context"), self.telemetry)
         if coordinator.get_capability("web.activity"):
             # Live provider edits may mount a new immutable instance after the
             # hooks were installed. Preserve its admission wrapper as well.

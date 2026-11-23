@@ -32,6 +32,7 @@ async def test_saved_choice_is_live_private_persistent_and_replayable(app_factor
     save_server_config(service.data_dir, saved)
     row = peer(tmp_path)
     row.pop('id')
+    row.update(sessionCwd=service.default_workspace, includeChatWorkspace=True)
     args = {'agent': row}
     receipt = await service.dispatch('externalAgents.save', args, command_id='add-external')
     result = receipt['result']
@@ -80,7 +81,8 @@ async def test_stale_editor_cannot_overwrite_or_remove_newer_entry(app_factory, 
 
 
 @pytest.mark.parametrize('patch', [{'command': 'relative-command'}, {'cwd': 'relative-folder'},
-                                  {'sessionCwd': 'relative-folder'}, {'label': '   '}, {'args': [1]}])
+                                  {'sessionCwd': 'relative-folder'}, {'includeChatWorkspace': True},
+                                  {'label': '   '}, {'args': [1]}])
 async def test_invalid_launch_does_not_save_or_start(app_factory, tmp_path, patch):
     service = app_factory()
     before = load_server_config(service.data_dir)

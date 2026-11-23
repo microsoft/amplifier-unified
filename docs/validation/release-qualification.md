@@ -357,6 +357,13 @@ before considering a retry. Never move a published tag or replace release assets
 
 ### Release completion and follow-up
 
+For a publisher, installed-package smoke or nightly verification run, read its
+status with `python scripts/post_release_checks.py status RUN_ID`. To inspect an
+earlier attempt, add `--attempt N`. The output links to the run and its jobs,
+names running or failed steps, gives finished job times, and counts skipped jobs.
+Open a failed job for its original evidence. The displayed commit belongs to the
+workflow. Use the candidate receipt for the packaged revision.
+
 Routine release work ends after immutable publication and the short published
 asset/install smoke. Do not create a per-release model monitor, full-suite task,
 or broad acceptance campaign. GitHub records conclusions and tracks failures;

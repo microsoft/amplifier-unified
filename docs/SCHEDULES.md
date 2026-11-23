@@ -50,6 +50,12 @@ input. It releases the lock after input admission, never after model execution o
 permission waits. The public runtime.control action cannot invoke this internal
 path. Normal tool approval hooks still run on every execution.
 
+While due work waits for worker startup, the host periodically renews its
+current, unexpired lease. If renewal misses the deadline or another host takes
+over, admission checks still prevent further effects. A startup rejection that
+leaves the schedule needing review qualifies for a failure notification.
+Ordinary missed occurrences skipped by their saved policy stay quiet.
+
 For `new_task`, preview also binds a hash of the source's effective configuration,
 provider/model/effort selection, budget settings, bundle, and execution workspace.
 The UI displays the workspace, bundle, model and turn cap before activation.
