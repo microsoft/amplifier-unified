@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'tests'))
 os.environ.update(AMPLIFIER_HOME=str(HOME / 'native'), AMPLIFIER_WEB_HOME=str(HOME / 'app'),
                   AMPLIFIER_UNIFIED_IMPORT_HOME=str(HOME / 'legacy'),
+                  AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH=str(HOME / 'native' / 'projects'),
                   AMPLIFIER_SESSION_STATE_HOME=str(HOME / 'ownership'))
 from aiohttp import web
 from amplifier_web.server import create_app
@@ -104,7 +105,8 @@ async def main():
             emitted.clear()
         elif op != 'inspect':
             raise web.HTTPBadRequest()
-        return web.json_response({**counts, 'runtimeCalls': len(service.runtime.started)
+        return web.json_response({**counts, 'revision': service.state['revision'],
+            'runtimeCalls': len(service.runtime.started)
             + len(service.runtime.sent) + len(service.runtime.stopped),
             'plan': service._session(sid, hydrate=False).get('_reportedPlan'),
             'logBytes': log.stat().st_size})

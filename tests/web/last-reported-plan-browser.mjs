@@ -15,9 +15,13 @@ const home=await mkdtemp(join(tmpdir(),'last-reported-plan-'));
 const headers={Authorization:'Bearer last-plan-fixture-token','Content-Type':'application/json'};
 let browser,page,stop,base,sid,primary,log='';
 const evidence={checkpoints:[]},errors=[],actions=[];
+let activeStops=0;
 async function start(){
  const child=spawn(fixturePython(root+'.venv/bin/python'),['-u',root+'tests/fixtures/last_reported_plan_server.py',root,home],{stdio:['ignore','pipe','pipe']});
- stop=ownFixture(child,{label:'Last reported Plan host'});
+ activeStops++;
+ const release=ownFixture(child,{label:'Last reported Plan host'});
+ let stopped=false;
+ stop=async()=>{const receipt=await release();if(!stopped){activeStops--;stopped=true}return receipt};
  child.stderr.on('data',chunk=>{log=(log+chunk).slice(-16384)});
  const meta=await new Promise((resolve,reject)=>{
   let text='';const timer=setTimeout(()=>reject(Error('Fixture startup: '+log)),30000);
@@ -30,7 +34,11 @@ async function start(){
 }
 async function control(op,extra={}){
  const response=await fetch(base+'/api/fixture/plan',{method:'POST',headers,body:JSON.stringify({op,...extra})});
- assert.equal(response.status,200,await response.clone().text());return response.json();
+ assert.equal(response.status,200,await response.clone().text());
+ const result=await response.json();
+ if(page&&!page.isClosed()&&op!=='inspect')
+  await page.waitForFunction(revision=>window.amplifier.getState().revision>=revision,result.revision);
+ return result;
 }
 async function open(){
  page=await browser.newPage({viewport:{width:1400,height:1000},extraHTTPHeaders:headers});
@@ -58,8 +66,9 @@ try{
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Private draft remains');
  const first=await current();
  for(const op of ['failure','malformed','child']){
-  await control(op,{text:'Must not replace root',status:'completed'});
-  await expect.poll(current).toEqual(first);await check('Prepare the team update');
+  const receipt=await control(op,{text:'Must not replace root',status:'completed'});
+  assert.deepEqual(receipt.plan,first);
+  assert.deepEqual(await current(),first);await check('Prepare the team update');
  }
  await control('edit-history');await check('Prepare the team update');
  assert.deepEqual(await current(),first);
@@ -94,6 +103,7 @@ finally{
   await writeFile(process.env.AMPLIFIER_TEST_ARTIFACTS+'/last-reported-plan.json',JSON.stringify({...evidence,errors},null,2));
  }}finally{
   await finishFixture({label:'Last reported Plan',close:[['browser',()=>browser?.close()]],stop:()=>stop?.(),originalError:primary});
-  await rm(home,{recursive:true,force:true});
+  if(activeStops===0)await rm(home,{recursive:true,force:true});
+  else console.error('Unconfirmed fixture cleanup; retained home:',home);
  }
 }
