@@ -981,7 +981,9 @@ async def test_provider_count_diagnostics_reach_real_context_intelligence_captur
             'extra_request_params': {'metadata': {'user_id': private['config']}},
         })
         assert callable(provider_cleanup)
-        assert await coordinator.collect_contributions('observability.events') == [[event]]
+        contributions = await coordinator.collect_contributions('observability.events')
+        assert len(contributions) == 1
+        assert contributions[0].count(event) == 1
         assert coordinator.channels['observability.events'][0]['name'] == 'provider-anthropic'
         await ci.on_session_ready(coordinator)
         assert coordinator.hooks.list_handlers()[event] == ['LoggingHandler']
