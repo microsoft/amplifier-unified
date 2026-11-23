@@ -21,10 +21,19 @@ def test_peer_hosted_route_is_fixed_and_separate():
     assert job['if'] == "${{ !inputs.permissions_history && !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && inputs.peer_messages }}"
     assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '30'
     steps = job['steps']
-    reject = steps[0]
+    captured, = [step for step in steps if step.get('name') == 'Reject mixed captured delivery selection']
+    assert captured['run'] == 'exit 1'
+    assert captured['if'] == '${{ inputs.captured_message_delivery }}'
+    reject, = [step for step in steps if step.get('name') == 'Reject incompatible peer selections']
     assert reject['run'] == 'exit 1'
-    for selection in ('canvas_qualification', 'multi_quote', 'attachment_experience', 'compact_composer', 'destination_history', 'settings_close_diagnostic', 'mcp_boundary', 'app004_qualification', 'attachment_consumption'):
-        assert 'inputs.' + selection in reject['if']
+    incompatible = ('canvas_qualification', 'multi_quote', 'attachment_experience', 'compact_composer',
+                    'destination_history', 'settings_close_diagnostic', 'mcp_boundary',
+                    'app004_qualification', 'attachment_consumption')
+    assert reject['if'] == '${{ ' + ' || '.join('inputs.' + name for name in incompatible) + ' }}'
+    checkout, = [step for step in steps if step.get('uses', '').startswith('actions/checkout@')]
+    assert checkout['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
+    assert steps.index(captured) < steps.index(checkout)
+    assert steps.index(reject) < steps.index(checkout)
     assert not any(step.get('continue-on-error') for step in steps)
     assert 'secrets.' not in json.dumps(job)
     commands = [step.get('run', '') for step in steps]
