@@ -378,6 +378,49 @@ async def test_worker_native_refuses_pre_generation_observation_race(monkeypatch
         assert 'next' not in runtime.accepted
 
 
+async def test_actual_native_busy_crosses_paired_http_boundary(monkeypatch, native_loop, tmp_path):
+    from aiohttp.test_utils import TestClient, TestServer
+    from amplifier_module_loop_live.runtime import Input
+    runtime, _, worker, requests, _ = native_loop
+    await runtime.submit(Input('user', 'The existing turn', id='original'))
+    await asyncio.wait_for(requests.get(), 5)
+    original_generation = runtime.generation['id']
+    manager = RuntimeManager()
+    async def client_factory(app):
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        return client
+    app, client, headers, _, sid = await paired(client_factory, tmp_path / 'http', manager)
+    ready = asyncio.get_running_loop().create_future()
+    ready.set_result({})
+    row = {'process': SimpleNamespace(returncode=None), 'ready': ready, 'pending': {},
+           'inflight': set(), 'idleOnlyAdmission': worker.supports_idle_input()}
+    manager.workers[sid] = row
+    replies, writes = [], []
+    monkeypatch.setattr('amplifier_web.runtime_worker.publish', replies.append)
+    async def write(row, data):
+        writes.append(data)
+        await worker.command(data)
+        row['inflight'].discard(data['id'])
+        row['pending'][data['id']].set_result(replies[-1]['result'])
+    monkeypatch.setattr(manager, '_write', write)
+    try:
+        assert app['service']._session(sid)['status'] == 'idle'  # Deliberately stale.
+        target = '/api/sessions/' + sid + '/commands'
+        for _ in range(2):  # Exact replay must not make a second native attempt.
+            response = await client.post(target, headers=headers, json=payload())
+            result = await response.json()
+            assert response.status == 200, result
+            assert result['accepted'] is False and result['code'] == 'input_busy'
+            assert result['delivery'] == 'failed' and 'state' not in result
+        assert len(writes) == 1 and writes[0]['only_if_idle'] is True
+        assert 'attempt-1' not in runtime.accepted
+        assert runtime.generation['id'] == original_generation
+    finally:
+        manager.workers.clear()  # The pipe fixture owns no OS worker.
+        await client.close()
+
+
 @pytest.mark.parametrize('shortcut', ['configuration_if_idle', 'applied_fork_choice', 'recovery_allowance'])
 async def test_worker_blocks_configuration_shortcuts(monkeypatch, native_loop, shortcut):
     runtime, _, worker, _, _ = native_loop
