@@ -383,6 +383,15 @@ async def test_stop_exempts_only_exact_unadmitted_peer_receipts(app, monkeypatch
             app.db.execute('UPDATE commands SET receipt=? WHERE id=?',
                            ('null' if change == 'null-receipt' else '[]', 'queued-one'))
             app.db.commit()
+        elif change == 'null-target':
+            # Corrupt retained bytes at the read boundary, as with null/list
+            # receipts above. The ordinary writer requires a shaped target and
+            # cannot construct this malformed-record negative control.
+            receipt['target'] = None
+            app.db.execute('UPDATE commands SET receipt=? WHERE id=?',
+                           (json.dumps(receipt), 'queued-one'))
+            app.db.commit()
+            assert app.collaboration.receipt('queued-one')['target'] is None
         elif change != 'none':
             if change == 'wrong-message':
                 receipt['messageId'] = 'another-message'
@@ -392,8 +401,6 @@ async def test_stop_exempts_only_exact_unadmitted_peer_receipts(app, monkeypatch
                 receipt['delivery'] = change
             elif change == 'admitted':
                 receipt['admittedAt'] = 1
-            elif change == 'null-target':
-                receipt['target'] = None
             else:
                 receipt['humanResume'] = {'sourceMessageId': 'not-authorized'}
             app.collaboration.save('queued-one', receipt)
