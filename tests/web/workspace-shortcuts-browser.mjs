@@ -1,4 +1,5 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {readAppearance,settledAppearance} from './settings-fixture.mjs';
 // Manager-run DTU fixture: production assets/actions, synthetic runtime, no model calls.
 // Run from frontend after the manager builds this candidate: node tests/workspace-shortcuts-browser.mjs
 import './composer-test-helpers.mjs';
@@ -11,7 +12,7 @@ import {chromium,expect} from '@playwright/test';
 
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls'],{stdio:['ignore','pipe','inherit']});
 const out=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/amplifier-workspace-shortcuts';
-let browser,context,page,calls=[];
+let browser,context,page,calls=[];const presentationChanges=[];
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
  await mkdir(out,{recursive:true});
@@ -69,13 +70,23 @@ try{
   const select=row(b).locator('.a-workspace-select'),title=select.locator('[data-scroll-title]').first();
   await expect(select).toHaveAttribute('data-tooltip','off');
   assert.equal(await select.locator('[title]').count(),0);
+  // Sibling row hover reveals actions; title motion belongs to the select
+  // itself. A previous viewport's overflow attribute is not a hover witness.
+  await select.hover();
+  await expect.poll(()=>select.evaluate(node=>node.matches(':hover'))).toBe(true);
+  assert.equal(await page.evaluate(()=>matchMedia('(prefers-reduced-motion: reduce)').matches),false);
   await expect(title).toHaveAttribute('data-overflow','true');
+  await expect(title.locator(':scope > span')).toHaveCSS('animation-name','a-chat-title-pan');
   const motion=await title.evaluate(element=>{
    const text=element.firstElementChild,animations=text.getAnimations();
+   const select=element.closest('.a-workspace-select');
+   const witness={hover:select.matches(':hover'),focusVisible:select.matches(':focus-visible'),
+    reduced:matchMedia('(prefers-reduced-motion: reduce)').matches,
+    name:getComputedStyle(text).animationName,overflow:getComputedStyle(element).getPropertyValue('--title-overflow')};
    animations.forEach(animation=>animation.finish());
-   return {animations:animations.length,transform:getComputedStyle(text).transform};
+   return {animations:animations.length,transform:getComputedStyle(text).transform,witness};
   });
-  assert.equal(motion.animations,1);assert.notEqual(motion.transform,'none');
+  assert.equal(motion.animations,1,JSON.stringify(motion));assert.notEqual(motion.transform,'none');
   await expect(page.getByRole('dialog',{name:'Details for '+b.name,exact:true})).toBeVisible();
   await expect(page.getByRole('tooltip')).toHaveCount(0);
   const hovered=await geometry(b);
@@ -199,11 +210,43 @@ try{
  await checkSpace(shortcutRows[2],'.a-nav-chat-label','.a-nav-chat-select',1);
  await checkSpace(shortcutRows[3],'.a-nav-chat-label','.a-nav-chat-select',1);
  // Everything mode promises visible list actions, including at rest.
- const presentation=detail=>page.evaluate(async detail=>{
-  const shell=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
-  const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:shell.revision,composition:{...shell.effectiveComposition,presentation:{...shell.effectiveComposition.presentation,interfaceDetail:detail}}},{presentation:true});
-  await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:shell.revision,changeId:prepared.result.id},{presentation:true});
- },detail);
+ const presentation=async detail=>{
+  const before=await settledAppearance(page);
+  const change=await page.evaluate(async detail=>{
+   const shell=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
+   const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:shell.revision,composition:{...shell.effectiveComposition,presentation:{...shell.effectiveComposition.presentation,interfaceDetail:detail}}},{presentation:true});
+   if(prepared.accepted!==true)throw Error(prepared.error||'Presentation preparation refused');
+   const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:shell.revision,changeId:prepared.result.id},{presentation:true});
+   if(applied.accepted!==true)throw Error(applied.error||'Presentation application refused');
+   return {shellRevision:shell.revision,changeId:prepared.result.id,queued:applied.result};
+  },detail);
+  const checkpoint={detail,before,change};presentationChanges.push(checkpoint);
+  await writeFile(out+'/presentation-changes.json',JSON.stringify(presentationChanges,null,2)+'\n');
+  // Apply queues browser storage. Painted detail alone can precede the shell
+  // revision update; never prepare the next change from that stale revision.
+  assert.equal(change.queued.status,'awaiting-storage');
+  assert.equal(change.queued.stored,false);assert.equal(change.queued.activated,false);
+  await expect.poll(async()=>{
+   const value=await readAppearance(page);return {id:value.command?.id,status:value.command?.status};
+  }).toEqual({id:change.queued.commandId,status:'stored'});
+  const after=await settledAppearance(page);
+  assert.equal(after.clientId,before.clientId);assert.equal(after.generation,before.generation);
+  assert.equal(after.namespace,before.namespace);assert.equal(after.activeScope,'client');
+  assert.equal(after.command.expectedRevision,before.local.revision);
+  assert.equal(after.command.expectedStorageVersion,before.local.storageVersion);
+  assert.equal(after.local.revision,before.local.revision+1);
+  assert.notEqual(after.local.storageVersion,before.local.storageVersion);
+  assert.notEqual(after.local.storageVersion,'missing');
+  assert.deepEqual(after.shared,before.shared,'Presentation edits must not change Global preferences');
+  assert.deepEqual(after.effective,{...before.effective,interfaceDetail:detail});
+  assert.deepEqual(after.local.values,after.effective);
+  assert.deepEqual(await page.evaluate(key=>JSON.parse(localStorage.getItem(key)),after.namespace),
+   {version:after.local.storageVersion,activeScope:'client',values:after.local.values});
+  await expect(page.locator('#amp-one')).toHaveAttribute('data-appearance-composition',after.composition.id);
+  await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState()?.revision)).toBe(change.shellRevision+1);
+  checkpoint.after=after;checkpoint.activatedShellRevision=change.shellRevision+1;
+  await writeFile(out+'/presentation-changes.json',JSON.stringify(presentationChanges,null,2)+'\n');
+ };
  await presentation('detailed');await expect(page.locator('#amp-one')).toHaveAttribute('data-interface-detail','detailed');
  await composer.focus();await page.mouse.move(1000,900);
  for(const target of shortcutRows){
