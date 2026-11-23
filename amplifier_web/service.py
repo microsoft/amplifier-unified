@@ -5030,12 +5030,19 @@ class AppService:
         runtime, sid = self.runtime, session['id']
         interruption = copy.deepcopy(session['lastInterruption'])
         generation = session.get('collaborationGeneration') or {}
-        generation_key = (generation.get('id'), generation.get('interruptionRevision'),
-                          tuple(generation.get('inputIds', ())))
+        generation_key = (generation.get('id'), generation.get('interruptionRevision'))
+        generation_inputs = tuple(generation.get('inputIds', ()))
         worker = getattr(runtime, 'workers', {}).get(sid)
         worker_key = ((worker or {}).get('runtimeOwnerId'), (worker or {}).get('inputId'))
         preparation = getattr(runtime, '_preparations', {}).get(sid)
         preparation_owner = (preparation or {}).get('runtimeOwnerId')
+        # Reader delivery can lag submission. Input already saved when this
+        # Stop was admitted still belongs to its original owner; observing that
+        # delivery later must not cancel the interruption of that same work.
+        saved_inputs = frozenset(message['inputId'] for message in session.get('messages', ())
+                                 if message.get('role') == 'user'
+                                 and isinstance(message.get('inputId'), str))
+        delivery_inputs = saved_inputs if worker_key[0] or preparation_owner else frozenset()
         last_input = next((row for row in reversed(session.get('messages', ()))
                            if row.get('role') == 'user'), None)
         last_message_id = (last_input or {}).get('id')
@@ -5044,21 +5051,25 @@ class AppService:
         def current():
             target = self._session(sid, hydrate=False)
             active = target.get('collaborationGeneration') or {}
+            active_inputs = tuple(active.get('inputIds', ()))
             row = getattr(runtime, 'workers', {}).get(sid)
             preparing = getattr(runtime, '_preparations', {}).get(sid)
             if (self.runtime is not runtime
                     or target.get('interruptionRevision', 0) != boundary['interruptionRevision']
                     or any((target.get('lastInterruption') or {}).get(key) != interruption.get(key)
                            for key in ('commandId', 'at'))
-                    or (active.get('id'), active.get('interruptionRevision'),
-                        tuple(active.get('inputIds', ()))) != generation_key
+                    or (active.get('id'), active.get('interruptionRevision')) != generation_key
+                    or active_inputs[:len(generation_inputs)] != generation_inputs
+                    or any(identity not in delivery_inputs for identity in active_inputs[len(generation_inputs):])
                     or preparing is not None and preparing is not preparation
                     or preparing is not None and preparing.get('runtimeOwnerId') != preparation_owner
                     or row is worker and row is not None
-                    and (row.get('runtimeOwnerId'), row.get('inputId')) != worker_key
+                    and (row.get('runtimeOwnerId') != worker_key[0]
+                         or row.get('inputId') != worker_key[1] and row.get('inputId') not in delivery_inputs)
                     or row is not None and row is not worker
                     and not (worker is None and preparation_owner
-                             and row.get('runtimeOwnerId') == preparation_owner)):
+                             and row.get('runtimeOwnerId') == preparation_owner
+                             and (row.get('inputId') is None or row.get('inputId') in delivery_inputs))):
                 return False
             # Inspect every intervening user input. A newer human input followed
             # by a queued peer must not conceal the human's execution boundary.
@@ -5085,6 +5096,7 @@ class AppService:
                         or receipt.get('target', {}).get('sessionId') != sid
                         or receipt.get('interruptionRevision') != boundary['interruptionRevision']
                         or receipt.get('mode') != 'queue'
+                        or not isinstance(receipt.get('delivery'), str)
                         or receipt.get('delivery') not in {'queued', 'suppressed', 'expired'}
                         or any(key in receipt for key in
                                ('admittedAt', 'admissionOrder', 'admission', 'steering',

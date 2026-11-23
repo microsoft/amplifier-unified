@@ -483,7 +483,9 @@ async def test_delayed_reader_delivery_does_not_cancel_its_original_stop(tmp_pat
             app._message(target, 'user', 'New human input', inputId='C', inputOrigin='ui',
                          interruptionRevision=1)
         elif delivery == 'new-generation':
-            await generation(app, target, 'new-generation', ['C'], interruption_revision=1)
+            # Membership alone would qualify after B arrives. Only the changed
+            # generation identity/epoch must reject this older Stop.
+            await generation(app, target, 'new-generation', ['A'], interruption_revision=1)
         identity = 'C' if delivery == 'human-after-stop' else 'B'
         frame = {'type': 'input.delivered', 'input_id': identity,
                  'interruptionRevision': 0 if delivery == 'saved-before-stop' else 1}
@@ -514,13 +516,16 @@ async def test_delayed_reader_delivery_does_not_cancel_its_original_stop(tmp_pat
             ['A', 'B', 'C'] if delivery == 'human-after-stop' else ['A', 'B'])
     finally:
         release.set()
-        if stop_tasks and not stop_tasks[0].done():
-            await asyncio.wait({stop_tasks[0]}, timeout=3)
-        if reader:
-            reader.cancel()
-            await asyncio.gather(reader, return_exceptions=True)
-        runtime.workers.clear()
-        await app.close()
+        try:
+            if stop_tasks and not stop_tasks[0].done():
+                _, pending = await asyncio.wait({stop_tasks[0]}, timeout=3)
+                assert not pending, 'Stop fixture cleanup remains unsettled'
+        finally:
+            if reader:
+                reader.cancel()
+                await asyncio.gather(reader, return_exceptions=True)
+            runtime.workers.clear()
+            await app.close()
 
 
 async def test_stop_context_resets_in_throwing_observer_task_and_cannot_cross_child_task(app):
