@@ -65,7 +65,9 @@ def streaming_process(stdout=STDOUT, stderr=STDERR, returncode=7):
     process = fake_process((stdout, stderr), returncode=None)
     readers = {}
     for channel, payload in (('stdout', stdout), ('stderr', stderr)):
-        readers[channel] = AsyncMock(side_effect=(payload[:7], payload[7:], b''))
+        chunks = [payload[:7], *(payload[offset:offset + 65536]
+                                for offset in range(7, len(payload), 65536)), b'']
+        readers[channel] = AsyncMock(side_effect=chunks)
         setattr(process, channel, SimpleNamespace(read=readers[channel]))
     async def wait():
         process.returncode = returncode
@@ -761,9 +763,13 @@ class ProcessObservationTests(unittest.IsolatedAsyncioTestCase):
                 process.stdout = SimpleNamespace(read=readers['stdout'])
                 process.stderr = SimpleNamespace(read=readers['stderr'])
                 wait = process.wait = AsyncMock(return_value=7)
+                process.kill, process.terminate = Mock(), Mock()
                 self.spawn.reset_mock()
                 self.spawn.return_value = process
                 with ExitStack() as stack:
+                    # Even a regression must never signal an unrelated group
+                    # whose ID happens to equal this synthetic process's PID.
+                    killpg = stack.enter_context(patch.object(updates.os, 'killpg', create=True))
                     # Replace the module's clock, not the event loop's global time.
                     stack.enter_context(patch.object(updates, 'time', SimpleNamespace(monotonic=lambda: 12.0)))
                     retry = stack.enter_context(patch.object(reset, 'anonymous_retry_environment', return_value=None))
@@ -778,6 +784,9 @@ class ProcessObservationTests(unittest.IsolatedAsyncioTestCase):
                         stack.enter_context(patch.object(Path, 'write_text', side_effect=PermissionError(SENSITIVE)))
                     with self.assertRaises(update_diagnostics.CommandFailure) as caught:
                         await updates.process(*command, env={})
+                    killpg.assert_not_called()
+                    process.kill.assert_not_called()
+                    process.terminate.assert_not_called()
                 error = caught.exception
                 self.assertIs(type(error), update_diagnostics.CommandFailure)
                 self.assertEqual(error.diagnostic_facts, expected)
@@ -817,10 +826,14 @@ class ProcessObservationTests(unittest.IsolatedAsyncioTestCase):
                         self.assertFalse(row['stderrComplete'])
                     for channel, expected in (('stdout', STDOUT), ('stderr', payload)):
                         stream = getattr(observed, channel)
-                        chunks = [await stream.read(65536), await stream.read(65536)]
+                        chunks = []
+                        while chunk := await stream.read(65536):
+                            self.assertLessEqual(len(chunk), 65536)
+                            chunks.append(chunk)
                         self.assertEqual(b''.join(chunks), expected)
-                        self.assertEqual(await stream.read(65536), b'')
-                        self.assertEqual(readers[channel].await_count, 3)
+                        expected_reads = 2 + (len(expected) - 7 + 65535) // 65536
+                        self.assertEqual(readers[channel].await_args_list,
+                                         [unittest.mock.call(65536)] * expected_reads)
                     if not wait_first:
                         self.assertNotIn('stderrFailure', row)
                         self.assertEqual(await observed.wait(), 7)
