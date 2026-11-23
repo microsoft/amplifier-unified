@@ -1,7 +1,7 @@
 """Synthetic unit checks, authored for the parent's isolated Python check.
 
 No fixture run/main, real subprocesses, dependency preparation, or raw-log files.
-Every spawn/communicate/readline and receipt write is mocked; adapter main uses
+Every spawn/communicate/read/readline/wait and receipt write is mocked; adapter main uses
 synthetic metadata and memory-only IO, stopping at its first mocked command.
 Spec imports load guarded definitions only. One guest-only test imports the real
 updates/diagnostics definitions and calls updates.process with a fake subprocess.
@@ -732,7 +732,9 @@ class ProcessObservationTests(unittest.IsolatedAsyncioTestCase):
         command = ('synthetic', 'unit-command')
         stderr = STDERR + b'ValueError: ' + SENSITIVE.encode() + b'\n'
         expected = {'exitCode': 7, 'durationMs': 0, 'stdoutBytes': len(STDOUT),
-                    'stderrBytes': len(stderr), 'errorType': 'ValueError'}
+                    'stderrBytes': len(stderr), 'errorType': 'ValueError',
+                    'stdoutTruncated': False, 'stderrTruncated': False}
+        expected = {**expected, 'commandAttempts': [dict(expected)]}
         baseline_error = None
         for fault in ('unobserved', None, 'log', 'classifier', 'receipt'):
             with self.subTest(fault=fault):
@@ -740,6 +742,12 @@ class ProcessObservationTests(unittest.IsolatedAsyncioTestCase):
                 observer.baseline_command = command
                 process = fake_process((STDOUT, stderr), returncode=7)
                 communicate = process.communicate
+                readers = {
+                    channel: AsyncMock(side_effect=(payload[:7], payload[7:], b''))
+                    for channel, payload in (('stdout', STDOUT), ('stderr', stderr))}
+                process.stdout = SimpleNamespace(read=readers['stdout'])
+                process.stderr = SimpleNamespace(read=readers['stderr'])
+                process.wait = AsyncMock(return_value=7)
                 self.spawn.reset_mock()
                 self.spawn.return_value = process
                 with ExitStack() as stack:
@@ -772,10 +780,13 @@ class ProcessObservationTests(unittest.IsolatedAsyncioTestCase):
                 self.spawn.assert_awaited_once_with(*command, cwd=None, env={},
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                     start_new_session=updates.os.name != 'nt')
-                communicate.assert_awaited_once_with()
-                retry.assert_called_once_with(command, {}, STDOUT, stderr)
-                self.assertIs(retry.call_args.args[2], STDOUT)
-                self.assertIs(retry.call_args.args[3], stderr)
+                communicate.assert_not_awaited()
+                process.wait.assert_awaited_once_with()
+                for reader in readers.values():
+                    self.assertEqual(reader.await_args_list, [unittest.mock.call(65536)] * 3)
+                # The current consumer appends only the bounded retry predicate,
+                # not another copy of raw output or observer-derived facts.
+                retry.assert_called_once_with(command, {}, STDOUT, stderr + b'Authentication failed')
                 assert_sanitized(self, {'message': str(error), 'facts': error.diagnostic_facts})
 
 

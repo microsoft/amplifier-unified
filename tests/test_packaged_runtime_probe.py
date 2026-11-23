@@ -25,10 +25,42 @@ class PackagedProbeTests(unittest.TestCase):
         for name in ("amplifier-foundation", "amplifier-module-hooks-session-naming"):
             sources[name]["rev"] = probe.FOUNDATION
         sources["amplifier-module-loop-live"]["rev"] = probe.LOOP
-        expected["tool"]["uv"]["override-dependencies"] = [
-            f"amplifier-foundation @ git+{probe.FOUNDATION_URL}@{probe.FOUNDATION}"]
+        # The named transitive override follows the single source-table pin;
+        # unrelated overrides (including Memory) must remain byte-for-byte values.
+        self.assertEqual(original["tool"]["uv"]["override-dependencies"].count("amplifier-foundation"), 1)
         self.assertEqual(actual, expected)
         self.assertIn("amplifier-core", actual["tool"]["uv"]["no-build-package"])
+
+    def test_legacy_direct_override_is_pinned_without_replacing_other_overrides(self):
+        content = (ROOT / "amplifier_web/runtime_deps/pyproject.toml").read_bytes()
+        original_override = b'override-dependencies = [\n  "amplifier-foundation",'
+        legacy_override = f'amplifier-foundation @ git+{probe.FOUNDATION_URL}@main'
+        legacy = content.replace(original_override,
+                                 f'override-dependencies = [\n  "{legacy_override}",'.encode())
+        self.assertNotEqual(legacy, content)
+        actual = probe.pinned_manifest(legacy)
+        expected = probe.pinned_manifest(content)
+        expected["tool"]["uv"]["override-dependencies"] = [
+            f"amplifier-foundation @ git+{probe.FOUNDATION_URL}@{probe.FOUNDATION}"
+            if row == "amplifier-foundation" else row
+            for row in expected["tool"]["uv"]["override-dependencies"]]
+        self.assertEqual(actual, expected)
+
+    def test_manifest_refuses_missing_duplicate_and_foreign_foundation_overrides(self):
+        content = (ROOT / "amplifier_web/runtime_deps/pyproject.toml").read_bytes()
+        original = b'override-dependencies = [\n  "amplifier-foundation",'
+        cases = {
+            "missing": ('', "exactly one"),
+            "duplicate": ('"amplifier-foundation", "amplifier-foundation",', "exactly one"),
+            "mixed": (f'"amplifier-foundation", "amplifier-foundation @ git+{probe.FOUNDATION_URL}@main",', "exactly one"),
+            "foreign": ('"amplifier-foundation @ git+https://other.invalid/foundation@main",', "Unexpected Foundation override"),
+        }
+        for name, (rows, reason) in cases.items():
+            with self.subTest(case=name):
+                altered = content.replace(original, ('override-dependencies = [\n  ' + rows).encode())
+                self.assertNotEqual(altered, content)
+                with self.assertRaisesRegex(AssertionError, reason):
+                    probe.pinned_manifest(altered)
 
     def test_manifest_refuses_unexpected_foundation_owner(self):
         content = (ROOT / "amplifier_web/runtime_deps/pyproject.toml").read_bytes()
