@@ -893,6 +893,113 @@ class ProcessObservationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(row['stderrFailure']['failureCategory'], 'unknown')
                     assert_sanitized(self, evidence.report)
 
+    async def test_stream_read_zero_and_nested_read_all_keep_exact_bytes(self):
+        evidence, observer = self.observer()
+        process, _ = streaming_process()
+        pieces = iter((STDERR[:7], STDERR[7:], b''))
+        reader = SimpleNamespace()
+        async def read(n=-1):
+            if n == 0:
+                return b''
+            if n < 0:
+                chunks = []
+                while chunk := await reader.read(65536):
+                    chunks.append(chunk)
+                return b''.join(chunks)
+            return next(pieces)
+        reader.read = read
+        process.stderr = reader
+        self.spawn.return_value = process
+        observed = await observer(*BASELINE)
+        await observed.wait()
+        self.assertEqual(await observed.stderr.read(0), b'')
+        row, = evidence.report['processes']
+        self.assertFalse(row['stderrComplete'])
+        self.assertNotIn('stderrFailure', row)
+        self.assertEqual(await observed.stderr.read(), STDERR)
+        self.assertEqual(row['stderrObservedBytes'], len(STDERR))
+        self.assertEqual(row['stderrObservedChunks'], 1)
+        self.assertEqual(row['stderrFailure'], {
+            'phase': 'baseline-install', 'role': 'baseline-install', 'channel': 'stderr',
+            **helper.stream_facts((STDERR,), 7)})
+
+    async def test_stream_sample_is_bounded_and_classifier_identity_fault_is_not_accepted(self):
+        payload = STDERR + b'x' * (4 * LIMIT)
+        classify = fixture.diagnostics.stream_facts
+        for corrupt in (False, True):
+            with self.subTest(corrupt=corrupt):
+                evidence, observer = self.observer()
+                process, _ = streaming_process(stderr=payload)
+                self.spawn.return_value = process
+                observed = await observer(*BASELINE)
+                samples = []
+                def sampled(chunks, code):
+                    sample = b''.join(chunks)
+                    samples.append(len(sample))
+                    result = classify((sample,), code)
+                    if corrupt:
+                        result['rawLogSha256'] = '0' * 64
+                    return result
+                with patch.object(fixture.diagnostics, 'stream_facts', sampled):
+                    while await observed.stderr.read(65536):
+                        pass
+                    await observed.wait()
+                self.assertEqual(samples, [LIMIT + 1])
+                row, = evidence.report['processes']
+                self.assertEqual(evidence.capture_failed, corrupt)
+                self.assertEqual(row['stderrObservedBytes'], len(payload))
+                self.assertEqual(row['stderrObservedSha256'], hashlib.sha256(payload).hexdigest())
+                facts = row['stderrFailure']
+                self.assertEqual(facts['complete'], not corrupt)
+                self.assertEqual(facts['failureCategory'], 'unknown')
+                if corrupt:
+                    self.assertEqual(facts['captureError'], 'stderr-capture-failed')
+                    self.assertIsNone(facts['rawLogSha256'])
+                else:
+                    self.assertEqual(facts['rawLogSha256'], hashlib.sha256(payload).hexdigest())
+                    self.assertEqual(facts['rawLogBytes'], len(payload))
+                assert_sanitized(self, evidence.report)
+
+    async def test_streamed_probe_keeps_last_sanitized_record_across_split_and_oversized_lines(self):
+        first = b'AMPLIFIER_UPDATE_PROBE={"ok":false,"stage":"complete"}\n'
+        last = ('AMPLIFIER_UPDATE_PROBE=' + json.dumps({
+            'ok': True, 'stage': 'complete', 'private': SENSITIVE}, ensure_ascii=False)).encode()
+        payload = first + b'x' * (5 * 8192) + b'\n' + last
+        evidence, observer = self.observer()
+        process, _ = streaming_process(stdout=payload, returncode=0)
+        self.spawn.return_value = process
+        observed = await observer('synthetic-python', '/synthetic/update_probe.py')
+        output = []
+        while chunk := await observed.stdout.read(65536):
+            output.append(chunk)
+        await observed.wait()
+        self.assertEqual(b''.join(output), payload)
+        row, = evidence.report['processes']
+        self.assertEqual(row['probeReports'], [{'ok': True, 'stage': 'complete'}])
+        self.assertEqual(row['stdoutObservedBytes'], len(payload))
+        self.assertNotIn('commandRole', row)
+        self.assertNotIn('stderrFailure', row)
+        assert_sanitized(self, evidence.report)
+
+    async def test_streamed_success_with_log_failure_cannot_certify_fixture_pass(self):
+        evidence, observer = self.observer()
+        process, _ = streaming_process(returncode=0)
+        self.spawn.return_value = process
+        observed = await observer(*BASELINE)
+        with patch.object(evidence, 'log', side_effect=OSError(SENSITIVE)):
+            for channel in ('stdout', 'stderr'):
+                while await getattr(observed, channel).read(65536):
+                    pass
+            self.assertEqual(await observed.wait(), 0)
+        row, = evidence.report['processes']
+        self.assertFalse(row['stdoutComplete'] or row['stderrComplete'])
+        self.assertTrue(evidence.capture_failed)
+        self.assertNotIn('stderrFailure', row)
+        evidence.report['status'] = 'passed'
+        evidence.save_observation()
+        self.assertEqual(evidence.report['status'], 'failed')
+        assert_sanitized(self, evidence.report)
+
 
 if __name__ == '__main__':
     unittest.main()
