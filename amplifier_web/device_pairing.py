@@ -49,7 +49,8 @@ async def permits_companion(request):
         return (set(args) <= {'id', 'title', 'location', 'select'}
                 and args.get('location') == {'kind': 'managed'} and args.get('select') is False)
     if re.fullmatch(r'/api/sessions/[^/]+/commands', request.path) and body.get('action') == 'conversation.send':
-        return (set(args) <= {'text', 'via', 'preserveDraft', 'attachmentIds'}
+        return (set(args) <= {'text', 'via', 'preserveDraft', 'attachmentIds', 'onlyIfIdle'}
+                and ('onlyIfIdle' not in args or type(args['onlyIfIdle']) is bool)
                 and args.get('via') == 'chat' and args.get('preserveDraft') is True
                 and args.get('attachmentIds') == [])
     return False

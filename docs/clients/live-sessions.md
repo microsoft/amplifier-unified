@@ -119,6 +119,25 @@ revision at submission. A stale value refuses fresh admission with `input_stoppe
 it is not a generation/route choice. Exact duplicate receipts still reconcile after
 Stop. The bundled browser preserves this value across uncertain delivery.
 
+Restricted paired companions may opt in to `onlyIfIdle: true` on their existing
+text-only `conversation.send` command (`via: chat`, `preserveDraft: true`,
+`attachmentIds: []`). This requires an already ready native worker confirming
+idle-only support. The native `Input.only_if_idle` boundary decides admission,
+not displayed status or generation. Busy refusal is `accepted: false`,
+`delivery: failed`, `code: input_busy`: the native input was not reserved.
+Unsupported runtimes/routes, cold workers, pending/fork configuration, updates,
+steering and recovery shortcuts fail closed; none falls back to ordinary Send.
+Ordinary sends with this option absent or false are unchanged.
+
+Command receipts retain their existing immutable attempt identity: repeating a
+busy command ID returns its saved refusal even after the conversation is idle.
+A later attempt therefore needs a **new command ID**, still `onlyIfIdle: true`.
+The companion must correlate those attempt IDs to its own original spoken item;
+the host does not add a queue or a second item identity. After a lost response,
+replay the **same ID and exact arguments** to reconcile first. A sending/unknown
+receipt or generic worker failure is not `input_busy` and never permits an
+automatic new attempt. Ordinary `conversation.retry` cannot resend these inputs.
+
 Keep the same command ID and arguments after an uncertain transport failure.
 Persisted receipts deduplicate retries by client, action, arguments, and origin.
 A changed command with the same ID is rejected. Command acceptance is distinct

@@ -1222,6 +1222,7 @@ class Worker:
             public.update(self.preparation_report)
             with startup_timing.phase('worker.ready'):
                 publish({"type": "runtime.ready", "report": public,
+                         "idleOnlyAdmission": self.supports_idle_input(),
                          "configurationInputs": list(self.config_inputs),
                          "configurationStamp": self.configuration_stamp(),
                          "workerIdentity": {"pid": os.getpid(), "sessionId": self.session.session_id,
@@ -1588,6 +1589,7 @@ class Worker:
                 if op in {'send', 'retry'} and self.stop_revision != stop_revision:
                     publish({'op': 'reply', 'id': data.get('id'), 'result': {
                         'accepted': False, 'delivery': 'failed', 'effect': 'none',
+                        **({'code': 'input_stopped', 'inputId': data['input_id']} if data.get('only_if_idle') is True else {}),
                         'reason': 'This input was stopped before admission. Nothing was sent.'}})
                     return
                 if self.ownership.yielding or self.shutdown.is_set():
@@ -1775,6 +1777,15 @@ class Worker:
         finally:
             self.activation_gate.reset(token)
 
+    def supports_idle_input(self):
+        """The exact native admission implementation, not a host idle hint."""
+        try:
+            from amplifier_module_loop_live.runtime import Input, InputBusyError, Runtime
+            return (type(self.runtime) is Runtime and issubclass(InputBusyError, Exception)
+                    and 'only_if_idle' in Input.__dataclass_fields__)
+        except (ImportError, AttributeError, TypeError):
+            return False
+
     async def _command_serial(self, data):
         identity = data.get("id")
         try:
@@ -1907,6 +1918,16 @@ class Worker:
             elif op in {"send", "retry"}:
                 from amplifier_module_loop_live.runtime import Input
                 from amplifier_web.message_interactions import prepare_input
+                only_if_idle = data.get('only_if_idle') is True
+                if only_if_idle:
+                    code = ('input_idle_unsupported' if not self.supports_idle_input() else
+                            'input_idle_configuration' if op != 'send' or any(data.get(key) for key in (
+                                'configuration_if_idle', 'applied_fork_choice', 'recovery_allowance',
+                                'reply_context', 'attachments')) else None)
+                    if code:
+                        publish({'op': 'reply', 'id': identity, 'result': {
+                            'accepted': False, 'effect': 'none', 'inputId': data['input_id'], 'code': code}})
+                        return
                 if data.get('configuration_if_idle') and self.runtime.generation is None and data['input_id'] not in self.runtime.accepted:
                     result = {'accepted': False, 'effect': 'none', 'configurationRequired': True}
                     publish({'op': 'reply', 'id': identity, 'result': result})
@@ -1921,13 +1942,30 @@ class Worker:
                         or self.shutdown.is_set() or self.ownership.yielding):
                     publish({'op': 'reply', 'id': identity, 'result': {
                         'accepted': False, 'delivery': 'failed', 'effect': 'none',
+                        **({'code': 'input_stopped', 'inputId': data['input_id']} if only_if_idle else {}),
                         'reason': 'This input was stopped before admission. Nothing was sent.'}})
                     return
                 self.bind_input_context(data['input_id'], data, data.get('context_binding'))
-                input_id = await self.runtime.submit(Input(
+                command = Input(
                     "user", text, id=data["input_id"],
                     attachments=tuple(data.get("attachments", [])),
-                    activation=self.activation))
+                    activation=self.activation, **({'only_if_idle': True} if only_if_idle else {}))
+                if only_if_idle:
+                    from amplifier_module_loop_live.runtime import InputBusyError
+                    try:
+                        input_id = await self.runtime.submit(command)
+                    except InputBusyError:
+                        # Only this native synchronous admission refusal proves
+                        # no reservation. Preparation/notification/pipe failures
+                        # (even similarly named errors) remain ambiguous.
+                        if data['input_id'] in self.runtime.accepted:
+                            raise
+                        self.context_bindings.pop(data['input_id'], None)
+                        publish({'op': 'reply', 'id': identity, 'result': {
+                            'accepted': False, 'effect': 'none', 'inputId': data['input_id'], 'code': 'input_busy'}})
+                        return
+                else:
+                    input_id = await self.runtime.submit(command)
                 result = {"accepted": True, "inputId": input_id}
             elif op == "control":
                 arguments = data.get("arguments", {})

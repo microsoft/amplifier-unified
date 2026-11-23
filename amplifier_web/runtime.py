@@ -1318,6 +1318,7 @@ class RuntimeManager:
                         row["detail"] = data.get("detail", row["detail"])
                         await self._emit_progress(sid, row)
                 elif data.get("type") == "runtime.ready":
+                    row['idleOnlyAdmission'] = data.get('idleOnlyAdmission') is True
                     if not row["ready"].done():
                         # uv is the managed launcher, not necessarily the Python
                         # worker. Bind configuration effects to the identity on
@@ -1745,6 +1746,45 @@ class RuntimeManager:
             if row and row["process"].returncode is None:
                 return
             await self.start(session, emit)
+
+    async def send_if_idle(self, session, text, input_id, emit, *, admission_check=None):
+        """An already loaded native owner only; never prepare, configure or steer."""
+        def refused(code):
+            return {'accepted': False, 'effect': 'none', 'inputId': input_id, 'code': code}
+        async with self._admission(session['id']):
+            current = self._check_execution(session['id'], session)
+            if current is not None and current.get('interruptionRevision', 0) != session.get('interruptionRevision', 0):
+                return refused('input_stopped')
+            if admission_check:
+                admission_check()
+            try:
+                getattr(self, 'update_input_gate', lambda *args: None)(session['id'], input_id)
+            except UpdateDeferred:
+                return refused('input_idle_unavailable')
+            if session.get('externalAgent'):
+                return refused('input_idle_unsupported')
+            if any(session.get(key) for key in ('pendingModelSelection', 'pendingBundleSelection',
+                                               'fileAccessPending', 'forkTranscript')):
+                return refused('input_idle_configuration')
+            row = self.workers.get(session['id'])
+            if (self._closed or not row or row['process'].returncode is not None or row.get('closing')
+                    or not row['ready'].done() or row['ready'].cancelled() or row['ready'].exception()):
+                return refused('input_idle_unavailable')
+            # Old worker code may ignore unknown fields. Require its own pipe's
+            # positive support witness before writing an effectful send.
+            if row.get('idleOnlyAdmission') is not True:
+                return refused('input_idle_unsupported')
+            pending = await self._admit(session['id'], 'send', {
+                'text': text, 'input_id': input_id, 'only_if_idle': True,
+                'context_binding': session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []})})
+        result = await self._reply(*pending, op='send', args={})
+        if not (isinstance(result, dict) and (
+                result.get('accepted') is True and result.get('inputId') == input_id
+                or result.get('accepted') is False and result.get('effect') == 'none'
+                and result.get('code') in {'input_busy', 'input_idle_unsupported', 'input_idle_configuration', 'input_stopped'}
+                and result.get('inputId') == input_id)):
+            raise RuntimeError('Idle-only input admission was not confirmed. Do not resend.')
+        return result
 
     async def send(self, session, text, input_id, emit, *, admission_check=None):
         update_gate = getattr(self, 'update_input_gate', lambda *args: None)

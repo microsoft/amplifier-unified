@@ -392,6 +392,8 @@ ACTION_DEFINITIONS.update(patch_placement_definitions(schema, string))
 from .next_message_configuration import definitions as next_message_definitions
 ACTION_DEFINITIONS.update(next_message_definitions(schema, string))
 ACTION_DEFINITIONS['conversation.send'][1]['properties']['expectedConfigurationRevision'] = {'type': 'integer', 'minimum': 0}
+ACTION_DEFINITIONS['conversation.send'][1]['properties']['onlyIfIdle'] = {
+    'type': 'boolean', 'description': 'Restricted paired companion only: native idle admission, never steering or ordinary-send fallback.'}
 from .transition_allowance import MAX_ADDITIONAL_CALLS
 ACTION_DEFINITIONS['conversation.send'][1]['properties']['recoveryAllowance'] = schema({
     'offerId': {'type': 'string', 'pattern': '^[0-9a-f]{64}$'},
@@ -2891,6 +2893,8 @@ class AppService:
                 if external_target and self._session(external_target, hydrate=False).get('externalAgent'):
                     self.external_conversations.guard(self._session(external_target), action, args)
             from .update_drain import held as update_held, new_work as update_new_work
+            if action == 'conversation.send' and args.get('onlyIfIdle') is True and update_held(self):
+                raise AppError('Idle-only input cannot be queued across an app update.', 409, code='input_idle_unavailable')
             update_message = action == 'conversation.send' and update_held(self) and not args.get('expectedGenerationId')
             if work_paused(self.state) and not update_message and update_new_work(action, args):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
@@ -3631,6 +3635,23 @@ class AppService:
                 diagnostic_result = save(self, args, configuration_authority)
             elif action == "conversation.send":
                 session = self._session(args.get("sessionId"), hydrate=False)
+                only_if_idle = args.get('onlyIfIdle') is True
+                if only_if_idle:
+                    client = self.clients.record() or {}
+                    if (origin != 'ui' or caller_session_id or not command_id
+                            or client.get('kind') != 'native' or not client.get('deviceOwner')
+                            or args.get('via') != 'chat' or args.get('preserveDraft') is not True
+                            or args.get('attachmentIds') != []
+                            or set(args) - {'sessionId', 'text', 'via', 'preserveDraft', 'attachmentIds', 'onlyIfIdle'}):
+                        raise AppError('Idle-only input requires a bound paired companion text command.', 403,
+                                       code='input_idle_unsupported')
+                    if session.get('externalAgent') or not callable(getattr(self.runtime, 'send_if_idle', None)):
+                        raise AppError('This conversation does not support native idle-only input.', 409,
+                                       code='input_idle_unsupported')
+                    if any(session.get(key) for key in ('pendingModelSelection', 'pendingBundleSelection',
+                                                       'fileAccessPending', 'forkTranscript')):
+                        raise AppError('Idle-only input cannot apply pending or fork configuration.', 409,
+                                       code='input_idle_configuration')
                 if ('expectedInterruptionRevision' in args
                         and args['expectedInterruptionRevision'] != session.get('interruptionRevision', 0)):
                     raise AppError('This message was prepared before Stop. Nothing was sent. Send a new message to continue.',
@@ -3677,7 +3698,7 @@ class AppService:
                 if args.get('recipientAgentId') and not session.get('externalAgent'):
                     raise AppError('Choose a participant only in an external-agent conversation.')
                 stopped_generation = (recover_failed_generation(self, session, recovery_boundary)
-                    if not session.get('externalAgent') and origin == 'ui' and not update_message and args.get('expectedGenerationId') is None else None)
+                    if not only_if_idle and not session.get('externalAgent') and origin == 'ui' and not update_message and args.get('expectedGenerationId') is None else None)
                 # Ordinary input is conversation-addressed. Only explicit
                 # anchored callers consult the host's observed generation.
                 target_generation = (steering_target(session, args['expectedGenerationId'])
@@ -3695,6 +3716,8 @@ class AppService:
                 session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
                 message = self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), human_post=post_previous is not None,inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending'}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
                 message['interruptionRevision'] = session.get('interruptionRevision', 0)
+                if only_if_idle:
+                    message['onlyIfIdle'] = True
                 if allowance is not None:
                     message['recoveryAllowance'] = copy.deepcopy(allowance)
                 if session.get('externalAgent'):
@@ -3714,7 +3737,7 @@ class AppService:
                     from .update_drain import hold_message
                     hold_message(self, session, message)
                     self._clear_sent_draft(session, message, text, args.get("preserveDraft", False))
-                elif not target_generation:
+                elif not target_generation and not only_if_idle:
                     if not shared_room:
                         preparing = session.get('preparation', {}).get('status') == 'preparing'
                         self._activity(session, "runtime-setup" if preparing else "queued",
@@ -3733,13 +3756,19 @@ class AppService:
                     dispatch_session = ({'id': session['id'], 'externalAgent': {'participation': 'shared'},
                                          'interruptionRevision': session.get('interruptionRevision', 0)}
                                         if shared_room else copy.deepcopy(session))
-                    pending.append((self._send, (dispatch_session, text, input_id, previous_activity, args.get('preserveDraft', False))))
+                    send_args = (dispatch_session, text, input_id, previous_activity, args.get('preserveDraft', False))
+                    if only_if_idle:
+                        send_args += (False, False, admission_check)
+                    pending.append((self._send, send_args))
             elif action == "conversation.retry":
                 from .message_delivery import find_message, latest_user_input
                 session = self._session(args['sessionId'], hydrate=False)
                 message = find_message(session, args['inputId'])
                 if message is None:
                     raise AppError('This message is not saved in this conversation.', 404)
+                if message.get('onlyIfIdle'):
+                    raise AppError('Idle-only commands cannot use ordinary Retry. Reconcile the original receipt; '
+                                   'only a proven refusal permits a new idle-only command identity.', 409)
                 if message.get('steering'):
                     raise AppError('A steering message belongs to its original run and cannot be resent as a new turn. Check delivery, or write a new message explicitly.', 409)
                 if message.get('delivery', {}).get('status') == 'accepted':
@@ -4817,7 +4846,7 @@ class AppService:
             receipt['navigationPost'] = copy.deepcopy(message['navigationPost'])
             self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), message['inputId']))
 
-    async def _send(self, session, text, input_id, previous_activity=None, preserve_draft=False, retry=False, known_undelivered=False):
+    async def _send(self, session, text, input_id, previous_activity=None, preserve_draft=False, retry=False, known_undelivered=False, admission_check=None):
         if session.get('externalAgent'):
             return await self.external_conversations.send(session, text, input_id, preserve_draft)
         if not self.runtime:
@@ -4825,7 +4854,8 @@ class AppService:
         from .message_delivery import find_message, receipt_delivery
         from .update_drain import UpdateDeferred, held, defer_send
         original = find_message(session, input_id) or {}
-        if not retry and held(self) and not original.get('steering'):
+        only_if_idle = original.get('onlyIfIdle') is True
+        if not only_if_idle and not retry and held(self) and not original.get('steering'):
             from .update_drain import input_gate
             try:
                 input_gate(self, session['id'], input_id)
@@ -4838,12 +4868,14 @@ class AppService:
         from .runtime import RuntimeOperationPending, RuntimeStartupError, SessionInUseError, RuntimeHostClosingError
         try:
             session.setdefault('surfaceInputs', {}).setdefault(input_id, self.surface_context.bind_input(session['id']))
-            sender = self.runtime.retry if retry else self.runtime.send
+            sender = self.runtime.send_if_idle if only_if_idle else self.runtime.retry if retry else self.runtime.send
             admission = ({'admission_check': lambda: self.handoffs.input_guard(session['id'], input_id)}
                          if original.get('handoffOrigin') else {})
+            if only_if_idle and admission_check:
+                admission['admission_check'] = admission_check
             send_result = await sender(session, text, input_id, self.on_runtime_event, **admission)
         except UpdateDeferred:
-            if retry:
+            if retry or only_if_idle:
                 raise
             return await defer_send(self, session['id'], input_id, preserve_draft)
         except RuntimeHostClosingError:
@@ -4979,6 +5011,15 @@ class AppService:
                         row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
                         delivery = (receipt_delivery(row[0], current['id'], input_id) if row else None) or delivery
                     send_result = {**(send_result if isinstance(send_result, dict) else {}), 'delivery': delivery}
+                    if only_if_idle and send_result.get('accepted') is False and send_result.get('effect') == 'none':
+                        # Preserve command identity semantics: a proven refusal
+                        # replays forever, rather than becoming a fresh attempt.
+                        row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
+                        if row:
+                            receipt = json.loads(row[0])
+                            receipt.update(accepted=False, delivery=delivery,
+                                           code=send_result.get('code', 'input_idle_unavailable'))
+                            self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), input_id))
                 sent = next((row for row in session["messages"] if row.get("inputId") == input_id), {})
                 self._clear_sent_draft(current, sent, text, preserve_draft)
                 current.pop("lockOwner", None)
