@@ -479,6 +479,80 @@ class Requests(unittest.IsolatedAsyncioTestCase):
             self.host.complete.assert_awaited_once()
         self.assertNotIn('prior_attempt_', repr(list(self.app.db.execute('SELECT * FROM suggestion_requests'))))
 
+    async def test_confirmed_enable_accepts_existing_assistant_source_and_focus_reuses_it(self):
+        original = copy.deepcopy(self.app.session)
+        self.app.state['settings']['suggestedMessages'] = False
+        self.assertEqual((await self.request('off'))['status'], 'disabled')
+        self.assertFalse(self.host.jobs)
+        self.assertEqual(self.calls, [])
+        # This fixture changes the confirmed preference, not the history. The
+        # real settings commit/CAS is covered by the AppService cases below.
+        self.app.state['settings']['suggestedMessages'] = True
+        ready = await self.terminal_request('after-enable')
+        self.assertEqual(ready['status'], 'ready')
+        self.assertFalse(ready['reused'])
+        claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+        for _ in range(3):
+            self.assertEqual(await self.status('after-enable'), ready)
+        self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
+        rebound = await self.terminal_request('same-source-visit')
+        self.assertTrue(rebound['reused'])
+        self.assertEqual(rebound['generationId'], ready['generationId'])
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.app.session, original)
+
+    async def test_terminal_status_recovery_retains_original_source_and_reason_without_replay(self):
+        for state, reason in (('empty', None), ('failed', 'transport_authentication'),
+                              ('unsupported', 'runtime_not_prepared'), ('timeout', None),
+                              ('cancelled', None)):
+            with self.subTest(state=state):
+                self.app.session['messages'][-1]['text'] = 'Distinct source ' + state
+                self.host.complete = AsyncMock(return_value={
+                    'status': state, 'suggestion': None, 'usage': None, 'cost': None, 'reason': reason})
+                terminal = await self.terminal_request('terminal-' + state)
+                self.assertEqual(terminal['status'], state)
+                self.assertEqual(terminal['reason'], reason)
+                self.assertTrue(terminal['sourceKey'])
+                self.assertEqual(terminal['configRevision'], self.revision)
+                claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+                for _ in range(3):
+                    self.assertEqual(await self.status('terminal-' + state), terminal)
+                self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
+                self.host.complete.assert_awaited_once()
+                # Same-cookie tabs are presentation partitions, not a claimed
+                # security boundary, but a foreign principal gets no disposition.
+                token = BROWSER.set({'principal': 'other-owner', 'valid': lambda: True})
+                try:
+                    foreign = await self.status('terminal-' + state)
+                    self.assertEqual(foreign['status'], 'expired')
+                    self.assertIsNone(foreign['sourceKey'])
+                    self.assertIsNone(foreign['reason'])
+                finally:
+                    BROWSER.reset(token)
+
+    async def test_expired_pending_exact_recovery_cannot_buy_another_attempt(self):
+        entered = asyncio.Event()
+        async def pending(*args):
+            self.calls.append('one admitted call')
+            entered.set()
+            await asyncio.Event().wait()
+        self.host.complete = pending
+        await self.request('lost-pending')
+        await entered.wait()
+        record = next(iter(self.host.records.values()))
+        claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+        self.host._expire(record)
+        await self.settle()
+        self.assertEqual((await self.status('lost-pending'))['status'], 'expired')
+        self.assertEqual((await self.request('lost-pending'))['status'], 'expired')
+        # Simulate request-LRU loss while preserving the actual durable claim.
+        self.host.records.clear()
+        result = await self.terminal_request('lost-pending')
+        self.assertEqual(result['status'], 'expired')
+        self.assertEqual(result['reason'], 'prior_attempt_unavailable')
+        self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
+        self.assertEqual(len(self.calls), 1)
+
     async def test_pending_cancel_blocks_other_client_until_physical_settlement(self):
         entered, settling, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
         async def respond(*args):
@@ -2919,6 +2993,55 @@ class Integration(unittest.IsolatedAsyncioTestCase):
                 'enabled': False, 'transcriptMode': 'last_n', 'humanTurns': 6, 'scope': 'global'},
                 origin='agent', caller_session_id=None, include_state=False)
 
+    async def test_recommendation_roster_uses_current_exact_account_catalog_and_preserves_manual_choice(self):
+        from amplifier_web.provider_catalog import model_key
+        manager = self.app.prompt_suggestions.manager
+        manager.store.update(self.root, 'global', lambda value: value.update(
+            config={'providers': []}))
+        self.assertEqual((await manager.perform('providers.suggestionModels', {
+            'workspace': str(self.root)}))['providers'], [])
+        connections = [{'id': identity, 'module': 'provider-custom',
+                        'config': {'base_url': 'https://' + identity + '.invalid',
+                                   'api_key': 'synthetic-' + identity}}
+                       for identity in ('one', 'two', 'unknown')]
+        manager.store.update(self.root, 'global', lambda value: value.update(
+            config={'providers': connections}))
+        configure(manager, {'enabled': True, 'provider': 'one', 'model': 'Manual/Exact',
+                            'prompt': 'Preserved instructions.', 'transcriptMode': 'full'},
+                  self.root, 'global')
+        before = copy.deepcopy(manager.store.read(self.root, 'global'))
+        revision = describe(manager, self.root)['revision']
+        for identity in ('one', 'two'):
+            key = manager.catalog_key({'id': identity}, str(self.root))
+            model = identity + '/Current'
+            manager.catalog.put(model_key(key), {
+                'models': [{'id': model}], 'modelsSupported': True, 'modelsProvenance': 'provider-api',
+                'providerMetadata': {'module': 'provider-custom', 'modelListInfo': {
+                    'version': 1, 'source': 'provider-api',
+                    'purpose_recommendations': {'prompt-suggestions': [model]}}}})
+        with patch.object(manager, 'probe', AsyncMock(side_effect=AssertionError('no probe'))) as probe, \
+                patch.object(manager, 'discover_catalog', AsyncMock(side_effect=AssertionError('no discovery'))) as discover:
+            result = await manager.perform('providers.suggestionModels', {'workspace': str(self.root)})
+            rows = {row['id']: row for row in result['providers']}
+            for identity in ('one', 'two'):
+                self.assertEqual(rows[identity]['suggestionRecommendation']['model'], identity + '/Current')
+            self.assertIsNone(rows['unknown']['suggestionRecommendation'])
+            self.assertEqual(result['suggestionModels']['model'], 'Manual/Exact')
+            self.assertEqual(result['suggestionModels']['revision'], revision)
+            # Current identity after an endpoint edit cannot borrow old metadata.
+            manager.store.update(self.root, 'global', lambda value:
+                                 value['config']['providers'][0]['config'].update(base_url='https://changed.invalid'))
+            changed = await manager.perform('providers.suggestionModels', {'workspace': str(self.root)})
+            changed_rows = {row['id']: row for row in changed['providers']}
+            self.assertIsNone(changed_rows['one']['suggestionRecommendation'])
+            self.assertEqual(changed_rows['two']['suggestionRecommendation']['model'], 'two/Current')
+            self.assertEqual(manager.store.read(self.root, 'global')['prompt_suggestions'],
+                             before['prompt_suggestions'])
+        probe.assert_not_called()
+        discover.assert_not_called()
+        self.runtime.start.assert_not_called()
+        self.runtime.send.assert_not_called()
+
     async def test_real_action_schema_prompt_only_reset_and_model_only_preserve_all_omitted_settings(self):
         manager = self.app.prompt_suggestions.manager
         manager.store.update(self.root, 'global', lambda value: value.update(config={'providers': [{
@@ -3492,6 +3615,103 @@ probe.main()
             self.assertNotIn('SECRET', repr(result))
         finally:
             await manager.close()
+
+
+class Recommendations(unittest.TestCase):
+    """Only synthetic metadata and a memory catalog; no provider construction."""
+
+    def setUp(self):
+        from amplifier_web.provider_catalog import ProviderCatalog
+        self.manager = SimpleNamespace(catalog=ProviderCatalog())
+        self.row = {'id': 'account-a', 'module': 'provider-custom',
+                    'enabled': True, 'sharedCatalogKey': 'exact-account-a'}
+
+    def put(self, *, key='exact-account-a', models=None, ranked=None,
+            provenance='provider-api', module='provider-custom', **values):
+        from amplifier_web.provider_catalog import model_key
+        self.manager.catalog.put(model_key(key), {
+            'models': models if models is not None else [{'id': 'Current/Exact'}],
+            'modelsSupported': True, 'modelsProvenance': provenance,
+            'providerMetadata': {'module': module, 'modelListInfo': {
+                'version': 1, 'source': provenance,
+                'purpose_recommendations': {'prompt-suggestions': ranked if ranked is not None else ['Current/Exact']}}},
+            **values})
+
+    def get(self):
+        from amplifier_web.suggestion_settings import recommendation
+        return recommendation(self.manager, self.row)
+
+    def test_unknown_module_uses_its_exact_current_purpose_ranking(self):
+        for family in ('Luna', 'Haiku', 'Company'):
+            with self.subTest(family=family):
+                current = family + '/Current-Exact'
+                self.put(models=[{'id': family + '/old'}, {'id': current}],
+                         ranked=[family + '/retired', current])
+                self.assertEqual(self.get(), {
+                    'model': current, 'provenance': 'provider-api', 'basis': 'provider-purpose'})
+
+    def test_no_module_metadata_means_no_recommendation_not_inventory_order(self):
+        self.assertIsNone(self.get())
+        self.put(providerMetadata={'module': 'provider-custom', 'info': {
+            'display_name': 'OpenAI Luna Anthropic Haiku', 'defaults': {'model': 'Current/Exact'}}})
+        self.assertIsNone(self.get())
+
+    def test_exact_case_aliases_and_available_ids_only(self):
+        self.put(ranked=['current/exact', 'Retired-Model'])
+        self.assertIsNone(self.get())
+        self.put(models=[])
+        self.assertIsNone(self.get())
+        self.put(models=[{'id': 'Current/Exact'}, {'id': 'Current/Exact'}])
+        self.assertIsNone(self.get())
+
+    def test_account_module_disabled_and_signin_boundaries_cannot_donate_models(self):
+        self.put(key='other-account')
+        self.assertIsNone(self.get())
+        self.put(module='provider-other')
+        self.assertIsNone(self.get())
+        self.put()
+        for field, value in (('sharedCatalogKey', 'missing'), ('enabled', False),
+                             ('authenticationRequired', True)):
+            with self.subTest(field=field), patch.dict(self.row, {field: value}):
+                self.assertIsNone(self.get())
+        self.assertIsNotNone(self.get())
+
+    def test_configured_static_and_simulated_origins_stay_honest(self):
+        for provenance in ('configured', 'static', 'simulated', 'unsupported', None):
+            self.put(provenance=provenance)
+            with self.subTest(provenance=provenance):
+                value = self.get()
+                if provenance in {'configured', 'static'}:
+                    self.assertEqual(value['provenance'], provenance)
+                else:
+                    self.assertIsNone(value)
+
+    def test_failed_or_stale_catalog_never_recommends_retained_prior_inventory(self):
+        from amplifier_web.provider_catalog import model_key
+        self.put()
+        key = model_key(self.row['sharedCatalogKey'])
+        self.manager.catalog.failed_at[key] = 1
+        self.assertIsNone(self.get())
+        self.manager.catalog.failed_at.clear()
+        self.manager.catalog.ttl = 0
+        self.assertIsNone(self.get())
+
+    def test_malformed_optional_metadata_fails_closed_without_breaking_settings(self):
+        for metadata in ([], 'bad', {'module': 'provider-custom', 'modelListInfo': []},
+                         {'module': 'provider-custom', 'modelListInfo': {'version': True}},
+                         {'module': 'provider-custom', 'modelListInfo': {
+                             'version': 2, 'source': 'provider-api'}}):
+            with self.subTest(metadata=metadata):
+                self.put(providerMetadata=metadata)
+                self.assertIsNone(self.get())
+        for ranked in ([], [''], ['x'] * 2, ['x'] * 33, ['x' * 201], [None], 'Current/Exact'):
+            with self.subTest(ranked=ranked):
+                self.put(ranked=ranked)
+                self.assertIsNone(self.get())
+        for models in (1, {'id': 'Current/Exact'}, 'Current/Exact'):
+            with self.subTest(models=models):
+                self.put(models=models)
+                self.assertIsNone(self.get())
 
 
 if __name__ == '__main__':

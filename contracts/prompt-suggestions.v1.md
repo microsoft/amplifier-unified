@@ -54,7 +54,15 @@ from every conversation participant and execution runtime.
   Client interest/visibility owns those triggers; the host proves cookie-backed
   selected-chat authority, not the document's physical visibility. Reconnect and
   status reads never start inference. Request/source deduplication still forbids
-  replay of a prior attempt merely because a chat is revisited. Ordinary composing remains
+  replay of a prior attempt merely because a chat is revisited. Confirmed enable
+  followed by closing Settings reconciles the current eligible chat immediately;
+  an assistant source predating enable is not itself ineligible. The same
+  reconciliation runs when selected old history becomes ready, on focus and on
+  reconnect. Only the current interested chat creates demand, not a history-wide
+  backfill. Saved On remains separate from request status: pending has a quiet
+  composer loading indication, EMPTY means no suggestion this time, and failed,
+  unsupported or unavailable prior attempts have content-free feedback rather
+  than misleading silence. Ordinary composing remains
   available when the utility is disabled, busy, unsupported or unsuccessful.
   The existing update owner also fences utility admission while draining,
   replacing or releasing saved input, including final transport grants and
@@ -190,6 +198,30 @@ Clients may hydrate cached choices only by this exact key, never by connection
 ID alone or a workspace override/mounted fork. Reading this roster does not
 discover models, prepare a runtime or change settings.
 
+Each row also carries `suggestionRecommendation:null|{model,provenance,
+basis:"provider-purpose"}`. The host projects the first ranked exact ID present
+unambiguously in that connection's current cached inventory from the **new
+optional** `get_model_list_info()` version-1 extension
+`purpose_recommendations:{"prompt-suggestions":[ordered exact model IDs]}`.
+There are at most 32 distinct nonblank IDs, each at most 200 characters.
+Existing model-list discovery already carries this metadata; no additional probe
+or SDK is required. This is an extension point, not a claim existing modules
+advertise it. The module owns ranking, current families and aliases. The host
+does not infer a family from names or copy a vendor's model policy. In particular
+Luna/Haiku preferences cannot fabricate IDs or eligibility when a module does not
+establish them. A module without this metadata, unknown version, stale/failed,
+unsupported, simulated or absent catalog, disabled connection or required sign-in
+has no recommendation. Unknown/custom modules can use the same extension.
+`provenance` stays `provider-api`, `configured` or `static`; the latter two are
+not live account inventories. Recommendation is neither strict suggestion-output
+support nor a cost, latency or availability guarantee. Refreshing a catalog uses
+its existing explicit owner; focus/save never probes merely for recommendations.
+Clients reread this projection after relevant catalog hydration/refresh and
+discard it when its exact catalog identity or freshness changes. No saved model,
+prompt, sharing choice or connection is migrated or silently replaced; manual
+exact IDs remain unverified choices, never inferred recommendations. Another
+account, including one using the same module, cannot donate a recommendation.
+
 `providers.configureSuggestions {enabled?,provider?,model?,effort?,prompt?,transcriptMode?,
 humanTurns?,scope:"global",configurationTarget:{kind:"global"}}` saves the same
 selection and returns `suggestionModels`, `configurationChanged:true`,
@@ -228,6 +260,13 @@ Null without this explicit READY retention mode is not a validity grant.
 Pending work still has its independent 15-second overall deadline; clients do
 not renew finite expiry when receiving responses. Fresh source/authority checks
 remain mandatory for READY status and acceptance.
+Clients retain bounded private dispositions for the exact request/source/config
+identity, not only READY text. Revisit/refocus can read that exact pending or
+terminal receipt, never reset a spent attempt because it was empty, failed,
+cancelled, expired or the transport outcome was unknown. Lost/expired pending
+recovery does not authorize another inference. Terminal status/reason describes
+the original attempt, not current setup readiness or proof of zero billing;
+clients suppress its presentation after source/config/principal/Stop changes.
 
 Statuses: `pending`, `ready`, `empty`, `disabled`, `missing_selection`,
 `unsupported`, `stale`, `failed`, `timeout`, `cancelled`, `expired`,

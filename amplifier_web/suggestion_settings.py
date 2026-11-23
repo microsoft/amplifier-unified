@@ -38,6 +38,48 @@ def describe(manager, workspace):
     return selected(manager, workspace)[0]
 
 
+def recommendation(manager, row):
+    """Project module-owned purpose ranking from this exact cached catalog.
+
+    This optional model-list metadata extension is not a host vendor policy or
+    an availability/strict-output attestation. Reading Settings never discovers
+    models, and a saved manual choice is never rewritten by a recommendation.
+    """
+    from .provider_catalog import model_key
+    if not row.get('enabled') or row.get('authenticationRequired'):
+        return None
+    entry = manager.catalog.entry(model_key(row['sharedCatalogKey']))
+    if (entry['phase'] != 'ready' or entry['stale'] or not entry['supported']
+            or entry['provenance'] not in {'provider-api', 'configured', 'static'}):
+        return None
+    metadata = entry.get('metadata') or {}
+    if not isinstance(metadata, dict) or metadata.get('module') != row['module']:
+        return None
+    info = metadata.get('modelListInfo') or {}
+    if (not isinstance(info, dict) or type(info.get('version')) is not int or info['version'] != 1
+            or info.get('source') != entry['provenance']):
+        return None
+    purposes = info.get('purpose_recommendations')
+    ranked = purposes.get('prompt-suggestions') if isinstance(purposes, dict) else None
+    if (not isinstance(ranked, list) or not 1 <= len(ranked) <= 32
+            or any(not isinstance(model, str) or not model.strip() or len(model) > 200
+                   for model in ranked) or len(set(ranked)) != len(ranked)):
+        return None
+    models = entry.get('models') or []
+    if not isinstance(models, list):
+        return None
+    # Ambiguous duplicate IDs are not a recommendation. Never interpret model
+    # names, aliases, family substrings, defaults, prices or inventory order.
+    counts = {}
+    for model in models:
+        identity = model.get('id') if isinstance(model, dict) else None
+        if isinstance(identity, str):
+            counts[identity] = counts.get(identity, 0) + 1
+    model = next((model for model in ranked if counts.get(model) == 1), None)
+    return ({'model': model, 'provenance': entry['provenance'], 'basis': 'provider-purpose'}
+            if model is not None else None)
+
+
 def configure(manager, args, workspace, scope):
     if scope != 'global' or not manager.global_only:
         raise ValueError('Prompt suggestions use app-global Settings.')
