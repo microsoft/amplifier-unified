@@ -227,7 +227,7 @@ metadata needs no model-row walk; an advertised ranking inspects only exact IDs
 in the existing bounded catalog. Normal cache retention/freshness still applies.
 
 `providers.configureSuggestions {enabled?,provider?,model?,effort?,prompt?,transcriptMode?,
-humanTurns?,scope:"global",configurationTarget:{kind:"global"}}` saves the same
+humanTurns?,expectedSuggestionModelsRevision?,scope:"global",configurationTarget:{kind:"global"}}` saves the same
 selection and returns `suggestionModels`, `configurationChanged:true`,
 `takesEffect:"next_request"` and the updated `configurationRevision`.
 Existing configuration authority applies. No setting changes a chat's model.
@@ -239,6 +239,21 @@ settings). Independent prompt-only/reset or model-only forms therefore do not
 disable the utility, clear its account/model or reset its transcript window.
 The complete merged value is validated before one atomic settings write;
 invalid partial edits change neither settings nor the configuration revision.
+Bundled setup/model/Advanced saves submit `expectedSuggestionModelsRevision`,
+the exact 64-character lowercase hex `suggestionModels.revision` associated with
+the sharing disclosure the person reviewed. The raw action's optional comparison
+does not authorize a bundled form to omit it or fall back after conflict.
+Comparison, omitted-field merge and validation occur inside the existing global
+settings file's writer lock immediately before the write, using fresh current
+global settings and selected connection binding, never an earlier inventory
+snapshot. A mismatch returns 409 (`suggestion_configuration_changed`) without
+changing settings, configuration/preference revisions, success cache or paid
+claims. The client retains staged account/model edits, rereads current settings
+and shows the new sharing disclosure for review before an explicit save. It does
+not silently replay, overwrite sharing with the private draft, or treat an
+earlier render check as commit-time consent. A refreshed successful model-only
+save still preserves omitted sharing/prompt settings. Each actual save retains
+the existing new intent witness, so A→B→A is not the original confirmation.
 `defaultPrompt` is read-only metadata; Reset sends its exact value as `prompt`.
 Effort/prompt edits change the settings/configuration witness and invalidate pending
 or ready candidates like other app configuration edits; no existing paid claim is

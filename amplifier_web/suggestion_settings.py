@@ -55,33 +55,51 @@ def recommendation(manager, row):
 def configure(manager, args, workspace, scope):
     if scope != 'global' or not manager.global_only:
         raise ValueError('Prompt suggestions use app-global Settings.')
-    previous = _values(manager, workspace)
-    # Independent Settings controls submit only their changed fields. Merge all
-    # omitted preferences before validation, then publish one complete value.
-    value = {key: args.get(key, previous[key]) for key in (
-        'enabled', 'provider', 'model', 'effort', 'prompt', 'transcriptMode', 'humanTurns')}
-    validate_options(value['effort'], value['prompt'])
-    if value['transcriptMode'] not in {'full', 'last_n'} or type(value['humanTurns']) is not int or not 1 <= value['humanTurns'] <= 20:
-        raise ValueError('Choose full transcript or 1 to 20 recent human turns.')
-    if value['enabled']:
-        if not any(row['id'] == value['provider'] and row['enabled']
-                   for row in manager.provider_rows(workspace, ordinary_only=True)):
-            raise ValueError('Choose an enabled saved chat connection for prompt suggestions.')
-        if not isinstance(value['model'], str) or not value['model'].strip() or len(value['model']) > 200:
-            raise ValueError('Choose an explicit suggestion model.')
-        if value['effort'] is not None:
-            # Reuse ordinary model/effort capability validation without
-            # discovering models or making a request merely to save Settings.
-            from .provider_catalog import model_key
-            from .next_message_configuration import validate_selection
-            entry = manager.catalog.peek(model_key(manager.catalog_key({'id': value['provider']}, workspace))) or {}
-            validate_selection({'instance': value['provider'], 'model': value['model'], 'effort': value['effort']}, {
-                'providers': [{'id': value['provider'], 'sharedCatalogKey': 'selected'}],
-                'catalogs': {'selected': {'metadata': entry.get('providerMetadata')}}})
-    value['_revision'] = uuid.uuid4().hex  # A→B→A is not the original selection.
-    manager.store.update(workspace, scope, lambda settings: settings.update(prompt_suggestions=value))
-    return {'suggestionModels': describe(manager, workspace),
-            'configurationChanged': True, 'takesEffect': 'next_request'}
+    snapshot = getattr(manager, '_config_snapshot', None)
+    def mutate(settings):
+        # SettingsStore/ Foundation holds the ordinary global per-file writer
+        # lock here, including against other processes editing provider settings.
+        # Never compare against a caller's earlier inventory read_snapshot.
+        manager._config_snapshot = None
+        try:
+            with manager.read_snapshot(workspace):
+                if ('expectedSuggestionModelsRevision' in args
+                        and args['expectedSuggestionModelsRevision'] != describe(manager, workspace)['revision']):
+                    from .errors import AppError
+                    raise AppError('Suggestion settings changed. Review the current sharing choice before saving.',
+                                   409, code='suggestion_configuration_changed')
+                previous = _values(manager, workspace)
+                # Merge omitted fields from the locked current settings, never
+                # overwrite newer sharing with the form's stale private draft.
+                value = {key: args.get(key, previous[key]) for key in (
+                    'enabled', 'provider', 'model', 'effort', 'prompt', 'transcriptMode', 'humanTurns')}
+                validate_options(value['effort'], value['prompt'])
+                if value['transcriptMode'] not in {'full', 'last_n'} or type(value['humanTurns']) is not int or not 1 <= value['humanTurns'] <= 20:
+                    raise ValueError('Choose full transcript or 1 to 20 recent human turns.')
+                if value['enabled']:
+                    if not any(row['id'] == value['provider'] and row['enabled']
+                               for row in manager.provider_rows(workspace, ordinary_only=True)):
+                        raise ValueError('Choose an enabled saved chat connection for prompt suggestions.')
+                    if not isinstance(value['model'], str) or not value['model'].strip() or len(value['model']) > 200:
+                        raise ValueError('Choose an explicit suggestion model.')
+                    if value['effort'] is not None:
+                        # Cached capability validation only, never discovery.
+                        from .provider_catalog import model_key
+                        from .next_message_configuration import validate_selection
+                        entry = manager.catalog.peek(model_key(manager.catalog_key({'id': value['provider']}, workspace))) or {}
+                        validate_selection({'instance': value['provider'], 'model': value['model'], 'effort': value['effort']}, {
+                            'providers': [{'id': value['provider'], 'sharedCatalogKey': 'selected'}],
+                            'catalogs': {'selected': {'metadata': entry.get('providerMetadata')}}})
+                value['_revision'] = uuid.uuid4().hex  # A→B→A is not the original selection.
+                settings.update(prompt_suggestions=value)
+        finally:
+            manager._config_snapshot = None
+    try:
+        manager.store.update(workspace, scope, mutate)
+        return {'suggestionModels': describe(manager, workspace),
+                'configurationChanged': True, 'takesEffect': 'next_request'}
+    finally:
+        manager._config_snapshot = snapshot
 
 
 def definitions(schema, string):
@@ -94,6 +112,7 @@ def definitions(schema, string):
             'Opt in to app-level prompt suggestions using one saved connection and explicit model. '
             'Sends only bounded display transcript on a later interested-client request; never drafts or native model context.',
             schema({**owner, 'enabled': {'type': 'boolean'}, 'provider': string(100),
+                    'expectedSuggestionModelsRevision': {**string(64), 'pattern': '^[0-9a-f]{64}$'},
                     'model': string(200), 'transcriptMode': {'enum': ['full', 'last_n']},
                     'effort': {'type': ['string', 'null'], 'pattern': r'^[A-Za-z0-9_-]{1,100}$'},
                     'prompt': {**string(MAX_PROMPT_BYTES), 'minLength': 1},

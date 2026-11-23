@@ -3042,6 +3042,50 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         self.runtime.start.assert_not_called()
         self.runtime.send.assert_not_called()
 
+    async def test_suggestion_configuration_cas_rejects_stale_compact_sharing_without_side_effects(self):
+        from amplifier_web.errors import AppError
+        manager = self.app.prompt_suggestions.manager
+        manager.store.update(self.root, 'global', lambda value: value.update(config={'providers': [
+            {'id': account, 'module': 'provider-openai',
+             'config': {'api_key': 'synthetic-' + account}} for account in ('old', 'new')]}))
+        authority = {'scope': 'global', 'configurationTarget': {'kind': 'global'}}
+        async def save(values):
+            return (await self.app.dispatch('providers.configureSuggestions', {**authority, **values},
+                                           include_state=False))['result']['suggestionModels']
+        initial = await save({'enabled': True, 'provider': 'old', 'model': 'saved',
+                              'prompt': 'Keep this instruction.', 'transcriptMode': 'last_n', 'humanTurns': 8})
+        # Compact form staged a new account while showing Recent. Another
+        # authorized client changes sharing before that compact form submits.
+        full = await save({'transcriptMode': 'full', 'expectedSuggestionModelsRevision': initial['revision']})
+        before = manager.store.path(self.root, 'global').read_bytes()
+        config_revision = self.app.state['configurationRevision']
+        preference = copy.deepcopy(self.app.state['settings'])
+        host = self.app.prompt_suggestions
+        claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+        with patch.object(host, 'invalidate', wraps=host.invalidate) as invalidate, \
+                patch.object(manager, 'probe', AsyncMock(side_effect=AssertionError('no provider call'))) as probe:
+            with self.assertRaises(AppError) as raised:
+                await save({'provider': 'new', 'model': 'staged',
+                            'expectedSuggestionModelsRevision': initial['revision']})
+            self.assertEqual((raised.exception.status, raised.exception.code),
+                             (409, 'suggestion_configuration_changed'))
+            self.assertEqual(manager.store.path(self.root, 'global').read_bytes(), before)
+            self.assertEqual(self.app.state['configurationRevision'], config_revision)
+            self.assertEqual(self.app.state['settings'], preference)
+            self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
+            invalidate.assert_not_called()
+            # Reviewed refreshed Full disclosure authorizes this explicit save;
+            # omitted sharing/prompt still come from current settings.
+            accepted = await save({'provider': 'new', 'model': 'staged',
+                                   'expectedSuggestionModelsRevision': full['revision']})
+            self.assertEqual((accepted['provider'], accepted['model'], accepted['transcriptMode'],
+                              accepted['humanTurns'], accepted['prompt']),
+                             ('new', 'staged', 'full', 8, 'Keep this instruction.'))
+            invalidate.assert_called_once()
+            probe.assert_not_called()
+        self.runtime.start.assert_not_called()
+        self.runtime.send.assert_not_called()
+
     async def test_real_action_schema_prompt_only_reset_and_model_only_preserve_all_omitted_settings(self):
         manager = self.app.prompt_suggestions.manager
         manager.store.update(self.root, 'global', lambda value: value.update(config={'providers': [{
@@ -3615,6 +3659,104 @@ probe.main()
             self.assertNotIn('SECRET', repr(result))
         finally:
             await manager.close()
+
+
+class SuggestionConfigurationCAS(unittest.TestCase):
+    """Real settings writer/lock with synthetic configuration and no providers."""
+
+    def setUp(self):
+        from amplifier_web.setup import SetupManager
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.env = patch.dict(os.environ, {'AMPLIFIER_HOME': str(self.root / 'shared'),
+                                          'AMPLIFIER_WEB_HOME': str(self.root / 'app')})
+        self.env.start()
+        self.manager = SetupManager(self.root / 'app', global_only=True)
+        self.manager.store.update(self.root, 'global', lambda value: value.update(config={'providers': [
+            {'id': 'saved', 'module': 'provider-openai', 'config': {
+                'api_key': 'synthetic-key', 'base_url': 'https://fixture.invalid'}}]}))
+        self.initial = configure(self.manager, {'enabled': True, 'provider': 'saved', 'model': 'original',
+                                               'transcriptMode': 'last_n', 'humanTurns': 7,
+                                               'prompt': 'Preserve me.'}, self.root, 'global')['suggestionModels']
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def test_compare_and_merge_use_fresh_locked_settings_not_earlier_read_snapshot(self):
+        from amplifier_web.errors import AppError
+        update = self.manager.store.update
+        def interleaved(workspace, scope, mutator, **kwargs):
+            # Another writer wins before this operation acquires the canonical
+            # lock; the caller's outer inventory snapshot is now stale.
+            update(workspace, scope, lambda value:
+                   value['prompt_suggestions'].update(transcriptMode='full'))
+            return update(workspace, scope, mutator, **kwargs)
+        with self.manager.read_snapshot(self.root):
+            snapshot = self.manager._config_snapshot
+            with patch.object(self.manager.store, 'update', side_effect=interleaved):
+                with self.assertRaises(AppError) as raised:
+                    configure(self.manager, {'model': 'new',
+                        'expectedSuggestionModelsRevision': self.initial['revision']}, self.root, 'global')
+            self.assertIs(self.manager._config_snapshot, snapshot)
+        self.assertEqual(raised.exception.status, 409)
+        actual = describe(self.manager, self.root)
+        self.assertEqual((actual['model'], actual['transcriptMode']), ('original', 'full'))
+        with self.manager.read_snapshot(self.root):
+            snapshot = self.manager._config_snapshot
+            accepted = configure(self.manager, {'model': 'new',
+                'expectedSuggestionModelsRevision': actual['revision']}, self.root, 'global')['suggestionModels']
+            self.assertIs(self.manager._config_snapshot, snapshot)
+        self.assertEqual((accepted['model'], accepted['transcriptMode'], accepted['prompt']),
+                         ('new', 'full', 'Preserve me.'))
+        self.assertEqual(accepted, describe(self.manager, self.root))
+
+    def test_two_competing_writers_with_same_revision_have_one_winner(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        from amplifier_web.errors import AppError
+        from amplifier_web.setup import SetupManager
+        barrier = Barrier(2)
+        def writer(model):
+            manager = SetupManager(self.root / 'app', global_only=True)
+            update = manager.store.update
+            def together(*args, **kwargs):
+                barrier.wait(timeout=5)
+                return update(*args, **kwargs)
+            with patch.object(manager.store, 'update', side_effect=together):
+                try:
+                    result = configure(manager, {'model': model,
+                        'expectedSuggestionModelsRevision': self.initial['revision']}, self.root, 'global')
+                    return 'saved', result['suggestionModels']['model']
+                except AppError as exc:
+                    return exc.status, exc.code
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(writer, ('first', 'second')))
+        self.assertEqual(sum(status == 'saved' for status, _ in results), 1)
+        self.assertEqual(sum(status == 409 for status, _ in results), 1)
+        saved = next(value for status, value in results if status == 'saved')
+        actual = describe(self.manager, self.root)
+        self.assertEqual((actual['model'], actual['transcriptMode'], actual['humanTurns'], actual['prompt']),
+                         (saved, 'last_n', 7, 'Preserve me.'))
+
+    def test_same_account_binding_edit_and_a_b_a_are_not_old_confirmation(self):
+        from amplifier_web.errors import AppError
+        self.manager.store.update(self.root, 'global', lambda value:
+                                 value['config']['providers'][0]['config'].update(base_url='https://changed.invalid'))
+        with self.assertRaises(AppError):
+            configure(self.manager, {'model': 'new',
+                'expectedSuggestionModelsRevision': self.initial['revision']}, self.root, 'global')
+        current = describe(self.manager, self.root)
+        full = configure(self.manager, {'transcriptMode': 'full',
+            'expectedSuggestionModelsRevision': current['revision']}, self.root, 'global')['suggestionModels']
+        recent = configure(self.manager, {'transcriptMode': 'last_n',
+            'expectedSuggestionModelsRevision': full['revision']}, self.root, 'global')['suggestionModels']
+        self.assertNotEqual(current['revision'], recent['revision'])
+        before = self.manager.store.path(self.root, 'global').read_bytes()
+        with self.assertRaises(AppError):
+            configure(self.manager, {'model': 'new',
+                'expectedSuggestionModelsRevision': current['revision']}, self.root, 'global')
+        self.assertEqual(self.manager.store.path(self.root, 'global').read_bytes(), before)
 
 
 class Recommendations(unittest.TestCase):
