@@ -33,6 +33,11 @@ def public_config(value, *, module=None, metadata=False):
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
     if isinstance(value, dict):
+        if module == "hook-context-intelligence" and isinstance(value.get("destinations"), dict):
+            others = {key: item for key, item in value.items() if key != "destinations"}
+            return {**public_config(others, module=module, metadata=metadata),
+                    "destinations": {name: public_config(dest, metadata=metadata)
+                                     for name, dest in value["destinations"].items()}}
         return {str(key): REDACTED if credential_field(key, module=module)
                 else public_config(item, module=value.get("module") if key == "config" else None,
                                    metadata=metadata)

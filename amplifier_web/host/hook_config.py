@@ -52,9 +52,19 @@ def mounted_config(config):
 def omit_inherited_literals(plan):
     """A new worker cannot infer a credential's name from an old private plan."""
     from .components import declarations
+    root_hooks = {id(row) for row in plan.get("hooks", []) if row.get("enabled") is not False}
+    warning = False
     for row in declarations(plan):
         if row.get("module") == MODULE:
             for _, destination in destinations_in(row.get("config")):
                 value = destination.get("api_key")
                 if value and not reference_name(value):
                     destination.pop("api_key")
+                    if (id(row) in root_hooks and destination.get("url") and destination.get("include")
+                            and str(destination.get("auth_mode") or "static").strip() == "static"):
+                        warning = True
+    if warning:
+        return {"warnings": ["A Context Intelligence destination credential could not be inherited. "
+                             "If this worker should forward there, set that destination's api_key "
+                             "to a named environment reference in the source conversation."]}
+    return {}

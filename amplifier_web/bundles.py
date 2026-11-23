@@ -176,6 +176,9 @@ def sanitize_export(value, path=(), secrets=None, *, context_hook=False):
             key = str(key)
             if key.startswith("_") or key in {"keys", "keys_file", "keyring", "credential_store"}:
                 continue
+            if context_hook and path[-1:] == ("destinations",):
+                result[key] = sanitize_export(item, (*path, key), secrets, context_hook=True)
+                continue
             normalized = key.lower().replace("-", "_")
             if normalized in SECRET_KEYS or normalized in {"token_file_path", "credential_file", "credentials_file"} or normalized.endswith(("_api_key", "_secret", "_password", "_token")):
                 if isinstance(item, str) and re.fullmatch(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", item):
@@ -629,9 +632,11 @@ class BundleManager:
             original = settings.get("config", {}).get(section, [])
             for row in document.get(section, []):
                 identity = row.get("id") or row.get("instance_id") or row.get("module")
-                source = next((item for item in original if (item.get("id") or item.get("instance_id") or item.get("module")) == identity), {})
+                matches = [item for item in original if (item.get("id") or item.get("instance_id") or item.get("module")) == identity]
+                source = matches[0] if matches else {}
                 context_hook = section == "hooks" and row.get("module") == hook_config.MODULE
-                if context_hook and (source.get("module"), source.get("source")) != (row["module"], row.get("source")):
+                if context_hook and (len(matches) != 1 or source.get("module") != row["module"]
+                                     or source.get("source") != row.get("source")):
                     continue
                 restore(row, source, context_hook=context_hook)
         body = expand(resources.get("instruction", ""))

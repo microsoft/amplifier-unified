@@ -97,6 +97,8 @@ diagnostic. Empty optional references, destination filters, and local capture
 continue to follow the hook's settings.
 
 A literal in an older private plan cannot identify its original variable.
-To restore forwarding for new workers, set the named reference on the intended
+The creation receipt or new-task schedule preview warns when a configured
+root destination loses an opaque key during inheritance. To restore forwarding
+for new workers, set the named reference on the intended
 destination in the source configuration and prepare that chat again. Review
 the updated configuration for an existing new-task schedule if prompted.

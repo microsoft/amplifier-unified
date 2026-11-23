@@ -58,7 +58,9 @@ def test_legacy_literals_stay_in_the_source_and_never_supply_another_worker(monk
                "local-only": {}, "entra": destination("entra", auth_mode="entra", auth_resource="resource")}
     source = {"hooks": [hook(entries)]}
     inherited = copy.deepcopy(source)
-    hook_config.omit_inherited_literals(inherited)
+    diagnostic = hook_config.omit_inherited_literals(inherited)
+    assert len(diagnostic["warnings"]) == 1 and "named environment reference" in diagnostic["warnings"][0]
+    assert "old-value" not in str(diagnostic)
     selected = inherited["hooks"][0]["config"]["destinations"]
     assert selected["selected"] == destination("selected")
     assert {k: v for k, v in selected.items() if k != "selected"} == {
@@ -94,3 +96,26 @@ def test_redacted_destination_edits_and_portable_export(tmp_path, monkeypatch, r
     changed = BundleManager(tmp_path).export_document({"config": {"hooks": [row]}},
         effective_plan={"hooks": [redacted]}, resources={"instruction": ""})
     assert "TEST_KEY" not in changed["content"] and "old-value" not in changed["content"]
+
+
+def test_destination_names_are_not_secret_fields(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRAPH_KEY", "local-test-only")
+    row = hook({"private_key": destination("one", api_key="${GRAPH_KEY}")})
+    assert credential_bindings(row) == row
+    visible = public_config(row)
+    assert visible["config"]["destinations"]["private_key"]["api_key"] == REDACTED
+    exported = BundleManager(tmp_path).export_document({"config": {"hooks": [row]}},
+        effective_plan={"hooks": [visible]}, resources={"instruction": ""})
+    assert "local-test-only" not in exported["content"]
+    assert yaml.safe_load(exported["content"].split("---", 2)[1])["hooks"] == [row]
+
+
+def test_no_new_warning_for_disabled_local_optional_or_unauthored_config():
+    row = hook({"off": destination("off", include=[], api_key="opaque"),
+                "absent": destination("absent"),
+                "optional": destination("optional", api_key="${EMPTY:}"),
+                "entra": destination("entra", auth_mode="entra", api_key="ignored")})
+    disabled = {**hook({"off": destination("off", api_key="opaque")}), "enabled": False}
+    agent = hook({"child": destination("child", api_key="opaque")})
+    assert hook_config.omit_inherited_literals({"hooks": [row, disabled],
+                                                "agents": {"specialist": {"hooks": [agent]}}}) == {}

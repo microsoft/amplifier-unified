@@ -2457,6 +2457,8 @@ class Collaboration:
                 'sourceTaskContinuationEpoch': continuation_epoch(task),
                 "initialInputId": identity + ":brief", "detail": "Creation committed; preparation is owned by the service."}
             receipt['assignmentId'] = assignment_id
+            if summary.get('warnings'):
+                receipt['warnings'] = summary['warnings']
             if execution:
                 receipt['execution'] = execution
             if args.get('objective'):
