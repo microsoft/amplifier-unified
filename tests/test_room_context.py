@@ -23,13 +23,13 @@ from test_service import Runtime
 
 
 @pytest.fixture
-async def host(tmp_path, aiohttp_server, monkeypatch):
-    config = setup_local_ca(tmp_path, validate_server({'public_origins': ['https://localhost']}))
+async def host(tmp_path, aiohttp_server, unused_tcp_port, monkeypatch):
+    config = setup_local_ca(tmp_path, validate_server({'port': unused_tcp_port, 'public_origins': [
+        f'https://127.0.0.1:{unused_tcp_port}', f'https://room.example:{unused_tcp_port}']}))
     app = await create_app(tmp_path, workspace=tmp_path, runtime=Runtime(), server_config=config,
         voice=False, background_work=False, background_updates=False, preload_providers=False)
-    server = await aiohttp_server(app, ssl=ssl_context(tmp_path, config))
+    server = await aiohttp_server(app, port=unused_tcp_port, ssl=ssl_context(tmp_path, config))
     service = app['service']
-    service.server_config['public_origins'] = [str(server.make_url('')).rstrip('/')]
     ca = tmp_path / 'config/tls/ca.crt'
     monkeypatch.setenv('SSL_CERT_FILE', str(ca))
     service.server_config['externalAgents'] = [
@@ -60,6 +60,25 @@ async def reader(host, *, room=None, participant='alpha'):
 
 async def call(client, name='conversation_read', **args):
     return (await client.call_tool(name, args)).model_dump(by_alias=True)
+
+
+async def test_sdk_accepts_configured_public_authority_and_port(host):
+    _, service, session, server, trust = host
+    descriptor = service.room_context.descriptor(session['id'], 'alpha')
+    authority = f'room.example:{server.port}'
+    headers = {row['name']: row['value'] for row in descriptor['headers']}
+    headers.update(Host=authority, Origin=f'https://{authority}')
+    async with httpx2.AsyncClient(headers=headers, verify=trust) as http:
+        async with streamable_http_client(descriptor['url'], http_client=http) as streams:
+            async with ClientSession(*streams) as client:
+                await client.initialize()
+                assert [tool.name for tool in (await client.list_tools()).tools] == [
+                    'conversation_read', 'conversation_read_text']
+    async with aiohttp.ClientSession() as http:
+        response = await http.post(server.make_url(PATH), ssl=trust, json={},
+            headers={'Authorization': headers['Authorization'], 'Host': 'room.example:1',
+                     'Content-Type': 'application/json'})
+        assert response.status == 421
 
 
 async def test_sdk_pages_actual_public_source_and_continues_text_without_browser_grants(host):

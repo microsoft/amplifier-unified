@@ -41,6 +41,24 @@ def work(path, identity):
     return [row for row in operations(path / identity) if row['kind'] == 'work']
 
 
+async def test_room_reports_failed_setup_and_recovers_on_new_input(app_factory, tmp_path):
+    app = app_factory()
+    session = await room(app, tmp_path)
+    endpoints = app.server_config['externalAgents']
+    app.server_config['externalAgents'] = []
+    await send(app, session['id'], 'first message', 'failed-setup')
+    await idle(app, session['id'])
+    assert session['status'] == 'error' and 'All participants' in session['externalAgent']['error']
+    assert all(item['lastReceipt']['state'] == 'failed' for item in bindings(session))
+
+    app.server_config['externalAgents'] = endpoints
+    await send(app, session['id'], 'new message', 'new-attempt')
+    await idle(app, session['id'])
+    assert session['status'] == 'idle' and 'error' not in session['externalAgent']
+    assert all(row['state'] == 'failed' for row in session['_externalRoom']['deliveries']
+               if row['inputId'] == 'failed-setup')
+
+
 @pytest.mark.parametrize('profile', ['plain', 'attention', 'instance'])
 async def test_concurrent_streams_public_acceptance_stop_and_later_post(app_factory, tmp_path, profile):
     app = app_factory()

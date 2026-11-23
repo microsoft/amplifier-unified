@@ -110,8 +110,15 @@ class SharedConversations:
         active = any(sid == session['id'] for sid, _ in self.turns)
         pending = any(row['state'] in {'pending', 'observing'} for row in self.room(session)['deliveries'])
         session['externalAgent']['pendingCount'] = sum(row['state'] in {'pending', 'observing'} for row in self.room(session)['deliveries'])
+        external = session['externalAgent']
         status = 'working' if active or pending else 'idle'
-        session['status'] = session['externalAgent']['status'] = status
+        participants = external['participants']
+        if status == 'idle' and participants and all(row.get('status') == 'error' for row in participants):
+            status = 'error'
+            external['error'] = 'All participants reported delivery failures. Check the agent connections and room context address.'
+        else:
+            external.pop('error', None)
+        session['status'] = external['status'] = status
 
     def _record(self, session, delivery, state):
         delivery['state'] = state
