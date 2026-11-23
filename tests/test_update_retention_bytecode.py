@@ -170,9 +170,13 @@ async def test_import_cache_does_not_waive_generation_protection(tmp_path, monke
 async def test_post_proof_edits_cannot_become_the_retirement_baseline(tmp_path, monkeypatch, mode, change):
     manager, names, project, folder, source, cached = imported_generation(tmp_path, monkeypatch)
     probe = retention._probe
-    changed = {}
+    changed, measurements = {}, []
+    recorded = {name: (folder / name).read_bytes()
+                for name in ('validated.json', 'runtime-installed.json', 'runtime-project.json')}
     async def race(operation, values, **kwargs):
         result = await probe(operation, values, **kwargs)
+        if operation == 'measure':
+            measurements.append(result)
         if operation == 'bytecode' and result is True and not changed:
             target = {'cache': cached, 'source': source / 'fixture.py', 'unknown': source / 'private-notes.txt'}[change]
             contents = b'VALUE = 99\n' if change == 'source' else b'preserve post-proof work'
@@ -183,8 +187,28 @@ async def test_post_proof_edits_cannot_become_the_retirement_baseline(tmp_path, 
     options = {'inspect_only': True} if mode == 'preview' else {'selected': {names[3]}} if mode == 'selected' else {}
     result = await retention.reclaim(manager, **options)
     assert changed and result['removed'] == 0
-    assert not result.get('candidates')
+    if mode == 'preview':
+        # Preview is the pre-proof inspection snapshot, not removal admission.
+        # It may list a candidate whose files changed after inspection.
+        candidate, = result['candidates']
+        assert result['complete'] is True and len(measurements) == 1
+        assert candidate == {'kind': 'ecosystem', 'id': names[3],
+            'label': 'Unused component version', 'paths': [str(folder)], **measurements[0]}
+        now = await probe('measure', {'paths': candidate['paths']}, timeout=retention.INSPECTION_SECONDS)
+        assert now['stamp'] != candidate['stamp'], 'Preview must not adopt the edited tree as its baseline'
+        edited = {p.relative_to(folder): p.read_bytes() for p in folder.rglob('*')
+                  if p.is_file() and '.git' not in p.parts}
+        # Select the actual returned identity. Requalification must refuse all
+        # three edits; the stale preview cannot authorize retirement.
+        removal = await retention.reclaim(manager, selected={candidate['id']})
+        assert removal['removed'] == 0 and not removal.get('candidates')
+        assert {p.relative_to(folder): p.read_bytes() for p in folder.rglob('*')
+                if p.is_file() and '.git' not in p.parts} == edited
+    else:
+        assert not result.get('candidates')
+    assert {name: (folder / name).read_bytes() for name in recorded} == recorded
     assert folder.exists() and changed['path'].read_bytes() == changed['contents']
+    assert project.exists()
     assert not list((manager.directory / 'retired').glob('*/payload'))
 
 

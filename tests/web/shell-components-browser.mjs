@@ -1,16 +1,19 @@
 import {fixturePython} from './fixture-python.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {settledAppearance} from './settings-fixture.mjs';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import './composer-test-helpers.mjs';
 // Build an independently authored package only after the production app opens.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {readFile,mkdir} from 'node:fs/promises';
+import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
-import {settingsButton} from '../../.build/web-client/tests/browser-settings.mjs';
+import {openSettingsSection} from '../../.build/web-client/tests/browser-settings.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(fixturePython(root+'.venv/bin/python'),[root+'tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
-let browser,page;const errors=[];
+const stopFixture=ownFixture(fixture,{label:'Shell components fixture'});
+let browser,page,failure;const errors=[];
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}}catch{}});fixture.once('exit',code=>reject(Error('Fixture exited '+code)))});
  browser=await chromium.launch({headless:true});
@@ -20,7 +23,11 @@ try{
  const clientId=await page.evaluate(()=>window.amplifier.shellClientId);
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const inspect=()=>action('shell.inspect',{clientId}).then(row=>row.result);
- const openPreferences=async()=>{await page.locator('[data-settings-section="advanced"]').click();await page.locator('[data-settings-destination="shell:preferences"]').click()};
+ const openPreferences=async()=>{
+  await openSettingsSection(page,'advanced',{activate:(_label,control,options)=>control.click(options)});
+  await page.locator('[data-settings-destination="shell:preferences"]').click();
+  await expect(page.locator('.a-settings-experience')).toHaveAttribute('data-settings-page','shell:preferences');
+ };
  const change=async composition=>{const current=await inspect();const prepared=await action('shell.changes.prepare',{clientId,expectedRevision:current.revision,composition});return {clientId,expectedRevision:current.revision,changeId:prepared.result.id}};
  await action('session.create',{title:'Component acceptance'});
  // App status/actions belong to the navigation footer in the current shell.
@@ -50,7 +57,7 @@ try{
  const controls=page.locator('[data-shell-component="extra-actions"]');
  await controls.getByRole('button',{name:'Toggle compact spacing'}).click();
  await expect(page.locator('#amp-one')).toHaveAttribute('data-density','compact');
- await settingsButton(page).click();
+ const compact=await settledAppearance(page);assert.equal(compact.effective.density,'compact');
  await openPreferences();
  const editor=page.locator('[data-shell-component="preferences"]');
  await editor.getByLabel('Component note').fill('Keep this unfinished edit');
@@ -72,7 +79,6 @@ try{
  await page.waitForFunction(revision=>window.amplifier.getShellState()?.revision===revision,restoredChange.expectedRevision+1);
  await expect.poll(async()=>(await inspect()).reported?.instances?.preferences).toBe('inactive');
  assert.equal((await inspect()).reported.status,'incomplete');
- await settingsButton(page).click();
  await openPreferences();
  await expect(page.getByLabel('Component note')).toHaveValue('Keep this unfinished edit');
  await expect.poll(async()=>(await inspect()).reported?.status).toBe('ready');
@@ -86,17 +92,49 @@ try{
   return {belowHeader:popup.top>=header.bottom,inViewport:popup.left>=0&&popup.right<=innerWidth&&popup.bottom<=innerHeight,receivesPointer:!!hit&&(hit===button||button.contains(hit))};
  });
  const usableOverflow={belowHeader:true,inViewport:true,receivesPointer:true};
+ const navigationMeasurements=[];
  for(const width of [320,390,600,760]){
+  const enteringMobile=width<=640&&page.viewportSize().width>640;
   await page.setViewportSize({width,height:844});
   await expect(page.locator('.a-layout[data-pane-layout]')).toHaveAttribute('data-narrow','true');
-  if(!await page.locator('#workspace-navigation').isVisible())await page.getByRole('button',{name:'Open navigation',exact:true}).click();
-  await expect(page.getByRole('dialog',{name:'Workspaces and chats',exact:true})).toBeVisible();
+  const navigation=page.locator('#workspace-navigation');
+  const mobile=width<=640;
+  await expect(page.locator('.a-layout[data-pane-layout]')).toHaveAttribute('data-navigation-narrow',String(mobile));
+  // The undocked outer slot has width zero; its child rail owns the visible
+  // flyout. Use the actual disclosure state, not the outer bounding box.
+  const toggle=page.locator('#navigation-toggle');
+  if(enteringMobile)await page.waitForFunction(()=>{
+   const nav=document.querySelector('#workspace-navigation'),toggle=document.querySelector('#navigation-toggle');
+   return nav.hidden&&nav.inert&&toggle.getAttribute('aria-expanded')==='false';
+  });
+  await page.waitForFunction(()=>{
+   const nav=document.querySelector('#workspace-navigation'),toggle=document.querySelector('#navigation-toggle');
+   return toggle?.getAttribute('aria-expanded')===String(!nav.hidden&&!nav.inert);
+  });
+  if(await toggle.getAttribute('aria-expanded')==='false')await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+  await expect(toggle).toHaveAttribute('aria-expanded','true');
+  await expect(page.getByRole(mobile?'dialog':'complementary',{name:'Workspaces and chats',exact:true})).toHaveCount(1);
+  await expect(navigation.locator('.a-nav-rail')).toBeVisible();
+  const measured=await navigation.evaluate(nav=>{
+   const box=node=>node.getBoundingClientRect().toJSON(),toggle=document.querySelector('#navigation-toggle');
+   return {width:innerWidth,narrow:document.querySelector('.a-layout').dataset.navigationNarrow,
+    hidden:nav.hidden,inert:nav.inert,docked:nav.dataset.docked,owner:box(nav),rail:box(nav.querySelector('.a-nav-rail')),
+    toggle:{label:toggle.getAttribute('aria-label'),expanded:toggle.getAttribute('aria-expanded')}};
+  });
+  navigationMeasurements.push(measured);
+  await writeFile(output+'navigation-owners.json',JSON.stringify(navigationMeasurements,null,2));
+  assert.equal(measured.hidden,false);assert.equal(measured.inert,false);
   await expect.poll(()=>page.locator('.a-work-footer').evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
   await page.getByRole('button',{name:'Additional controls',exact:true}).click();
   await expect.poll(overflowGeometry).toEqual(usableOverflow);
   await page.getByRole('button',{name:'Additional controls',exact:true}).click();
  }
- await page.setViewportSize({width:390,height:844});await page.screenshot({path:output+'mobile-contributions.png'});
+ await page.setViewportSize({width:390,height:844});
+ await expect(page.locator('.a-layout[data-pane-layout]')).toHaveAttribute('data-navigation-narrow','true');
+ await expect(page.locator('#workspace-navigation')).toBeHidden();
+ await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+ await expect(page.getByRole('dialog',{name:'Workspaces and chats',exact:true})).toBeVisible();
+ await page.screenshot({path:output+'mobile-contributions.png'});
  assert.ok(await page.locator('.a-work-footer').evaluate(el=>el.scrollWidth<=el.clientWidth),'Navigation footer contributions fit a narrow viewport');
  const additional=page.getByRole('button',{name:'Additional controls',exact:true});await additional.click();
  await expect(controls.getByRole('button',{name:'Toggle compact spacing'})).toBeVisible();
@@ -116,6 +154,7 @@ try{
  await expect.poll(overflowGeometry).toEqual(usableOverflow);
  await controls.getByRole('button',{name:'Toggle compact spacing'}).click();
  await expect(page.locator('#amp-one')).toHaveAttribute('data-density','comfortable');
+ assert.equal((await settledAppearance(page)).effective.density,'comfortable');
  await page.screenshot({path:output+'mobile-controls.png'});
  // The SSE presentation can update before the save promise re-enables its button.
  const spacing=controls.getByRole('button',{name:'Toggle compact spacing'});
@@ -142,9 +181,11 @@ try{
  const old=(await action('shell.query',{clientId,instanceId:'extra-actions'})).result;
  const updated=structuredClone((await inspect()).effectiveComposition);updated.instances.find(row=>row.id==='extra-actions').package=replacement.result.digest;
  await action('shell.changes.apply',await change(updated));
+ await settledAppearance(page);
+ await expect.poll(async()=>(await action('shell.query',{clientId,instanceId:'extra-actions'})).result.generation).toBeGreaterThan(old.generation);
  await assert.rejects(()=>action('shell.command',{clientId,instanceId:'extra-actions',generation:old.generation,action:'panel.open',args:{panel:'settings'}}),/replaced/);
  await page.reload();await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Draft survives contribution changes');
- await settingsButton(page).click();await openPreferences();
+ await openPreferences();
  await expect(page.getByLabel('Component note')).toHaveValue('Keep this unfinished edit');
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  // Reload attaches a fresh client while cloning this composition and view state.
@@ -160,7 +201,9 @@ try{
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Draft survives contribution changes');
  await action('shell.recover',{clientId:reloaded,expectedRevision:current.revision+1,target:'default'});
  await expect(page.locator('[data-shell-component]')).toHaveCount(0);
- await expect(settingsButton(page)).toBeVisible();
+ await openSettingsSection(page,'advanced',{activate:(_label,control,options)=>control.click(options)});
+ await expect(page.locator('.a-settings-experience')).toHaveAttribute('data-settings-page','advanced');
  assert.deepEqual(errors,[]);
  console.log('Component slots passed: independent hot loading, host validation, user actions, agent preview/apply, bounded summaries, dirty deferral, stale callbacks, persistent module state/draft, unchanged viewer/composer and default recovery.');
-}catch(error){console.error('Browser diagnostics',errors,await page?.locator('[role=alert]').allTextContents());throw error}finally{await browser?.close();fixture.kill()}
+}catch(error){failure=error;console.error('Browser diagnostics',errors,await page?.locator('[role=alert]').allTextContents());throw error}
+finally{await finishFixture({label:'Shell components fixture',close:[['browser',()=>browser?.close()]],stop:stopFixture,originalError:failure})}

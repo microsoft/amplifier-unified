@@ -1,5 +1,6 @@
 """A staged optional tool and saved settings must not strand an included worker update."""
 import copy
+import json
 import shutil
 import sqlite3
 import time
@@ -12,6 +13,7 @@ from amplifier_web.configuration_recovery import authorize, native_apply, prepar
 from amplifier_web.management import Management
 from amplifier_web.service import AppService
 from amplifier_web.smart_tools import SmartToolsManager
+from amplifier_web.update_blockers import assess
 from amplifier_web.updates import UpdateManager, active_release, foundation_home
 from amplifier_web.windows_launcher_follow import _idle as launcher_idle
 from test_queued_configuration_boundary import ControlsTransport, plan
@@ -67,11 +69,34 @@ async def test_included_generation_with_staged_tool_and_saved_configuration(
             "label": "digital-twin", "status": "update", "eligible": True, "latest": "b" * 40,
             "updateTier": "other"}
     running = app._session()
-    await native_workers.send(running, "Original synthetic turn", "original-input", native_workers.emit)
-    old_process = native_workers.workers[running["id"]]["process"]
     held = [await retain_saved_settings(app, i) for i in range(4)]
     originals = [snapshot(app, session) for session in held]
+    before_work = assess(app)
+    assert not manager.busy() and before_work["blockers"] == []
+    assert before_work["observation"]["configurationHoldCount"] == 4
+    assert before_work["observation"]["configurationReasonCounts"] == {"idle-configuration-hold": 4}
+    assert all(row["quiescent"] for row in before_work["observation"]["configurationHolds"])
+    # This low-level RuntimeManager fixture records events but bypasses
+    # conversation.send's host admission. Model its working state explicitly;
+    # idle recovery fences must not accidentally stand in for executing work.
+    running["status"] = "working"
+    admitted = await native_workers.send(
+        running, "Original synthetic turn", "original-input", native_workers.emit)
+    assert admitted["accepted"] is True
+    old_row = native_workers.workers[running["id"]]
+    old_process = old_row["process"]
+    assert old_process.returncode is None and old_row["idle"] is False
+    old_generation = old_row["generation"], old_row["source_generation"]
+    old_lease = old_row["generation_lease"]
+    lease_bytes = old_lease.read_bytes()
+    assert json.loads(lease_bytes) == {
+        "schema": 1, "generation": old_row["source_generation"], "pid": old_process.pid}
     assert manager.busy()
+    during_work = assess(app)
+    assert [(row["kind"], row.get("sessionId")) for row in during_work["blockers"]] == [
+        ("conversation", running["id"])]
+    assert during_work["observation"]["configurationReasonCounts"] == {"idle-configuration-hold": 4}
+    assert all(row["quiescent"] for row in during_work["observation"]["configurationHolds"])
 
     stage_tool = AsyncMock(return_value={"id": "target"})
     switch_tool = AsyncMock(side_effect=AssertionError("Held tool must not switch"))
@@ -106,6 +131,8 @@ async def test_included_generation_with_staged_tool_and_saved_configuration(
     assert git(previous_cache, "rev-parse", "HEAD") == repo[1]
     row = native_workers.workers[running["id"]]
     assert row["process"] is old_process and old_process.returncode is None
+    assert (row["generation"], row["source_generation"]) == old_generation
+    assert row["generation_lease"] == old_lease and old_lease.read_bytes() == lease_bytes
     if hot:
         expected = pointer.get("current")
         assert expected, "The ready optional tool stranded the included worker generation"
@@ -127,6 +154,7 @@ async def test_included_generation_with_staged_tool_and_saved_configuration(
     assert state["pendingSmartTools"] == staged_tool
     assert qualified == [expected]
     assert active_release(app.data_dir) == pointer
+    assert old_lease.read_bytes() == lease_bytes
     stage_tool.assert_awaited_once()
     switch_tool.assert_not_awaited()
     delivered = [data["inputId"] for kind, data in native_workers.events
