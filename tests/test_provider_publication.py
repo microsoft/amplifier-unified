@@ -1,5 +1,6 @@
 import asyncio
 from collections import Counter
+from pathlib import Path
 
 import pytest
 
@@ -23,10 +24,35 @@ async def app(tmp_path):
 
 
 def configured(monkeypatch, count=14):
+    from amplifier_web.host.config import HostConfig
     rows = [{'id': str(i), 'module': 'provider-fixture', 'enabled': True} for i in range(count)]
+    def config(self, workspace):
+        value = HostConfig(self.home, Path(workspace), {'config': {'providers': rows}},
+                           self.home, global_only=self.global_only)
+        assert value.configured_connections == rows
+        return value
+    monkeypatch.setattr(SetupManager, 'config', config)
     monkeypatch.setattr(SetupManager, 'provider_rows', lambda self, workspace: rows)
-    monkeypatch.setattr(SetupManager, 'catalog_key', lambda self, args, workspace: str((workspace, self.global_only, args['id'])))
+    def key(self, args, workspace, *, binding=False):
+        identity = (workspace, self.global_only, args['id'])
+        return str(('binding', *identity) if binding else identity)
+    monkeypatch.setattr(SetupManager, 'catalog_key', key)
     return rows
+
+
+async def test_display_only_rows_are_not_ordinary_discovery_authority(app, monkeypatch):
+    configured(monkeypatch, 0)
+    monkeypatch.setattr(SetupManager, 'provider_rows', lambda self, workspace: [
+        {'id': 'display-only', 'module': 'provider-fixture', 'enabled': True}])
+    manager = SetupManager(app.data_dir, catalog=app.management.provider_catalog)
+    async def unexpected(*args):
+        pytest.fail('A display-only account must not trigger model discovery')
+    monkeypatch.setattr(manager, 'perform', unexpected)
+    workspace = app.default_workspace
+    app.state['setup'] = {'providersWorkspace': workspace, 'providersLocation': {'kind': 'workspace'}}
+    await app.management.warm_providers(manager, workspace)
+    assert app.state['setup']['providerCatalogs'] == {}
+    assert not manager.catalog.pending and not manager.catalog.entries
 
 
 async def seed(manager, workspace, rows):
@@ -173,9 +199,13 @@ async def test_listing_error_finishes_status_and_receipt(app, monkeypatch):
 async def test_token_rotation_discards_old_catalog_and_finishes_under_new_identity(app, monkeypatch):
     rows = configured(monkeypatch, 1)
     generation = [0]
-    monkeypatch.setattr(SetupManager, 'catalog_key', lambda self, args, workspace: str((workspace, args['id'], generation[0])))
+    def key(self, args, workspace, *, binding=False):
+        return str((workspace, args['id'], 'connection' if binding else generation[0]))
+    monkeypatch.setattr(SetupManager, 'catalog_key', key)
     manager = SetupManager(app.data_dir, catalog=app.management.provider_catalog)
     workspace = app.default_workspace
+    binding = manager.catalog_key({'id': '0'}, workspace, binding=True)
+    old_key = manager.catalog_key({'id': '0'}, workspace)
     app.state['setup'] = {'providersWorkspace': workspace, 'providersLocation': {'kind': 'workspace'}}
     calls = []
     async def probe(self, action, args, workspace):
@@ -192,3 +222,6 @@ async def test_token_rotation_discards_old_catalog_and_finishes_under_new_identi
     assert catalog['models'] == [{'id': 'renewed'}]
     assert catalog['sharedCatalogKey'] == str((workspace, '0', 1))
     assert app.state['setup']['providers'] == rows
+    assert manager.catalog_key({'id': '0'}, workspace, binding=True) == binding
+    assert manager.catalog.peek(('providers.models', old_key)) is None
+    assert manager.catalog.entry(('providers.models', catalog['sharedCatalogKey'])) == catalog

@@ -130,7 +130,7 @@ async def test_preparation_preserves_exact_result_failure_and_cancellation(monke
     assert 'private' not in json.dumps(rows) and 'secret' not in json.dumps(rows)
 
 
-async def test_default_off_does_not_install_wrappers_hooks_or_inspect_coordinator(monkeypatch):
+async def test_default_off_does_not_install_timing_but_retains_media_cleanup(monkeypatch):
     monkeypatch.setattr(timings, 'TIMING_ENABLED', False)
     class Unavailable:
         def __getattr__(self, name):raise AssertionError(name)
@@ -138,8 +138,16 @@ async def test_default_off_does_not_install_wrappers_hooks_or_inspect_coordinato
     assert timings.time_preparation(Unavailable(), 'context.view', original) is original
     timings.install_preparation_timing(Unavailable())
     from amplifier_web.surface_delivery import SurfaceProvider
-    wrapped = SurfaceProvider(object(), object(), coordinator=Unavailable())
+    cleanups = []
+    class CleanupOnly(Unavailable):
+        # Ordinary provider lifetime is independent of opt-in timing.
+        def register_cleanup(self, callback):
+            cleanups.append(callback)
+    wrapped = SurfaceProvider(object(), object(), coordinator=CleanupOnly())
     assert wrapped.timing_coordinator is None and '_prepare' not in vars(wrapped)
+    assert 'refit_request' not in vars(wrapped)
+    assert cleanups == [wrapped.close_media]
+    await cleanups[0]()
 
 
 async def test_failed_observer_does_not_replace_success(monkeypatch):
