@@ -166,6 +166,7 @@ async def _post(request, manager, owner):
 
 def setup_routes(app):
     from mcp.server import MCPServer
+    from mcp.server.transport_security import TransportSecuritySettings
     owner = app['service'].room_context = RoomContext(app['service'])
     mcp = MCPServer('Unified room context')
 
@@ -196,8 +197,13 @@ def setup_routes(app):
 
     # SDK owns framing, protocol, schemas and tool dispatch. Only its finite JSON
     # response transport is adapted; no separate web server or MCP session store.
+    origins = sorted(app['allowed_origins'])
+    transport_security = TransportSecuritySettings(
+        allowed_hosts=sorted({urlsplit(origin).netloc for origin in origins}),
+        allowed_origins=origins)
     mcp.streamable_http_app(streamable_http_path=PATH, stateless_http=True,
-                           json_response=True, max_request_body_size=REQUEST_LIMIT)
+                           json_response=True, max_request_body_size=REQUEST_LIMIT,
+                           transport_security=transport_security)
     manager = mcp.session_manager
 
     async def lifetime(app):
