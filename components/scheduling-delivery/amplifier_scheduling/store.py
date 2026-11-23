@@ -157,6 +157,13 @@ class ScheduleStore:
         row = self.db.execute('SELECT owner,expires FROM scheduler_lease WHERE id=1').fetchone()
         return bool(row and row[0] == self.owner and row[1] > now)
 
+    def renew(self, now, ttl=30):
+        """Extend only this owner's still-live lease, without acquiring or recovering."""
+        return self.db.execute(
+            'UPDATE scheduler_lease SET expires=? WHERE id=1 AND owner=? AND expires>?',
+            (now + ttl, self.owner, now)
+        ).rowcount == 1
+
     def claim(self, session_id, identity, now):
         with self.transaction():
             if not self.owns(now): raise ValueError('Scheduler lease is no longer held')
