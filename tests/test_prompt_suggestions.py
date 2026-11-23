@@ -97,6 +97,10 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         await self.settle()
         return await self.status(request_id)
 
+    async def cancel(self, request_id='request'):
+        return await self.host.dispatch('session.suggestion.cancel',
+                                       {'sessionId': 'chat', 'requestId': request_id}, 'ui')
+
     async def test_request_is_private_and_never_changes_history(self):
         original = copy.deepcopy(self.app.session)
         pending = await self.request()
@@ -553,6 +557,150 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
         self.assertEqual(len(self.calls), 1)
 
+    async def test_cancel_preserves_completed_outcome_and_exact_receipt_without_replay(self):
+        for state, reason in (('failed', 'construction_connection'), ('empty', None),
+                              ('timeout', None), ('unsupported', 'runtime_not_prepared'),
+                              ('cancelled', None), ('stale', 'capture_source_changed')):
+            with self.subTest(state=state):
+                request_id = 'completed-' + state
+                self.app.session['messages'][-1]['text'] = 'Distinct input ' + state
+                self.host.complete = AsyncMock(return_value={
+                    'status': state, 'suggestion': None, 'usage': {'input_tokens': 17, 'output_tokens': 2},
+                    'cost': 0.125, 'reason': reason})
+                terminal = await self.terminal_request(request_id)
+                self.assertEqual(terminal['status'], state)
+                self.assertEqual(terminal['reason'], reason)
+                claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+                cache = list(self.app.db.execute('SELECT * FROM suggestion_success_cache'))
+                for _ in range(2):
+                    self.assertEqual(await self.cancel(request_id), terminal)
+                    self.assertEqual(await self.status(request_id), terminal)
+                # Best-effort cancellation after navigation is still allowed
+                # for this exact owner; it does not rewrite that past outcome.
+                with patch.dict(self.app.clients.records['one'], selectedSessionId='elsewhere'):
+                    self.assertEqual(await self.cancel(request_id), terminal)
+                self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
+                self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_success_cache')), cache)
+                self.host.complete.assert_awaited_once()
+
+    async def test_cancel_preserves_immediate_terminal_admission_refusals(self):
+        cases = (
+            ('disabled', patch.dict(self.app.state['settings'], suggestedMessages=False)),
+            ('busy', patch.dict(self.app.session, status='working')),
+            ('missing_selection', patch.object(self.host, 'settings',
+                                               return_value=(self.config, None, self.revision))),
+            ('unsupported', patch.dict(self.app.session, sessionKind='internal')),
+        )
+        claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+        for state, gate in cases:
+            with self.subTest(state=state), gate:
+                terminal = await self.request('not-admitted-' + state)
+                self.assertEqual(terminal['status'], state)
+                self.assertEqual(await self.cancel('not-admitted-' + state), terminal)
+        self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
+        self.assertEqual(self.calls, [])
+
+    async def test_ready_cancel_retains_current_success_but_not_a_display_authority_grant(self):
+        ready = await self.terminal_request('completed-ready')
+        claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+        cache = list(self.app.db.execute('SELECT * FROM suggestion_success_cache'))
+        self.assertEqual(await self.cancel('completed-ready'), ready)
+        self.assertEqual(await self.status('completed-ready'), ready)
+        rebound = await self.terminal_request('ready-rebound')
+        self.assertTrue(rebound['reused'])
+        self.assertEqual(rebound['generationId'], ready['generationId'])
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(len(list(self.app.db.execute('SELECT * FROM suggestion_success_cache'))), len(cache))
+        # A foreign cookie cannot use cancel to acquire the completed body.
+        token = BROWSER.set({'principal': 'foreign', 'valid': lambda: True})
+        try:
+            foreign = await self.cancel('completed-ready')
+            self.assertEqual(foreign['status'], 'expired')
+            self.assertIsNone(foreign['suggestion'])
+        finally:
+            BROWSER.reset(token)
+        # Selection is optional only for withdrawal, never delivery of READY.
+        with patch.dict(self.app.clients.records['one'], selectedSessionId='elsewhere'):
+            withdrawn = await self.cancel('completed-ready')
+            self.assertEqual(withdrawn['status'], 'stale')
+            self.assertEqual(withdrawn['reason'], 'current_selected')
+            self.assertIsNone(withdrawn['suggestion'])
+        self.assertEqual((await self.status('completed-ready'))['status'], 'stale')
+        self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests'))[:len(claims)], claims)
+        self.assertEqual(len(self.calls), 1)
+
+    async def test_ready_cancel_keeps_existing_source_stop_config_and_auth_fences(self):
+        for dimension in ('source', 'stop', 'config', 'off', 'epoch', 'auth'):
+            with self.subTest(dimension=dimension):
+                self.app.session['messages'][-1]['text'] = 'Before ' + dimension
+                ready = await self.terminal_request('ready-' + dimension)
+                self.assertEqual(ready['status'], 'ready')
+                claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+                record = next(reversed(self.host.records.values()))
+                changes = {
+                    'source': lambda: patch.dict(self.app.session['messages'][-1], text='Changed'),
+                    'stop': lambda: patch.dict(self.app.session, interruptionRevision=77),
+                    'config': lambda: patch.object(self.host, 'settings',
+                                                   return_value=(self.config, {'id': 'explicit-account'}, 'other')),
+                    'off': lambda: patch.dict(self.app.state['settings'], suggestedMessages=False),
+                    'epoch': lambda: patch.object(self.host, '_epoch', return_value='other-epoch'),
+                }
+                with ExitStack() as stack:
+                    if dimension == 'auth':
+                        # Restore only the authentication closure, not all
+                        # record fields changed by the actual stale transition.
+                        stack.callback(record.__setitem__, 'authenticated', record['authenticated'])
+                        record['authenticated'] = lambda: False
+                    else:
+                        stack.enter_context(changes[dimension]())
+                    refused = await self.cancel('ready-' + dimension)
+                    self.assertEqual(refused['status'], 'stale')
+                    self.assertIsNone(refused['suggestion'])
+                self.assertEqual((await self.status('ready-' + dimension))['status'], 'stale')
+                self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
+        self.assertEqual(len(self.calls), 6)
+
+    async def test_pending_cancel_is_idempotent_and_late_failure_or_success_cannot_replace_it(self):
+        for late in ('failed', 'ready', 'exception'):
+            with self.subTest(late=late):
+                self.app.session['messages'][-1]['text'] = 'Pending input ' + late
+                entered, settling, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+                async def respond(*args):
+                    self.calls.append('one admitted completion')
+                    entered.set()
+                    try:
+                        await asyncio.Event().wait()
+                    except asyncio.CancelledError:
+                        settling.set()
+                        await release.wait()
+                        if late == 'exception':
+                            raise ConnectionError('PRIVATE late provider prose')
+                        return {'status': late, 'suggestion': 'Too late.' if late == 'ready' else None,
+                                'usage': {'input_tokens': 4}, 'cost': 0.01,
+                                'reason': 'construction_connection' if late == 'failed' else None}
+                self.host.complete = respond
+                request_id = 'pending-' + late
+                await self.request(request_id)
+                await entered.wait()
+                claims = list(self.app.db.execute('SELECT * FROM suggestion_requests'))
+                cancelled = await self.cancel(request_id)
+                await settling.wait()
+                try:
+                    self.assertEqual(cancelled['status'], 'cancelled')
+                    self.assertEqual(await self.cancel(request_id), cancelled)
+                    self.assertEqual((await self.request('busy-' + late))['status'], 'busy')
+                    self.assertTrue(self.host.jobs, 'Cancellation retains physical occupancy')
+                finally:
+                    release.set()
+                    await self.settle()
+                self.assertEqual(await self.status(request_id), cancelled)
+                self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
+                self.assertFalse(list(self.app.db.execute('SELECT * FROM suggestion_success_cache')))
+                repeated = await self.terminal_request('after-cancel-' + late)
+                self.assertEqual(repeated['status'], 'duplicate_source')
+                self.assertEqual(repeated['reason'], 'prior_attempt_cancelled')
+        self.assertEqual(len(self.calls), 3)
+
     async def test_pending_cancel_blocks_other_client_until_physical_settlement(self):
         entered, settling, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
         async def respond(*args):
@@ -715,6 +863,13 @@ class Requests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record['_expiresAt'], pending['expiresAt'])
         await self.host.dispatch('session.suggestion.cancel',
                                  {'sessionId': 'chat', 'requestId': 'request'}, 'ui')
+        # A best-effort cancellation cannot turn completed success into a
+        # cancelled attempt or shorten its retention. Actual new input/Stop
+        # still invalidates the body through the ordinary currentness check.
+        self.assertEqual((await self.status())['retention'], 'source')
+        self.assertIsNone((await self.status())['expiresAt'])
+        self.app.session['interruptionRevision'] = 1
+        self.assertEqual((await self.status())['status'], 'stale')
         self.assertIsNone((await self.status())['retention'])
         self.assertEqual((await self.status())['expiresAt'], pending['expiresAt'])
 

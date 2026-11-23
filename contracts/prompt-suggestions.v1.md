@@ -292,6 +292,19 @@ Statuses: `pending`, `ready`, `empty`, `disabled`, `missing_selection`,
 `duplicate_source`, `busy`. Only ready carries candidate text. Usage contains
 reported finite token counters only; missing usage and unknown cost stay null.
 Cancellation requests process cleanup but never claim to undo provider effects.
+Only a still-PENDING owned request transitions to `cancelled`; repeated
+cancellation does not interrupt its already-running cleanup. Late provider
+failure/success cannot overwrite that cancellation. A best-effort cancellation
+of a terminal record preserves its original status, sanitized reason and other
+receipt facts within existing retention; it is not model abstention, retry
+permission, dismissal or completion acknowledgement. A still-current READY
+remains READY with its existing source retention/cache. The client owns local
+suppression/dismissal while composing or viewing Settings. Before returning a
+READY body, cancellation also performs the existing currentness checks despite
+allowing withdrawal after navigation: changed selection, source, Stop, account,
+configuration or authentication makes that candidate stale with no body, not
+freshly cancelled or newly authorized. Cache rebinding and invalidation retain
+their existing fresh authority/source checks; no saved claim is cleared.
 The occupied slot remains held until the physical request/cleanup settles.
 That occupancy covers the same principal/session across clients, not just the
 tab which originally requested the utility.
