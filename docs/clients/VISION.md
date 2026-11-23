@@ -54,6 +54,11 @@ parallel configuration task beside every everyday choice. Accessibility means
 readable, keyboard- and touch-usable journeys with low cognitive effort, not
 oversized controls or smaller text used to compensate for a poor layout.
 
+People know the product as **Amplifier**, not by the name of its host
+implementation. Clients keep that name consistent as people move between
+interfaces or connect instances. [CX8](../../contracts/client-experience.v1.md#the-promises)
+defines the user-facing naming rule.
+
 ### 3. Independent attention, shared work
 A person's selection, unfinished input and reading position persist locally in
 that client with no routine backend synchronization. Shared drafting or agent
