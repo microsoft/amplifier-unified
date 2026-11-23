@@ -139,7 +139,7 @@ def pinned_manifest(content):
     sources["amplifier-module-loop-live"] = {"git": LOOP_URL, "rev": LOOP}
     overrides = uv["override-dependencies"]
     foundation = [row for row in overrides if re.match(
-        r"(?i)^amplifier[-_.]foundation(?=$|[\s@<>=!~;\[])", row)]
+        r"(?i)^\s*amplifier[-_.]+foundation(?=$|[\s@<>=!~;\[])", row)]
     require(len(foundation) == 1,
             "Expected exactly one shipped Foundation override")
     selected = foundation[0]

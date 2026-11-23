@@ -53,6 +53,8 @@ class PackagedProbeTests(unittest.TestCase):
             "missing": ('', "exactly one"),
             "duplicate": ('"amplifier-foundation", "amplifier-foundation",', "exactly one"),
             "mixed": (f'"amplifier-foundation", "amplifier-foundation @ git+{probe.FOUNDATION_URL}@main",', "exactly one"),
+            "normalized-alias": ('"amplifier-foundation", "amplifier__foundation @ git+https://other.invalid/foundation@main",', "exactly one"),
+            "mixed-separator-alias": ('"amplifier-foundation", " Amplifier._-Foundation",', "exactly one"),
             "foreign": ('"amplifier-foundation @ git+https://other.invalid/foundation@main",', "Unexpected Foundation override"),
         }
         for name, (rows, reason) in cases.items():

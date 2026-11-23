@@ -923,6 +923,35 @@ class ProcessObservationTests(unittest.IsolatedAsyncioTestCase):
             'phase': 'baseline-install', 'role': 'baseline-install', 'channel': 'stderr',
             **helper.stream_facts((STDERR,), 7)})
 
+    async def test_cancelled_nested_read_cannot_certify_a_later_suffix_as_complete(self):
+        evidence, observer = self.observer()
+        process, _ = streaming_process()
+        reader = SimpleNamespace()
+        primary = asyncio.CancelledError(SENSITIVE)
+        pieces = iter((STDERR[:7], STDERR[7:], b''))
+        async def read(n=-1):
+            if n < 0:
+                await reader.read(65536)  # Consumed, but aggregate never returned.
+                raise primary
+            return next(pieces)
+        reader.read = read
+        process.stderr = reader
+        self.spawn.return_value = process
+        observed = await observer(*BASELINE)
+        with self.assertRaises(asyncio.CancelledError) as caught:
+            await observed.stderr.read()
+        self.assertIs(caught.exception, primary)
+        self.assertEqual(await observed.stderr.read(65536), STDERR[7:])
+        self.assertEqual(await observed.stderr.read(65536), b'')
+        await observed.wait()
+        row, = evidence.report['processes']
+        self.assertEqual(row['stderrObservedBytes'], len(STDERR) - 7)
+        self.assertFalse(row['stderrComplete'])
+        self.assertEqual(row['stderrCaptureError'], 'stream-capture-failed')
+        self.assertFalse(row['stderrFailure']['complete'])
+        self.assertTrue(evidence.capture_failed)
+        assert_sanitized(self, evidence.report)
+
     async def test_stream_sample_is_bounded_and_classifier_identity_fault_is_not_accepted(self):
         payload = STDERR + b'x' * (4 * LIMIT)
         classify = fixture.diagnostics.stream_facts

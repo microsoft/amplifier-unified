@@ -460,6 +460,7 @@ class ProcessObservations:
                 except BaseException:
                     if outer:
                         self.evidence.capture_failed = True
+                        row[channel + 'CaptureError'] = 'stream-capture-failed'
                         row[channel + 'Complete'] = False
                         finish_stream(failed=True)
                     raise
