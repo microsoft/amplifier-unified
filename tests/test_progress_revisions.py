@@ -144,6 +144,16 @@ async def test_cas_lock_admission_cannot_accept_a_later_queued_runtime_mutation(
         queue = app.subscribe()
     tasks, waiting, admission, commits = {}, {}, [], []
     real_acquire, real_commit = app.lock.acquire, app._commit_pending_progress
+    real_flush = app._flush_progress
+    timer_release = asyncio.Event()
+    timer_tasks = set()
+
+    async def gated_timer():
+        timer_tasks.add(asyncio.current_task())
+        # The independent background publication timer must not win a wall-clock
+        # race against these assertions. The command's real commit remains live.
+        await timer_release.wait()
+        await real_flush()
 
     async def observed_acquire():
         event = waiting.get(asyncio.current_task())
@@ -182,6 +192,7 @@ async def test_cas_lock_admission_cannot_accept_a_later_queued_runtime_mutation(
         revision = app.state['revision']
         monkeypatch.setattr(app.lock, 'acquire', observed_acquire)
         monkeypatch.setattr(app, '_commit_pending_progress', observed_commit)
+        monkeypatch.setattr(app, '_flush_progress', gated_timer)
         order = [('runtime', delta), ('command', command)] if runtime_first else [('command', command), ('runtime', delta)]
         async with app.lock:
             for name, operation in order:
@@ -222,12 +233,22 @@ async def test_cas_lock_admission_cannot_accept_a_later_queued_runtime_mutation(
             assert stored['stored'] and stored['activated'] and not stored['rendered']
             assert app.appearance.read(client_id)['effective']['scheme'] == 'dark'
             assert app.appearance.shared() == shared_before
+        # After the ordering proof, use the ordinary read barrier to drain the
+        # held timer and durably publish any remaining stream without a sleep.
+        await asyncio.wait_for(app._flush_pending_progress(), 2)
+        assert not app._progress_dirty
+        assert load_saved_state(app.db)['revision'] == app.state['revision']
     finally:
-        for task in tasks.values():
+        timer_release.set()
+        pending_timer = app._progress_publish_task
+        owned = set(tasks.values()) | timer_tasks
+        if pending_timer is not None:
+            owned.add(pending_timer)
+        for task in owned:
             if not task.done():
                 task.cancel()
         try:
-            if tasks:
-                await asyncio.wait_for(asyncio.gather(*tasks.values(), return_exceptions=True), 2)
+            if owned:
+                await asyncio.wait_for(asyncio.gather(*owned, return_exceptions=True), 2)
         finally:
             app.unsubscribe(queue)
