@@ -165,37 +165,39 @@ def catalog_metadata(config, registry, name):
     return metadata
 
 
-def sanitize_export(value, path=(), secrets=None, *, context_hook=False):
+def sanitize_export(value, path=(), secrets=None, *, destination=False):
     """Keep placeholders; replace actual credentials and drop private host keys."""
     secrets = secrets if secrets is not None else []
     if isinstance(value, dict):
-        if "module" in value:
-            context_hook = value["module"] == hook_config.MODULE
         result = {}
         for key, item in value.items():
             key = str(key)
             if key.startswith("_") or key in {"keys", "keys_file", "keyring", "credential_store"}:
                 continue
-            if context_hook and path[-1:] == ("destinations",):
-                result[key] = sanitize_export(item, (*path, key), secrets, context_hook=True)
+            if (key == "config" and value.get("module") == hook_config.MODULE
+                    and isinstance(item, dict) and isinstance(item.get("destinations"), dict)):
+                fields = {k: v for k, v in item.items() if k != "destinations"}
+                result[key] = sanitize_export(fields, (*path, key), secrets)
+                result[key]["destinations"] = {
+                    name: sanitize_export(dest, (*path, key, "destinations", str(name)), secrets, destination=True)
+                    for name, dest in item["destinations"].items()}
                 continue
             normalized = key.lower().replace("-", "_")
             if normalized in SECRET_KEYS or normalized in {"token_file_path", "credential_file", "credentials_file"} or normalized.endswith(("_api_key", "_secret", "_password", "_token")):
                 if isinstance(item, str) and re.fullmatch(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", item):
                     result[key] = item
                     secrets.append(item[2:-1])
-                elif (context_hook and normalized == "api_key" and path[-2:-1] == ("destinations",)
-                      and hook_config.reference_name(item)):
+                elif destination and normalized == "api_key" and hook_config.reference_name(item):
                     result[key] = item  # An empty fallback is optional.
                 else:
                     name = "AMPLIFIER_" + re.sub(r"[^A-Za-z0-9]+", "_", "_".join((*path, key))).upper()
                     result[key] = "${" + name + "}"
                     secrets.append(name)
             else:
-                result[key] = sanitize_export(item, (*path, key), secrets, context_hook=context_hook)
+                result[key] = sanitize_export(item, (*path, key), secrets)
         return result
     if isinstance(value, list):
-        return [sanitize_export(item, (*path, str(index)), secrets, context_hook=context_hook) for index, item in enumerate(value)]
+        return [sanitize_export(item, (*path, str(index)), secrets) for index, item in enumerate(value)]
     if isinstance(value, str) and value.startswith(("git+https://", "https://", "http://")):
         parsed = urlsplit(value.removeprefix("git+"))
         if parsed.username or parsed.password or parsed.query:

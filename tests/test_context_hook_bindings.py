@@ -98,16 +98,22 @@ def test_redacted_destination_edits_and_portable_export(tmp_path, monkeypatch, r
     assert "TEST_KEY" not in changed["content"] and "old-value" not in changed["content"]
 
 
-def test_destination_names_are_not_secret_fields(monkeypatch, tmp_path):
+@pytest.mark.parametrize("name", ["secret-graph", "api_key", "private_key", "_internal", "keys", "destinations"])
+def test_destination_names_are_not_secret_fields(monkeypatch, tmp_path, name):
     monkeypatch.setenv("GRAPH_KEY", "local-test-only")
-    row = hook({"private_key": destination("one", api_key="${GRAPH_KEY}")})
+    row = hook({name: destination("one", api_key="${GRAPH_KEY}")})
     assert credential_bindings(row) == row
     visible = public_config(row)
-    assert visible["config"]["destinations"]["private_key"]["api_key"] == REDACTED
+    assert visible["config"]["destinations"][name]["api_key"] == REDACTED
     exported = BundleManager(tmp_path).export_document({"config": {"hooks": [row]}},
         effective_plan={"hooks": [visible]}, resources={"instruction": ""})
     assert "local-test-only" not in exported["content"]
     assert yaml.safe_load(exported["content"].split("---", 2)[1])["hooks"] == [row]
+    assert exported["requiredEnvironment"] == ["GRAPH_KEY"]
+    raw = hook({name: destination("one", api_key="local-test-only")})
+    exported = BundleManager(tmp_path).export_document({}, effective_plan={"hooks": [raw]},
+                                                       resources={"instruction": ""})
+    assert "local-test-only" not in exported["content"] and len(exported["requiredEnvironment"]) == 1
 
 
 def test_no_new_warning_for_disabled_local_optional_or_unauthored_config():
