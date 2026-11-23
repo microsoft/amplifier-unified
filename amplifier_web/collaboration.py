@@ -1525,6 +1525,9 @@ class Collaboration:
                 return changed
             session["collaborationGeneration"] = {"id": identity, "inputIds": [], "terminal": False,
                 'interruptionRevision': interruption}
+            from .settled_compaction import assignment_scope
+            session['_settledAssignmentScope'] = [
+                identity, assignment_scope(session), session.get('configurationPendingRevision', 0)]
             session['_collaborationHostInstanceId'] = self.service.instance_id
             self.service._task(self.drain(session['id']))
             return changed
