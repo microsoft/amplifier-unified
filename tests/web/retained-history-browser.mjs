@@ -20,22 +20,31 @@ try{
  const select=id=>page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),id);
  const rows=page.locator('[data-message-id]');
  const firstNumber=async()=>Number((await rows.first().innerText()).match(/Saved message (\d+)/)?.[1]);
- await select(id);await expect(rows).toHaveCount(100);await expect.poll(firstNumber).toBe(9900);
+ const expectRange=async(elements,first,count)=>{
+  await expect(elements).toHaveCount(count);
+  assert.deepEqual(await elements.evaluateAll(nodes=>nodes.map(node=>Number(node.innerText.match(/Saved message (\d+)/)?.[1]))),
+   Array.from({length:count},(_,i)=>first+i),'Reading window must remain contiguous and in source order');
+ };
+ // Native startup intentionally reads only20; explicitly requested older
+ // pages retain their independent100-message size (TranscriptWindows).
+ await select(id);await expect(rows).toHaveCount(20);await expect.poll(firstNumber).toBe(9980);
+ await expectRange(rows,9980,20);
  // The navigator describes only this requested reading window. Opening and
  // using it must not enumerate all 5,000 turns in the saved transcript.
- await expect(page.locator('.a-rail-mark')).toHaveCount(50);
+ await expect(page.locator('.a-rail-mark')).toHaveCount(10);
  await expect(page.locator('.a-rail-mark').first()).toHaveAttribute('data-turn-id',await rows.first().getAttribute('data-message-id'));
  await page.locator('.a-rail-mark').first().click();
  await expect.poll(()=>rows.first().evaluate(el=>Math.abs(el.getBoundingClientRect().top-el.closest('.a-messages').getBoundingClientRect().top))).toBeLessThan(100);
  await page.locator('.a-rail-mark').last().click();
  assert.equal(navigationReads.length,0,'Visible navigator jumps need no full-history index');
- await expect(rows).toHaveCount(100);await expect.poll(firstNumber).toBe(9900);
+ await expectRange(rows,9980,20);
  // Read ten prior pages explicitly, preserving contiguous, unique rows.
- for(let first=9800;first>=8900;first-=100){
+ for(let first=9880;first>=8980;first-=100){
   await page.getByRole('button',{name:'Load earlier conversation',exact:true}).evaluate(el=>el.click());
   await expect.poll(firstNumber).toBe(first);
+  await expectRange(rows,first,10000-first);
  }
- assert.equal(await rows.count(),1100);
+ assert.equal(await rows.count(),1020);
  const ids=await rows.evaluateAll(elements=>elements.map(el=>el.dataset.messageId));
  assert.equal(new Set(ids).size,ids.length);
  const reading=rows.nth(150),readingId=await reading.getAttribute('data-message-id');
@@ -47,21 +56,19 @@ try{
  const offset=()=>page.locator(`[data-message-id="${readingId}"]`).evaluate(el=>el.getBoundingClientRect().top-el.closest('.a-messages').getBoundingClientRect().top);
  const before=await offset();
  // An independent browser starts with its own latest page and can expand it
- // without moving this reader or inheriting its eleven loaded pages.
+ // without moving this reader or inheriting its initial and ten older pages.
  const other=await browser.newPage({viewport:{width:1440,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-history-loading'}});
  other.on('pageerror',e=>errors.push(e.message));await login(other);
  await other.evaluate(id=>window.amplifier.dispatch('session.select',{id}),id);
- await expect(other.locator('[data-message-id]')).toHaveCount(100);
+ await expectRange(other.locator('[data-message-id]'),9980,20);
  await other.getByRole('button',{name:'Load earlier conversation',exact:true}).click();
- await expect(other.locator('[data-message-id]')).toHaveCount(200);
- await expect(other.locator('[data-message-id]').first()).toContainText('Saved message 9800');
+ await expectRange(other.locator('[data-message-id]'),9880,120);
  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
- assert.equal(await firstNumber(),8900);await expect(rows).toHaveCount(1100);await expect.poll(offset).toBeCloseTo(before,0);
+ assert.equal(await firstNumber(),8980);await expectRange(rows,8980,1020);await expect.poll(offset).toBeCloseTo(before,0);
  await page.getByRole('button',{name:'Load earlier conversation',exact:true}).evaluate(el=>el.click());
- await expect.poll(firstNumber).toBe(8800);await expect.poll(offset).toBeCloseTo(before,0);
- await expect(rows).toHaveCount(1200);
- await expect(other.locator('[data-message-id]')).toHaveCount(200);
- await expect(other.locator('[data-message-id]').first()).toContainText('Saved message 9800');
+ await expect.poll(firstNumber).toBe(8880);await expect.poll(offset).toBeCloseTo(before,0);
+ await expectRange(rows,8880,1120);
+ await expectRange(other.locator('[data-message-id]'),9880,120);
  await other.close();
  await select(initial.home);await expect(rows).toHaveCount(0);await select(id);
  await expect(page.locator(`[data-message-id="${readingId}"]`)).toHaveCount(1);
