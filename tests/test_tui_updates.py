@@ -109,7 +109,9 @@ async def test_changed_extras_can_restage_through_normal_app_command(tmp_path, m
         monkeypatch.setattr(app_updates, 'process', install)
         monkeypatch.setattr(app_updates.shutil, 'which', lambda _: '/fixture/uv')
         monkeypatch.setattr('amplifier_web.deployment_service.current_process_is_unit_managed', lambda _: True)
-        monkeypatch.setattr(manager, 'busy', lambda: True)
+        # App activation has its own idle boundary; the component busy helper
+        # is not the admission check used by manager.app()/activate().
+        monkeypatch.setattr(manager, 'app_busy', lambda: True)
         await manager.app()
         assert json.loads(marker.read_text())['extras'] == previous  # Retained legacy receipt.
         marker = marker.parent / service.state['updates']['pendingApp']['generation'] / 'validated.json'
@@ -117,9 +119,10 @@ async def test_changed_extras_can_restage_through_normal_app_command(tmp_path, m
         candidate = marker.parent / 'tools/amplifier-unified/bin/python'
         assert candidate.is_file()
         assert service.state['updates']['pendingApp']
+        assert not service.state['updates'].get('pendingRestart')
         assert len(calls) == 2  # Candidate install and probe only; work stays open.
         close.assert_not_awaited()
-        monkeypatch.setattr(manager, 'busy', lambda: False)
+        monkeypatch.setattr(manager, 'app_busy', lambda: False)
         await manager.app()
         # Keep the retained host usable until actual shutdown; an installation
         # or restart failure must not strand it with a terminally closed runtime.
