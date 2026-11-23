@@ -65,6 +65,13 @@ def restore_redactions(value, old, *, _config=False):
                 or value.get("module") != old.get("module")
                 or value.get("source") != old.get("source")):
             old = _MISSING_SETTING
+        if value.get("module") == "hook-context-intelligence" and isinstance(old, dict):
+            from .host.hook_config import destinations_in
+            original = dict(destinations_in(old.get("config")))
+            for name, dest in destinations_in(value.get("config")):
+                if (dest.get("api_key") == REDACTED
+                        and original.get(name, {}).get("url") != dest.get("url")):
+                    raise ValueError("Enter the credential reference for the changed Context Intelligence destination.")
         return {key:restore_redactions(item, old.get(key, _MISSING_SETTING)
                                       if isinstance(old, dict) else _MISSING_SETTING,
                                       _config=_config or key == "config" and isinstance(value.get("module"), str))

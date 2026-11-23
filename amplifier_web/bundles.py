@@ -20,6 +20,7 @@ import uuid
 
 import yaml
 
+from .host import hook_config
 from .builtin_behaviors import DEFAULT_BEHAVIORS, app_behaviors
 
 SNAPSHOT_VERSION = "1.0.0+amplifier-unified.snapshot.1"
@@ -164,10 +165,12 @@ def catalog_metadata(config, registry, name):
     return metadata
 
 
-def sanitize_export(value, path=(), secrets=None):
+def sanitize_export(value, path=(), secrets=None, *, context_hook=False):
     """Keep placeholders; replace actual credentials and drop private host keys."""
     secrets = secrets if secrets is not None else []
     if isinstance(value, dict):
+        if "module" in value:
+            context_hook = value["module"] == hook_config.MODULE
         result = {}
         for key, item in value.items():
             key = str(key)
@@ -178,15 +181,18 @@ def sanitize_export(value, path=(), secrets=None):
                 if isinstance(item, str) and re.fullmatch(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", item):
                     result[key] = item
                     secrets.append(item[2:-1])
+                elif (context_hook and normalized == "api_key" and path[-2:-1] == ("destinations",)
+                      and hook_config.reference_name(item)):
+                    result[key] = item  # An empty fallback is optional.
                 else:
                     name = "AMPLIFIER_" + re.sub(r"[^A-Za-z0-9]+", "_", "_".join((*path, key))).upper()
                     result[key] = "${" + name + "}"
                     secrets.append(name)
             else:
-                result[key] = sanitize_export(item, (*path, key), secrets)
+                result[key] = sanitize_export(item, (*path, key), secrets, context_hook=context_hook)
         return result
     if isinstance(value, list):
-        return [sanitize_export(item, (*path, str(index)), secrets) for index, item in enumerate(value)]
+        return [sanitize_export(item, (*path, str(index)), secrets, context_hook=context_hook) for index, item in enumerate(value)]
     if isinstance(value, str) and value.startswith(("git+https://", "https://", "http://")):
         parsed = urlsplit(value.removeprefix("git+"))
         if parsed.username or parsed.password or parsed.query:
@@ -608,19 +614,26 @@ class BundleManager:
             if key in MODULE_KEYS - {"context"}:
                 document[key] = portable(value, key)
         # Keep literal environment references when inspection redacts them.
-        def restore(current, raw):
+        def restore(current, raw, *, context_hook=False):
             if not isinstance(current, dict) or not isinstance(raw, dict): return
             for key, value in current.items():
-                if isinstance(value, dict): restore(value, raw.get(key))
+                if isinstance(value, dict): restore(value, raw.get(key), context_hook=context_hook)
+                elif context_hook and key == "api_key" and current.get("url") != raw.get("url"):
+                    continue
                 elif isinstance(value, str) and value in ("[REDACTED]", "<redacted>"):
                     candidate = raw.get(key)
-                    if isinstance(candidate, str) and re.fullmatch(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", candidate): current[key] = candidate
+                    if (context_hook and key == "api_key" and hook_config.reference_name(candidate)
+                            or isinstance(candidate, str) and re.fullmatch(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", candidate)):
+                        current[key] = candidate
         for section in ("providers", "tools", "hooks"):
             original = settings.get("config", {}).get(section, [])
             for row in document.get(section, []):
                 identity = row.get("id") or row.get("instance_id") or row.get("module")
                 source = next((item for item in original if (item.get("id") or item.get("instance_id") or item.get("module")) == identity), {})
-                restore(row, source)
+                context_hook = section == "hooks" and row.get("module") == hook_config.MODULE
+                if context_hook and (source.get("module"), source.get("source")) != (row["module"], row.get("source")):
+                    continue
+                restore(row, source, context_hook=context_hook)
         body = expand(resources.get("instruction", ""))
         for key, row in contexts.items():
             if key not in used:

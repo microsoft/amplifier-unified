@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 
 from .config import HostConfig, expand_environment, load_config, merge, write_private, provider_mount_sources, provider_dropped
+from . import hook_config
 from .components import HostComponents, ComponentResolver, compose_bundles, imagegen_defaults, capability_defaults, explicit_context_forwarding, installed_package_source
 from .components import declarations, git_source
 from ..surface_delivery import _accepts_exact_count
@@ -484,7 +485,10 @@ def _apply_settings(bundle, config):
                     row["source"] = expand_environment(row["source"])
                 values.append(row)
             else:
-                values.append(expand_environment(row))
+                expanded = expand_environment(row)
+                if kind == "hooks" and row.get("module") == hook_config.MODULE and "config" in row:
+                    hook_config.retain_references(row["config"], expanded["config"])
+                values.append(expanded)
         setattr(bundle, kind, values)
     # Foundation intentionally skips source-less rows during preparation and
     # will not let another account's prepared module stand in at mount time.
@@ -605,7 +609,9 @@ def _expand_module_configuration(node, in_provider=False):
     provider = in_provider or node.get("module", "").startswith("provider-")
     result = {}
     for key, value in node.items():
-        if key in {"config", "source"}:
+        if key == "config" and node.get("module") == hook_config.MODULE:
+            result[key] = hook_config.declared_config(value)
+        elif key in {"config", "source"}:
             result[key] = copy.deepcopy(value) if provider and key == "config" else expand_environment(value)
         elif key in {"instruction", "instructions", "system_prompt"}:
             result[key] = copy.deepcopy(value)
@@ -1333,7 +1339,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         initialization = initialization_hooks(isolation=isolation, decision_accounts=decision_accounts,
                                               routing=routing, retain=retain_session,
                                               ephemeral_servers=ephemeral_mcp_servers,
-                                              providers=prepared.mount_plan.get('providers', []), media=media)
+                                              providers=prepared.mount_plan.get('providers', []),
+                                              hooks=prepared.mount_plan.get('hooks', []), media=media)
         with startup_timing.phase('manager.session.create'):
             session = await prepared.create_session(session_id=runtime.session_id,
                 session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None,

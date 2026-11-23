@@ -118,6 +118,8 @@ def template(service, source):
     if not path.exists():
         raise ValueError('Prepare the source configuration before previewing a new-task schedule')
     plan = json.loads(path.read_text())
+    from .host.hook_config import omit_inherited_literals
+    omit_inherited_literals(plan)
     state_path = directory / 'control-state.json'
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
     # Never inherit task/goal/history, usage, receipts, active jobs or approvals.

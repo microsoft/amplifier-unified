@@ -197,6 +197,9 @@ def credential_bindings(value, *, provider=False, module=None):
             else:
                 result[key] = credential_bindings(
                     item, provider=provider, module=value.get("module") if key == "config" else None)
+        if module == "hook-context-intelligence":
+            from .host.hook_config import retain_references
+            retain_references(value, result)
         return result
     if isinstance(value, list):
         return [credential_bindings(item, provider=provider) for item in value]
