@@ -1,5 +1,6 @@
 """The Linux KISS502 guest saves reports even when a pytest stage fails."""
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -8,7 +9,10 @@ from scripts import kiss502_checks
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="KISS502 runs in a Linux guest")
-def test_pytest_scratch_is_retired_outside_saved_outputs_on_failure(tmp_path):
+def test_pytest_scratch_is_retired_outside_saved_outputs_on_failure(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(kiss502_checks, "ROOT", workspace)
     output = tmp_path / "artifacts"
     output.mkdir()
     scratch = {}
@@ -16,13 +20,16 @@ def test_pytest_scratch_is_retired_outside_saved_outputs_on_failure(tmp_path):
 
     def stage(name, argv, *, cwd, env, required=True):
         temp = Path(env["TMPDIR"])
-        assert temp.is_dir() and not temp.is_relative_to(output)
+        assert temp.is_dir() and temp.parent == workspace
         scratch[name] = temp
         if "--basetemp" in argv:
             base = Path(argv[argv.index("--basetemp") + 1])
             assert base.is_relative_to(temp)
             base.mkdir()
-            (base / "fixture").touch()
+            executable = base / "fixture"
+            executable.write_text("#!/bin/sh\nexit 0\n")
+            executable.chmod(0o700)
+            subprocess.run([executable], check=True)
             report = Path(next(arg.split("=", 1)[1] for arg in argv if arg.startswith("--junitxml=")))
             assert report.parent == output
             report.touch()

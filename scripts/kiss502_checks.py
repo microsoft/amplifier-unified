@@ -164,8 +164,9 @@ print(json.dumps({'wheelSha256':hashlib.sha256(wheel.read_bytes()).hexdigest(),
 
 
 def run_pytests(command, python, harness, output, env, targets):
-    # The artifacts volume is exported wholesale. Keep pytest fixtures in guest scratch.
-    with tempfile.TemporaryDirectory(prefix="kiss502-", dir="/tmp") as scratch:
+    # The guest exports /artifacts and mounts /tmp noexec. Its private workspace
+    # can run fixture executables and is cleaned before result collection.
+    with tempfile.TemporaryDirectory(prefix=".kiss502-", dir=ROOT) as scratch:
         pytest_env = {**env, "TMPDIR": scratch}
         if "test_app_guidance" in targets:
             command("source-census", [python, "-I", "-B", "-m", "pytest", "-c", "/dev/null",
