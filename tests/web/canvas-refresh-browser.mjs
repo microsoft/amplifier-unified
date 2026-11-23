@@ -1,5 +1,6 @@
 // Exact production assets/host; synthetic data and a separate publishing client.
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {prepareCanvasReaderInput} from './canvas-reader-input.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
@@ -67,6 +68,12 @@ try{
  }else{
   const refresh=()=>panel.getByRole('button',{name:'Refresh document',exact:true});
   const status=()=>panel.locator('.a-canvas-freshness');
+  const showDetails=async()=>{
+   const details=panel.getByRole('region',{name:'Canvas details',exact:true});
+   if(!await details.isVisible())await panel.getByRole('button',{name:'Canvas details',exact:true}).click();
+   await expect(details).toBeVisible();await expect(refresh()).toBeVisible();
+  };
+  await showDetails();
   await expect(status()).toContainText('Version 1');await expect(status()).toContainText('Version 4');
   await refresh().focus();await expect(refresh()).toBeFocused();await page.keyboard.press('Enter');
   await expect(status()).toContainText('Checked');
@@ -80,7 +87,7 @@ try{
   await versions.selectOption('latest');
   await page.getByRole('button',{name:'Close canvas details',exact:true}).click();
   await expect(panel.getByRole('heading',{name:'Saved four',exact:true})).toBeVisible();
-  await refresh().click();await expect(status()).toContainText('Checked');await expect(status()).toContainText('Latest');
+  await showDetails();await refresh().click();await expect(status()).toContainText('Checked');await expect(status()).toContainText('Latest');
   await capture('latest-desktop');
   report.checks.push('Keyboard Refresh preserves historical v1; existing selector retains all versions and returns to Latest');
   // Delay and fail the real read request. No forged successful product response.
@@ -110,9 +117,10 @@ try{
   // Inspect must not remount/execute existing HTML code or erase live DOM edits.
   await action('canvas.show',{kind:'html',title:'Retain interactive view',content:'<label>Unfinished input <input id="draft"></label><output id="mount"></output><script>document.getElementById("mount").textContent=crypto.randomUUID()</script>'});
   const frame=page.frameLocator('[data-canvas-view="primary"] iframe');
+  await prepareCanvasReaderInput(page,{target:frame.getByLabel('Unfinished input'),label:'refresh-html-input',outputDir:output});
   await frame.getByLabel('Unfinished input').fill('Retain local HTML input');
   const mount=await frame.locator('#mount').textContent();assert.ok(mount);
-  await refresh().click();await expect(status()).toContainText('Checked');
+  await showDetails();await refresh().click();await expect(status()).toContainText('Checked');
   assert.equal(await frame.locator('#mount').textContent(),mount);
   await expect(frame.getByLabel('Unfinished input')).toHaveValue('Retain local HTML input');
   report.checks.push('Refresh does not rerun HTML or discard interactive input');
@@ -141,10 +149,11 @@ try{
   const target=v=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(k=>[k,v[k]]));
   await action('canvas.views.renderer',{...target(await view()),renderer:digest});
   const editor=panel.getByLabel('Unfinished renderer edit');
+  await prepareCanvasReaderInput(page,{target:editor,label:'refresh-dirty-input',outputDir:output});
   await editor.fill('Retain the unsaved renderer draft');
   await expect.poll(async()=>(await view()).dirty).toBe(true);
   const editorMount=await editor.getAttribute('data-mount'),before=target(await view());
-  await refresh().click();await expect(status()).toContainText('Checked');
+  await showDetails();await refresh().click();await expect(status()).toContainText('Checked');
   assert.deepEqual(target(await view()),before);assert.equal((await view()).dirty,true);
   assert.equal(await editor.getAttribute('data-mount'),editorMount);
   await expect(editor).toHaveValue('Retain the unsaved renderer draft');

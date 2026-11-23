@@ -181,12 +181,35 @@ try{
  // Both views use the same chat row and respect the existing path preference.
  const completed=before.state.sessions.find(row=>row.nativeIdentity==='alpha-198');
  const chatRow=()=>sidebar.locator(`.a-nav-chat[data-session-id="${completed.id}"]`).first();
- const rowStyle=()=>chatRow().evaluate(node=>({
-  height:node.getBoundingClientRect().height,
-  location:getComputedStyle(node.querySelector('.a-nav-chat-workspace')).display,
-  text:node.querySelector('.a-nav-chat-workspace').textContent,
-  status:node.querySelector('.a-navigation-status').dataset.kind
- }));
+ assert.ok(before.state.attention.sessions[completed.id],'The unchanged fixture response is unread');
+ report.rowSettlements=[];
+ const rowStyle=async()=>{
+  let sample;const observations=[];
+  try{
+   await expect.poll(async()=>{
+    sample=await chatRow().evaluate(node=>{
+     const snapshot=window.amplifier.getShellState().snapshots.chats;
+     const resource=node.closest('[data-status-group]')?'workStatusUnread':'recentNavigation';
+     const page=snapshot[resource],row=page?.items?.find(row=>row.id===node.dataset.sessionId);
+     const activity=snapshot.navigationActivityById?.[node.dataset.sessionId]||row?.activity;
+     return {height:node.getBoundingClientRect().height,
+      location:getComputedStyle(node.querySelector('.a-nav-chat-workspace')).display,
+      text:node.querySelector('.a-nav-chat-workspace').textContent,
+      status:node.querySelector('.a-navigation-status').dataset.kind,
+      resource,covered:snapshot.navigationResources?.includes(resource)===true,
+      pending:!!snapshot.navigationResourcePending?.[resource],retained:!!snapshot.navigationResourceRetained?.[resource],
+      currentKind:activity?.kind,member:!!row};
+    });
+    if(observations.length<20)observations.push(sample);
+    // An empty pending map from the previous demand is not current row coverage.
+    // The known unread fixture must be freshly projected and rendered, not
+    // accepted from the temporary "Updating status" reading copy.
+    return sample.covered&&!sample.pending&&!sample.retained&&sample.member
+     &&sample.currentKind==='unread'&&sample.status==='unread';
+   },{message:'Current unread row coverage and badge settle together',timeout:15000}).toBe(true);
+  }finally{report.rowSettlements.push(observations)}
+  const {height,location,text,status}=sample;return {height,location,text,status};
+ };
  const workspaceName=before.state.workspaces.find(row=>row.id===completed.workspaceId).name;
  const statusStyle=await rowStyle();assert.equal(statusStyle.location,'block');
  assert.equal(statusStyle.text,workspaceName);assert.equal(statusStyle.height,54);

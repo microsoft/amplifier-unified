@@ -450,6 +450,29 @@ async function enterStreamConversation(page,expectedSessionId,stage) {
 // Word ranges detect the one-letter-per-line regression that an element box
 // inside the viewport cannot detect. Hit tests also reject floating overlays.
 function measureOwner(element,probe) {
+  if(probe?.negative) {
+    // Oracle self-tests must not publish their artificial geometry across a
+    // browser-task boundary: the application's reading observer must never
+    // capture the deliberately broken width as a real reading position.
+    const before=measureOwner(element),style=element.getAttribute('style');
+    let cover,negative;
+    try {
+      if(probe.negative==='width'){
+        element.style.maxWidth='8px';element.style.overflowWrap='anywhere';
+      }else if(probe.negative==='cover'){
+        const rect=element.getBoundingClientRect();cover=document.createElement('div');
+        cover.id='readability-negative-cover';
+        Object.assign(cover.style,{position:'fixed',left:rect.left+'px',top:rect.top+'px',
+          width:rect.width+'px',height:rect.height+'px',zIndex:'2147483647',background:'white'});
+        document.body.append(cover);
+      }else throw Error('Unknown readability negative control');
+      negative=measureOwner(element);
+    }finally{
+      if(style===null)element.removeAttribute('style');else element.setAttribute('style',style);
+      cover?.remove();
+    }
+    return {before,negative,restored:measureOwner(element)};
+  }
   if(probe) {
     // Preserve the existing recenter, then sample in that same browser task.
     // Two bounded animation frames expose movement; they do NOT prove settlement.
@@ -703,35 +726,36 @@ try {
       await expect.poll(async()=> (await owner.evaluate(measureOwner)).problems).toEqual([]);
       // Negative controls: the same oracle must reject both the old narrow
       // column symptom and text covered by another UI element.
-      const style=await owner.getAttribute('style');
-      restoredOwnerStyle=style;
-      await owner.evaluate(element=>{element.style.maxWidth='8px';element.style.overflowWrap='anywhere'});
-      const split=await owner.evaluate(measureOwner);
+      const preservedGeometry=value=>({owner:value.owner,button:value.button,pane:value.pane,
+        jumpContainer:value.jumpContainer,jumpControl:value.jumpControl,viewport:value.viewport});
+      const widthControl=await owner.evaluate(measureOwner,{negative:'width'});
+      const split=widthControl.negative;
+      assert.deepEqual(widthControl.before.problems,[],'Width negative begins with readable owner words');
       assert.ok(split.problems.some(value=>value.startsWith('split word:')),'Readability check must detect split owner words');
-      await owner.evaluate((element,style)=>style===null?element.removeAttribute('style'):element.setAttribute('style',style),style);
-      await recordOwnerDiagnostics('width-restored-and-recentered',{recenter:true,frames:true});
+      assert.deepEqual(preservedGeometry(widthControl.restored),preservedGeometry(widthControl.before),
+        'Atomic width control restores exact geometry, styles and pane reading position');
+      assert.deepEqual(widthControl.restored.problems,[]);
+      writeFileSync(artifact('delegate-work-stream-negative-controls.json'),JSON.stringify({widthControl},null,2));
+      await recordOwnerDiagnostics('width-restored-atomically',{frames:true});
       await expect.poll(async()=>{
         lastOwnerMeasurement=await owner.evaluate(measureOwner);
         return lastOwnerMeasurement.problems;
       }).toEqual([]);
-      await owner.evaluate(element=>{
-        const rect=element.getBoundingClientRect(),cover=document.createElement('div');
-        cover.id='readability-negative-cover';
-        Object.assign(cover.style,{position:'fixed',left:rect.left+'px',top:rect.top+'px',width:rect.width+'px',height:rect.height+'px',zIndex:'2147483647',background:'white'});
-        document.body.append(cover);
-      });
-      const covered=await owner.evaluate(measureOwner);
+      const coverControl=await owner.evaluate(measureOwner,{negative:'cover'});
+      const covered=coverControl.negative;
+      assert.deepEqual(coverControl.before.problems,[],'Cover negative begins with readable owner words');
       assert.ok(covered.problems.some(value=>value.startsWith('covered word:')),'Readability check must detect obscured owner text');
-      await page.locator('#readability-negative-cover').evaluate(element=>element.remove());
-      // Restore the inspected position after the artificial reflow/overlay.
-      // The app may have applied its reading anchor while this control ran.
-      await recordOwnerDiagnostics('cover-removed-and-recentered',{recenter:true,frames:true});
+      assert.deepEqual(preservedGeometry(coverControl.restored),preservedGeometry(coverControl.before),
+        'Atomic cover control restores exact geometry, styles and pane reading position');
+      assert.deepEqual(coverControl.restored.problems,[]);
+      await expect(page.locator('#readability-negative-cover')).toHaveCount(0);
+      await recordOwnerDiagnostics('cover-removed-atomically',{frames:true});
       await expect.poll(async()=>{
         lastOwnerMeasurement=await owner.evaluate(measureOwner);
         return lastOwnerMeasurement.problems;
       }).toEqual([]);
       saveOwnerDiagnostics();
-      writeFileSync(artifact('delegate-work-stream-negative-controls.json'),JSON.stringify({split,covered},null,2));
+      writeFileSync(artifact('delegate-work-stream-negative-controls.json'),JSON.stringify({split,covered,widthControl,coverControl},null,2));
       await page.screenshot({path:artifact('delegate-work-stream-mobile-owner.png')});
     }
     writeFileSync(artifact(`delegate-work-stream-${name}-readability.json`),JSON.stringify(readability,null,2));

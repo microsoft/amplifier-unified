@@ -6,6 +6,7 @@ import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {join} from 'node:path';
 import {chromium,expect} from '@playwright/test';
+import {settledAppearance} from './settings-fixture.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const output=process.env.AMPLIFIER_TEST_ARTIFACTS||join(root,'output/browser-checks/shared-landing');
@@ -16,7 +17,7 @@ const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||join(root,'.venv/bin/pyth
 let logs='',browser,isolatedBrowser,page,failure;
 const launchOptions={headless:true,...(process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}:{})};
 fixture.stderr.on('data',chunk=>{logs=(logs+chunk).slice(-12000)});
-const report={checks:[],errors:[],liveProvider:false};
+const report={checks:[],errors:[],liveProvider:false,readingTimeline:[],readingDiagnosticsErrors:[]};
 try{
  const port=await new Promise((resolve,reject)=>{
   let text='';const timer=setTimeout(()=>reject(Error('Fixture timeout: '+logs)),30000);
@@ -89,8 +90,20 @@ try{
  assert.equal(await page.locator('header #navigation-toggle').count(),1);
  await expect(page.locator('header')).not.toContainText('Home');
  await landing.getByRole('button',{name:'Home appearance',exact:true}).click();
- for(const detail of ['Focused','Everything','Balanced']){
-  await landing.getByRole('group',{name:'Appearance detail'}).getByRole('button',{name:detail,exact:true}).click();
+ report.appearanceChoices=[];
+ await settledAppearance(page);
+ for(const [detail,level] of [['Focused','minimal'],['Everything','detailed'],['Balanced','standard']]){
+  const choice=landing.getByRole('group',{name:'Appearance detail'}).getByRole('button',{name:detail,exact:true});
+  await choice.click();
+  await expect(choice).toHaveAttribute('aria-pressed','true');
+  await expect(page.locator('#amp-one')).toHaveAttribute('data-interface-detail',level);
+  await expect(landing).toHaveAttribute('data-level',level);
+  const confirmed=await settledAppearance(page);
+  assert.equal(confirmed.effective.interfaceDetail,level);
+  assert.equal(confirmed.effective.executionDetail,level);
+  report.appearanceChoices.push({detail,level,compositionId:confirmed.composition.id,
+   observedCompositionId:confirmed.observedCompositionId,scope:confirmed.activeScope,
+   revision:confirmed.source.revision});
   await expect(landing.getByRole('group',{name:'Work view',exact:true}).getByRole('button')).toHaveCount(3);
  }
  await landing.getByRole('button',{name:'Close home appearance',exact:true}).click();
@@ -263,9 +276,60 @@ try{
  await workspaceReady('Alpha');await expect(landing).toHaveAttribute('data-view','focus');
  await expect(workspaceCards()).toHaveAttribute('data-session-id',alphaCursor);
  report.checks.push('A Focus/Alpha/idle/page 1 and B Studio/Beta/Overview/page 0 survive A→B→A and reload, with independent Focus cursors');
+ // Observe the existing exact scroll assertion across reload without changing
+ // its target, waiting for a convenient position, or editing application CSS.
+ const readingStorageKey='amplifier.work-reading.v1:workspace:'+workspaceId+':chats';
+ await page.exposeFunction('__recordWorkReading',sample=>{
+  if(report.readingTimeline.length<180)report.readingTimeline.push(sample);
+ });
+ const installReadingTrace=({storageKey,workspaceId})=>{
+  const documentId=crypto.randomUUID();let count=0,frame=null,resize;
+  const observed=new WeakSet();
+  const rect=node=>{if(!node)return null;const r=node.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};
+  const snapshot=phase=>{
+   let saved;
+   try{const value=JSON.parse(sessionStorage.getItem(storageKey)||'null');saved=value?{key:value.key,top:value.top}:null}catch{saved={unavailable:true}}
+   const pane=document.querySelector('.a-adaptive-home[data-landing="workspace"]'),root=document.querySelector('#amp-one'),layout=document.querySelector('[data-part=workspace]');
+   const style=pane&&getComputedStyle(pane),shell=window.amplifier?.getShellState?.()?.snapshots?.chats;
+   const top=pane?.getBoundingClientRect().top;
+   const first=pane&&[...pane.querySelectorAll('.a-work-card[data-session-id]')].find(row=>row.getBoundingClientRect().bottom>top);
+   return {documentId,phase,at:performance.now(),saved,workspaceId,
+    pane:pane?{...rect(pane),scrollTop:pane.scrollTop,clientHeight:pane.clientHeight,scrollHeight:pane.scrollHeight,
+     mode:pane.dataset.view,level:pane.dataset.level,padding:style.padding,overflowAnchor:style.overflowAnchor}:null,
+    root:root?{detail:root.dataset.interfaceDetail,density:root.dataset.density,appearance:root.dataset.appearanceComposition}:null,
+    layout:layout?{...rect(layout),narrow:layout.dataset.narrow,navigationNarrow:layout.dataset.navigationNarrow}:null,
+    toolbar:rect(pane?.querySelector('.a-home-toolbar')),viewSwitch:rect(pane?.querySelector('.a-work-view-switch')),
+    first:first?{id:first.dataset.sessionId,offset:first.getBoundingClientRect().top-top}:null,
+    resource:shell?{scope:shell.workHome?.scope,query:shell.workHome?.query,pages:shell.workHome?.requestedPages,
+     pending:Object.keys(shell.navigationResourcePending||{})}:null};
+  };
+  const publish=sample=>{void window.__recordWorkReading(sample).catch(()=>{})};
+  const stop=()=>{observer.disconnect();resize?.disconnect();document.removeEventListener('scroll',scroll,true);window.removeEventListener('pagehide',hide);if(frame!==null)cancelAnimationFrame(frame)};
+  const record=phase=>{
+   const sample=snapshot(phase);
+   if(count++<120)publish(sample);else stop();
+   return sample;
+  };
+  const watch=()=>{
+   for(const node of document.querySelectorAll('#amp-one,.a-adaptive-home,.a-home-content'))if(!observed.has(node)){observed.add(node);resize.observe(node)}
+  };
+  const queue=()=>{watch();if(frame===null)frame=requestAnimationFrame(()=>{frame=null;record('layout-frame')})};
+  const scroll=event=>{if(event.target.matches?.('.a-adaptive-home'))record('scroll')};
+  const hide=()=>record('pagehide');
+  const observer=new MutationObserver(queue);
+  resize=new ResizeObserver(queue);
+  observer.observe(document,{subtree:true,childList:true,attributes:true,
+   attributeFilter:['data-view','data-level','data-interface-detail','data-density','data-appearance-composition','data-navigation-narrow','data-narrow']});
+  document.addEventListener('scroll',scroll,{capture:true,passive:true});window.addEventListener('pagehide',hide);
+  window.__workReadingTrace={snapshot:record,stop};record('installed');watch();
+ };
+ const traceArgs={storageKey:readingStorageKey,workspaceId};
+ await page.evaluate(installReadingTrace,traceArgs);
+ await page.addInitScript(installReadingTrace,traceArgs);
  await choose('Studio');await landing.evaluate(node=>{node.scrollTop=420});
  await expect.poll(()=>landing.evaluate(node=>node.scrollTop)).toBeGreaterThan(300);
  const workspaceTop=await landing.evaluate(node=>node.scrollTop);
+ await page.evaluate(()=>window.__workReadingTrace.snapshot('initial-reading-position'));
  await home();await expect(landing).toHaveAttribute('data-view','focus');
  await expect(landing.getByLabel('Work scope',{exact:true})).toHaveValue(otherWorkspace.id);
  await expect(landing.getByRole('searchbox',{name:'Search your work',exact:true})).toHaveValue('Beta');
@@ -274,10 +338,15 @@ try{
  await act('view.update',{patch:{workSurface:'workspace',workWorkspaceId:workspaceId}});
  await workspaceReady('Alpha');await expect(landing).toHaveAttribute('data-view','studio');
  await expect.poll(()=>landing.evaluate(node=>node.scrollTop)).toBe(workspaceTop);
+ await page.evaluate(()=>window.__workReadingTrace.snapshot('returned-before-reload'));
  await expect(pickUpAgain()).toHaveAttribute('aria-pressed','true');
  assert.equal((await shell()).workHome.groups.idle.index,1);
+ await page.evaluate(()=>window.__workReadingTrace.snapshot('immediately-before-reload'));
  await page.reload();await expect(landing).toHaveAttribute('data-landing','workspace');await workspaceReady('Alpha');
- await expect.poll(()=>landing.evaluate(node=>node.scrollTop)).toBe(workspaceTop);
+ await expect(page.locator('#amp-one')).toHaveAttribute('data-interface-detail','standard');
+ await expect(landing).toHaveAttribute('data-level','standard');
+ await expect.poll(()=>page.evaluate(()=>window.__workReadingTrace.snapshot('reload-assertion').pane?.scrollTop)).toBe(workspaceTop);
+ await page.evaluate(()=>window.__workReadingTrace.stop());
  await landing.getByRole('button',{name:'Clear status filter'}).click();await workspaceReady('Alpha');
  await expect(landing.getByRole('searchbox',{name:'Search your work',exact:true})).toHaveValue('Alpha');
  await landing.getByRole('searchbox',{name:'Search your work',exact:true}).fill('not-a-matching-chat');
@@ -344,6 +413,7 @@ try{
  report.build=JSON.parse(await readFile(join(root,'amplifier_web/static/build.json'),'utf8'));report.passed=true;
 }catch(error){failure=error;report.passed=false;report.failure=error.stack;report.fixtureLog=logs;report.diagnostics=await page?.evaluate(async()=>(await fetch('/api/diagnostics/performance')).json()).catch(()=>null);await page?.screenshot({path:join(output,'failure.png')}).catch(()=>{});report.text=await page?.locator('body').innerText().catch(()=>null)}
 finally{
+ if(page&&!page.isClosed())try{await page.evaluate(()=>window.__workReadingTrace?.stop())}catch(error){report.readingDiagnosticsErrors.push(error.message)}
  try{await isolatedBrowser?.close()}finally{await browser?.close()}
  if(fixture.exitCode===null&&fixture.signalCode===null){
   const exited=once(fixture,'exit');fixture.kill('SIGTERM');let timer;
