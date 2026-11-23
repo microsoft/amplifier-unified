@@ -179,8 +179,10 @@ async def test_real_owned_runtime_exits_before_promotion(staged, monkeypatch):
     import sys
     from amplifier_web.runtime import RuntimeManager
     from test_runtime_retention import SCRIPT
-    script = SCRIPT.replace("parked=False;result={'accepted':True}",
-        "print(json.dumps({'type':'runtime.activity','phase':'processing','detail':'input held'}),flush=True);continue")
+    anchor = "idle=False;result={'accepted':True}"
+    assert SCRIPT.count(anchor) == 1
+    script = SCRIPT.replace(anchor,
+        "idle=False;print(json.dumps({'type':'runtime.activity','phase':'processing','detail':'input held'}),flush=True);continue", 1)
     runtime = RuntimeManager(command=[sys.executable, '-c', script])
     runtime.home = staged.service.data_dir
     runtime.retention.wake = lambda: None
