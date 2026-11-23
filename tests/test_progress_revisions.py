@@ -240,7 +240,7 @@ async def test_cas_lock_admission_cannot_accept_a_later_queued_runtime_mutation(
         assert load_saved_state(app.db)['revision'] == app.state['revision']
     finally:
         timer_release.set()
-        pending_timer = app._progress_publish_task
+        pending_timer = getattr(app, '_progress_publish_task', None)
         owned = set(tasks.values()) | timer_tasks
         if pending_timer is not None:
             owned.add(pending_timer)
