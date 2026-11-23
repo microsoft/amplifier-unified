@@ -845,7 +845,9 @@ async def test_bound_child_refuses_unauthorized_credentials_before_prepare_witho
     root = h.load(authorized)
     original_root = root.to_mount_plan()
     monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-ambient-fallback")
-    with pytest.raises(ValueError, match="authorized host credential binding") as failure:
+    expected = (r"^Ambiguous authorized provider instance/source\.$" if case == "ambiguous"
+                else "authorized host credential binding")
+    with pytest.raises(ValueError, match=expected) as failure:
         await host.prepare_manager(h.config.workspace, runtime=h.runtime,
                                    runtime_plan=child, qualification_readonly=True)
     assert child == before and root.to_mount_plan() == original_root
