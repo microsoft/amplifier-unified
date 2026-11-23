@@ -8,7 +8,7 @@ import json
 import time
 import uuid
 
-from .acp_participant import ACPParticipant
+from .acp_participant import ACPParticipant, ProjectWorkspaceError
 from .errors import AppError
 
 
@@ -156,7 +156,7 @@ class SharedConversations:
                 continue
             participant = self.owner.participants.get(key)
             if participant is None:
-                participant = ACPParticipant(selected, source_binding['cwd'],
+                participant = ACPParticipant(selected, source_binding['cwd'], project=source_binding.get('projectDirectory'),
                     update=lambda update, agent=delivery['agentId']: self._update(sid, agent, update),
                     permission=lambda tool, options, agent=delivery['agentId']: self._permission(sid, agent, options, tool))
                 self.owner.participants[key] = participant
@@ -367,10 +367,11 @@ class SharedConversations:
             if turn.attempted or not getattr(turn.participant, '_retirement_uncertain', False):
                 await turn.participant.close()
             raise
-        except Exception:
+        except Exception as error:
             turn.stop = turn.retiring = True
             async with self.service.lock:
-                self._settle(self.service._session(sid), turn, 'unknown' if turn.attempted else 'failed')
+                self._settle(self.service._session(sid), turn, 'unknown' if turn.attempted else 'failed',
+                             error=str(error) if isinstance(error, ProjectWorkspaceError) else None)
             if not getattr(turn.participant, '_retirement_uncertain', False):
                 await turn.participant.close()
         finally:
@@ -387,7 +388,7 @@ class SharedConversations:
                     self._schedule(session)
                     self.service._publish_changes(sessions={sid})
 
-    def _settle(self, session, turn, state, *, publish=False):
+    def _settle(self, session, turn, state, *, publish=False, error=None):
         self.owner.approvals.expire(session, turn=turn, terminal=True)
         binding = self.participant(session, turn.agent_id)
         delivery = self._delivery(session, turn)
@@ -405,7 +406,7 @@ class SharedConversations:
         self._record(session, delivery, state)
         binding['status'] = 'unknown' if state == 'unknown' else 'error' if state == 'failed' else 'idle'
         if state in {'unknown', 'failed'}:
-            binding['error'] = ('The participant outcome could not be confirmed. Its source and execution identity were preserved; work was not replayed.' if state == 'unknown' else 'The participant could not connect or resume. Nothing was sent; its binding was preserved.')
+            binding['error'] = ('The participant outcome could not be confirmed. Its source and execution identity were preserved; work was not replayed.' if state == 'unknown' else error or 'The participant could not connect or resume. Nothing was sent; its binding was preserved.')
         self.service._publish_changes(sessions={session['id']})
 
     async def _update(self, sid, identity, update):

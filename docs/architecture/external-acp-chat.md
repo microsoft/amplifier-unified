@@ -54,7 +54,12 @@ Optional `cwd` is the local launch directory. `sessionCwd` is the execution
 location sent to the agent, defaulting to the chat's workspace. Neither is a new
 filesystem grant. Arguments are passed directly, without a shell. A fixed SSH
 launcher can use the same stdio boundary; remote deployment is not qualified by
-the local pilot.
+the local pilot. For a fixed agent workspace, optionally enable **Also use the selected
+project in new chats** (`includeChatWorkspace: true`). This sends just that chat's
+selected project as an ACP additional directory on creation and resume if it differs
+from the agent workspace. The path must also exist and be permitted on the agent.
+Peers must advertise additional directories. Existing chats keep their saved scope
+when this setting changes.
 
 Choose the external agent in New chat and an existing workspace, then submit the
 first message. The draft stays private and creates no conversation or connection
