@@ -342,18 +342,25 @@ async def test_revision_change_during_mkdir_rejects_chat_without_removing_create
 
 @pytest.mark.parametrize('client',['web','agent'])
 async def test_draft_provider_discovery_targets_requested_workspace_without_creating_it(app,tmp_path,monkeypatch,client):
+    import yaml
     from amplifier_web.management import Management
     from amplifier_web.setup import SetupManager
+    from amplifier_web.session_files import amplifier_home
+    shared = amplifier_home()
+    shared.mkdir(parents=True, exist_ok=True)
+    (shared / 'settings.yaml').write_text(yaml.safe_dump({'providers': [
+        {'id': 'one', 'module': 'provider-test', 'config': {'model': 'not-discovered'}}]}))
     app.management=Management(app)
     path=tmp_path/'future'/'workspace';observed=[]
+    original_rows = SetupManager.provider_rows
     def rows(self,workspace):
         observed.append(workspace)
-        return [{'id':'one','module':'provider-test','config':{'model':'chosen'},'enabled':True}]
+        return original_rows(self, workspace)
     async def catalog(self,action,args,workspace):
         observed.append(workspace)
         return {'modelsProviderId':'one','models':[{'id':'chosen'}]}
     monkeypatch.setattr(SetupManager,'provider_rows',rows)
-    monkeypatch.setattr(SetupManager,'cached_probe',catalog)
+    monkeypatch.setattr(SetupManager,'probe',catalog)
     await command(app,client,'providers.list',{'workspace':str(path)})
     await command(app,client,'providers.models',{'workspace':str(path),'id':'one'})
     for _ in range(100):
@@ -362,6 +369,9 @@ async def test_draft_provider_discovery_targets_requested_workspace_without_crea
     assert app.state['setup']['providersWorkspace']==str(path)
     assert app.state['setup']['providersRequestedWorkspace']==str(path)
     assert app.state['setup']['providerCatalogs']['one']['models']==[{'id':'chosen'}]
+    entry = app.state['setup']['providerCatalogs']['one']
+    assert entry['phase'] == 'ready'
+    assert entry == app.management.provider_catalog.entry(('providers.models', entry['sharedCatalogKey']))
     assert observed and all(workspace==str(path) for workspace in observed)
     assert not app.state['sessions'] and not app.runtime.started and not app.runtime.sent
     assert not path.exists()
