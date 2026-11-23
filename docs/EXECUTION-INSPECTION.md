@@ -156,7 +156,22 @@ are never assigned another call's recording. Failed reads offer retry, and
 replaced logs invalidate old references. Closing or changing the call cancels
 pending reads. Payload disclosures close when their model row is remounted.
 
-Workspace plan summaries read root todo receipts through the incremental event
+The chat Plan shows the last successfully reported root-agent checklist, not
+whether an operation is currently working, approved or Done. Successful ordinary
+todo receipts update a bounded value in the existing Session view; terminal
+receipt publication persists it. Failed or malformed results do not replace
+that value; a valid empty list clears it. No saved report means no panel, with
+no automatic historical reconstruction, restore, replay or model call.
+The tool's coordinator-local todo list is not restored from this display value.
+
+This explicitly replaces the experimental universal mutable-history currentness
+requirement. The unmerged `e30c` scanner's 214 passes and one sustained-growth
+failure remain historical evidence of the withdrawn requirement, **not a pass**,
+skip or xfail. Its scanner, prefix verification, continuations and currentness
+dashboard are not shipped by this implementation. Other history-source checks,
+ownership and recovery rules are unchanged.
+
+Explicit `session.plans` workspace summaries read root todo receipts through the incremental event
 index. They do not hydrate the saved execution graph, traverse child logs, or
 associate the conversation transcript. A changing chat's read failure retires
 only the indexes touched by that read, not every other chat's parsed history.

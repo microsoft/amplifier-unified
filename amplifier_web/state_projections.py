@@ -187,7 +187,7 @@ class StateProjections:
         while len(self.detail_bodies) > 32:
             self.detail_bodies.popitem(last=False)
         result = {key: value for key, value in row.items()
-                  if key not in fields and key != 'messageQuotes'}
+                  if key not in fields and key not in {'messageQuotes', '_reportedPlan'}}
         result.update(body)
         from .peer_attribution import display_annotations
         result['messageAnnotations'] = display_annotations(row, (message.get('id') for message in result.get('messages', [])))

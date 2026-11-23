@@ -122,6 +122,8 @@ class ExecutionEvents:
         # Optional status-only observation of live accepted plans, not a plan
         # store. Never read logs or retain tool text/arguments for discovery.
         self.status_plan_inputs = {} if os.environ.get('AMPLIFIER_STATUS_DIR') else None
+        # Only bounded in-flight root todo proposals, not tool-owned storage.
+        self.plan_inputs = {}
 
     def publish(self, row):
         # Observe both wrapped and hook-only provider paths. Optional naming or
@@ -548,6 +550,7 @@ class ExecutionEvents:
                 "sessionId": sid, "rootSessionId": self.root_id, "kind": "tool", "toolCallId": call,
                 "label": str(data.get("tool_name") or "Tool")[:120], "startedAt": now}
             row = dict(row)
+            row.pop('reportedPlan', None)
             # Bind this host update to ONE canonical event, not an inferred
             # attempt. Hook callbacks are separate tasks and repeated call IDs
             # cannot prove which earlier pre belongs to a late terminal.
@@ -574,6 +577,27 @@ class ExecutionEvents:
 
             from .image_generation import observe
             observe(row, event, data)
+            if sid == self.root_id and row['label'] == 'todo':
+                from .chat_plan import accepted_report
+                if event == 'tool:pre':
+                    self.plan_inputs.pop(key, None)
+                    args = data.get('tool_input', data.get('arguments', data.get('input')))
+                    if (isinstance(args, dict) and args.get('action') in {'create', 'update'}
+                            and key not in self.calls and len(self.plan_inputs) < 32):
+                        proposed = accepted_report({'todos': args.get('todos')})
+                        if proposed is not None:
+                            self.plan_inputs[key] = proposed
+                else:
+                    proposed = self.plan_inputs.pop(key, None)
+                    if input_key is not None:
+                        args = data[input_key]
+                        proposed = (accepted_report({'todos': args.get('todos')})
+                                    if isinstance(args, dict) and args.get('action') in {'create', 'update'}
+                                    else None)
+                    if event == 'tool:post' and row['phase'] == 'completed':
+                        accepted = accepted_report(data.get('result', data.get('tool_result')), proposed)
+                        if accepted is not None:
+                            row['reportedPlan'] = accepted
             if self.status_plan_inputs is not None and row['label'] == 'todo':
                 from .status_protocol.hook import accepted_plan
                 if event == 'tool:pre':
@@ -586,6 +610,10 @@ class ExecutionEvents:
                                          if row['phase'] == 'completed' else None)
             self.calls[key] = row
             self.publish(row)
+            # The current Session owns the last report. Completed tool/node
+            # caches retain ordinary observation metadata, not checklist copies.
+            row.pop('reportedPlan', None)
+            self.nodes[row['id']].pop('reportedPlan', None)
             if event == 'tool:post' and row['label'] == 'image_generate':
                 from .image_results import completed_receipt
                 receipt = completed_receipt(data.get('result', data.get('tool_result')))
