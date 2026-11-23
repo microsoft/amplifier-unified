@@ -3112,11 +3112,16 @@ class Integration(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(changed_model[key], reset[key])
         before = copy.deepcopy(manager.config(self.root).settings)
         revision = self.app.state['configurationRevision']
-        with patch.object(manager.store, 'update', wraps=manager.store.update) as write:
+        # Validation runs under the normal writer lock; it must not reach the
+        # actual file replacement or change the existing saved bytes.
+        before_bytes = manager.store.path(self.root, 'global').read_bytes()
+        with patch('amplifier_foundation.settings.atomic_write',
+                   side_effect=AssertionError('Invalid settings must not be published')) as write:
             with self.assertRaises(Exception):
                 await save({'prompt': ' \n'})
             write.assert_not_called()
         self.assertEqual(manager.config(self.root).settings, before)
+        self.assertEqual(manager.store.path(self.root, 'global').read_bytes(), before_bytes)
         self.assertEqual(self.app.state['configurationRevision'], revision)
         self.assertEqual(len({row['revision'] for row in (initial, edited, reset, changed_model)}), 4)
         self.runtime.start.assert_not_called()
@@ -3301,12 +3306,15 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(accepted['result']['suggestionModels']['effort'], 'low')
             before = copy.deepcopy(ordinary.config(self.root).settings)
             revision = self.app.state['configurationRevision']
-            with patch.object(early.store, 'update', wraps=early.store.update) as write:
+            before_bytes = early.store.path(self.root, 'global').read_bytes()
+            with patch('amplifier_foundation.settings.atomic_write',
+                       side_effect=AssertionError('Invalid effort must not be published')) as write:
                 with self.assertRaisesRegex(Exception, 'reasoning effort is unavailable'):
                     await self.app.dispatch('providers.configureSuggestions', {**args, 'effort': 'unadvertised'},
                                             include_state=False)
                 write.assert_not_called()
             self.assertEqual(ordinary.config(self.root).settings, before)
+            self.assertEqual(early.store.path(self.root, 'global').read_bytes(), before_bytes)
             self.assertEqual(self.app.state['configurationRevision'], revision)
             self.assertIs(self.app.prompt_suggestions.manager, early)
             self.assertIs(early.catalog, shared)
