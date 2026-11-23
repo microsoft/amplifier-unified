@@ -21,8 +21,11 @@ def test_observation_keeps_newer_projection_and_omitted_live_fields(newer_owner)
     previous = {'task': old, 'history': ['retained-history'], 'continuity': live,
                 'continuationSupported': True, 'goal': {'turns_used': 3}}
     session = {'id': 'one', 'task': old, 'continuity': live}
+    def lookup(sid, *, hydrate=True):
+        assert sid == session['id'] and hydrate is False
+        return session
     service = SimpleNamespace(state={'runtimeControl': {'one': {'task.get': previous}}},
-                              _publish_changes=Mock(), _session=lambda sid: session)
+                              _publish_changes=Mock(), _session=Mock(side_effect=lookup))
     current = {'id': 'task', 'revision': 3}
     assert task_continuity.observe_task(service, session, {'task': current}) == (True, 3)
     observed = service.state['runtimeControl']['one']['task.get']
@@ -38,6 +41,7 @@ def test_observation_keeps_newer_projection_and_omitted_live_fields(newer_owner)
     publication, revision = task_continuity.publish_task_observation(service, session['id'], {'task': old})
     assert publication == {'status': 'superseded'} and revision == 3
     assert (session, service.state) == before
+    service._session.assert_called_once_with(session['id'], hydrate=False)
     service._publish_changes.assert_not_called()
 
 
