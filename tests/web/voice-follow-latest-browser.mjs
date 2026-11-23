@@ -63,7 +63,11 @@ try {
  };
  const checkReading=async(goal,label)=>{
   const actual=await pane.evaluate(async(el,goal)=>{
-   const paint=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+   const paint=()=>new Promise((resolve,reject)=>{
+    let first,second;
+    const timer=setTimeout(()=>{cancelAnimationFrame(first);cancelAnimationFrame(second);reject(Error('Native oracle animation frame timed out'))},2000);
+    first=requestAnimationFrame(()=>{second=requestAnimationFrame(()=>{clearTimeout(timer);resolve()})});
+   });
    let prototype=el;
    while(prototype&&!Object.getOwnPropertyDescriptor(prototype,'scrollTop'))prototype=Object.getPrototypeOf(prototype);
    const native=Object.getOwnPropertyDescriptor(prototype,'scrollTop');
@@ -84,10 +88,14 @@ try {
      offsetWidth:node.offsetWidth,offsetHeight:node.offsetHeight,rectWidth:box.width,rectHeight:box.height};
    };
    const before=measure(),shape=dimensions(el),style=getComputedStyle(el),bounds=el.getBoundingClientRect();
-   for(let node=el;node;node=node.parentElement){
-    const css=getComputedStyle(node);
-    if(css.transform!=='none'||!['1','normal'].includes(css.zoom)||css.writingMode!=='horizontal-tb')throw Error('Unsupported native oracle coordinate scale');
-   }
+   const supportedCoordinates=()=>{
+    for(let node=el;node;node=node.parentElement){
+     const css=getComputedStyle(node);
+     if(css.transform!=='none'||css.translate!=='none'||css.scale!=='none'||css.rotate!=='none'
+       ||!['1','normal'].includes(css.zoom)||css.writingMode!=='horizontal-tb')throw Error('Unsupported native oracle coordinate scale');
+    }
+   };
+   supportedCoordinates();
    if(style.direction!=='ltr'||style.scrollSnapType!=='none'||style.scrollBehavior!=='auto')throw Error('Unsupported native oracle scrolling mode');
    const doc=()=>({width:document.documentElement.scrollWidth,height:document.documentElement.scrollHeight,x:scrollX,y:scrollY});
    const documentBefore=doc(),focusBefore=document.activeElement;
@@ -100,18 +108,22 @@ try {
    grid.id='grid';
    // Separate controller-free native scroller: same measured viewport, origin,
    // borders/padding, gutter and content extent, with no application DOM or data.
-   grid.style.cssText='all:initial;display:block;min-width:0;min-height:0;max-width:none;max-height:none;margin:0;scroll-behavior:auto;scroll-snap-type:none;overflow-anchor:none;';
+   grid.style.cssText='all:initial;display:block;visibility:hidden;pointer-events:none;min-width:0;min-height:0;max-width:none;max-height:none;margin:0;scroll-behavior:auto;scroll-snap-type:none;overflow-anchor:none;';
    for(const key of ['width','height','box-sizing','padding-top','padding-bottom','padding-left','padding-right',
     'border-top-width','border-bottom-width','border-left-width','border-right-width','border-top-style','border-bottom-style','border-left-style','border-right-style',
     'overflow-x','overflow-y','scrollbar-gutter','scrollbar-width','direction','writing-mode','zoom','transform','transform-origin']){
     grid.style.setProperty(key,style.getPropertyValue(key));
    }
    const number=key=>parseFloat(style.getPropertyValue(key))||0;
-   extent.style.cssText='all:initial;display:block;box-sizing:border-box;min-width:0;min-height:0;margin:0;padding:0;border:0;';
+   extent.style.cssText='all:initial;display:block;visibility:hidden;pointer-events:none;box-sizing:border-box;min-width:0;min-height:0;margin:0;padding:0;border:0;';
    extent.style.width=(shape.scrollWidth-number('padding-left')-number('padding-right'))+'px';
    extent.style.height=(shape.scrollHeight-number('padding-top')-number('padding-bottom'))+'px';
    grid.append(extent);shadow.append(rules,grid);document.body.append(host);
    try{
+    for(const node of [host,grid,extent]){
+     const css=getComputedStyle(node);
+     if(css.visibility!=='hidden'||css.pointerEvents!=='none')throw Error('Native oracle reference is not hidden and noninteractive');
+    }
     if(JSON.stringify(dimensions(grid))!==JSON.stringify(shape))throw Error('Native oracle scroller geometry does not match: '+JSON.stringify({pane:shape,grid:dimensions(grid)}));
     if(grid.getBoundingClientRect().top!==bounds.top)throw Error('Native oracle fractional origin does not match');
     const wanted=before.contentTop-goal.offset,max=shape.scrollHeight-shape.clientHeight;
@@ -120,13 +132,17 @@ try {
     await paint();
     if(native.get.call(grid)!==attainable)throw Error('Native oracle did not settle');
     // Countercheck sample, independent of the tested pane and controller.
-    native.set.call(grid,wanted+1);const adjacent=native.get.call(grid);
+    const neighbor=wanted+1<=max?wanted+1:wanted-1;
+    if(neighbor<0)throw Error('Native oracle has no in-range neighbor');
+    native.set.call(grid,neighbor);const adjacent=native.get.call(grid);
     await paint();
     if(native.get.call(grid)!==adjacent||adjacent===attainable)throw Error('Native oracle countercheck is not discriminating');
     const after=measure();
+    supportedCoordinates();
     if(JSON.stringify(after)!==JSON.stringify(before)||JSON.stringify(dimensions(el))!==JSON.stringify(shape)
+      ||el.getBoundingClientRect().top!==bounds.top||el.getBoundingClientRect().left!==bounds.left
       ||JSON.stringify(doc())!==JSON.stringify(documentBefore)||document.activeElement!==focusBefore)throw Error('Reading geometry changed during native oracle sampling');
-    return {...after,wanted,attainable,adjacent,shape};
+    return {...after,wanted,attainable,neighbor,adjacent,shape};
    }finally{host.remove()}
   },goal);
   assertReading(goal,actual,label);
@@ -184,9 +200,11 @@ try {
  await checkReading(heldReading,'Call scrollback retains the original reading goal');
  assert.ok(await remaining()>500,'Deliberate scrollback pauses call following');
  await action('session.select',{id:other});await scrollBack();const otherReading=await captureReading();await append(call,2);await page.waitForTimeout(250);
- await checkReading(otherReading,'Call updates preserve the other conversation reading anchor');
+ // This unrelated chat has no prefix change: retain its exact original oracle.
+ const exactReading=({sessionId,id,offset})=>({sessionId,id,offset});
+ assert.deepEqual(exactReading(await readingPosition()),exactReading(otherReading),'Call updates preserve the other conversation reading anchor');
  await workReady(page,other);
- await checkReading(otherReading,'The other conversation reading anchor remains after Work settles');
+ assert.deepEqual(exactReading(await readingPosition()),exactReading(otherReading),'The other conversation reading anchor remains after Work settles');
  assert.equal(await top(),otherReading.scrollTop,'Call updates must not scroll a different conversation');
  await action('session.select',{id:call});await workReady();await checkReading(heldReading,'Returning to the call preserves its original paused reading goal');
  await page.getByRole('button',{name:'Jump to latest messages'}).click();await bottom();await append(call,2);await bottom();
