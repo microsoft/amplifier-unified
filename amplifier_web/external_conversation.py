@@ -9,7 +9,7 @@ import json
 import time
 import uuid
 
-from .acp_participant import ACPParticipant, endpoint
+from .acp_participant import ACPParticipant, ProjectWorkspaceError, endpoint
 from .errors import AppError
 from .execution import finish
 from .shared_conversation import SharedConversations, is_shared
@@ -64,7 +64,7 @@ def shared_context(session, input_id):
 
 
 def source_identity(selected):
-    source = {key: value for key, value in selected.items() if key != 'label'}
+    source = {key: value for key, value in selected.items() if key not in {'label', 'includeChatWorkspace'}}
     return hashlib.sha256(json.dumps(source, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
@@ -165,8 +165,12 @@ class ExternalConversations:
         selected = [endpoint(getattr(self.service, 'server_config', {}), identity) for identity in identities]
         rows = [{'id': row['id'], 'label': row['label'], 'status': 'idle',
                  'capabilities': {'text': True, 'stop': True, 'nativeControls': False}} for row in selected]
-        sources = {row['id']: {'fingerprint': source_identity(row),
-                              'cwd': row.get('sessionCwd', workspace)} for row in selected}
+        sources = {}
+        for row in selected:
+            binding = {'fingerprint': source_identity(row), 'cwd': row.get('sessionCwd', workspace)}
+            if row.get('includeChatWorkspace') and binding['cwd'] != workspace:
+                binding['projectDirectory'] = workspace
+            sources[row['id']] = binding
         external = rows[0] if len(rows) == 1 else {
             'label': ', '.join(row['label'] for row in rows), 'status': 'idle',
             'participants': rows, 'participation': 'shared', 'capabilities': {'text': True, 'stop': True, 'nativeControls': False}}
@@ -272,7 +276,7 @@ class ExternalConversations:
             key = (sid, binding['id'])
             participant = self.participants.get(key)
             if participant is None:
-                participant = ACPParticipant(selected, source['cwd'],
+                participant = ACPParticipant(selected, source['cwd'], project=source.get('projectDirectory'),
                     update=lambda update: self._update(sid, binding['id'], update),
                     permission=lambda tool, options: self._permission(sid, binding['id'], options, tool))
                 self.participants[key] = participant
@@ -315,7 +319,7 @@ class ExternalConversations:
             participant = self.participants.get(key)
             room = self.shared if is_shared(session) else self
             if participant is None:
-                participant = ACPParticipant(endpoint, source['cwd'],
+                participant = ACPParticipant(endpoint, source['cwd'], project=source.get('projectDirectory'),
                     update=lambda update: room._update(sid, identity, update),
                     permission=lambda tool, options: room._permission(sid, identity, options, tool))
                 self.participants[key] = participant
@@ -401,12 +405,15 @@ class ExternalConversations:
                     and not getattr(turn.participant, '_retirement_uncertain', False)):
                 await turn.participant.close()
             raise
-        except Exception:
+        except Exception as error:
             turn.stop = True
+            message = 'The external agent could not connect or resume. Its binding was preserved.'
+            if turn.dispatched:
+                message = 'External delivery could not be confirmed. Work was not replayed.'
+            elif isinstance(error, ProjectWorkspaceError):
+                message = str(error)
             await self._settle(sid, turn, 'unknown' if turn.dispatched else 'failed',
-                               'unknown' if turn.dispatched else 'error',
-                               error=('External delivery could not be confirmed. Work was not replayed.'
-                                      if turn.dispatched else 'The external agent could not connect or resume. Its binding was preserved.'))
+                               'unknown' if turn.dispatched else 'error', error=message)
             if not getattr(turn.participant, '_retirement_uncertain', False):
                 await turn.participant.close()
         finally:
