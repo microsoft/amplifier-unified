@@ -331,3 +331,68 @@ async def test_pending_file_policy_idle_no_effect_cannot_apply_or_submit():
         await manager.send({'id': 'chat', 'fileAccessPending': True}, 'ordinary', 'input', AsyncMock())
     manager._start_for_input.assert_not_awaited()
     manager._request.assert_not_awaited()
+
+
+async def test_native_submit_reserves_input_before_its_first_suspension():
+    from amplifier_module_loop_live.runtime import Input, Runtime
+    runtime = Runtime()
+    # Force the first emit to suspend. Admission must already have reserved the
+    # input even though its observer notification has not finished.
+    async with runtime.changed:
+        pending = asyncio.create_task(runtime.submit(Input('user', 'Separate turn', id='reserved')))
+        try:
+            await asyncio.sleep(0)
+            assert not pending.done()
+            assert 'reserved' in runtime.accepted
+            assert runtime.queued_inputs == 1
+            assert not runtime.inbox.empty()
+        finally:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+    # Cancellation after reservation is uncertain delivery, not no effect.
+    assert 'reserved' in runtime.accepted
+
+
+@pytest.mark.parametrize('phase', [
+    'input.queued',
+    pytest.param('observation.received', marks=pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=(
+        'loop-live ddc44d50352c dequeues service input before awaiting observation.received; '
+        'no native in-flight-input witness or atomic idle-only admission exists'))),
+])
+async def test_native_input_before_generation_is_not_an_idle_admission_boundary(phase):
+    """Real native loop, no provider call: expose both pre-generation windows."""
+    from amplifier_core import AmplifierSession
+    from amplifier_module_loop_live.runtime import Input, Runtime
+    from amplifier_web.runtime_controls import RuntimeControls
+    runtime = Runtime()
+    session = AmplifierSession({'session': {'orchestrator': {'module': 'loop-live',
+        'config': {'configured_bundle': True, 'min_delay_between_calls_ms': 0}},
+        'context': {'module': 'context-simple'}}, 'providers': []}, session_id=runtime.session_id)
+    task = None
+    try:
+        await session.initialize()
+        session.coordinator.register_capability('live.runtime', runtime)
+        task = asyncio.create_task(session.execute(''))
+        await runtime.wait_for(lambda event: event['type'] == 'session.ready', 5)
+        service = phase == 'observation.received'
+        await runtime.submit(Input('service' if service else 'user', 'An admitted input',
+                                   source='fixture-observation' if service else 'user', id='prior-input'))
+        # Use the native event condition itself, not a replacement submit/emit
+        # or a simulated host status. The loop must wait here while observing
+        # the input it just dequeued.
+        async with runtime.changed:
+            await asyncio.sleep(0)
+            assert runtime.events[-1]['type'] == phase
+            loop = session.coordinator.get('orchestrator')
+            assert runtime.generation is None
+            assert runtime.queued_inputs == 0
+            assert runtime.inbox.empty()
+            assert bool(loop.pending) is not service
+            controls = SimpleNamespace(runtime=runtime, coordinator=session.coordinator)
+            with pytest.raises(ValueError, match='current response'):
+                RuntimeControls.require_idle(controls)
+    finally:
+        if task:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await session.cleanup()

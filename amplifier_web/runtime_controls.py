@@ -290,9 +290,12 @@ class RuntimeControls:
         write_private(self.state_path().with_name("effective-configuration.json"),json.dumps(plan,default=str))
 
     def require_idle(self):
-        if getattr(self.runtime, "generation", None) or getattr(self.runtime, "queued_inputs", 0):
-            raise ValueError("Wait for the current response before changing session configuration")
         loop = self.coordinator.get("orchestrator")
+        # Dequeue is not delivery: the live loop moves input into pending before
+        # announcing a generation. This guard is not atomic input admission.
+        if (getattr(self.runtime, "generation", None) or getattr(self.runtime, "queued_inputs", 0)
+                or getattr(self.runtime, "pending_steering", ()) or getattr(loop, "pending", ())):
+            raise ValueError("Wait for the current response before changing session configuration")
         if any(not job["task"].done() for job in getattr(loop, "jobs", {}).values()):
             raise ValueError("Wait for delegated work to finish before changing session configuration")
         children = self.coordinator.get_capability("live.children")

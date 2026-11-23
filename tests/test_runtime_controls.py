@@ -7,6 +7,35 @@ import pytest
 from amplifier_web.runtime_controls import public_config, restore_redactions, validate_plan
 
 
+@pytest.mark.parametrize('location', ['inbox', 'pending', 'pending_steering', 'generation', 'job', 'child', None])
+def test_require_idle_includes_inputs_waiting_outside_the_inbox(location):
+    from types import SimpleNamespace
+    from amplifier_web.runtime_controls import RuntimeControls
+    runtime = SimpleNamespace(generation=None, queued_inputs=0, pending_steering=[])
+    loop = SimpleNamespace(pending=[], jobs={})
+    children = SimpleNamespace(rows={})
+    if location == 'inbox':
+        runtime.queued_inputs = 1
+    elif location == 'pending':
+        loop.pending.append(object())
+    elif location == 'pending_steering':
+        runtime.pending_steering.append(object())
+    elif location == 'generation':
+        runtime.generation = {'id': 'active'}
+    elif location == 'job':
+        loop.jobs['job'] = {'task': SimpleNamespace(done=lambda: False)}
+    elif location == 'child':
+        children.rows['child'] = {'status': 'running'}
+    controls = SimpleNamespace(runtime=runtime, coordinator=SimpleNamespace(
+        get=lambda name: loop if name == 'orchestrator' else None,
+        get_capability=lambda name: children if name == 'live.children' else None))
+    if location is None:
+        RuntimeControls.require_idle(controls)
+    else:
+        with pytest.raises(ValueError, match='Wait|Finish'):
+            RuntimeControls.require_idle(controls)
+
+
 @pytest.mark.asyncio
 async def test_explicit_recovery_control_only_arms_with_host_binding(tmp_path, monkeypatch):
     from types import SimpleNamespace
