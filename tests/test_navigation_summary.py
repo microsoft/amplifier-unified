@@ -16,14 +16,35 @@ def test_actionable_states_are_distinct_from_unread_and_background_lifecycle():
     assert activity({'status': 'idle'}) == {'kind': 'idle', 'label': 'Idle'}
 
 
-def test_reviewed_failure_does_not_hide_current_obligations_or_active_work():
-    failed = {'status': 'error', 'error': 'Reviewed historical failure'}
+@pytest.mark.parametrize('delivery_status', ['unknown', 'rejected'])
+def test_reviewed_failure_does_not_hide_current_obligations_or_active_work(delivery_status):
+    failed = {'id': 'owner', 'status': 'error', 'error': 'Reviewed historical failure'}
     assert activity(failed, error_reviewed=True) == {'kind': 'idle', 'label': 'Idle'}
     assert activity(failed, True, error_reviewed=True)['kind'] == 'unread'
     assert activity({**failed, 'status': 'working'}, error_reviewed=True)['kind'] == 'working'
     assert activity({**failed, 'approvals': [{'status': 'pending'}]}, error_reviewed=True)['label'] == 'Approval requested'
     assert activity({**failed, 'questions': [{'status': 'pending', 'required': True}]}, error_reviewed=True)['label'] == 'Answer requested'
-    assert activity({**failed, 'questions': [{'status': 'answered', 'delivery': {'status': 'unknown'}}]}, error_reviewed=True)['label'] == 'Check answer delivery'
+    question = {'id': 'current-question', 'sessionId': 'owner', 'revision': 2, 'status': 'answered',
+                'delivery': {'status': delivery_status, 'inputId': 'question:current-question:answer'}}
+    session = {**failed, 'questions': [question]}
+    before = deepcopy(session)
+    assert activity(session, error_reviewed=True) == {'kind': 'attention', 'label': 'Check answer delivery'}
+    assert activity(session, True, error_reviewed=True)['kind'] == 'attention'
+    # A reminder for another immutable answer cannot hide the current obligation.
+    question['reminderDismissal'] = {'inputId': 'question:older-question:answer'}
+    assert activity(session, error_reviewed=True)['label'] == 'Check answer delivery'
+    question.pop('reminderDismissal')
+    assert session == before
+    # Exact dismissal changes presentation only; it never settles unknown
+    # delivery or makes a reviewed historical failure current again.
+    question['reminderDismissal'] = {'inputId': question['delivery']['inputId']}
+    dismissed = deepcopy(session)
+    assert activity(session, error_reviewed=True) == {'kind': 'idle', 'label': 'Idle'}
+    assert activity(session, True, error_reviewed=True)['kind'] == 'unread'
+    assert activity({**session, 'status': 'working'}, error_reviewed=True)['kind'] == 'working'
+    pending = {'id': 'next-question', 'sessionId': 'owner', 'status': 'pending', 'required': True}
+    assert activity({**session, 'questions': [question, pending]}, error_reviewed=True)['label'] == 'Answer requested'
+    assert session == dismissed and question['delivery']['status'] == delivery_status
 
 
 def test_chat_filter_and_workspace_rollup_use_the_same_reviewed_error_receipt():

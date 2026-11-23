@@ -1,5 +1,6 @@
 """Revision tokens include coalesced work before external reads or CAS commands."""
 from amplifier_web.state_records import load as load_saved_state
+from copy import deepcopy
 import asyncio
 import json
 
@@ -9,6 +10,7 @@ from amplifier_web.service import AppError
 from amplifier_web.server import create_app
 from test_automatic_history import app_factory
 from test_service import Runtime
+from test_appearance_preferences import report as appearance_report, ack as appearance_ack
 
 
 async def create_chat(app):
@@ -133,25 +135,99 @@ async def test_failed_flush_does_not_return_changed_data_under_old_revision(app_
     assert result['value'] == 'retained' and result['revision'] == revision + 1
 
 
-async def test_cas_lock_admission_cannot_accept_a_later_queued_runtime_mutation(app_factory):
-    app = app_factory(); sid = await create_chat(app); revision = app.state['revision']
-    command_queued, runtime_queued = asyncio.Event(), asyncio.Event()
+@pytest.mark.parametrize('runtime_first', [False, True], ids=['command-first', 'runtime-first'])
+async def test_cas_lock_admission_cannot_accept_a_later_queued_runtime_mutation(app_factory, monkeypatch, runtime_first):
+    app = app_factory(); sid = await create_chat(app)
+    client_id = 'cas-browser'
+    app.clients.attach(client_id)
+    with app.clients.bind(client_id):
+        queue = app.subscribe()
+    tasks, waiting, admission, commits = {}, {}, [], []
+    real_acquire, real_commit = app.lock.acquire, app._commit_pending_progress
+
+    async def observed_acquire():
+        event = waiting.get(asyncio.current_task())
+        if event is not None and not event.is_set():
+            assert app.lock.locked()
+            event.set()
+        return await real_acquire()
+
+    def observed_commit():
+        commits.append((asyncio.current_task(), app.lock.locked(),
+                        app.state['revision'], app._session(sid).get('streaming')))
+        return real_commit()
+
+    def admitted():
+        admission.append((app.lock.locked(), app.state['revision'],
+                          app._session(sid).get('streaming'), app._progress_dirty))
+
     async def command():
-        command_queued.set()
-        return await app.dispatch('view.update', {'patch':{'scheme':'dark'}}, expected_revision=revision)
+        with app.clients.bind(client_id):
+            return await app.dispatch('view.update', {'patch': {'scheme': 'dark'}},
+                                      expected_revision=revision, admission_check=admitted)
+
     async def delta():
-        runtime_queued.set()
-        await app.on_runtime_event('assistant.delta', {'sessionId':sid,'text':'later queued mutation'})
+        await app.on_runtime_event('assistant.delta', {'sessionId': sid, 'text': 'queued runtime mutation'})
+        return app.state['revision'], app._progress_dirty
+
     # Queue a command followed by a runtime callback behind another owner. A
     # separate flush-lock/reacquire-lock would allow that later callback to slip
     # between the command's barrier and comparison without changing revision.
-    await app.lock.acquire()
-    command_task = asyncio.create_task(command()); await command_queued.wait()
-    runtime_task = asyncio.create_task(delta()); await runtime_queued.wait()
-    app.lock.release()
-    result = await command_task
-    await runtime_task
-    assert result['accepted']
-    assert 'streaming' not in result['state']['sessions'][0]
-    assert app._session(sid)['streaming'] == 'later queued mutation'
-    assert app._progress_dirty
+    # Reverse order is the negative control: the command itself must publish the
+    # earlier delta under this same lock, then refuse the now-stale revision.
+    try:
+        await appearance_report(app, client=client_id)
+        before = app.appearance.read(client_id)
+        shared_before = deepcopy(app.appearance.shared())
+        revision = app.state['revision']
+        monkeypatch.setattr(app.lock, 'acquire', observed_acquire)
+        monkeypatch.setattr(app, '_commit_pending_progress', observed_commit)
+        order = [('runtime', delta), ('command', command)] if runtime_first else [('command', command), ('runtime', delta)]
+        async with app.lock:
+            for name, operation in order:
+                task = asyncio.create_task(operation())
+                tasks[name] = task
+                event = waiting[task] = asyncio.Event()
+                await asyncio.wait_for(event.wait(), 2)
+        results = await asyncio.wait_for(asyncio.gather(tasks['command'], tasks['runtime'],
+                                                      return_exceptions=True), 2)
+        result, runtime_observation = results
+        assert runtime_observation == (revision if runtime_first else revision + 1, True)
+        assert app._session(sid)['streaming'] == 'queued runtime mutation'
+        assert app.appearance.shared() == shared_before
+        if runtime_first:
+            assert isinstance(result, AppError) and result.status == 409
+            assert 'app changed' in str(result)
+            assert commits == [(tasks['command'], True, revision, 'queued runtime mutation')]
+            assert admission == [(True, revision + 1, 'queued runtime mutation', False)]
+            assert app.appearance.read(client_id) == before
+            assert app.state['revision'] == load_saved_state(app.db)['revision'] == revision + 1
+            assert not app._progress_dirty
+        else:
+            assert not isinstance(result, BaseException), result
+            assert result['accepted'] is True
+            assert result['revision'] == result['state']['revision'] == revision + 1
+            target = next(row for row in result['state']['sessions'] if row['id'] == sid)
+            assert 'streaming' not in target
+            assert admission == [(True, revision, None, False)]
+            assert commits == [] and app._progress_dirty
+            assert result['result']['status'] == 'awaiting-storage'
+            assert result['result']['stored'] is False and result['result']['activated'] is False
+            pending = app.appearance.read(client_id)
+            assert pending['effective'] == before['effective']
+            assert pending['command']['after'] == {
+                'activeScope': 'client', 'values': {**before['effective'], 'scheme': 'dark'}}
+            # Storage ACK is later, not part of CAS admission or inferred render.
+            stored = await appearance_ack(app, client=client_id)
+            assert stored['stored'] and stored['activated'] and not stored['rendered']
+            assert app.appearance.read(client_id)['effective']['scheme'] == 'dark'
+            assert app.appearance.shared() == shared_before
+    finally:
+        for task in tasks.values():
+            if not task.done():
+                task.cancel()
+        try:
+            if tasks:
+                await asyncio.wait_for(asyncio.gather(*tasks.values(), return_exceptions=True), 2)
+        finally:
+            app.unsubscribe(queue)
