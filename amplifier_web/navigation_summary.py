@@ -11,6 +11,19 @@ def task_blocked(state, sid):
     return task.get('status') == 'blocked'
 
 
+def observed_step(activity):
+    """Use original step timestamps. Repeated status events do not advance them."""
+    from .input_status import timestamp
+    event = activity.get('lastEvent') or {}
+    times = [('Turn started', timestamp(activity.get('startedAt'))),
+             ('Model request started', timestamp(activity.get('lastModelRequestAt')))]
+    tool_phase = {'pre': 'Tool started', 'post': 'Tool finished', 'error': 'Tool failed'}.get(event.get('phase'))
+    if event.get('tool') and tool_phase:
+        times.append((tool_phase, timestamp(event.get('at'))))
+    label, at = max(times, key=lambda item: item[1] or 0)
+    return {'label': label, 'at': at} if at else None
+
+
 def activity(session, unread=False, *, error_reviewed=False, blocked=False, task=None, db=None):
     task = task or session.get('task') or {}
     if any(row.get('status') in {None, 'pending'} for row in session.get('approvals', [])):

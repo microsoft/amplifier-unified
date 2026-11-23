@@ -621,6 +621,7 @@ body,
 /* Native choice inputs must not inherit full-width text-field geometry. */
 #amp-one :where(.a-dialog) label:has(> input:is([type="checkbox"], [type="radio"])) {
   display: flex;
+  flex-direction: row;
   align-items: flex-start;
   gap: 10px;
   min-width: 0;
@@ -1016,6 +1017,17 @@ body,
 #amp-one.a-chat-shell .a-attachment > a:not([download]) {
   color: var(--a-ink);
   text-decoration: none;
+}
+
+/* Truncate only the summary text, not its metadata or sibling controls. */
+#amp-one.a-chat-shell .a-attachment-label {
+  display: block;
+  align-self: stretch;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 #amp-one.a-chat-shell .a-attachment small {
