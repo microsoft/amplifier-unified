@@ -818,6 +818,7 @@ class ProcessObservationTests(unittest.IsolatedAsyncioTestCase):
                     payload = STDERR + b'x' * (size - len(STDERR))
                     evidence, observer = self.observer()
                     process, readers = streaming_process(stderr=payload)
+                    communicate = process.communicate
                     self.spawn.return_value = process
                     observed = await observer(*BASELINE)
                     row, = evidence.report['processes']
@@ -844,7 +845,7 @@ class ProcessObservationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(facts['classificationTruncated'], size > LIMIT)
                     self.assertEqual(facts['failureCategory'], 'unknown' if size > LIMIT else 'transport-auth')
                     self.assertTrue(facts['complete'] and row['stdoutComplete'] and row['stderrComplete'])
-                    process.communicate.assert_not_awaited()
+                    communicate.assert_not_awaited()
                     assert_sanitized(self, evidence.report)
 
     async def test_communicate_internal_reads_and_wait_are_not_counted_twice(self):
