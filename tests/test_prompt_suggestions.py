@@ -3713,6 +3713,81 @@ class Recommendations(unittest.TestCase):
                 self.put(models=models)
                 self.assertIsNone(self.get())
 
+    def test_recommendation_read_never_copies_or_encodes_large_model_bodies(self):
+        from amplifier_web import provider_catalog as catalog
+        key = catalog.model_key(self.row['sharedCatalogKey'])
+        dumps = json.dumps
+        def key_encoding_only(value, *args, **kwargs):
+            self.assertEqual(value, key, 'Only the fixed catalog key may be encoded during projection')
+            return dumps(value, *args, **kwargs)
+        for count in (1, 1800):
+            for ranked in (False, True):
+                with self.subTest(rows=count, ranked=ranked), tempfile.TemporaryDirectory() as root:
+                    self.manager.catalog = catalog.ProviderCatalog(Path(root) / 'catalog.json')
+                    values = {} if ranked else {'providerMetadata': {'module': self.row['module']}}
+                    self.put(models=[{'id': 'Current/Exact' if index == 0 else str(index),
+                                      'opaque': {'body': 'x' * 1536, 'nested': list(range(10))}}
+                                     for index in range(count)], **values)
+                    # Constructor/disk decoding retain their existing cost.
+                    # Both the resident and lazy-restored *read* must avoid a
+                    # bulk deepcopy, JSON encode or extra cache hydration.
+                    for restored in (False, True):
+                        if restored:
+                            self.manager.catalog = catalog.ProviderCatalog(self.manager.catalog.path)
+                            self.assertFalse(self.manager.catalog.entries)
+                        with patch.object(catalog.copy, 'deepcopy', side_effect=AssertionError('bulk copy')), \
+                                patch.object(catalog.json, 'dumps', side_effect=key_encoding_only):
+                            for _ in range(3):
+                                value = self.get()
+                                self.assertEqual(value is not None, ranked)
+                                if ranked:
+                                    self.assertEqual(value['model'], 'Current/Exact')
+                                    value['model'] = 'caller edit'
+                        if restored:
+                            self.assertFalse(self.manager.catalog.entries, 'Scalar reads do not hydrate model bodies')
+                    # Existing whole-catalog readers still return detached
+                    # content and can hydrate the lazy record normally.
+                    view = self.manager.catalog.peek(key)
+                    self.assertEqual(len(view['models']), count)
+                    view['models'].clear()
+                    self.assertEqual(len(self.manager.catalog.peek(key)['models']), count)
+
+    def test_absent_purpose_metadata_never_walks_model_inventory(self):
+        class GuardedRows(list):
+            blocked = False
+            def __iter__(self):
+                if self.blocked:
+                    raise AssertionError('Negative projection walked model rows')
+                return super().__iter__()
+        self.put(models=GuardedRows([{'id': 'Current/Exact'}]),
+                 providerMetadata={'module': self.row['module'], 'modelListInfo': {
+                     'version': 1, 'source': 'provider-api'}})
+        GuardedRows.blocked = True
+        try:
+            for _ in range(3):
+                self.assertIsNone(self.get())
+        finally:
+            GuardedRows.blocked = False
+
+    def test_lazy_projection_preserves_freshness_and_retention_boundaries(self):
+        from amplifier_web import provider_catalog as catalog
+        now = [1000.]
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'catalog.json'
+            self.manager.catalog = catalog.ProviderCatalog(path, clock=lambda: now[0])
+            self.put()
+            cache = catalog.ProviderCatalog(path, ttl=60, max_age=120, clock=lambda: now[0])
+            self.manager.catalog = cache
+            self.assertIsNotNone(self.get())
+            self.assertFalse(cache.entries)
+            now[0] += 61
+            self.assertIsNone(self.get(), 'Stale disk data is not a recommendation')
+            self.assertTrue(cache.saved, 'TTL is not deletion')
+            now[0] += 60
+            self.assertIsNone(self.get(), 'Retired disk data cannot project')
+            self.assertFalse(cache.saved)
+            self.assertIsNone(cache.peek(catalog.model_key(self.row['sharedCatalogKey'])))
+
 
 if __name__ == '__main__':
     unittest.main()

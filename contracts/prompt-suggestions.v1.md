@@ -221,6 +221,10 @@ discard it when its exact catalog identity or freshness changes. No saved model,
 prompt, sharing choice or connection is migrated or silently replaced; manual
 exact IDs remain unverified choices, never inferred recommendations. Another
 account, including one using the same module, cannot donate a recommendation.
+The catalog owner projects this bounded scalar hint synchronously, without
+copying or encoding model bodies or hydrating a second inventory. Absent purpose
+metadata needs no model-row walk; an advertised ranking inspects only exact IDs
+in the existing bounded catalog. Normal cache retention/freshness still applies.
 
 `providers.configureSuggestions {enabled?,provider?,model?,effort?,prompt?,transcriptMode?,
 humanTurns?,scope:"global",configurationTarget:{kind:"global"}}` saves the same
