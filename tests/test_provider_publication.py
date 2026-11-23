@@ -26,8 +26,12 @@ async def app(tmp_path):
 def configured(monkeypatch, count=14):
     from amplifier_web.host.config import HostConfig
     rows = [{'id': str(i), 'module': 'provider-fixture', 'enabled': True} for i in range(count)]
-    monkeypatch.setattr(SetupManager, 'config', lambda self, workspace: HostConfig(
-        self.home, Path(workspace), {'providers': rows}, self.home, global_only=self.global_only))
+    def config(self, workspace):
+        value = HostConfig(self.home, Path(workspace), {'config': {'providers': rows}},
+                           self.home, global_only=self.global_only)
+        assert value.configured_connections == rows
+        return value
+    monkeypatch.setattr(SetupManager, 'config', config)
     monkeypatch.setattr(SetupManager, 'provider_rows', lambda self, workspace: rows)
     def key(self, args, workspace, *, binding=False):
         identity = (workspace, self.global_only, args['id'])
