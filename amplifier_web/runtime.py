@@ -276,6 +276,13 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         if event.get('kind') == 'tool' and event.get('label') == 'todo' and 'statusPlan' in event:
             from .status_protocol.hook import accepted_plan
             public['statusPlan'] = accepted_plan({'todos': event['statusPlan']})
+        if (event.get('kind') == 'tool' and event.get('label') == 'todo'
+                and event.get('phase') == 'completed' and 'reportedPlan' in event
+                and event.get('sessionId') == event.get('rootSessionId') == session_id):
+            from .chat_plan import accepted_report
+            reported = accepted_report({'todos': event['reportedPlan']})
+            if reported is not None:
+                public['reportedPlan'] = reported
         if event.get('kind') == 'tool' and event.get('label') in {'image_generate', 'nano-banana'}:
             from .image_generation import metadata
             image = metadata(event.get('imageGeneration'))

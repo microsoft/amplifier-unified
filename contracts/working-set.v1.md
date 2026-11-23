@@ -43,6 +43,15 @@ accepted execution -> runtime admission -> working -> safely evictable when idle
    repeating unused historical bodies. Omitted detail retains its authorized read
    path until an explicit WS7 retention policy expires it; projection alone never
    truncates the canonical record or invents empty coverage.
+   The chat Plan is the **last successfully reported root-agent checklist**,
+   saved with the existing session presentation. It is not execution state,
+   completion evidence, an approval gate or a claim about current historical
+   files. Failed or malformed updates leave that report unchanged; a valid
+   empty report clears it. A legacy session without a saved report has no Plan
+   panel until its next ordinary successful report. Opening a chat or updating
+   its Plan performs no historical reconstruction or model call. Manual edits
+   to old logs do not recompute this display. The explicit `session.plans`
+   history API retains its separate read contract.
    Broken: opening the sidebar starts dormant workers. Affected: people and active executions.
 
 4. **WS4 — Bound resident work.** Runtime, projection, replay and subscriber caches

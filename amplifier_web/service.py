@@ -5324,6 +5324,12 @@ class AppService:
                 self._publish_changes(sessions={session['id']})
 
     def _ingest_runtime_execution(self, session, payload):
+        if 'reportedPlan' in payload:
+            worker = getattr(self.runtime, 'workers', {}).get(session['id'])
+            if worker is not None and worker.get('runtimeOwnerId') != payload.get('runtimeOwnerId'):
+                # Late evidence still belongs in execution history, but a
+                # superseded runtime cannot replace the current chat report.
+                payload = {key: value for key, value in payload.items() if key != 'reportedPlan'}
         with self.performance_diagnostics.measure('execution.ingest', synchronous=True, session_id=session['id']):
             ingest_execution(session,payload)
             from .turn_model_settings import record as record_model_settings

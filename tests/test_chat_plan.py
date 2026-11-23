@@ -14,7 +14,7 @@ def tasks(status='in_progress'):
     return [{'content': 'Draft the team update', 'activeForm': 'Drafting the team update', 'status': status}]
 
 
-def test_plan_reads_canonical_update_and_survives_empty_display_window(tmp_path, monkeypatch):
+def test_explicit_plan_read_remains_separate_from_last_reported_display(tmp_path, monkeypatch):
     monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path/'native'))
     session = {'id': 'app', 'runtimeSessionId': 'native', 'workspace': str(tmp_path),
                'messages': [], 'workers': [], 'status': 'idle'}
@@ -30,15 +30,16 @@ def test_plan_reads_canonical_update_and_survives_empty_display_window(tmp_path,
         for i, (name, data) in enumerate(rows)))
     original = path.read_bytes()
     session['execution'] = EventLogView(None).read(session)
-    assert session['execution']['plan']['items'] == expected
+    assert 'plan' not in session['execution']
+    assert EventLogView(None).read_plan(session, include_items=True)['plan']['items'] == expected
     wire = project(session)
     assert wire['execution']['nodes'] == []
-    assert wire['execution']['plan']['items'] == expected
+    assert wire['execution']['plan'] is None
     stored = stored_execution(session['execution'])
     assert 'plan' not in stored
-    # A new process rebuilds the same plan, even without loaded messages.
+    # Explicit query still reads historical receipts; ordinary reopen does not.
     session['execution'] = stored
-    assert EventLogView(None).read(session)['plan']['items'] == expected
+    assert 'plan' not in EventLogView(None).read(session)
     assert path.read_bytes() == original
 
 
@@ -174,3 +175,191 @@ async def test_plan_sources_preserve_native_alias_ambiguity_and_delete_guards(ap
             await app.dispatch('session.plans', {'ids': [identity]})
         assert deleting.value.status == 409
     assert [row['id'] for row in app._state['sessions']] == before
+
+
+async def report(app, observer, status='in_progress', *, call=None, sid=None, outcome='success'):
+    from amplifier_web.runtime import normalize_event
+    sid = sid or observer.root_id
+    call = call or f'plan-{len(observer.nodes)}'
+    observer.hook(sid, 'tool:pre', {'session_id': sid, 'tool_name': 'todo',
+        'tool_call_id': call, 'tool_input': {'action': 'update', 'todos': tasks(status)}})
+    value = {'success': True, 'output': {'status': 'updated'}}
+    if outcome == 'failure':
+        value = {'success': False, 'output': {'todos': tasks('completed')}}
+    elif outcome == 'malformed':
+        value = {'success': True, 'output': {'todos': 'not a list'}}
+    elif outcome == 'clear':
+        value = {'success': True, 'output': {'todos': []}}
+    observer.hook(sid, 'tool:post', {'session_id': sid, 'tool_name': 'todo',
+        'tool_call_id': call, 'result': value})
+    for event in observer.test_events:
+        await app.on_runtime_event(*normalize_event(event, observer.root_id, 'input'))
+    observer.test_events.clear()
+
+
+def observer_for(sid):
+    from amplifier_web.execution_events import ExecutionEvents
+    events = []
+    observer = ExecutionEvents(sid, events.append)
+    observer.test_events = events
+    return observer
+
+
+def no_plan_history_reads(monkeypatch):
+    from amplifier_web.event_log_view import EventIndex
+    def forbidden(*args, **kwargs):
+        pytest.fail('Ordinary Plan must not read historical events')
+    monkeypatch.setattr(EventIndex, 'refresh', forbidden)
+    monkeypatch.setattr(EventLogView, 'read_plan', forbidden)
+    monkeypatch.setattr(EventLogView, 'read', forbidden)
+
+
+@pytest.mark.parametrize('batched', [False, True])
+async def test_last_report_persists_reopens_clears_and_ignores_failed_child_reports(
+        app_factory, tmp_path, monkeypatch, batched):
+    from amplifier_web.runtime import normalize_event
+    from amplifier_web.state_records import load
+    no_plan_history_reads(monkeypatch)
+    app = app_factory()
+    await app.dispatch('session.create', {'title': 'Reported Plan'})
+    session = app._session()
+    sid = session['id']
+    assert project(session).get('execution', {}).get('plan') is None
+    observer = observer_for(sid)
+    await report(app, observer)
+    assert project(session)['execution']['plan']['items'] == tasks()
+    assert '_reportedPlan' not in project(session)
+    first = json.dumps(session['_reportedPlan'])
+    for outcome in ('failure', 'malformed'):
+        await report(app, observer, outcome=outcome)
+        assert json.dumps(session['_reportedPlan']) == first
+    await report(app, observer, sid='child', status='completed')
+    assert json.dumps(session['_reportedPlan']) == first
+    # Defense at normalization and ingestion, not just the producer's child filter.
+    forged = {'id': 'child-report', 'kind': 'tool', 'label': 'todo', 'phase': 'completed',
+              'sessionId': 'child', 'rootSessionId': sid, 'reportedPlan': tasks('completed')}
+    normalized = normalize_event({'type': 'execution.event', 'event': forged}, sid, 'input')
+    assert 'reportedPlan' not in normalized[1]
+    await app.on_runtime_event('execution.event', forged)
+    assert json.dumps(session['_reportedPlan']) == first
+    if batched:
+        event = {'id': 'batch-plan', 'revision': 1, 'kind': 'tool', 'label': 'todo',
+                 'phase': 'completed', 'sessionId': sid, 'rootSessionId': sid,
+                 'reportedPlan': tasks('completed')}
+        await app.on_runtime_events([('execution.event', event)])
+    else:
+        await report(app, observer, status='completed')
+    assert session['_reportedPlan']['items'] == tasks('completed')
+    # Terminal publication persisted the existing view before another model turn.
+    assert load(app.db)['sessions']
+    home, workspace = app.data_dir, tmp_path / 'web-workspace'
+    await app.close()
+    reopened = app_factory(home=home, workspace=workspace)
+    restored = reopened._session(sid, hydrate=False)
+    assert project(restored)['execution']['plan']['items'] == tasks('completed')
+    # A fresh tool coordinator is empty; the UI report is deliberately separate.
+    observer = observer_for(sid)
+    assert observer.plan_inputs == {}
+    await report(reopened, observer, outcome='clear', call='clear')
+    assert project(restored)['execution']['plan']['items'] == []
+    await reopened.close()
+    again = app_factory(home=home, workspace=workspace)
+    assert project(again._session(sid, hydrate=False))['execution']['plan']['items'] == []
+    assert again.runtime.started == again.runtime.sent == again.runtime.stopped == []
+
+
+async def test_last_report_does_not_reconstruct_large_edited_legacy_logs(app_factory, monkeypatch):
+    app = app_factory()
+    await app.dispatch('session.create', {})
+    session = app._session()
+    path = event_path(session, session['id'])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('wb') as stream:
+        stream.write(b'old arbitrary bytes' * 100000)
+    no_plan_history_reads(monkeypatch)
+    assert project(session).get('execution', {}).get('plan') is None
+    await report(app, observer_for(session['id']))
+    expected = tasks()
+    path.write_bytes(b'rewritten non-winner becomes winner; not parsed\n')
+    assert project(session)['execution']['plan']['items'] == expected
+    assert session['_reportedPlan']['items'] == expected
+    assert app.runtime.started == app.runtime.sent == app.runtime.stopped == []
+
+
+def test_last_report_follows_existing_node_revision_rejection():
+    from amplifier_web.execution import ingest
+    session = {'id': 'root'}
+    event = {'id': 'tool:root:plan', 'kind': 'tool', 'label': 'todo', 'phase': 'completed',
+             'sessionId': 'root', 'rootSessionId': 'root', 'revision': 2,
+             'reportedPlan': tasks('completed')}
+    ingest(session, event)
+    ingest(session, {**event, 'revision': 1, 'reportedPlan': tasks('pending')})
+    assert session['_reportedPlan']['items'] == tasks('completed')
+    assert 'reportedPlan' not in session['execution']['nodes'][0]
+    ingest(session, {**event, 'revision': 3, 'reportedPlan': []})
+    assert session['_reportedPlan']['items'] == []
+
+
+def test_report_proposals_and_fields_are_bounded_and_not_tool_cache_history(monkeypatch):
+    monkeypatch.delenv('AMPLIFIER_STATUS_DIR', raising=False)
+    observer = observer_for('root')
+    for number in range(40):
+        observer.hook('root', 'tool:pre', {'tool_name': 'todo', 'tool_call_id': str(number),
+            'tool_input': {'action': 'update', 'todos': tasks()}})
+    assert len(observer.plan_inputs) == 32
+    observer.hook('root', 'tool:post', {'tool_name': 'todo', 'tool_call_id': '0',
+        'result': {'success': True, 'output': {'status': 'updated'}}})
+    assert observer.test_events[-1]['event']['reportedPlan'] == tasks()
+    assert all('reportedPlan' not in row for row in observer.calls.values())
+    assert all('reportedPlan' not in row for row in observer.nodes.values())
+    from amplifier_web.chat_plan import accepted_report
+    assert accepted_report({'todos': [{**tasks()[0], 'private': 'secret'}]}) == tasks()
+    for bad in (tasks() * 201, [{**tasks()[0], 'content': 'x' * 4001}], [{'status': 'made-up'}]):
+        assert accepted_report({'todos': bad}) is None
+    assert accepted_report({'success': False, 'todos': tasks()}) is None
+
+
+def test_native_reference_retains_only_explicit_last_report(tmp_path):
+    from amplifier_web.session_projection import persist, hydrate
+    session = {'id': 'native', 'nativeIdentity': 'native', 'nativeProject': 'p',
+               'workspace': str(tmp_path), 'historyManaged': True,
+               '_reportedPlan': {'items': tasks()}, 'titleSource': 'native'}
+    saved = persist(tmp_path, {'sessions': [session]}, {})
+    assert saved['sessions'][0]['$native']
+    assert saved['sessions'][0]['_reportedPlan'] == session['_reportedPlan']
+    hydrate(tmp_path, saved, None)
+    assert saved['sessions'][0]['_reportedPlan']['items'] == tasks()
+
+
+async def test_superseded_owner_cannot_replace_report_but_keeps_execution_evidence(app_factory):
+    app = app_factory()
+    await app.dispatch('session.create', {})
+    session = app._session()
+    sid = session['id']
+    app.runtime.workers = {sid: {'runtimeOwnerId': 'current'}}
+    event = {'id': 'accepted', 'revision': 1, 'kind': 'tool', 'label': 'todo', 'phase': 'completed',
+             'sessionId': sid, 'rootSessionId': sid, 'runtimeOwnerId': 'current',
+             'reportedPlan': tasks('completed')}
+    await app.on_runtime_event('execution.event', event)
+    await app.on_runtime_events([('execution.event', {**event, 'id': 'late-old',
+        'runtimeOwnerId': 'old', 'reportedPlan': tasks('pending')})])
+    assert session['_reportedPlan']['items'] == tasks('completed')
+    assert any(row['id'] == 'late-old' for row in session['execution']['nodes'])
+    app.runtime.workers.clear()
+
+
+def test_reused_call_cannot_publish_another_attempts_proposal():
+    observer = observer_for('root')
+    for status in ('pending', 'completed'):
+        observer.hook('root', 'tool:pre', {'tool_name': 'todo', 'tool_call_id': 'same',
+            'tool_input': {'action': 'update', 'todos': tasks(status)}})
+    terminal = {'tool_name': 'todo', 'tool_call_id': 'same',
+                'result': {'success': True, 'output': {'status': 'updated'}}}
+    observer.hook('root', 'tool:post', terminal)
+    assert 'reportedPlan' not in observer.test_events[-1]['event']
+    # Exact input on the successful terminal or a full-list result is sufficient.
+    observer.hook('root', 'tool:post', {**terminal,
+        'tool_input': {'action': 'update', 'todos': tasks('pending')}})
+    assert observer.test_events[-1]['event']['reportedPlan'] == tasks('pending')
+    observer.hook('root', 'tool:post', {**terminal, 'result': {'success': True, 'output': {'todos': []}}})
+    assert observer.test_events[-1]['event']['reportedPlan'] == []
