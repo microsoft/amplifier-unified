@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -162,6 +163,30 @@ print(json.dumps({'wheelSha256':hashlib.sha256(wheel.read_bytes()).hexdigest(),
 """
 
 
+def run_pytests(command, python, harness, output, env, targets):
+    # The guest exports /artifacts and mounts /tmp noexec. Its private workspace
+    # can run fixture executables and is cleaned before result collection.
+    with tempfile.TemporaryDirectory(prefix=".kiss502-", dir=ROOT) as scratch:
+        pytest_env = {**env, "TMPDIR": scratch}
+        if "test_app_guidance" in targets:
+            command("source-census", [python, "-I", "-B", "-m", "pytest", "-c", "/dev/null",
+                    "-p", "no:cacheprovider", "-q",
+                    str(ROOT / "tests/test_app_guidance.py") + "::test_all_installers_supply_an_explicit_execution_role"],
+                    cwd=ROOT, env=pytest_env)
+        installed_env = {**pytest_env, "UNIFIED_RUNTIME_PYTHON": python}
+        pytest = [python, "-I", "-B", "-m", "pytest", "-c", "/dev/null", "--rootdir", str(harness),
+                  "-o", "asyncio_mode=auto", "-p", "no:cacheprovider", "-q"]
+        command("pytest", [*pytest, "--basetemp", str(Path(scratch) / "suite"),
+                "--junitxml=" + str(output / "junit.xml"),
+                "--deselect=tests/test_app_guidance.py::test_all_installers_supply_an_explicit_execution_role",
+                *["tests/" + name + ".py" for name in targets]], cwd=harness,
+                env={**installed_env, "AMPLIFIER_TEST_ARTIFACTS": str(output / "native")}, required=False)
+        command("owner-pytest", [*pytest, "--basetemp", str(Path(scratch) / "owner"),
+                "--junitxml=" + str(output / "owner-junit.xml"),
+                *["tests/" + name + ".py" for name in OWNER_TARGETS]], cwd=harness,
+                env=installed_env, required=False)
+
+
 def run(output, targets=TARGETS):
     if ROOT != Path("/workspace") or not os.environ.get("AMPLIFIER_TEST_CONTRACT"):
         raise ValueError("Run only in the task-owned prepared guest, never a serving installation")
@@ -222,25 +247,7 @@ def run(output, targets=TARGETS):
     assert not (harness / "amplifier_web").exists()
     (harness / "tests/web/node_modules").symlink_to(ROOT / "tests/web/node_modules", target_is_directory=True)
     command("installed-before", [python, "-I", "-B", "-c", PROBE, str(wheel), str(ROOT)], cwd=harness)
-    if "test_app_guidance" in targets:
-        command("source-census", [python, "-I", "-B", "-m", "pytest", "-c", "/dev/null",
-                "-p", "no:cacheprovider", "-q",
-                str(ROOT / "tests/test_app_guidance.py") + "::test_all_installers_supply_an_explicit_execution_role"],
-                cwd=ROOT)
-    command("pytest", [python, "-I", "-B", "-m", "pytest", "-c", "/dev/null",
-                      "--rootdir", str(harness),
-                      "-o", "asyncio_mode=auto", "-p", "no:cacheprovider", "-q", "--basetemp", str(output / "pytest-tmp"),
-                      "--junitxml=" + str(output / "junit.xml"),
-                      "--deselect=tests/test_app_guidance.py::test_all_installers_supply_an_explicit_execution_role",
-                      *["tests/" + name + ".py" for name in targets]], cwd=harness,
-            env={**clean, "UNIFIED_RUNTIME_PYTHON": python,
-                 "AMPLIFIER_TEST_ARTIFACTS": str(output / "native")}, required=False)
-    command("owner-pytest", [python, "-I", "-B", "-m", "pytest", "-c", "/dev/null",
-            "--rootdir", str(harness), "-o", "asyncio_mode=auto", "-p", "no:cacheprovider", "-q",
-            "--basetemp", str(output / "owner-tmp"),
-            "--junitxml=" + str(output / "owner-junit.xml"),
-            *["tests/" + name + ".py" for name in OWNER_TARGETS]], cwd=harness,
-            env={**clean, "UNIFIED_RUNTIME_PYTHON": python}, required=False)
+    run_pytests(command, python, harness, output, clean, targets)
     for name in BROWSERS:
         command(name, ["node", "tests/web/" + name], cwd=harness, env={
             **clean, "AMPLIFIER_TEST_ROOT": str(harness), "AMPLIFIER_TEST_PYTHON": python,
