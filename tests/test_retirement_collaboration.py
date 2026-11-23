@@ -427,7 +427,9 @@ async def test_stop_exempts_only_exact_unadmitted_peer_receipts(app, monkeypatch
         release.set()
 
 
-@pytest.mark.parametrize('delivery', ['saved-before-stop', 'human-after-stop', 'new-generation'])
+@pytest.mark.parametrize('delivery', [
+    'saved-before-stop', 'human-after-stop', 'new-generation', 'list-input', 'object-input',
+])
 async def test_delayed_reader_delivery_does_not_cancel_its_original_stop(tmp_path, monkeypatch, delivery):
     """Real reader/reducers; only the worker pipe and Stop effect are scripted."""
     runtime = RuntimeManager(command=['unused'])
@@ -486,7 +488,8 @@ async def test_delayed_reader_delivery_does_not_cancel_its_original_stop(tmp_pat
             # Membership alone would qualify after B arrives. Only the changed
             # generation identity/epoch must reject this older Stop.
             await generation(app, target, 'new-generation', ['A'], interruption_revision=1)
-        identity = 'C' if delivery == 'human-after-stop' else 'B'
+        identity = ([] if delivery == 'list-input' else {} if delivery == 'object-input'
+                    else 'C' if delivery == 'human-after-stop' else 'B')
         frame = {'type': 'input.delivered', 'input_id': identity,
                  'interruptionRevision': 0 if delivery == 'saved-before-stop' else 1}
         stream.feed_data(json.dumps(frame).encode() + b'\n')
@@ -494,7 +497,10 @@ async def test_delayed_reader_delivery_does_not_cancel_its_original_stop(tmp_pat
         assert observations[-1]['runtimeOwnerId'] == 'original-owner'
         assert observations[-1]['inputId'] == row['inputId'] == identity
         assert observations[-1]['interruptionRevision'] == frame['interruptionRevision']
-        assert identity in target['collaborationGeneration']['inputIds']
+        if delivery in {'list-input', 'object-input'}:
+            assert target['collaborationGeneration']['inputIds'] == ['A']
+        else:
+            assert identity in target['collaborationGeneration']['inputIds']
         release.set()
         done, pending = await asyncio.wait({stop_tasks[0]}, timeout=3)
         assert not pending
@@ -526,6 +532,37 @@ async def test_delayed_reader_delivery_does_not_cancel_its_original_stop(tmp_pat
                 await asyncio.gather(reader, return_exceptions=True)
             runtime.workers.clear()
             await app.close()
+
+
+@pytest.mark.parametrize('where', ['generation', 'preparation'])
+@pytest.mark.parametrize('identity', [[], {}], ids=['list', 'object'])
+async def test_stop_saved_input_membership_rejects_malformed_id(app, where, identity):
+    from amplifier_web.message_delivery import execution_boundary
+
+    target = app.state['sessions'][1]
+    sid, runtime = target['id'], app.runtime
+    runtime.workers = {}
+    runtime._preparations = {}
+    await generation(app, target, 'same-generation', ['A'])
+    app._message(target, 'user', 'Saved B', inputId='B', inputOrigin='ui')
+    target['lastInterruption'] = {'commandId': 'stop', 'at': 1, 'origin': 'ui'}
+    target['interruptionRevision'] = 1
+    if where == 'generation':
+        runtime.workers[sid] = {'runtimeOwnerId': 'owner', 'inputId': 'A'}
+    else:
+        runtime._preparations[sid] = {'runtimeOwnerId': 'owner'}
+    current = app._capture_stop_guard(target, execution_boundary(target))
+    assert current() is True
+    try:
+        if where == 'generation':
+            target['collaborationGeneration']['inputIds'].append(identity)
+        else:
+            runtime.workers[sid] = {'runtimeOwnerId': 'owner', 'inputId': identity}
+        assert current() is False
+        assert not runtime.inputs
+    finally:
+        runtime.workers.clear()
+        runtime._preparations.clear()
 
 
 async def test_stop_context_resets_in_throwing_observer_task_and_cannot_cross_child_task(app):

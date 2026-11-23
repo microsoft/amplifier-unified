@@ -5048,6 +5048,9 @@ class AppService:
         last_message_id = (last_input or {}).get('id')
         last_input_id = (last_input or {}).get('inputId')
 
+        def saved_delivery(identity):
+            return isinstance(identity, str) and identity in delivery_inputs
+
         def current():
             target = self._session(sid, hydrate=False)
             active = target.get('collaborationGeneration') or {}
@@ -5060,16 +5063,16 @@ class AppService:
                            for key in ('commandId', 'at'))
                     or (active.get('id'), active.get('interruptionRevision')) != generation_key
                     or active_inputs[:len(generation_inputs)] != generation_inputs
-                    or any(identity not in delivery_inputs for identity in active_inputs[len(generation_inputs):])
+                    or any(not saved_delivery(identity) for identity in active_inputs[len(generation_inputs):])
                     or preparing is not None and preparing is not preparation
                     or preparing is not None and preparing.get('runtimeOwnerId') != preparation_owner
                     or row is worker and row is not None
                     and (row.get('runtimeOwnerId') != worker_key[0]
-                         or row.get('inputId') != worker_key[1] and row.get('inputId') not in delivery_inputs)
+                         or row.get('inputId') != worker_key[1] and not saved_delivery(row.get('inputId')))
                     or row is not None and row is not worker
                     and not (worker is None and preparation_owner
                              and row.get('runtimeOwnerId') == preparation_owner
-                             and (row.get('inputId') is None or row.get('inputId') in delivery_inputs))):
+                             and (row.get('inputId') is None or saved_delivery(row.get('inputId'))))):
                 return False
             # Inspect every intervening user input. A newer human input followed
             # by a queued peer must not conceal the human's execution boundary.
