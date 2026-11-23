@@ -9,6 +9,11 @@ from amplifier_scheduling import ScheduleStore, normalize, next_after, preview
 from amplifier_scheduling.store import ACTIVE_RUNS, fingerprint
 
 
+# Renew well inside ScheduleStore's 30-second lease while the event loop can
+# still make progress during a slow worker start.
+LEASE_RENEW_INTERVAL = 10
+
+
 def definitions(schema, string):
     sid = {'sessionId': string(200)}
     identity = {**sid, 'id': string(200)}
@@ -337,8 +342,28 @@ class Schedules:
         from .updates import work_paused
         from .update_drain import held
         if work_paused(self.app.state) or held(self.app): return
-        for schedule in self.store.list():
-            if schedule['status'] != 'active' or schedule.get('nextDue') is None or schedule['nextDue'] > now: continue
+        due = [row for row in self.store.list() if row['status'] == 'active'
+               and row.get('nextDue') is not None and row['nextDue'] <= now]
+        if not due: return
+        renewal = asyncio.create_task(self._renew_lease())
+        try:
+            await self._run_due(due)
+        finally:
+            renewal.cancel()
+            await asyncio.gather(renewal, return_exceptions=True)
+        if not renewal.cancelled():
+            renewal.result()
+
+    async def _renew_lease(self):
+        while True:
+            await asyncio.sleep(LEASE_RENEW_INTERVAL)
+            if not self.store.renew(self.clock()):
+                return
+
+    async def _run_due(self, due):
+        from .update_drain import held
+        for schedule in due:
+            if not self.store.owns(self.clock()): return
             sid = schedule['sessionId']
             session = self.app._session(sid)
             if session.get('configurationBusy') or session.get('fileAccessPending') or session.get('status') in {'working', 'starting', 'running', 'busy', 'stopping'}: continue
@@ -396,7 +421,7 @@ class Schedules:
                 configuration_comparison = {}
                 def guard():
                     latest = self.store.get(sid, current['id'])
-                    if not self.store.owns(self.clock()): return 'Scheduler ownership changed before admission.'
+                    if not self.store.owns(self.clock()): return 'The scheduler lease expired or changed owner before input admission.'
                     owner = self.app._session(sid)
                     if owner.get('configurationBusy') or owner.get('fileAccessPending') or owner.get('executionRevision', 0) != current.get('executionRevision', 0): return 'The task configuration changed or its execution folder is moving; this occurrence was skipped.'
                     reason = self.dependency_reason(owner, task, current)
@@ -436,7 +461,7 @@ class Schedules:
                 if saved['phase'] in {'unknown', 'skipped'}:
                     self.store.review(sid, current['id'], detail, self.clock())
                     self.app._session(target)['status'] = 'interrupted' if phase == 'unknown' else 'idle'
-                    if saved['phase'] == 'unknown': self.decide_notification(self.app._session(target), saved)
+                    self.decide_notification(self.app._session(target), saved)
                 self.changed()
             if cancelled: raise asyncio.CancelledError
 
@@ -480,7 +505,8 @@ class Schedules:
             elif report.get('outcome'):
                 changed = report['outcome'] == 'changed'
                 source = report['source']
-            failure = run['phase'] in {'failed', 'unknown'}
+            failure = run['phase'] in {'failed', 'unknown'} or (
+                run['phase'] == 'skipped' and schedule['status'] == 'needs_review')
             notify = failure or policy == 'always' or (policy == 'changes' and changed is True)
             run['notificationDecision'] = {'notify': notify, 'changed': changed, 'source': source, 'at': self.clock(), 'policy': policy}
             self.store.put_run(run)
