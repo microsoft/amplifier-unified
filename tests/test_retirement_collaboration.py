@@ -356,6 +356,7 @@ async def test_old_stop_cannot_cross_replacement_or_admission(app, monkeypatch, 
 @pytest.mark.parametrize('change', [
     'none', 'missing-receipt', 'wrong-message', 'wrong-target', 'submitting',
     'unknown', 'admitted', 'human-resume', 'null-receipt', 'list-receipt', 'null-target',
+    'list-delivery', 'object-delivery',
 ])
 async def test_stop_exempts_only_exact_unadmitted_peer_receipts(app, monkeypatch, change):
     source, target = app.state['sessions']
@@ -392,6 +393,12 @@ async def test_stop_exempts_only_exact_unadmitted_peer_receipts(app, monkeypatch
                            (json.dumps(receipt), 'queued-one'))
             app.db.commit()
             assert app.collaboration.receipt('queued-one')['target'] is None
+        elif change in {'list-delivery', 'object-delivery'}:
+            receipt['delivery'] = [] if change == 'list-delivery' else {}
+            app.db.execute('UPDATE commands SET receipt=? WHERE id=?',
+                           (json.dumps(receipt), 'queued-one'))
+            app.db.commit()
+            assert app.collaboration.receipt('queued-one')['delivery'] == receipt['delivery']
         elif change != 'none':
             if change == 'wrong-message':
                 receipt['messageId'] = 'another-message'
@@ -418,6 +425,147 @@ async def test_stop_exempts_only_exact_unadmitted_peer_receipts(app, monkeypatch
         assert target['interruptionRevision'] == 1
     finally:
         release.set()
+
+
+@pytest.mark.parametrize('delivery', ['saved-before-stop', 'human-after-stop', 'new-generation'])
+async def test_delayed_reader_delivery_does_not_cancel_its_original_stop(tmp_path, monkeypatch, delivery):
+    """Real reader/reducers; only the worker pipe and Stop effect are scripted."""
+    runtime = RuntimeManager(command=['unused'])
+    app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    entered, release, delivered = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    stop_tasks, calls, observations = [], [], []
+    reader = None
+    try:
+        await app.dispatch('session.create', {})
+        target = app._session()
+        sid = target['id']
+        for identity in ('A', 'B'):
+            app._message(target, 'user', identity, inputId=identity, inputOrigin='ui',
+                         interruptionRevision=0)
+        await generation(app, target, 'original-generation', ['A'])
+        stream = asyncio.StreamReader()
+        ready = asyncio.get_running_loop().create_future()
+        ready.set_result({})
+        async def emit(kind, payload):
+            await app.on_runtime_event(kind, payload)
+            if kind == 'runtime.status' and payload.get('event') == 'input.delivered':
+                observations.append(copy.deepcopy(payload))
+                delivered.set()
+        row = {'process': SimpleNamespace(stdout=stream, returncode=None),
+               'emit': emit, 'closing': False, 'pending': {}, 'ready': ready,
+               'runtime_id': sid, 'runtimeOwnerId': 'original-owner', 'inputId': 'A',
+               'bridge_tasks': set(), 'backgroundCalls': set()}
+        runtime.workers[sid] = row
+        reader = asyncio.create_task(runtime._read(sid, row))
+        original_drain = app.collaboration.drain
+
+        async def held_drain(identity):
+            if identity == sid and not entered.is_set():
+                stop_tasks.append(asyncio.current_task())
+                entered.set()
+                await release.wait()
+            await original_drain(identity)
+
+        async def stop(identity):
+            assert identity == sid and runtime.workers[sid] is row
+            calls.append((identity, row['runtimeOwnerId'], row['inputId']))
+            row['closing'] = True
+            runtime.workers.pop(sid)
+
+        monkeypatch.setattr(app.collaboration, 'drain', held_drain)
+        monkeypatch.setattr(runtime, 'stop', stop)
+        await app.dispatch('conversation.stop', {'sessionId': sid},
+                           command_id='stop-original', include_state=False)
+        await asyncio.wait_for(entered.wait(), 3)
+        assert target['interruptionRevision'] == 1 and row['inputId'] == 'A'
+        assert target['collaborationGeneration']['inputIds'] == ['A']
+        if delivery == 'human-after-stop':
+            app._message(target, 'user', 'New human input', inputId='C', inputOrigin='ui',
+                         interruptionRevision=1)
+        elif delivery == 'new-generation':
+            await generation(app, target, 'new-generation', ['C'], interruption_revision=1)
+        identity = 'C' if delivery == 'human-after-stop' else 'B'
+        frame = {'type': 'input.delivered', 'input_id': identity,
+                 'interruptionRevision': 0 if delivery == 'saved-before-stop' else 1}
+        stream.feed_data(json.dumps(frame).encode() + b'\n')
+        await asyncio.wait_for(delivered.wait(), 3)
+        assert observations[-1]['runtimeOwnerId'] == 'original-owner'
+        assert observations[-1]['inputId'] == row['inputId'] == identity
+        assert observations[-1]['interruptionRevision'] == frame['interruptionRevision']
+        assert identity in target['collaborationGeneration']['inputIds']
+        release.set()
+        done, pending = await asyncio.wait({stop_tasks[0]}, timeout=3)
+        assert not pending
+        for task in done:
+            task.result()
+        observed = {'delivery': delivery, 'stopCalls': calls, 'status': target['status'],
+                    'interruptionRevision': target['interruptionRevision'],
+                    'generation': target['collaborationGeneration'],
+                    'readerEvent': observations[-1], 'workerPresent': sid in runtime.workers}
+        print('DELAYED_STOP_BOUNDARY ' + json.dumps(observed, sort_keys=True))
+        if delivery == 'saved-before-stop':
+            assert calls == [(sid, 'original-owner', 'B')], observed
+            assert target['status'] == 'stopped' and sid not in runtime.workers
+        else:
+            assert calls == [] and runtime.workers[sid] is row
+            assert target['status'] == 'working'
+        assert target['interruptionRevision'] == 1
+        assert [message['inputId'] for message in target['messages'] if message['role'] == 'user'] == (
+            ['A', 'B', 'C'] if delivery == 'human-after-stop' else ['A', 'B'])
+    finally:
+        release.set()
+        if stop_tasks and not stop_tasks[0].done():
+            await asyncio.wait({stop_tasks[0]}, timeout=3)
+        if reader:
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+        runtime.workers.clear()
+        await app.close()
+
+
+async def test_stop_context_resets_in_throwing_observer_task_and_cannot_cross_child_task(app):
+    from amplifier_web.execution_owner import ensure_observers
+    from amplifier_web.message_delivery import execution_boundary
+    from amplifier_web.service import _STOP_OBSERVATION
+
+    target = app.state['sessions'][1]
+    sid = target['id']
+    target['status'] = 'stopping'
+    target['interruptionRevision'] = 1
+    boundary = execution_boundary(target)
+    child_status = []
+    observers = ensure_observers(app)
+
+    class Observer:
+        async def observe(self, kind, payload):
+            if payload.get('sessionId') != sid or payload.get('stopBoundary') != boundary:
+                return
+            if asyncio.current_task() is owner_task:
+                assert _STOP_OBSERVATION.get()[1] is owner_task
+                # Reuse the exact payload identity in an inherited ContextVar.
+                # Only the owning task can carry the host-private exception.
+                target['status'] = 'stopping'
+                app._message(target, 'user', 'new human input', inputId='new', inputOrigin='ui')
+                async def child():
+                    await app.on_runtime_event(kind, payload)
+                    child_status.append(target['status'])
+                await asyncio.create_task(child())
+                raise RuntimeError('Synthetic observer failure')
+
+    observer = Observer()
+    observers.attachments.add(observer)
+    owner_task = asyncio.current_task()
+    prior = _STOP_OBSERVATION.get()
+    try:
+        with pytest.raises(RuntimeError, match='Synthetic observer failure'):
+            await app._observe_stop('runtime.status',
+                {'sessionId': sid, 'status': 'stopped', 'stopBoundary': boundary}, lambda: True)
+        assert _STOP_OBSERVATION.get() is prior
+        assert child_status == ['stopping']
+        assert target['status'] == 'stopping'
+        assert not app.runtime.inputs
+    finally:
+        observers.remove(observer)
 
 
 @pytest.mark.parametrize('wrapped', [False, True])
