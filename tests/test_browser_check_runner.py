@@ -55,9 +55,7 @@ def coverage_plan():
     activity_ids = retained_activity_browser_addition(plan['scenarios'])
     context_ids = context_degradation_browser_addition(plan['scenarios'])
     later_ids = (update_configuration_hold_browser_addition(plan['scenarios'])
-                      | model_change_history_browser_addition(plan['scenarios'])
-                      | grouped_work_browser_addition(plan['scenarios'])
-                      | transcript_suggestion_browser_addition(plan['scenarios']))
+                      | browser_additions_after_update_configuration_hold(plan['scenarios']))
     rows = []
     for row in plan['scenarios']:
         if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | preview_ids | approval_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids | changelog_ids | activity_ids | context_ids | later_ids:
@@ -1131,6 +1129,20 @@ def context_degradation_browser_addition(rows, readiness_scripts=()):
     return {expected['id']}
 
 
+def browser_additions_after_update_configuration_hold(rows, readiness_scripts=()):
+    # Validate newer owners before subtracting them from the frozen inventories.
+    name = 'last-reported-plan'
+    script = 'tests/web/last-reported-plan-browser.mjs'
+    owners = [row for row in rows if row['id'] == name
+              or any(Path(part).name == Path(script).name for part in row['command'])]
+    assert owners == [{'id': name, 'command': ['node', script],
+                       'env': {'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python'}}]
+    assert coverage_paths(script) not in readiness_scripts
+    return ({name} | model_change_history_browser_addition(rows, readiness_scripts)
+            | grouped_work_browser_addition(rows, readiness_scripts)
+            | transcript_suggestion_browser_addition(rows, readiness_scripts))
+
+
 def grouped_work_browser_addition(rows, readiness_scripts=()):
     name = 'grouped-work-inspector'
     script = 'tests/web/grouped-work-inspector-browser.mjs'
@@ -1196,9 +1208,7 @@ def test_update_configuration_hold_has_one_host_owner_and_preserves_prior_order(
     assert host['scenarioOrder'][index - 1:index + 2] == [
         'update-restart', 'update-configuration-hold', 'update-effects']
     # Exact order from 474dc80, before this sole new host scenario was added.
-    later = (model_change_history_browser_addition(plan['scenarios'])
-             | grouped_work_browser_addition(plan['scenarios'])
-             | transcript_suggestion_browser_addition(plan['scenarios']))
+    later = browser_additions_after_update_configuration_hold(plan['scenarios'])
     previous = [name for name in host['scenarioOrder'] if name not in identities | later]
     assert len(previous) == len(set(previous)) == 173
     assert hashlib.sha256(json.dumps(previous).encode()).hexdigest() == (
@@ -1253,9 +1263,7 @@ def test_context_degradation_has_one_client_owner_and_preserves_prior_order():
     assert host['scenarioOrder'][index - 1:index + 2] == [
         'shared-notices-motion', 'context-degradation', 'input-status']
     later_ids = (update_configuration_hold_browser_addition(plan['scenarios'])
-                      | model_change_history_browser_addition(plan['scenarios'])
-                      | grouped_work_browser_addition(plan['scenarios'])
-                      | transcript_suggestion_browser_addition(plan['scenarios']))
+                      | browser_additions_after_update_configuration_hold(plan['scenarios']))
     previous = [name for name in host['scenarioOrder']
                 if name not in {'context-degradation'} | later_ids]
     assert len(previous) == len(set(previous)) == 172
@@ -1318,9 +1326,7 @@ def test_retained_activity_is_composed_once_and_preserves_all_prior_scenario_ord
     # drop any of the 171 existing IDs, including the original changelog placement.
     assert context_degradation_browser_addition(plan['scenarios']) == {'context-degradation'}
     later_ids = (update_configuration_hold_browser_addition(plan['scenarios'])
-                      | model_change_history_browser_addition(plan['scenarios'])
-                      | grouped_work_browser_addition(plan['scenarios'])
-                      | transcript_suggestion_browser_addition(plan['scenarios']))
+                      | browser_additions_after_update_configuration_hold(plan['scenarios']))
     preceding_order = [name for name in host['scenarioOrder']
                        if name not in {'retained-activity', 'context-degradation'} | later_ids]
     assert len(preceding_order) == len(set(preceding_order)) == 171
@@ -1886,9 +1892,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     retained_activity_browser_addition(current_plan()['scenarios'], readiness_scripts)
     context_degradation_browser_addition(current_plan()['scenarios'], readiness_scripts)
     update_configuration_hold_browser_addition(current_plan()['scenarios'], readiness_scripts)
-    model_change_history_browser_addition(current_plan()['scenarios'], readiness_scripts)
-    grouped_work_browser_addition(current_plan()['scenarios'], readiness_scripts)
-    transcript_suggestion_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    browser_additions_after_update_configuration_hold(current_plan()['scenarios'], readiness_scripts)
     plan = coverage_plan()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], readiness_scripts)
     sidebar_ids = sidebar_controls_browser_addition(plan['scenarios'], readiness_scripts)
@@ -4553,9 +4557,7 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     activity_ids = retained_activity_browser_addition(plan['scenarios'])
     context_ids = context_degradation_browser_addition(plan['scenarios'])
     later_ids = (update_configuration_hold_browser_addition(plan['scenarios'])
-                      | model_change_history_browser_addition(plan['scenarios'])
-                      | grouped_work_browser_addition(plan['scenarios'])
-                      | transcript_suggestion_browser_addition(plan['scenarios']))
+                      | browser_additions_after_update_configuration_hold(plan['scenarios']))
     lifecycle_additions = [
         {'id': 'session-health-request-failure',
          'command': ['node', 'tests/web/session-health-browser.mjs', '--request-failure']},
@@ -4786,9 +4788,7 @@ def test_layout_pass2_assembly_retains_prior_order_and_binds_all_four_selected_o
     activity_ids = retained_activity_browser_addition(plan['scenarios'])
     context_ids = context_degradation_browser_addition(plan['scenarios'])
     later_ids = (update_configuration_hold_browser_addition(plan['scenarios'])
-                      | model_change_history_browser_addition(plan['scenarios'])
-                      | grouped_work_browser_addition(plan['scenarios'])
-                      | transcript_suggestion_browser_addition(plan['scenarios']))
+                      | browser_additions_after_update_configuration_hold(plan['scenarios']))
     assert identities == {
         'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'}
     client_path = source_test('tests/worktree-move-browser.mjs').with_name('browser-checks.json')

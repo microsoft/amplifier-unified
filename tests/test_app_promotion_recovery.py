@@ -379,7 +379,11 @@ async def test_restore_retains_terminal_configuration_hold_and_releases_only_uns
     original_runtime = service.runtime
     service.runtime = RuntimeManager()
     # Real absent-writer boundary; only delivery to the unrelated chat is synthetic.
-    monkeypatch.setattr(service.runtime, "send", original_runtime.send)
+    async def send(session, text, input_id, emit, *, admission_check):
+        admission_check()
+        return await original_runtime.send(session, text, input_id, emit)
+
+    monkeypatch.setattr(service.runtime, "send", send)
     service.runtime.sent = original_runtime.sent
     monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(service.data_dir))
     monkeypatch.setenv("AMPLIFIER_HOME", str(service.data_dir / "native"))

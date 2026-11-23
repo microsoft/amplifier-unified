@@ -1240,6 +1240,7 @@
     }
   ],
   "scenarioOrder": [
+    "last-reported-plan",
     "agent-chat-navigation",
     "agent-chat-navigation-settings",
     "navigation-waiting",
