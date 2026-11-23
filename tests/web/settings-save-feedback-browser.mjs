@@ -3,10 +3,14 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import {settledAppearance} from './settings-fixture.mjs';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/empty_host_ui_server.py','--voice-settings'],{stdio:['ignore','pipe','inherit']});
-let browser,release;
+const stopFixture=ownFixture(fixture,{label:'Settings save feedback fixture'});
+let browser,release,failure;
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exit '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
@@ -54,23 +58,66 @@ try{
  await page.getByText('Change voice connection',{exact:true}).click();
  await expect(key).toHaveValue('');
  // Shared file picker keeps an explicit working label for async import.
- await openSettingsPage(page,'custom-appearance');
+ await openSettingsPage(page,'appearance',{activate:(_label,control,options)=>control.click(options)});
+ for(const selector of ['.a-appearance-more','.a-appearance-advanced']){
+  const disclosure=page.locator(selector);
+  if(!await disclosure.evaluate(node=>node.open))await disclosure.locator(':scope > summary').click();
+ }
+ const initial=await settledAppearance(page);
+ const unchangedProfile=()=>page.evaluate(()=>{
+  const a=window.amplifier.getState().appearance;
+  return {scope:a.activeScope,shared:a.shared,local:{revision:a.local.revision,values:a.local.values,storageVersion:a.local.storageVersion},
+   effective:a.effective,storage:localStorage.getItem(a.namespace)};
+ });
+ const beforeProfile=await unchangedProfile();
+ // Produce a genuine current format-2 ZIP through ordinary save and export.
+ // Re-importing identical bytes must deduplicate, not activate the library item.
+ const css='#amp-one { --a-accent: #336699; }';
+ await page.locator('#theme-name').fill('fixture');await page.locator('#theme-css').fill(css);
+ const savedResponse=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='theme.save');
+ await page.getByRole('button',{name:'Save as copy',exact:true}).click();
+ const saved=await(await savedResponse).json();assert.equal(saved.accepted,true);
+ await expect(page.getByRole('button',{name:'Export ZIP for fixture',exact:true})).toBeVisible();
+ const downloaded=page.waitForEvent('download');
+ await page.getByRole('button',{name:'Export ZIP for fixture',exact:true}).click();
+ const stream=await(await downloaded).createReadStream(),chunks=[];assert.ok(stream);let bytes=0;
+ for await(const chunk of stream){bytes+=chunk.length;assert.ok(bytes<=4_000_000);chunks.push(chunk)}
+ const archive=Buffer.concat(chunks);
+ assert.equal(archive.subarray(0,4).toString('hex'),'504b0304');
+ assert.equal(createHash('sha256').update(archive).digest('hex'),saved.result.fingerprint);
+ assert.deepEqual(await unchangedProfile(),beforeProfile);
  action='theme.import';held=null;count=0;
- const upload=page.getByRole('button',{name:'Upload appearance',exact:true});
+ // Chromium exposes the file input with button semantics too. Measure the
+ // native chooser button, while checking the input's lock independently.
+ const upload=page.locator('.a-appearance-import button[data-action="theme.import"]');
+ await expect(upload).toHaveAccessibleName('Upload ZIP package');
  const uploadWidth=(await upload.boundingBox()).width;
- await page.locator('#theme-import').setInputFiles({name:'fixture.css',mimeType:'text/css',buffer:Buffer.from('/* synthetic appearance */\n#amp-one { --accent: #336699; }')});
+ await page.locator('#theme-import').setInputFiles({name:'fixture.zip',mimeType:'application/zip',buffer:archive});
  await expect.poll(()=>held?.action).toBe(action);
- const uploading=page.getByRole('button',{name:'Uploading appearance…',exact:true});
+ const uploading=upload;
+ await expect(uploading).toHaveAccessibleName('Importing appearance…');
  await expect(uploading).toBeDisabled();await expect(page.locator('#theme-import')).toBeDisabled();
  assert.equal((await uploading.boundingBox()).width,uploadWidth);
- await page.locator('.a-appearance-import .a-file-drop').evaluate(el=>{const data=new DataTransfer();data.items.add(new File(['/* second selection */'],'second.css',{type:'text/css'}));el.dispatchEvent(new DragEvent('drop',{bubbles:true,dataTransfer:data}));});
+ await page.locator('.a-appearance-import .a-file-drop').evaluate((el,base64)=>{
+  const data=new DataTransfer(),bytes=Uint8Array.from(atob(base64),c=>c.charCodeAt(0));
+  data.items.add(new File([bytes],'second.zip',{type:'application/zip'}));
+  el.dispatchEvent(new DragEvent('drop',{bubbles:true,dataTransfer:data}));
+ },archive.toString('base64'));
  await page.setViewportSize({width:390,height:844});
  await expect(uploading).toBeVisible();
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
- release();release=null;await expect(upload).toBeEnabled();
- await expect(page.getByText('fixture added to your library. Select it to preview.',{exact:true})).toBeVisible();
- await expect(page.getByRole('button',{name:'Preview fixture',exact:true})).toBeVisible();
+ const importedResponse=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='theme.import');
+ release();release=null;
+ const imported=await(await importedResponse).json();assert.equal(imported.accepted,true);
+ assert.equal(imported.result.id,saved.result.id);assert.equal(imported.result.fingerprint,saved.result.fingerprint);
+ await expect(upload).toBeEnabled();
+ await expect(upload).toHaveAccessibleName('Upload ZIP package');
+ await expect(page.getByText('fixture added to your library.',{exact:true})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Edit fixture',exact:true})).toHaveCount(1);
+ assert.deepEqual(await unchangedProfile(),beforeProfile);
+ assert.equal((await settledAppearance(page)).namespace,initial.namespace);
  assert.equal(count,1);assert.deepEqual(errors,[]);
  assert.deepEqual((await(await page.request.get(url+'/fixture')).json()).sent,[]);
  console.log('Settings save feedback passed: scoped credential locking, duplicate suppression, failure/draft/retry, stable labels, shared file progress, motion/contrast and mobile.');
-}finally{release?.();await browser?.close();fixture.kill('SIGTERM')}
+}catch(error){failure=error;throw error}
+finally{release?.();await finishFixture({label:'Settings save feedback fixture',close:[['browser',()=>browser?.close()]],stop:stopFixture,originalError:failure})}
