@@ -390,10 +390,8 @@ function scopedCase(scenario) {
  state.run=async()=>{
   if(scenario==='ready')return readyExecution({env:state.env,scopedRead:read,realpath,
    entrypoint:state.entrypoint,read:()=>assert.fail('No managed read')});
-  const result=questionFadeExecution({root,env:state.env,read,realpath,entrypoint:state.entrypoint,
+  const result=state.result=questionFadeExecution({root,env:state.env,read,realpath,entrypoint:state.entrypoint,
    ensureDirectory:()=>assert.fail('Scoped helper creates nothing')});
-  assert.equal(result.python,selectedPython);
-  assert.equal(result.artifactRoot,artifacts);
   return result.evidence;
  };
  return state;
@@ -406,6 +404,10 @@ for(const scenario of ['ready','question-transcript-fade']){
   const bytes=Buffer.from(JSON.stringify(state.report,null,2)+'\n');
   state.reportBytes=bytes;
   const result=await state.run();
+  if(scenario==='question-transcript-fade'){
+   assert.equal(state.result.python,selectedPython);
+   assert.equal(state.result.artifactRoot,artifacts);
+  }
   assert.equal(result.executionMode,'scoped-source');
   assert.equal(result.managedSnapshot,false);
   assert.equal(result.runnerOwnerTag,owner);
@@ -476,7 +478,35 @@ for(const scenario of ['ready','question-transcript-fade']){
    else if(change==='build')s.build={...s.build,id:'different'};
    else if(change==='build-file')state.files.set(root+'/amplifier_web/static/build.json',
     Buffer.from(JSON.stringify({...s.build,id:'different'})));
-   await assert.rejects(state.run);
+   const expected={
+    'unknown-mode':/Unknown explicit test execution mode/,
+    'empty-mode':/Unknown explicit test execution mode/,
+    contract:/conflicts with scoped-source/, 'empty-contract':/conflicts with scoped-source/,
+    owner:/exact runner cleanup tag/, 'owner-newline':/exact runner cleanup tag/,
+    'root-env':/Selected root mismatch/, 'root-report':/Runner source root mismatch/,
+    entrypoint:/expected scenario entrypoint/, 'python-report':/Runner Python selection mismatch/,
+    'python-row':/Scenario Python selection mismatch/, 'same-base-alias':/Runner Python selection mismatch/,
+    'artifacts-row':/Scenario artifact mismatch/, 'artifacts-inside-root':/outside the repository/,
+    'missing-python':{code:'ENOENT'}, 'missing-artifacts':{code:'ENOENT'},
+    'relative-report':/explicit absolute canonical runner report/, 'missing-report':{code:'ENOENT'},
+    'malformed-report':SyntaxError, 'read-denied':{code:'EACCES'},
+    schema:{code:'ERR_ASSERTION',actual:2,expected:1},
+    complete:{code:'ERR_ASSERTION',actual:true,expected:false},
+    'report-passed':{code:'ERR_ASSERTION',actual:true,expected:false},
+    'missing-row':/one matching scenario/, 'duplicate-row':/one matching scenario/,
+    'other-running':/one running scenario/, 'stale-row':/running scenario at report read time/,
+    'wrong-command':/Unexpected scenario command/, 'wrong-cwd':/Unexpected scenario working directory/,
+    'row-mode':{code:'ERR_ASSERTION',actual:undefined,expected:'scoped-source'},
+    'row-report':{code:'ERR_ASSERTION',actual:'/other/root',expected:state.reportPath},
+    'missing-source':/Missing runner source provenance/,
+    'bad-source':{code:'ERR_ASSERTION',actual:4,expected:40},
+    'bad-tree':{code:'ERR_ASSERTION',actual:41,expected:40},
+    'component-bytes':/Current component receipt differs/, client:/Runner client provenance differs/,
+    'selected-client':/Selected client differs/, build:/Runner build provenance differs/,
+    'build-file':/Current build identity differs/,
+   }[change];
+   assert.ok(expected,'Every negative must name its intended refusal.');
+   await assert.rejects(state.run,expected);
    if(['unknown-mode','empty-mode','contract','empty-contract'].includes(change))
     assert.deepEqual(state.calls,[]);
    assert.equal(state.calls.some(([,path])=>path===defaultContract),false);
