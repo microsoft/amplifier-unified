@@ -1283,3 +1283,207 @@ def test_decision_projection_keeps_portable_hint_and_exact_prepared_provider(man
     assert resolver.resolve('hook-fixture', c.portable).resolve() == c.module
     with pytest.raises(ValueError, match='authorized account'):
         resolver.resolve('hook-fixture', c.portable.replace(c.commit, 'f' * 40))
+
+
+@pytest.fixture
+def provider_source_control(tmp_path, monkeypatch):
+    """Real prepared resolver and saved-plan writer; no provider execution."""
+    import copy
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from amplifier_foundation.bundle import BundleModuleResolver
+    from amplifier_web.runtime_controls import RuntimeControls
+    from test_task_continuity import Coordinator
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app'))
+    paths = {}
+    for label in ('A', 'B', 'C'):
+        paths[label] = tmp_path / label
+        paths[label].mkdir()
+
+    def make(*, selected='B', alter=None, preserve=False):
+        coordinator = Coordinator()
+        row = {'module': 'provider-fixture', 'id': 'root', 'source': str(paths['A']),
+               'config': {'options': {'value': 1}, 'api_key': 'synthetic-secret'}}
+        child = {**copy.deepcopy(row), 'source': str(paths['C'])}
+        coordinator.config.update(providers=[row], agents={'child': {'providers': [child]}})
+        providers = {'root': object()}
+        prior_get = coordinator.get
+        coordinator.get = lambda key: providers if key == 'providers' else prior_get(key)
+        resolver = BundleModuleResolver({'provider-fixture': paths['C']}, source_paths={
+            ('provider-fixture', str(paths['A'])): paths[selected],
+            ('provider-fixture', str(paths[selected])): paths[selected],
+            ('provider-fixture', str(paths['C'])): paths['C']})
+        catalog = {'sources': {'root': str(paths[selected])}}
+        prepared = SimpleNamespace(resolver=resolver)
+        coordinator.register_capability('web.prepared', prepared)
+        coordinator.register_capability('web.provider_catalog', catalog)
+        case = SimpleNamespace(coordinator=coordinator, providers=providers, resolver=resolver,
+                               catalog=catalog, row=row, paths=paths, prepared=prepared)
+        if alter:
+            alter(case)
+        case.resolve = Mock(wraps=prepared.resolver.resolve)
+        monkeypatch.setattr(prepared.resolver, 'resolve', case.resolve)
+        case.controls = RuntimeControls(SimpleNamespace(session_id='source-test', coordinator=coordinator),
+                                       SimpleNamespace(generation=None, queued_inputs=0),
+                                       preserve_configuration=preserve)
+        case.effective = case.controls.state_path().with_name('effective-configuration.json')
+        return case
+    return make
+
+
+async def test_mounted_root_source_persists_without_rewriting_authored_or_nested_plan(provider_source_control, monkeypatch):
+    import copy
+    import json
+    from amplifier_web.provider_environment import HOST_CREDENTIAL
+    case = provider_source_control()
+    before = copy.deepcopy(case.coordinator.config)
+    authored = case.controls.state_path().with_name('configuration.json')
+    authored.parent.mkdir(parents=True, exist_ok=True)
+    authored.write_text(json.dumps(before))
+    original = authored.read_bytes()
+    case.coordinator.register_capability('web.provider_credentials_bound', True)
+    assert case.resolve.call_count == 2
+    case.resolve.side_effect = AssertionError('Checkpoint repeated source resolution')
+    monkeypatch.setattr('amplifier_web.host.components.portable_module_sources',
+                        lambda *a, **k: pytest.fail('Checkpoint repeated portability/Git inspection'))
+    try:
+        for number in range(5):
+            case.row['config']['options']['value'] = number
+            case.controls.persist()
+            saved = json.loads(case.effective.read_text())
+            assert saved['providers'][0]['source'] == str(case.paths['B'])
+            assert saved['providers'][0]['config']['api_key'] == HOST_CREDENTIAL
+            assert saved['providers'][0]['config']['options']['value'] == number
+            assert saved['agents']['child']['providers'][0]['source'] == str(case.paths['C'])
+            assert authored.read_bytes() == original
+            assert case.row['source'] == str(case.paths['A'])
+        assert case.resolve.call_count == 2
+    finally:
+        await case.controls.close()
+
+
+@pytest.mark.parametrize('change', ['source', 'instance', 'module', 'provider-object', 'duplicate', 'disabled'])
+async def test_mount_capture_never_relabels_a_changed_root_row(provider_source_control, change):
+    import copy
+    import json
+    case = provider_source_control()
+    if change == 'source':
+        case.row['source'] = str(case.paths['C'])
+    elif change == 'instance':
+        case.row['id'] = 'other'
+    elif change == 'module':
+        case.row['module'] = 'provider-other'
+    elif change == 'provider-object':
+        case.providers['root'] = object()
+    elif change == 'duplicate':
+        case.coordinator.config['providers'].append(copy.deepcopy(case.row))
+    else:
+        case.row['enabled'] = False
+    expected = copy.deepcopy(case.coordinator.config)
+    try:
+        case.controls.persist()
+        assert json.loads(case.effective.read_text())['providers'] == expected['providers']
+    finally:
+        await case.controls.close()
+
+
+@pytest.mark.parametrize('unproven', ['missing-provider', 'disabled', 'duplicate', 'module-only',
+                                    'failed-source', 'missing-catalog', 'installed-component'])
+async def test_only_genuinely_mounted_source_qualified_choices_are_captured(provider_source_control, unproven):
+    import copy
+    from amplifier_foundation.bundle import BundleModuleResolver
+    from amplifier_web.host.components import ComponentResolver, HostComponents
+    def alter(case):
+        if unproven == 'missing-provider':
+            case.providers.clear()
+        elif unproven == 'disabled':
+            case.row['enabled'] = False
+        elif unproven == 'duplicate':
+            case.coordinator.config['providers'].append(copy.deepcopy(case.row))
+        elif unproven == 'module-only':
+            case.prepared.resolver = BundleModuleResolver({'provider-fixture': case.paths['B']})
+        elif unproven == 'failed-source':
+            case.prepared.resolver = BundleModuleResolver({'provider-fixture': case.paths['C']},
+                source_paths={('provider-fixture', str(case.paths['A'])): case.paths['B'],
+                              ('provider-fixture', str(case.paths['B'])): case.paths['B']},
+                source_failures={('provider-fixture', str(case.paths['A'])): ValueError('Unprepared')})
+        elif unproven == 'missing-catalog':
+            case.catalog['sources'].clear()
+        else:
+            case.prepared.resolver = ComponentResolver(case.resolver,
+                HostComponents(installed={'provider-fixture': lambda: str(case.paths['B'])}))
+    case = provider_source_control(alter=alter)
+    try:
+        assert case.controls._mounted_provider_sources == {}
+    finally:
+        await case.controls.close()
+
+
+async def test_later_settings_do_not_relabel_prior_mount_and_new_mount_gets_own_capture(provider_source_control):
+    import json
+    old = provider_source_control(selected='A')
+    old.catalog['sources']['root'] = str(old.paths['B'])
+    try:
+        old.controls.persist()
+        assert json.loads(old.effective.read_text())['providers'][0]['source'] == str(old.paths['A'])
+        assert old.resolve.call_count == 0
+        fresh = provider_source_control(selected='C')
+        try:
+            fresh.controls.persist()
+            assert json.loads(fresh.effective.read_text())['providers'][0]['source'] == str(fresh.paths['C'])
+            assert fresh.resolve.call_count == 2
+        finally:
+            await fresh.controls.close()
+    finally:
+        await old.controls.close()
+
+
+@pytest.mark.parametrize('mode', ['preserve', 'restoring', 'task-only'])
+async def test_source_projection_keeps_persistence_exemptions(provider_source_control, mode):
+    case = provider_source_control(preserve=mode == 'preserve')
+    if mode == 'restoring':
+        case.controls._restoring = True
+    try:
+        case.controls.persist(task_only=mode == 'task-only')
+        assert not case.effective.exists()
+        if mode == 'preserve':
+            assert case.resolve.call_count == 0
+    finally:
+        await case.controls.close()
+
+
+async def test_checkout_spelling_alone_is_not_a_new_source_pin(provider_source_control, managed_module_source, monkeypatch):
+    c = managed_module_source
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(c.home))
+    from amplifier_foundation.bundle import BundleModuleResolver
+    def alter(case):
+        case.row['source'] = c.portable
+        case.catalog['sources']['root'] = str(c.module)
+        case.prepared.resolver = BundleModuleResolver({'provider-fixture': c.module}, source_paths={
+            ('provider-fixture', c.portable): c.module, ('provider-fixture', str(c.module)): c.module})
+    case = provider_source_control(alter=alter)
+    try:
+        assert case.controls._mounted_provider_sources == {}
+    finally:
+        await case.controls.close()
+
+
+async def test_named_root_instances_keep_distinct_selected_sources(provider_source_control):
+    import copy
+    import json
+    def alter(case):
+        second = copy.deepcopy(case.row)
+        second.update(id='protected', source=str(case.paths['C']))
+        case.coordinator.config['providers'].append(second)
+        case.providers['protected'] = object()
+        case.catalog['sources']['protected'] = str(case.paths['C'])
+    case = provider_source_control(alter=alter)
+    try:
+        case.controls.persist()
+        saved = json.loads(case.effective.read_text())
+        assert [(row['id'], row['source']) for row in saved['providers']] == [
+            ('root', str(case.paths['B'])), ('protected', str(case.paths['C']))]
+        assert saved['agents']['child']['providers'][0]['source'] == str(case.paths['C'])
+        assert case.resolve.call_count == 2
+    finally:
+        await case.controls.close()

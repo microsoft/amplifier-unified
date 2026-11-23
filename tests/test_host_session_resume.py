@@ -836,6 +836,118 @@ async def test_saved_module_sources_survive_preparation_and_mount(mounted_host, 
     h.session.execute.assert_not_called()
 
 
+@pytest.fixture
+def inherited_provider_plan(tmp_path):
+    from amplifier_foundation import Bundle
+    from amplifier_web.host.config import HostConfig
+    from amplifier_web.provider_environment import HOST_CREDENTIAL
+    row = {'module': 'provider-fixture', 'id': 'root', 'source': 'source-A',
+           'config': {'api_key': 'synthetic-root-secret', 'default_model': 'offline'}}
+    config = HostConfig(tmp_path, tmp_path, {'sources': {'modules': {'provider-fixture': 'source-B'}}}, tmp_path)
+    bundle = Bundle(name='source-fixture', providers=[copy.deepcopy(row)], session={
+        'orchestrator': {'module': 'loop-live'}, 'context': {'module': 'context-simple'}})
+    edited = copy.deepcopy(bundle.to_mount_plan())
+    edited['providers'][0].update(source='source-B', config={'api_key': HOST_CREDENTIAL, 'default_model': 'offline'})
+    return bundle, edited, config
+
+
+def test_inherited_source_credential_roundtrip_uses_current_same_instance_selection(inherited_provider_plan):
+    bundle, edited, config = inherited_provider_plan
+    before, saved = copy.deepcopy(bundle.to_mount_plan()), copy.deepcopy(edited)
+    authorized = host._inherited_provider_authorization(bundle, edited, config)
+    assert authorized['providers'][0]['source'] == 'source-B'
+    assert bundle.to_mount_plan() == before and edited == saved
+    loaded = host.apply_runtime_plan(bundle, edited, config, config.workspace)
+    assert loaded.providers[0]['source'] == 'source-B'
+    assert loaded.providers[0]['config']['api_key'] == 'synthetic-root-secret'
+    assert loaded._host_provider_credentials_bound is True
+    assert loaded._host_components.resolved_plan is True
+    assert host.module_source(config, False, 'provider-fixture', 'source-B', loaded._host_components) == 'source-B'
+    assert edited == saved
+
+
+def test_exact_instance_and_child_source_precede_ambient_module_choice(inherited_provider_plan):
+    from amplifier_web.provider_environment import HOST_CREDENTIAL
+    bundle, edited, config = inherited_provider_plan
+    bundle.providers[0]['source'] = edited['providers'][0]['source'] = 'source-C'
+    child = {'module': 'provider-fixture', 'instance_id': 'child-account', 'source': 'source-child',
+             'config': {'api_key': 'synthetic-child-secret'}}
+    second = {**copy.deepcopy(child), 'instance_id': 'second-root', 'source': 'source-second'}
+    bundle.providers.append(second)
+    bundle.agents = {'child': {'providers': [child]}}
+    edited['providers'].append({**copy.deepcopy(second), 'config': {'api_key': HOST_CREDENTIAL}})
+    edited['agents'] = {'child': {'providers': [{**copy.deepcopy(child), 'config': {'api_key': HOST_CREDENTIAL}}]}}
+    original = copy.deepcopy(bundle.to_mount_plan())
+    authorized = host._inherited_provider_authorization(bundle, edited, config)
+    assert authorized == original
+    loaded = host.apply_runtime_plan(bundle, edited, config, config.workspace)
+    assert [row['source'] for row in loaded.providers] == ['source-C', 'source-second']
+    assert loaded.agents['child']['providers'][0] == child
+    assert loaded.providers[0]['config']['api_key'] == 'synthetic-root-secret'
+    assert loaded.providers[1]['config']['api_key'] == 'synthetic-child-secret'
+
+
+@pytest.mark.parametrize('depth', [1, 2], ids=['child', 'nested-child'])
+def test_root_source_normalization_does_not_authorize_mismatched_child(inherited_provider_plan, depth):
+    from amplifier_web.provider_environment import HOST_CREDENTIAL
+    bundle, edited, config = inherited_provider_plan
+    child = {'module': 'provider-fixture', 'instance_id': 'child-account', 'source': 'source-A',
+             'config': {'api_key': 'synthetic-child-secret'}}
+    authorized_child = {'providers': [child]}
+    inherited_child = {'providers': [{**copy.deepcopy(child), 'source': 'source-B',
+                                    'config': {'api_key': HOST_CREDENTIAL}}]}
+    for _ in range(depth):
+        authorized_child = {'agents': {'child': authorized_child}}
+        inherited_child = {'agents': {'child': inherited_child}}
+    bundle.agents = authorized_child['agents']
+    edited['agents'] = inherited_child['agents']
+    before, saved = copy.deepcopy(bundle.to_mount_plan()), copy.deepcopy(edited)
+    # Root A -> B is the approved normalization; the same ambient B must not
+    # authorize a mismatched child, even at the same child/module/instance.
+    with pytest.raises(ValueError, match='provider instance/source'):
+        host.apply_runtime_plan(bundle, edited, config, config.workspace)
+    assert bundle.to_mount_plan() == before and edited == saved
+    authorized = host._inherited_provider_authorization(bundle, edited, config)
+    assert authorized['providers'][0]['source'] == 'source-B'
+    assert authorized['agents'] == before['agents']
+
+
+@pytest.mark.parametrize('fault', ['wrong-source', 'wrong-instance', 'wrong-module', 'duplicate',
+                                 'disabled', 'missing-field', 'cross-scope', 'revoked',
+                                 'snapshot', 'resolved-plan'])
+def test_inherited_credential_normalization_never_borrows_foreign_authority(inherited_provider_plan, fault):
+    from amplifier_web.host.components import HostComponents
+    from amplifier_web.bundles import SNAPSHOT_VERSION
+    bundle, edited, config = inherited_provider_plan
+    if fault == 'wrong-source':
+        edited['providers'][0]['source'] = 'source-D'
+    elif fault == 'wrong-instance':
+        edited['providers'][0]['id'] = 'foreign-account'
+    elif fault == 'wrong-module':
+        edited['providers'][0]['module'] = 'provider-foreign'
+    elif fault == 'duplicate':
+        other = copy.deepcopy(bundle.providers[0])
+        other['source'] = 'source-other'
+        bundle.providers.append(other)
+    elif fault == 'disabled':
+        bundle.providers[0]['enabled'] = False
+    elif fault == 'missing-field':
+        bundle.providers[0]['config'].pop('api_key')
+    elif fault == 'cross-scope':
+        bundle.agents = {'child': {'providers': bundle.providers}}
+        bundle.providers = []
+    elif fault == 'revoked':
+        config.settings['sources']['modules']['provider-fixture'] = 'source-C'
+    elif fault == 'snapshot':
+        bundle.version = SNAPSHOT_VERSION
+    else:
+        bundle._host_components = HostComponents(resolved_plan=True)
+    before, saved = copy.deepcopy(bundle.to_mount_plan()), copy.deepcopy(edited)
+    with pytest.raises(ValueError, match='provider|credential'):
+        host.apply_runtime_plan(bundle, edited, config, config.workspace)
+    assert bundle.to_mount_plan() == before and edited == saved
+
+
 def nested_checkpoint_scope(h):
     from amplifier_web.coordination_delivery import WORK_NESTED
     coordinator = h.session.coordinator
