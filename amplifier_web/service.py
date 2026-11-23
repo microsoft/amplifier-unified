@@ -4842,25 +4842,130 @@ class AppService:
             from .conversation_steering import send
             return await send(self, session, text, input_id, preserve_draft)
         previous_error_at = session.get('errorAt')
-        from .runtime import RuntimeOperationPending, RuntimeStartupError, SessionInUseError, RuntimeHostClosingError
+        from .runtime import RuntimeManager, RuntimeOperationPending, RuntimeStartupError, SessionInUseError, RuntimeHostClosingError
+        from .message_delivery import execution_boundary
+        # Dispatch passes a snapshot; retain the existing resident delivery
+        # object as this attempt's token. A retry replaces it, even when its
+        # input ID and public status remain identical.
+        sid, runtime = session['id'], self.runtime
+        resident = self._session(sid, hydrate=False)
+        pending_message = find_message(resident, input_id)
+        delivery_attempt = pending_message.get('delivery') if pending_message else None
+        boundary = execution_boundary(session)
+        source_keys = ('workspace', 'workingDirectory', 'executionRevision', 'runtimeSessionId', 'nativeIdentity')
+        source = tuple(session.get(key) for key in source_keys)
+        prior_generation = (session.get('collaborationGeneration') or {}).get('id')
+        captured_current = (execution_boundary(resident) == boundary
+                            and (resident.get('collaborationGeneration') or {}).get('id') == prior_generation
+                            and (pending_message or {}).get('delivery') == original.get('delivery'))
+        prior_turn = execution_record(resident, 'turns', {'id': input_id})
+        retry_marker = (prior_turn or {}).get('retriedAt')
+        owner = preparation = None
+        owner_id = preparation_id = None
+        replaced_owner = False
+
+        def observe_send_owner():
+            nonlocal owner, preparation, owner_id, preparation_id, replaced_owner
+            row = getattr(runtime, 'workers', {}).get(sid)
+            preparing = getattr(runtime, '_preparations', {}).get(sid)
+            if row is not None:
+                if owner is None:
+                    owner, owner_id = row, row.get('runtimeOwnerId')
+                elif row is not owner or row.get('runtimeOwnerId') != owner_id:
+                    retirement = owner.get('retirement_task')
+                    # This invocation can retire an idle process before creating
+                    # its worker. Only the confirmed retirement and the new
+                    # registration-before-readiness boundary allow that move.
+                    if (row is not owner and retirement is not None and retirement.done()
+                            and not retirement.cancelled() and retirement.exception() is None
+                            and retirement.result() is True and owner.get('executionEnded')
+                            and owner.get('process') is not None
+                            and owner['process'].returncode is not None
+                            and row.get('ready') is not None and not row['ready'].done()):
+                        owner, owner_id = row, row.get('runtimeOwnerId')
+                    else:
+                        replaced_owner = True
+            if preparing is not None:
+                if preparation is None:
+                    preparation, preparation_id = preparing, preparing.get('runtimeOwnerId')
+                elif preparing is not preparation or preparing.get('runtimeOwnerId') != preparation_id:
+                    replaced_owner = True
+
+        observe_send_owner()
+
+        async def reconcile_shutdown():
+            async with self.lock:
+                current = self._session(sid, hydrate=False)
+                message = find_message(current, input_id)
+                row = getattr(runtime, 'workers', {}).get(sid)
+                preparing = getattr(runtime, '_preparations', {}).get(sid)
+                turn = execution_record(current, 'turns', {'id': input_id})
+                generation = (current.get('collaborationGeneration') or {}).get('id')
+                if (not self.closed or not captured_current or self.runtime is not runtime or replaced_owner
+                        or pending_message is None or message is not pending_message
+                        or not isinstance(delivery_attempt, dict)
+                        or delivery_attempt.get('status') != 'sending'
+                        or message.get('delivery') is not delivery_attempt
+                        or message.get('id') != original.get('id')
+                        or execution_boundary(current) != boundary
+                        or tuple(current.get(key) for key in source_keys) != source
+                        or (turn or {}).get('retriedAt') != retry_marker
+                        or row is not None and (row is not owner or row.get('runtimeOwnerId') != owner_id)
+                        or preparing is not None and (preparing is not preparation
+                                                     or preparing.get('runtimeOwnerId') != preparation_id)):
+                    return
+                # A generation may begin during this send. It belongs here only
+                # with exact input/owner attribution. Its execution and partial
+                # response still settle through the native owner's exit event.
+                if generation != prior_generation and not (
+                        turn and turn.get('generationId') == generation
+                        and owner_id and turn.get('runtimeOwnerId') == owner_id):
+                    return
+                self._delivery(current, input_id, 'unknown')
+                # Retry admission reopens an app turn before native execution.
+                # Settle only that exact unbound turn, not a native generation
+                # or any other work. Reload must not be its first reconciliation.
+                if (retry and turn is prior_turn and turn is not None
+                        and current_execution(current).get('currentTurnId') == input_id
+                        and not turn.get('generationId') and not turn.get('runtimeOwnerId')
+                        and turn.get('phase') == 'running'):
+                    turn.update(phase='interrupted', endedAt=time.time())
+                if (not (turn or {}).get('generationId') and not current.get('error')
+                        and not current.get('failure')
+                        and current['status'] in {'working', 'starting', 'ready'}):
+                    current['status'] = 'interrupted'
+                    self._activity(current, 'interrupted',
+                                   'The app closed before message delivery could be confirmed. Nothing was sent again.')
+                self._publish_changes(sessions={sid}, globals={'view'})
+
         try:
             session.setdefault('surfaceInputs', {}).setdefault(input_id, self.surface_context.bind_input(session['id']))
             sender = self.runtime.retry if retry else self.runtime.send
-            admission = ({'admission_check': lambda: self.handoffs.input_guard(session['id'], input_id)}
-                         if original.get('handoffOrigin') else {})
+            # The native manager invokes this existing host-only callback after
+            # registering a newly created owner as well as before submission.
+            def admission_check():
+                observe_send_owner()
+                if original.get('handoffOrigin'):
+                    self.handoffs.input_guard(sid, input_id)
+            admission = ({'admission_check': admission_check}
+                         if isinstance(runtime, RuntimeManager) or original.get('handoffOrigin') else {})
             send_result = await sender(session, text, input_id, self.on_runtime_event, **admission)
         except UpdateDeferred:
             if retry:
                 raise
             return await defer_send(self, session['id'], input_id, preserve_draft)
         except RuntimeHostClosingError:
-            async with self.lock:
-                current = self._session(session['id'], hydrate=False)
-                self._delivery(current, input_id, 'unknown')
-                interrupt_unfinished(current)
-                if current['status'] in {'working', 'starting', 'ready', 'stopping'}:
-                    current['status'] = 'interrupted'
-                self._publish_changes(sessions={session['id']}, globals={'view'})
+            await reconcile_shutdown()
+            raise
+        except asyncio.CancelledError as cancellation:
+            if self.closed:
+                try:
+                    await reconcile_shutdown()
+                except (Exception, asyncio.CancelledError) as reconciliation_error:
+                    cancellation.add_note('Shutdown input reconciliation was not confirmed; inspect the retained error.')
+                    logging.getLogger(__name__).warning(
+                        'Shutdown input reconciliation failed; preserving caller cancellation.', exc_info=True)
+                    raise cancellation from reconciliation_error
             raise
         except RuntimeOperationPending:
             async with self.lock:
