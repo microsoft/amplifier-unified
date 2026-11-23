@@ -9,6 +9,7 @@ import {chromium,expect} from '@playwright/test';
 import {fixturePython} from './fixture-python.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import './composer-test-helpers.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const home=await mkdtemp(join(tmpdir(),'last-reported-plan-'));
@@ -74,7 +75,7 @@ try{
  assert.deepEqual(await current(),first);
  await control('success',{text:'Publish the team update',status:'completed'});
  await check('Publish the team update');
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Private draft remains');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Private draft remains');
  const saved=await current();
  evidence.beforeRestart=await control('inspect');
  assert.equal(evidence.beforeRestart.historicalPlanReads,0);
