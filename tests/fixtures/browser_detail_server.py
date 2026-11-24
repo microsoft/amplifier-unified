@@ -496,9 +496,16 @@ async def main():
                     for event, data, at in pending:
                         log_hook(aid, event, data, at)
                     service.fixture_provider_records = []
+                # Settle synthetic diagnostic writes before exposing this source.
+                # Delayed provider captures remain in fixture_provider_records.
+                await service.diagnostics.flush()
+                assert not service.diagnostics.storage_error
                 await service.event_log_view.windows.close()
                 service.event_log_view.windows = WorkWindows(service)
-                await service.event_log_view.windows.read(aid)
+                # The grouped journey seeds before any browser is attached.
+                # A direct read has no selected-client interest and can have its
+                # epoch retired by the ordinary interest loop. Let that loop
+                # request the real window when a browser opens the conversation.
                 def no_complete_projection(*args, **kwargs):
                     raise AssertionError('This fixture must use bounded event windows only')
                 service.event_log_view.read = no_complete_projection
