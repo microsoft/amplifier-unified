@@ -74,6 +74,7 @@ async def test_actual_chatgpt_refresh_preserves_saved_and_mounted_account(
     tmp_path, monkeypatch, candidate_environment, record_property,
 ):
     from types import SimpleNamespace
+    from amplifier_web.host.config import provider_mount_sources
     from amplifier_web.provider_catalog import configured_binding, mounted_catalog_keys
     from amplifier_web.runtime_controls import RuntimeControls
     monkeypatch.setenv("UNIFIED_CATALOG_PROVIDER", "openai-chatgpt")
@@ -88,15 +89,28 @@ async def test_actual_chatgpt_refresh_preserves_saved_and_mounted_account(
     home=tmp_path/"host";cache=ProviderCatalog(tmp_path/"catalog.json")
     manager=SetupManager(home,catalog=cache,probe_command=[sys.executable,str(TRANSPORT_FILE)])
     expected=configured_binding(home,tmp_path,"candidate")
-    plan={"providers":[row]};sources={"candidate":None}
+    plan={"providers":[row]}
+    # Match ordinary composition's intended implementation identity. Discovery
+    # still imports the hash-verified installed candidate, not this source URL.
+    settings = manager.config(tmp_path)
+    sources = provider_mount_sources(
+        [value for value in settings.saved_connections if value.get("enabled", True)],
+        settings.settings,
+    )
     captured={"home":str(home),"workspace":str(tmp_path),"sources":sources,
               "connectionKeys":mounted_catalog_keys(home,tmp_path,[row],sources,binding=True)}
+    assert captured["connectionKeys"]["candidate"] == expected
+    assert mounted_catalog_keys(home,tmp_path,[row],{"candidate":None},binding=True)["candidate"] != expected
+    captured_before = deepcopy(captured)
     coordinator=SimpleNamespace(config=plan,session_state={},get=lambda name:{},
         get_capability=lambda name:captured if name=="web.provider_catalog" else None,
         register_capability=lambda *args:None)
     controls=RuntimeControls(SimpleNamespace(coordinator=coordinator,config=plan,session_id="fixture"),
                              SimpleNamespace(generation=None,queued_inputs=0))
     try:
+        assert (await controls.perform("provider.verifyConnection",{
+            "instance":"candidate","expectedConnectionKey":expected}))["verified"]
+        assert not _records(candidate_environment)  # Binding checks do not contact a provider.
         result=await manager.discover_catalog(tmp_path,instance="candidate")
         entry=next(iter(result["catalogs"].values()))
         assert entry["phase"]=="ready" and entry["models"]
@@ -107,10 +121,25 @@ async def test_actual_chatgpt_refresh_preserves_saved_and_mounted_account(
         assert (await controls.perform("provider.verifyConnection",{
             "instance":"candidate","expectedConnectionKey":expected}))["verified"]
         assert mounted_catalog_keys(home,tmp_path,[row],sources,binding=True)["candidate"]==expected
+        assert captured == captured_before  # Rotation must not relabel the captured mount.
+        rotated = json.loads(path.read_text())
+        write_private(path,json.dumps({**rotated,"account_id":"different-synthetic-account"}))
+        assert configured_binding(home,tmp_path,"candidate") != expected
+        with pytest.raises(ValueError,match="credentials changed"):
+            await controls.perform("provider.verifyConnection",{
+                "instance":"candidate","expectedConnectionKey":expected})
+        assert captured == captured_before
+        write_private(path,json.dumps(rotated))
+        assert configured_binding(home,tmp_path,"candidate") == expected
+        assert (await controls.perform("provider.verifyConnection",{
+            "instance":"candidate","expectedConnectionKey":expected}))["verified"]
         path.unlink()
         with pytest.raises(ValueError,match="credentials changed"):
             await controls.perform("provider.verifyConnection",{
                 "instance":"candidate","expectedConnectionKey":expected})
+        assert captured == captured_before
+        assert len(_records(candidate_environment,"refresh"))==1
+        assert len(_records(candidate_environment,"request"))==2
         assert not _records(candidate_environment,"forbidden")
         record_property("providerClasses",json.dumps(_records(candidate_environment,"provider-class")))
     finally:
@@ -448,7 +477,9 @@ async def test_actual_local_origin_catalog_is_visible_without_api_verification(
 ):
     if provider not in transport.LOCAL_PROVIDERS:
         pytest.skip("Provider is not part of the explicitly selected immutable graph")
-    from amplifier_web.provider_health import generation, record, issue
+    from amplifier_web.provider_health import generation, record, issue, path as health_path
+    from amplifier_web.probe_diagnostics import HostProbeFailure
+    from amplifier_web.provider_catalog import public_failure
     monkeypatch.setenv("UNIFIED_CATALOG_PROVIDER", provider)
     # LiteLLM's published opt-out keeps its bundled pricing data offline too;
     # it is not an alternative model inventory or a patched provider.
@@ -475,8 +506,22 @@ async def test_actual_local_origin_catalog_is_visible_without_api_verification(
             assert ProviderCatalog(manager.catalog.path).entry(model_key(key))["provenance"] == origin
             assert issue(manager.home, "local", row["module"], row["config"]), "Local listing cannot clear a known authentication failure"
         assert len(set(keys)) == 3
-        with pytest.raises(ValueError, match="models"):
+        # This is a typed refusal of API verification, not a failed inventory
+        # read or an authenticated success. Preserve the existing health record.
+        health_before = health_path(manager.home, "local").read_bytes()
+        with pytest.raises(HostProbeFailure) as refused:
             await manager.probe("providers.test", {"id":"local"}, str(tmp_path))
+        assert refused.value.code == "not-verifiable"
+        assert public_failure(refused.value) == (
+            "This provider does not expose API model listing for connection testing. "
+            "Local recommendations do not verify connectivity.",
+            {"stage":"probe", "category":"HostProbeFailure", "code":"not-verifiable"},
+        )
+        assert health_path(manager.home, "local").read_bytes() == health_before
+        assert issue(manager.home, "local", row["module"], row["config"])
+        assert await manager.cached_probe("providers.models", {"id":"local"}, str(tmp_path)) == result
+        assert manager.catalog.entry(model_key(keys[-1])) == entry
+        assert not _records(candidate_environment, "refresh")
         if provider in {"azure-openai", "litellm"}:
             row["config"] = {"base_url":"https://catalog.invalid/azure"} if provider=="azure-openai" else {}
             write_private(amplifier_home() / "settings.yaml", yaml.safe_dump({"config":{"providers":[row]}}))
@@ -489,6 +534,7 @@ async def test_actual_local_origin_catalog_is_visible_without_api_verification(
         assert evidence
         record_property("local_origin_evidence", json.dumps({
             "provider":provider, "source":origin, "classEvidence":evidence[0],
+            "connectionTestRefusal":refused.value.code, "authenticationFailureRetained":True,
             "networkRequests":0, "scope":"Installed provider listing, not inference or entitlement"}))
     finally:
         await manager.catalog.close()
