@@ -675,7 +675,7 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
             if outcome == 'persist-failure':
                 # Establish a genuine earlier checkpoint above, not a fabricated
                 # sentinel. Fail only its later automatic replacement write.
-                previous_bytes = continuity.path.read_bytes()
+                first_checkpoint_bytes = continuity.path.read_bytes()
                 previous_summary = copy.deepcopy(context.summary)
                 newer_history = reducible_history()
                 newer_history[2]['tool_calls'][0]['id'] = 'later-history-tool'
@@ -704,10 +704,19 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
                 assert budget['output'] == 8192
                 assert budget['input'] + budget['output'] <= budget['limit'] == 20000
                 await until(worker.idle)
+                await asyncio.wait_for(case['queue'].join(), 10)
                 assert raw.calls == ['foreground', 'summary', 'foreground']
                 second_canonical = copy.deepcopy(await context.get_messages())
                 assert len(case['schedules']) == 2 and case['schedules'][1]['result'] is True
                 second_task = case['schedules'][1]['task']
+                # Ordinary persistence may refresh evidence metadata. Rollback
+                # must preserve the bytes at THIS replacement boundary, while
+                # the accepted summary and covered source remain unchanged.
+                previous_bytes = continuity.path.read_bytes()
+                previous_record = json.loads(previous_bytes)
+                for key in ('summary', 'sourceRevision', 'identity', 'configuration'):
+                    assert previous_record[key] == saved[key]
+                assert context.summary == previous_summary and not writes
                 case['release_admission'].set()
                 failure = await asyncio.wait_for(asyncio.gather(second_task, return_exceptions=True), 30)
                 await asyncio.wait_for(case['queue'].join(), 10)
@@ -724,6 +733,7 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
                     'Ordinary answer completed.', 'Ordinary answer completed.']
                 record['replacementFailure'] = {
                     'error': type(failure[0]).__name__, 'attemptedWrites': len(writes),
+                    'firstCheckpointSha256': hashlib.sha256(first_checkpoint_bytes).hexdigest(),
                     'previousCheckpointSha256': hashlib.sha256(previous_bytes).hexdigest(),
                     'currentCheckpointSha256': hashlib.sha256(continuity.path.read_bytes()).hexdigest(),
                     'summaryCalls': raw.compactions,
