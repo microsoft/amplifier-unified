@@ -20,7 +20,7 @@ from jsonschema import validate, ValidationError
 from .errors import AppError
 from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background, interrupt_unfinished, restore_voice_usage
 from .execution_working_set import current as current_execution, exact as execution_record, turns_for_inputs
-from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, work_paused
+from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, new_work_paused, work_paused
 from .managed_chats import LOCATION
 from .attachments import MAX_ENCODED_BYTES
 from .performance_diagnostics import PerformanceDiagnostics, measure, measured, TimedLock
@@ -250,6 +250,7 @@ ACTION_DEFINITIONS = {
     "updates.check": ("Check published application releases and ecosystem sources for updates", schema()),
     "updates.failureDisposition": ("User-only: close one exact overflow or unknown-feature-scope failure as acknowledged uncertainty, not verified recovery. Use dispositionOccurrence from attention; reading alone never closes it.", schema({"id":string(300),"expectedOccurrence":{"type":"string","pattern":"^[a-f0-9]{64}$"},"disposition":{"enum":["acknowledged-uncertainty"]}},["id","expectedOccurrence","disposition"])),
     "updates.diagnostics": ("Collect a sanitized update support report, including source provenance, without credentials, chat content or private paths.", schema()),
+    "updates.safeResume": ("Queue new work, let active tasks save and yield, then resume after the prepared app and its included components are ready.", schema({"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(200)}, ["hostInstanceId","revision","generation","attemptId"])),
     "updates.forceRestart": ("Explicitly confirm interrupting active work to restart into one staged qualified app. Saved history and unresolved checkout fences remain; no work is replayed.", schema({"confirm":{"enum":[True]},"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(200)}, ["confirm","hostInstanceId","revision","generation","attemptId"])),
     "updates.install": ("Stage and validate available application or ecosystem updates; activate when idle. Application updates restart the host.", schema()),
     "updates.reconcileManualHandoff": ("Verify an already completed manual Windows app handoff against the exact retained pre-effect refusal and the actual installed official wheel, owner, launcher, dependencies and pinned listener. Does not install, restart or promote. Preserves existing whole-sequence Install intent. Read updates.manualHandoffResults for the durable result; never replay an unknown request.", schema({"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(32)}, ["hostInstanceId","revision","generation","attemptId"])),
@@ -2141,7 +2142,7 @@ class AppService:
         if action == 'runtime.control' and args.get('operation', '').startswith(('task.', 'capacity.')):
             action, args = args['operation'], {**args.get('args', {}), 'sessionId': args.get('sessionId')}
         defer_publish = action == 'smartTools.appCall' and not include_state
-        if action.startswith(("smartTools.","providers.")) or action in {'updates.featureInstall', 'updates.forceRestart', 'updates.reconcileManualHandoff'} or action.startswith('permissions.') and args.get('scope') == 'session':
+        if action.startswith(("smartTools.","providers.")) or action in {'updates.featureInstall', 'updates.safeResume', 'updates.forceRestart', 'updates.reconcileManualHandoff'} or action.startswith('permissions.') and args.get('scope') == 'session':
             command_id = command_id or str(uuid.uuid4())
         if action not in ACTION_DEFINITIONS:
             raise AppError("Unknown action: " + action, 404)
@@ -3490,8 +3491,8 @@ class AppService:
                     raise AppError('Wait for configuration changes to finish.',409)
                 if not self.runtime:
                     raise AppError('The Amplifier runtime is unavailable.')
-                if work_paused(self.state):
-                    raise AppError('An update is activating. Please retry in a moment.',409)
+                if new_work_paused(self.state):
+                    raise AppError('An update is in progress. Edit this message after the update.',409)
                 if args.get('mode', 'fork') == 'current':
                     if source['status'] in {'working','running','starting','stopping','busy'} or any(
                             row.get('status') in {'working','running','starting','stopping','queued','pending'} or row.get('persistent') and row.get('status')=='idle'
@@ -4107,8 +4108,20 @@ class AppService:
                     diagnostic_result = self.update_manager.diagnostics.dispose(args['id'], args['expectedOccurrence'])
                 except ValueError as error:
                     raise AppError(str(error), 409) from None
+            elif action == 'updates.safeResume':
+                if not self.update_manager:
+                    raise AppError("Update service is unavailable.")
+                from .safe_update import start
+                start(self.update_manager, args, origin)
             elif action.startswith("updates."):
                 if not self.update_manager: raise AppError("Update service is unavailable.")
+                drain = self.state['updates'].get('drain') or {}
+                if drain.get('safeUpdate') and drain.get('phase') != 'released' and action not in {
+                        'updates.check', 'updates.install', 'updates.diagnostics', 'updates.reconcileManualHandoff'}:
+                    raise AppError('A safe update is in progress. Its selected release must settle first.', 409)
+                if (drain.get('safeUpdate') and drain.get('phase') in {'waiting', 'replacing'}
+                        and self.state['updates'].get('pendingApp') and action == 'updates.install'):
+                    raise AppError('The safe update already owns this prepared release.', 409)
                 if getattr(self.update_manager, '_manual_handoff_commit_unknown', False):
                     raise AppError('The update commit is unknown. Reload the host before changing update state.', 409)
                 if action == 'updates.reconcileManualHandoff':
@@ -4328,7 +4341,7 @@ class AppService:
             if action in {"feedback.submit", "feedback.get", "feedback.comment", "feedback.reconcile", "feedback.update", "feedback.close", "feedback.reopen",
                           "feedback.attachments.review", "feedback.attachments.add", "feedback.attachments.reconcile"}:
                 receipt["requestId"] = args['requestId']
-            if action in {'updates.featureInstall', 'updates.forceRestart', 'updates.reconcileManualHandoff'}:
+            if action in {'updates.featureInstall', 'updates.safeResume', 'updates.forceRestart', 'updates.reconcileManualHandoff'}:
                 receipt['requestId'] = command_id
             self.shell.stage_action_receipt()
             if command_id:

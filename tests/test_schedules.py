@@ -277,3 +277,29 @@ async def test_execution_folder_revision_binds_preview_activation_and_due_admiss
         assert run['phase'] == 'skipped' and run['executionRevision'] == 1
         assert app.schedules.store.get(sid, record['id'])['status'] == 'needs_review'
     finally: await app.close()
+
+
+async def test_due_monitor_waits_through_safe_update_and_runs_once(tmp_path, monkeypatch):
+    from amplifier_web import update_drain
+    from amplifier_web.update_restart import target
+    from amplifier_web.updates import UpdateManager
+    app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
+    try:
+        await schedule(app, sid, now[0])
+        manager = app.update_manager = UpdateManager(app)
+        state = app.state['updates']
+        state.update(phase='app-staged', pendingApp={'revision': 'a'*40,
+                     'generation': 'b'*32, 'attemptId': 'schedule-test'})
+        state['application']['canInstall'] = True
+        await app.dispatch('updates.safeResume', target(manager), origin='ui', include_state=False)
+        now[0] += 61
+        for phase in ('waiting', 'replacing', 'releasing'):
+            state['drain']['phase'] = phase
+            await app.schedules.tick()
+            assert update_drain.held(app) and not app.schedules.store.runs(sid) and not runtime.inputs
+        state['drain']['phase'] = 'released'
+        await app.schedules.tick()
+        await app.schedules.tick()
+        assert len(runtime.inputs) == len(app.schedules.store.runs(sid)) == 1
+    finally:
+        await app.close()

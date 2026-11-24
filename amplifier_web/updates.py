@@ -37,6 +37,11 @@ def work_paused(state):
     return updates.get('phase') == 'activating' or bool(updates.get('pendingRestart')) or pending(updates)
 
 
+def new_work_paused(state):
+    drain = state.get('updates', {}).get('drain') or {}
+    return work_paused(state) or bool(drain.get('safeUpdate') and drain.get('phase') != 'released')
+
+
 def pending_tool_activations(state):
     """Tool activations that still own a handoff after staging."""
     return [row for row in state.get('pendingSmartTools') or []
@@ -55,7 +60,8 @@ def prepared_tool_activations(state):
 
 
 def availability_check_blocked(manager, state, tier):
-    if (manager.closed or manager.awaiting_restart() or state.get('pendingRelease')
+    if (manager.closed or manager.awaiting_restart() or getattr(manager, '_releasing_update_inputs', False)
+            or state.get('pendingRelease')
             or (state.get('pendingApp') or {}).get('featureSelection')):
         return True
     if prepared_tool_activations(state):
@@ -680,9 +686,9 @@ class UpdateManager:
         self._start_check_open = True
         self._activation_failed = None  # See _activation_held.
         self._update_health_seen_revision = service.state.get('configurationRevision')
-        from .update_restart import target
+        from .update_restart import publish_targets
         state['activation'] = activation(self)
-        state['forceRestartTarget'] = target(self)
+        publish_targets(self)
         publish_health(self)
         from .windows_launcher_follow import project
         project(self)
@@ -721,7 +727,7 @@ class UpdateManager:
     def _derive_state(self):
         """Refresh the publication fields under service.lock; report any change."""
         state = self.service.state['updates']
-        fields = ('blockers', 'activation', 'detail', 'currentStatus', 'forceRestartTarget')
+        fields = ('blockers', 'activation', 'detail', 'currentStatus', 'forceRestartTarget', 'safeResumeTarget')
         before = tuple(state.get(key) for key in fields)
         from .update_health import activation, publish as publish_health, PREPARED_STARTING, PREPARED_WAITING
         state['blockers'] = (self.app_blockers() if state.get('pendingApp')
@@ -735,10 +741,10 @@ class UpdateManager:
         # text replaces or extends it (no IO; it never raises).
         from .windows_launcher_follow import project
         project(self)
-        from .update_restart import target
+        from .update_restart import publish_targets
         # Also the identity that task.waitForUpdate names. The page's offer to
         # interrupt work is a matter of its view (update_health.browser_view).
-        state['forceRestartTarget'] = target(self)
+        publish_targets(self)
         return before != tuple(state.get(key) for key in fields)
 
     def configuration_changed(self):
@@ -1037,6 +1043,12 @@ class UpdateManager:
             # Queue that refresh, then recheck admission against current state.
             if availability_check_blocked(self, state, tier):
                 return
+            from .update_drain import verified_target
+            drain = state.get('drain') or {}
+            if drain.get('safeUpdate') and drain.get('phase') == 'replacing' and verified_target(self, drain):
+                tier, install = 'included', True
+                # A fresh check invalidates the previous proof before any await.
+                drain['componentsReady'] = False
             # A check has passed its admission since this host started. That
             # ends the start reason of check_due; a refusal above does not.
             self._start_check_open = False
@@ -1069,6 +1081,10 @@ class UpdateManager:
                                detail='Checking the application release…' if tier == 'application' else 'Checking included components…' if tier == 'included' else 'Checking other components…', error=None)
             try:
                 application = state.get('application', {})
+                if tier == 'included':
+                    from .safe_update import check_host
+                    if not await check_host(self):
+                        return
                 if tier == 'application':
                     from .app_updates import check as check_application
                     application = await check_application()
@@ -1188,7 +1204,9 @@ class UpdateManager:
                             and type(facts.get('exitCode')) is int and facts['exitCode'] > 0
                             and not facts.get('timedOut'))
                 checked = []
-                for stage in (['included', 'other'] if tier == 'included' else ['other']):
+                safe_included = tier == 'included' and drain.get('safeUpdate') and drain.get('phase') == 'replacing'
+                stages = ['included'] if safe_included else ['included', 'other'] if tier == 'included' else ['other']
+                for stage in stages:
                     selected = [row for row in rows if row.get('updateTier', 'other') == stage]
                     sequence['stage'] = stage
                     await self.publish(sequence={**sequence}, detail='Checking included components…' if stage == 'included' else 'Checking other components…')
@@ -1203,6 +1221,9 @@ class UpdateManager:
                     if sequence[stage]['available'] or (stage == 'included' and protected):break
                 from .update_sequence import verify_app_selection
                 await asyncio.to_thread(verify_app_selection, self, checked)
+                if tier == 'included':
+                    from .safe_update import included_result
+                    included_result(self, group_sources(checked))
                 self.inventory = checked
                 write_private(self.directory/'inventory.json',json.dumps(checked))
                 public = group_sources(checked)
@@ -1212,7 +1233,16 @@ class UpdateManager:
                     row.get('status') in {'check_failed', 'local_changes'} and not availability(row)
                     for row in checked if row.get('updateTier') == 'included')
                 failed_check = any(row.get('status') == 'check_failed' for row in checked)
-                if not available and not blocked:sequence['stage'] = 'complete';sequence['install'] = False
+                if safe_included and not available and not drain.get('componentsReady'):
+                    # A protected or missing required source can be ineligible for
+                    # automatic installation. Keep the failed check visible for retry.
+                    blocked = failed_check = True
+                if not available and not blocked:
+                    if safe_included and drain.get('componentsReady'):
+                        sequence['nextStage'] = 'other'
+                    else:
+                        sequence['stage'] = 'complete'
+                        sequence['install'] = False
                 from .update_health import refresh as refresh_health
                 await refresh_health(self)
                 await self.publish(phase='error' if blocked and failed_check else 'checked' if blocked else 'available' if available else 'checked',
@@ -1270,7 +1300,9 @@ class UpdateManager:
         from .app_updates import stage,activate,supersedes_staged
         state = self.service.state['updates']
         pending = state.get('pendingApp')
-        if (pending and not pending.get('featureSelection') and not self.app_busy()
+        from .safe_update import waiting, component_restart
+        pinned = waiting(state) or component_restart(state.get('drain') or {}, pending or {})
+        if (pending and not pinned and not pending.get('featureSelection') and not self.app_busy()
                 and time.time() - (state.get('pendingAppCheckAt') or 0) >= 60):
             # The idle window may arrive between scheduled checks. Refresh once
             # before activation; a recent check also avoids duplicate requests.
@@ -1282,7 +1314,7 @@ class UpdateManager:
             if pending_tool_activations(state) and not has_new_app_target(self, state):
                 return
             pending = state.get('pendingApp')
-            if not pending or supersedes_staged(state.get('application', {}), pending):
+            if not pending or not pinned and supersedes_staged(state.get('application', {}), pending):
                 await stage(self)
         await activate(self)
 
@@ -1912,6 +1944,9 @@ class UpdateManager:
                     self.inventory = adopted_inventory(self.inventory, partial)
                     write_private(self.directory / 'inventory.json', json.dumps(self.inventory), owned_root=self.home)
                 sequence = self.service.state['updates'].get('sequence')
+                if tier == 'included' and not rollback:
+                    from .safe_update import included_result
+                    included_result(self, items, promoted=True)
                 if sequence:
                     from .update_sequence import summary
                     tier_summary = summary([row for row in items if row.get('updateTier') == tier])
@@ -2055,6 +2090,8 @@ class UpdateManager:
         if getattr(self, '_manual_handoff_commit_unknown', False):return
         settings=self.service.state['settings'].get('updates',{})
         state=self.service.state['updates']
+        from .safe_update import adoption_target, enroll, waiting, component_restart
+        await enroll(self)
         from .update_drain import observe_waiters
         await observe_waiters(self)
         if self.awaiting_restart():
@@ -2075,7 +2112,7 @@ class UpdateManager:
         drain = state.get('drain') or {}
         if drain.get('phase') in {'draining', 'replacing', 'releasing'}:
             installed = state.get('applicationResult') or {}
-            if all(installed.get(key) == drain.get('target', {}).get(key) for key in ('attemptId', 'revision')):
+            if all(installed.get(key) == adoption_target(drain).get(key) for key in ('attemptId', 'revision')):
                 await finish(self, 'installed')
             elif not state.get('pendingApp') or state.get('phase') in {'error', 'interrupted'} or drain.get('hostInstanceId') != self.service.instance_id:
                 await finish(self, 'withdrawn')
@@ -2125,7 +2162,7 @@ class UpdateManager:
             return
         if state.get('pendingApp'):
             if state.get('phase') in {'error', 'interrupted'}:return
-            if self.check_due():
+            if self.check_due() and not waiting(state) and not component_restart(drain, state['pendingApp']):
                 await self.check(fresh=True, automatic=True)
             await self.app()
             return

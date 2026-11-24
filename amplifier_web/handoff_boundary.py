@@ -18,8 +18,10 @@ async def inspect(worker, request_id, cancel=False, *, update=False, configurati
         # Enrolment acknowledges the original marker, not readiness. Update
         # callers subsequently use observeOnly and must not see an acknowledged
         # intent whose hook was never installed.
-        await inspect(worker, request_id, update=update, configuration=configuration,
-                      expected=expected, arm_only=True)
+        armed = await inspect(worker, request_id, update=update, configuration=configuration,
+                              expected=expected, arm_only=True)
+        if armed['waitingFor'] != ['generation']:
+            return armed
         return {'ready': False, 'waitingFor': ['command']}
     async with AsyncExitStack() as stack:
         if not arm_only:
@@ -110,6 +112,24 @@ async def inspect(worker, request_id, cancel=False, *, update=False, configurati
                 name='unified-checkout-boundary', priority=0)
             worker._handoff_boundary = {'id': request_id, 'unregister': unregister, 'update': continuing,
                 'hadGoal': bool(coordinator.session_state.get('goal'))}
+            if update and (expected or {}).get('saveAndYield'):
+                async def request_yield(event, data):
+                    marker = worker._handoff_boundary
+                    if (not marker or marker['id'] != request_id or marker.get('yieldRequested')
+                            or not current_update() or not worker.runtime.generation
+                            or worker.runtime.generation.get('id') != requested_generation):
+                        return HookResult()
+                    marker['yieldRequested'] = True
+                    return HookResult(action='inject_context', ephemeral=True, context_injection_role='system',
+                        context_injection='A safe app update is waiting. Finish the current operation, '
+                            'save your progress and remaining steps, then end this turn. '
+                            'Keep the unfinished task active so it can resume after the update.')
+                remove_prompt = coordinator.hooks.register('provider:request', request_yield,
+                    name='unified-safe-update-yield', priority=6)
+                def remove_boundary_hooks():
+                    remove_prompt()
+                    unregister()
+                worker._handoff_boundary['unregister'] = remove_boundary_hooks
             if configuration:
                 worker._handoff_boundary.update(configuration=True, intent=copy.deepcopy(expected))
             if continuing:

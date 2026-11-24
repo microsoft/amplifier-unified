@@ -115,6 +115,19 @@ async def test_auth_failure_never_silently_changes_model(monkeypatch):
     with pytest.raises(ProviderError): await manager.connect('v=0')
     assert create.call_count==1
 
+async def test_safe_update_holds_new_voice_calls_and_previews_before_provider_request():
+    from amplifier_web import voice_settings
+    manager = VoiceService(Service(), api_key='fixture', http=object())
+    manager.service.state['updates'] = {'drain': {'safeUpdate': True, 'phase': 'waiting'}}
+    manager.request = AsyncMock(side_effect=AssertionError('Unexpected provider request'))
+    with pytest.raises(VoiceError, match='update'):
+        await manager.connect('v=0', provider='live')
+    with pytest.raises(VoiceError, match='update'):
+        await voice_settings.preview(manager, 'gpt-live-1', 'marin')
+    assert manager.call is None
+    manager.request.assert_not_awaited()
+
+
 async def test_no_key_and_no_session_fail_before_network():
     manager=VoiceService(Service(),api_key='',http=object())
     with pytest.raises(VoiceError,match='Voice settings'): await manager.connect('v=0')

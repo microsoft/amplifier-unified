@@ -15,7 +15,7 @@ import wave
 import aiohttp
 
 from .preferences import SettingsStore
-from .updates import work_paused
+from .updates import new_work_paused
 from .voice_options import voices_for
 
 SAMPLE = "Hello! I'm ready to help."
@@ -182,7 +182,7 @@ async def preview(manager, model, voice):
         async with manager.service.lock:
             if not manager.api_key:
                 raise VoiceError('Add an OpenAI API key in Voice settings first.', 409)
-            if work_paused(manager.service.state):
+            if new_work_paused(manager.service.state):
                 raise VoiceError('An update is activating. Try the preview when it finishes.', 409)
             if manager.call and not manager.call.closed or manager.service.state.get('voicePreviewBusy'):
                 raise VoiceError('Finish the current call or preview first.', 409)
