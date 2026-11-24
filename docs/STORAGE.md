@@ -495,13 +495,16 @@ retains exact original manifest hashes and its own package qualification.
 Settings → Storage → **Saved test evidence** reads recorded sizes only when the
 user chooses **Review saved test sizes**. Each page covers at most 32 canonical
 test allocations. Earlier pages replace the displayed page; totals apply only
-to the displayed, fully accounted records. Newly saved or changed records can
+to the displayed, fully accounted records. Results-only export sizes are shown
+separately. Newly saved or changed records can
 appear after Refresh. This is not a snapshot of all host storage.
 
 Original source, final workspace, and test results are separate roles. Complete
 accounting requires a completed removal receipt bound to the allocation's
 resource, root, environment and source hash, with a verified complete archive
-selection and matching byte totals. A full-environment archive includes the
+selection and matching byte totals. A verified results-only export reports its single
+results archive size and that the final workspace was not exported. Its source
+size and overall total remain unavailable. A full-environment archive includes the
 workspace and results without inventing separate sizes. Missing or inconsistent
 records remain visible as unavailable, rather than zero. Remote receipts say
 whether downloaded copies are recorded; a total counts one evidence set, not

@@ -33,12 +33,17 @@ def object_fields(fields):
 
 def projection():
     base = 'lastOperation.result.'
-    retention = object_fields({key: scalar(base + 'retention.' + key, kind) for key, kind in {
+    retained = base + 'retention.'
+    results_only = (f"json_array_length(body,'$.{retained}selection')=1 AND "
+                    f"json_type(body,'$.{retained}sourceBytes') IS NULL AND "
+                    f"json_type(body,'$.{retained}totalBytes') IS NULL AND "
+                    + scalar(retained + 'selection[0]') + "='/artifacts'")
+    retention = object_fields({'resultsOnly': results_only, **{key: scalar(retained + key, kind) for key, kind in {
         'verified': 'true', 'sourceBytes': 'integer', 'archiveBytes': 'integer', 'totalBytes': 'integer',
-        'policy': 'text', 'sourceSha256': 'text'}.items()})
+        'policy': 'text', 'sourceSha256': 'text', 'logicalBytes': 'integer'}.items()}})
     def archives(name):
         return 'json_array(' + ','.join(object_fields({key: scalar(base + name + f'[{i}].' + key, kind)
-            for key, kind in {'id': 'text', 'source': 'text', 'bytes': 'integer', 'sha256': 'text', 'verified': 'true'}.items()}) for i in range(3)) + ')'
+            for key, kind in {'id': 'text', 'source': 'text', 'bytes': 'integer', 'logicalBytes': 'integer', 'sha256': 'text', 'verified': 'true'}.items()}) for i in range(3)) + ')'
     result = object_fields({'ok': scalar(base + 'ok', 'true'), 'status': scalar(base + 'status'),
         'universeId': scalar(base + 'universeId'), 'retention': retention,
         **{name: archives(name) for name in ('archives', 'downloadedArchives')},
@@ -70,8 +75,9 @@ def archive_selection(value, name, universe, policy):
                 or not isinstance(checksum, str) or not re.fullmatch('[a-f0-9]{64}', checksum)):
             raise ValueError('Incomplete archive accounting')
         roles[role] = (size, checksum)
-    if (policy in {'files', 'archive-only'} and set(roles) != {'/workspace', '/artifacts'}
-            or policy == 'full' and set(roles) != {'/'} or policy not in {'files', 'archive-only', 'full'}):
+    expected = {'files': {'/workspace', '/artifacts'}, 'archive-only': {'/workspace', '/artifacts'},
+                'full': {'/'}, 'selected-artifacts': {'/artifacts'}}
+    if set(roles) != expected.get(policy):
         raise ValueError('The archive selection is incomplete')
     return roles
 
@@ -104,23 +110,34 @@ def project(position, identity, root, status, encoded):
                 or not re.fullmatch('[a-f0-9]{64}', row.get('sourceHash') or '')
                 or row['sourceHash'] != retained.get('sourceSha256')):
             raise ValueError('The saved source or environment identity does not match')
-        source = number(retained.get('sourceBytes'))
-        if source is None:
-            raise ValueError('Incomplete accounting')
         policy = retained.get('policy')
         original = archive_selection(value, 'archives', row['universeId'], policy)
         downloaded = bool(value.get('downloadedArchivesPresent'))
         if downloaded and archive_selection(value, 'downloadedArchives', row['universeId'], policy) != original:
             raise ValueError('The downloaded archives do not match the original exports')
         roles = {role: size for role, (size, _) in original.items()}
-        total = source + sum(roles.values())
-        if number(total) is None or number(retained.get('archiveBytes')) != sum(roles.values()) or number(retained.get('totalBytes')) != total:
-            raise ValueError('Inconsistent accounting')
-        expiry = row.get('workspaceArchiveExpiry') or {}
-        if (expiry.get('status') == 'expired' and isinstance(row.get('removalRequestId'), str)
-                and expiry.get('requestId') == row['removalRequestId']
-                and expiry.get('sha256') == original.get('/workspace', (None, None))[1]):
-            result['workspaceAvailability'] = 'expired'
+        archive_bytes = sum(roles.values())
+        if number(retained.get('archiveBytes')) != archive_bytes:
+            raise ValueError('Inconsistent archive accounting')
+        source = number(retained.get('sourceBytes'))
+        total = None
+        if policy == 'selected-artifacts':
+            logical = number(retained.get('logicalBytes'))
+            if (not retained.get('resultsOnly') or logical is None
+                    or number(value['archives'][0].get('logicalBytes')) != logical):
+                raise ValueError('Inconsistent results-only receipt')
+            result['workspaceAvailability'] = 'not-exported'
+        else:
+            if source is None:
+                raise ValueError('Incomplete accounting')
+            total = source + archive_bytes
+            if number(total) is None or number(retained.get('totalBytes')) != total:
+                raise ValueError('Inconsistent total accounting')
+            expiry = row.get('workspaceArchiveExpiry') or {}
+            if (expiry.get('status') == 'expired' and isinstance(row.get('removalRequestId'), str)
+                    and expiry.get('requestId') == row['removalRequestId']
+                    and expiry.get('sha256') == original.get('/workspace', (None, None))[1]):
+                result['workspaceAvailability'] = 'expired'
         result.update(sourceBytes=source, workspaceBytes=roles.get('/workspace'),
                       resultBytes=roles.get('/artifacts'), otherArchiveBytes=roles.get('/', 0), totalBytes=total,
                       combinedArchive=policy == 'full',
