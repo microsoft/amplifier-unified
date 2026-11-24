@@ -391,6 +391,138 @@ async def test_unresolvable_configuration_does_not_hide_cache_failures(repositor
     assert root.exists()
 
 
+@pytest.mark.parametrize('failure', ['yaml', 'module-shape', 'recursive-yaml'])
+@pytest.mark.parametrize('remote_result', ['failed', 'current', 'update'])
+async def test_invalid_app_selection_keeps_cache_diagnostics_but_never_installs(
+        repository, service, monkeypatch, tmp_path, failure, remote_result):
+    from amplifier_web import app_updates, updates, update_sequence
+    from amplifier_web.host import config
+    from amplifier_web.session_files import amplifier_home
+
+    manager = service.update_manager
+    root = cached(service, repository, 'repo')
+    dirty = cached(service, repository, 'dirty')
+    (dirty/'bundle.py').write_text('keep my edit\n')
+    pinned_root = cached(service, repository, 'pinned', 'a'*40)
+    foreign = tmp_path/'foreign'
+    shutil.copytree(repository, foreign, symlinks=True)
+    (foreign/'.amplifier_cache_meta.json').write_text(json.dumps({
+        'git_url': 'https://example.invalid/foreign', 'ref': 'main'}))
+    (root.parent/'external').symlink_to(foreign, target_is_directory=True)
+    settings = amplifier_home()/'settings.yaml'
+    valid = settings.read_bytes()
+    # A valid old index must not mask a later unreadable selection.
+    await manager.inventory_sources(indexed=True)
+    index = (manager.directory/'inventory-index.json').read_bytes()
+    secret = 'private-settings-marker'
+    settings.write_text({
+        'yaml': f'credential: {secret}\nbundle: [',
+        'module-shape': f'config:\n  providers:\n    - source: git+https://user:{secret}@example.invalid/untrusted@main\n',
+        'recursive-yaml': f'credential: {secret}\nconfig: &cycle\n  children: *cycle\n',
+    }[failure])
+    before_settings = settings.read_bytes()
+    before = {path: path.read_bytes() for folder in (root, dirty, pinned_root, foreign)
+              for path in folder.rglob('*') if path.is_file() and '.git' not in path.parts}
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('Invalid selection must not load keys, prepare sources, or select defaults')
+    monkeypatch.setattr(config, '_load_keys', forbidden)
+    monkeypatch.setattr(config, 'prepare_registry', forbidden)
+    calls = []
+    original = updates.process
+    current = git(repository, 'rev-parse', 'HEAD')
+    latest = 'b'*40 if remote_result == 'update' else current
+    async def process(*args, **kwargs):
+        if args[1] == 'ls-remote':
+            calls.append(args)
+            assert args[2] == 'https://example.invalid/repo'
+            if remote_result == 'failed':
+                raise RuntimeError('Unavailable branch')
+            return latest + '\trefs/heads/main'
+        assert args[0] == 'git' and not {'fetch', 'clone', 'checkout', 'reset'} & set(args)
+        return await original(*args, **kwargs)
+    async def application():
+        return {'id': 'application', 'label': 'Application', 'status': 'current'}
+    monkeypatch.setattr(updates, 'process', process)
+    monkeypatch.setattr(app_updates, 'check', application)
+    with monkeypatch.context() as invalid:
+        invalid.setattr(update_sequence, 'included_sources', forbidden)
+        await manager.check()
+        rows = manager.inventory
+        warning = next(row for row in rows if row['id'] == 'source-configuration')
+        assert warning['status'] == 'check_failed' and not warning['eligible']
+        assert 'settings' in warning['detail'].lower() and 'check' in warning['detail'].lower()
+        by_path = {row['path']: row for row in rows if row.get('path')}
+        assert set(by_path) == {str(path.relative_to(root.parent.parent)) for path in (root, dirty, pinned_root)}
+        clean = by_path[str(root.relative_to(root.parent.parent))]
+        assert clean['eligible'] and clean['usage'] == 'unknown'
+        assert clean['status'] == ('check_failed' if remote_result == 'failed' else remote_result)
+        assert by_path[str(dirty.relative_to(root.parent.parent))]['status'] == 'local_changes'
+        assert not by_path[str(dirty.relative_to(root.parent.parent))]['eligible']
+        assert by_path[str(pinned_root.relative_to(root.parent.parent))]['status'] == 'pinned'
+        assert not by_path[str(pinned_root.relative_to(root.parent.parent))]['eligible']
+        assert all(not row.get('appSelection') and not row.get('missing') for row in rows)
+        assert len(calls) == 1
+        state = service.state['updates']
+        assert state['phase'] == 'error' and state['available'] == 0
+        assert state['includedCanProceed'] is False
+        assert secret not in json.dumps(state)
+        # Both entry points retain the same pre-preparation refusal.
+        await manager.install()
+        await manager.install(automatic=True)
+        assert not active_release(service.data_dir)
+        assert not list((manager.directory/'releases').glob('*'))
+        assert settings.read_bytes() == before_settings
+        assert all(path.read_bytes() == content for path, content in before.items())
+        assert (manager.directory/'inventory-index.json').read_bytes() == index
+
+    # Repairing settings alone cannot retroactively authorize diagnostic rows.
+    settings.write_bytes(valid)
+    with pytest.raises(update_sequence.StaleAppSelection):
+        update_sequence.verify_app_selection(manager, rows)
+    calls.clear()
+    await manager.check()
+    assert not any(row['id'] == 'source-configuration' for row in manager.inventory)
+    assert all(row.get('appSelection') for row in manager.inventory)
+    assert len(calls) == 1
+
+
+async def test_settings_repaired_during_cache_check_require_another_check(repository, service, monkeypatch):
+    from amplifier_web import app_updates, updates, update_sequence
+    from amplifier_web.session_files import amplifier_home
+    root = cached(service, repository, 'repo')
+    settings = amplifier_home()/'settings.yaml'
+    valid = settings.read_bytes()
+    settings.write_text('bundle: [')
+    original = updates.process
+    calls = []
+    async def process(*args, **kwargs):
+        if args[1] == 'ls-remote':
+            calls.append(args)
+            settings.write_bytes(valid)
+            return 'b'*40 + '\trefs/heads/main'
+        return await original(*args, **kwargs)
+    async def application():
+        return {'id': 'application', 'label': 'Application', 'status': 'current'}
+    monkeypatch.setattr(updates, 'process', process)
+    monkeypatch.setattr(app_updates, 'check', application)
+    manager = service.update_manager
+    await manager.check()
+    assert len(calls) == 1
+    assert service.state['updates']['phase'] == 'error'
+    assert service.state['updates']['available'] == 0
+    assert all(not row.get('appSelection') for row in manager.inventory)
+    with pytest.raises(update_sequence.StaleAppSelection):
+        update_sequence.verify_app_selection(manager, manager.inventory)
+    assert not (manager.directory/'inventory-index.json').exists()
+    await manager.check()
+    assert len(calls) == 2
+    assert service.state['updates']['phase'] == 'available'
+    assert all(row.get('appSelection') for row in manager.inventory)
+    assert (manager.directory/'inventory-index.json').is_file()
+    assert root.exists()
+
+
 async def test_uncertain_transitive_module_and_skill_caches_survive_staging(repository, service):
     active = cached(service, repository, 'repo')
     module = cached(service, repository, 'transitive-module')
