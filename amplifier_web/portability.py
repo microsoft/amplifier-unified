@@ -539,12 +539,18 @@ class Portability:
                     path = _local_path(source / name)
                     destination = _local_path(archive / name)
                     expected = data.decode_file(value)
+                    # A detached composer transcript carries its signed source
+                    # digest. Archive the exact original under the same name.
+                    def matches(original):
+                        if 'sourceSha256' in value:
+                            return digest(original) == value['sourceSha256']
+                        return original == expected
                     if destination.exists():
-                        if destination.read_bytes() != expected or path.exists():
+                        if not matches(destination.read_bytes()) or path.exists():
                             raise ValueError('Source archive conflicts with the reviewed transfer')
                         confirm_durable(destination)
                         continue
-                    if path.read_bytes() != expected:
+                    if not matches(path.read_bytes()):
                         raise ValueError('Source native history changed before archival')
                     durable_directory(destination.parent)
                     os.replace(path, destination)

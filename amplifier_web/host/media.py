@@ -207,18 +207,26 @@ class RequestOnlyRegistry:
                 raise ValueError("Invalid private upload issuance")
             self.uploads = value["inputs"]
 
-    def issue_upload(self, input_id, content):
+    def issue_upload(self, input_id, content, *, refs=()):
         if not isinstance(input_id, str) or not input_id:
             raise ValueError("Upload issuance requires its actual admitted input ID")
         entry = {"content": _digest(content), "images": {
             str(index): _digest(block["source"]) for index, block in enumerate(content)
             if isinstance(block, dict) and block.get("type") == "image"}}
+        if refs:
+            entry["refs"] = _digest(refs)
         if input_id in self.uploads and self.uploads[input_id] != entry:
             raise ValueError("Admitted upload input identity cannot be rebound")
         self.uploads[input_id] = entry
         if self.issuance_path is not None:
             from .config import write_private
             write_private(self.issuance_path, json.dumps({"v": 1, "inputs": self.uploads}))
+
+    def issued_composer_refs(self, input_id, content, refs):
+        """Only the exact ordered images and content admitted with this user input."""
+        row = self.uploads.get(input_id) if isinstance(input_id, str) else None
+        return bool(refs and row and row.get("refs") == _digest(refs)
+                    and row["content"] == _digest(content))
 
     def bind(self, request, issued=None):
         if id(request) in self.requests:
@@ -416,9 +424,9 @@ def _support(provider, request, model, options):
     raise ValueError("Media requires request-indexed provider support")
 
 
-def _support_owner(provider):
+def _support_owner(provider, name="get_media_request_support_for_request"):
     """Retain the exact getter endpoint, not just its reproducible return value."""
-    getter = getattr(provider, "get_media_request_support_for_request", None)
+    getter = getattr(provider, name, None)
     return (getattr(getter, "__self__", None), getattr(getter, "__func__", getter))
 
 
@@ -431,7 +439,7 @@ def _effective_model(provider, request, options):
 
 class HostMediaProjection:
     """One private counted candidate; no hydrated data in canonical messages."""
-    def __init__(self, coordinator, provider, source, options, prepared, lifetime, support, model):
+    def __init__(self, coordinator, provider, source, options, prepared, lifetime, support, model, support_probe):
         self.coordinator, self.provider, self.source = coordinator, provider, source
         self.options, self.support = copy.deepcopy(options), copy.deepcopy(support)
         self.snapshot = source.model_copy(deep=True)
@@ -444,8 +452,14 @@ class HostMediaProjection:
         if not self.chain:
             raise ValueError("Prepared media provider identity is unavailable")
         self.binding = self._binding()
-        self.support_owner = _support_owner(provider)
+        self.support_probe = support_probe
+        self.support_owner = self._support_owner()
         prepared.set_binding_validator(self.validate_binding)
+
+    def _support_owner(self):
+        # A legacy fit must also expire if the provider gains an indexed declaration.
+        return (_support_owner(self.provider), _support_owner(self.provider, 'get_media_request_support')
+                if self.support_probe is not _support else None)
 
     def _binding(self):
         from ..provider_capture import normalized_options
@@ -462,8 +476,8 @@ class HostMediaProjection:
                 or self.coordinator.get_capability(NAMESPACE) is not self.capability
                 or self.capability.enabled is not True or self._binding() != self.binding
                 or self.model != _effective_model(self.provider, self.source, self.options)
-                or self.support_owner != _support_owner(self.provider)
-                or self.support != _support(self.provider, self.snapshot, self.model, self.options)
+                or self.support_owner != self._support_owner()
+                or self.support != self.support_probe(self.provider, self.snapshot, self.model, self.options)
                 or self.lifetime[1]() is not True):
             raise ValueError("Prepared media source/provider/construction changed")
         if self.capability.enabled is not True:
@@ -537,7 +551,8 @@ async def prepare_media(coordinator, provider, request, *, request_options=None)
     if (request.metadata or {}).get("purpose") == "context-compaction":
         return WarningProjection(request, options, coordinator=coordinator)
     if getattr(provider, "get_media_request_support_for_request", None) is None:
-        return WarningProjection(request, request_options, coordinator=coordinator)
+        from .composer_replay import legacy_projection
+        return await legacy_projection(coordinator, provider, request, options)
     model = _effective_model(provider, request, options)
     support = _support(provider, request, model, options)
     if not support["positions"]:
@@ -546,7 +561,12 @@ async def prepare_media(coordinator, provider, request, *, request_options=None)
         # refuses unsupported private carriers. A positive fitted candidate
         # changing support still fails validate_binding; it cannot downgrade.
         return WarningProjection(request, options, coordinator=coordinator)
-    context = state.bridge.request_scope()
+    return await _prepare_supported(coordinator, provider, request, options, model, support, _support)
+
+
+async def _prepare_supported(coordinator, provider, request, options, model, support, support_probe):
+    cap = coordinator.get_capability(NAMESPACE)
+    context = coordinator.get_capability("web.media.construction").bridge.request_scope()
     validate = context.__enter__()
     prepared = None
     try:
@@ -558,7 +578,7 @@ async def prepare_media(coordinator, provider, request, *, request_options=None)
                 "generation": str(coordinator.get_capability("web.worker_run") or id(coordinator))},
                 model=model, request_options=options, purpose="model", execution_scope=None)
         projection = HostMediaProjection(coordinator, provider, request, options, prepared,
-                                         (context, validate), support, model)
+                                         (context, validate), support, model, support_probe)
         projection.validate()
         return projection
     except BaseException:

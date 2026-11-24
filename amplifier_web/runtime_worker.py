@@ -1144,8 +1144,8 @@ class Worker:
                         and source_captures[0].same(source_captures[1])):
                     self.tool_sources = source_captures[1]
             self.config_inputs = tuple(report.get("config_inputs", ()))
-            from amplifier_web.attachments import encode
-            self.session.coordinator.register_capability('live.attachments.encode',encode)
+            from amplifier_web.attachments import encode, encoder_for_session
+            self.session.coordinator.register_capability('live.attachments.encode', encoder_for_session(config))
             with startup_timing.phase('worker.controls.restore'):
                 self.controls = RuntimeControls(self.session, self.runtime, self.telemetry,
                     preserve_configuration=config.get('_preserveConfiguration') is True,

@@ -3326,6 +3326,11 @@ class AppService:
                 if reused is not None:
                     session = reused
                 else:
+                    from .attachments import compact_images_for_new_chat
+                    if (session.get('sessionKind') == 'root' and not session.get('externalAgent')
+                            and origin in {'ui', 'user'} and not args.get('inheritConfiguration')
+                            and not caller_session_id and compact_images_for_new_chat(self.data_dir)):
+                        session['composerImageReferences'] = True
                     if args.get('fromDraft') and command_id:
                         session['creationCommandId'] = command_id
                     from .naming import persist

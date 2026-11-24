@@ -22,14 +22,31 @@ SESSION_FIELDS = {'id', 'title', 'titleSource', 'autoName', 'description', 'crea
                   'sharedHistoryUserTurnOffset', 'sharedHistoryTotal', 'executionRevision'}
 
 
-def file_data(path):
+def file_data(path, *, prepare=None):
     before = path.stat()
     data, _ = _regular_bytes(path, MAX_BYTES)
     after = path.stat()
     if (before.st_ino, before.st_mtime_ns, before.st_size) != (after.st_ino, after.st_mtime_ns, after.st_size):
         raise ValueError('Task history changed during export')
     validate_bytes(data)
-    return {'data': base64.b64encode(data).decode(), 'sha256': digest(data), 'bytes': len(data)}
+    source = data
+    if prepare is not None:
+        data = prepare(data)
+        if len(data) > MAX_BYTES:
+            raise ValueError('Detached history exceeds the task transfer limit')
+    packed = {'data': base64.b64encode(data).decode(), 'sha256': digest(data), 'bytes': len(data)}
+    if data is not source:
+        packed['sourceSha256'] = digest(source)
+    return packed
+
+
+def _unique(pairs):
+    result = {}
+    for key, child in pairs:
+        if key in result:
+            raise ValueError('Duplicate key in saved task history')
+        result[key] = child
+    return result
 
 
 def decode_file(value):
@@ -39,18 +56,11 @@ def decode_file(value):
     validate_bytes(data)
     # Native files are JSON/JSONL. Scan decoded structures too: base64 is a
     # transport encoding, never a way around credential-field rejection.
-    def unique(pairs):
-        result = {}
-        for key, child in pairs:
-            if key in result:
-                raise ValueError('Duplicate key in saved task history')
-            result[key] = child
-        return result
     try:
-        value = json.loads(data, object_pairs_hook=unique)
+        value = json.loads(data, object_pairs_hook=_unique)
     except json.JSONDecodeError:
         for line in data.splitlines():
-            if line.strip(): validate_public(json.loads(line, object_pairs_hook=unique))
+            if line.strip(): validate_public(json.loads(line, object_pairs_hook=_unique))
     else:
         validate_public(value)
     return data
@@ -76,10 +86,30 @@ def capture(app, session):
     identity = validate_id(session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'])
     native = native_directory(app, session)
     files = {}
+    converted = False
+
+    def detach(data):
+        nonlocal converted
+        from .composer_handoff import inline_composer_uploads
+        lines = data.splitlines(keepends=True)
+        positions = [i for i, line in enumerate(lines) if line.strip()]
+        rows = [json.loads(lines[i], object_pairs_hook=_unique) for i in positions]
+        portable = inline_composer_uploads(native, rows, limit=MAX_BYTES)
+        if portable is rows:
+            return data
+        for pos, old, new in zip(positions, rows, portable):
+            if old is not new:
+                lines[pos] = json.dumps(new, ensure_ascii=False).encode() + b'\n'
+        converted = True
+        return b''.join(lines)
+
     for name in sorted(NATIVE_FILES):
         path = native / name
         if path.exists():
-            files[name] = file_data(path)
+            if session.get('composerImageReferences') is True and name in {'transcript.jsonl', 'transcript.jsonl.backup'}:
+                files[name] = file_data(path, prepare=detach)
+            else:
+                files[name] = file_data(path)
     if 'transcript.jsonl' not in files:
         raise ValueError('A canonical saved transcript is required before transferring a task')
     directory = app.data_dir / 'sessions' / identity
@@ -138,7 +168,7 @@ def capture(app, session):
              'canvas': canvas, 'observations': observations,
              'origin': {'historyHome': session['workspace'], 'executionDirectory': session.get('workingDirectory') or session['workspace']}}
     checkpoint = directory / 'context-checkpoint.json'
-    if checkpoint.exists(): value['contextCheckpoint'] = file_data(checkpoint)
+    if not converted and checkpoint.exists(): value['contextCheckpoint'] = file_data(checkpoint)
     from .resource_files import references
     pending = list(references(value))
     resources = {}
@@ -202,6 +232,11 @@ def _validate(value):
         raise ValueError('Unsupported native history file')
     for name, row in value['native'].items():
         raw = decode_file(row)
+        if 'sourceSha256' in row:
+            sha = row['sourceSha256']
+            if (name not in {'transcript.jsonl', 'transcript.jsonl.backup'} or not isinstance(sha, str)
+                    or len(sha) != 64 or any(c not in '0123456789abcdef' for c in sha)):
+                raise ValueError('Invalid source transcript identity')
         if name in {'metadata.json', 'metadata.json.backup'}:
             metadata = json.loads(raw)
             if not isinstance(metadata, dict):
