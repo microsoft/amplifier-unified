@@ -37,6 +37,8 @@ import shutil
 import stat
 import subprocess
 import sys
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 import uuid
 
 import pytest
@@ -57,6 +59,7 @@ from amplifier_web.runtime_qualification import installed_graph, verify_recorded
 from amplifier_web.runtime_source_alignment import verify_checked_selection
 from amplifier_web.service import AppService
 from amplifier_web.session_files import sessions_dir
+from amplifier_web.update_command_details import STDERR_LIMIT, STDOUT_LIMIT
 
 from test_effective_behavior_update_native import (
     fixture_core,
@@ -298,6 +301,7 @@ def _assert_generation(manager, generation, revisions, versions):
 
 def _assert_probes(probes, generation, versions):
     selected = [row for row in probes if row["generation"] == generation]
+    assert all(row.get("captureComplete") is True for row in selected), selected
     assert selected and all(row["returncode"] == 0 for row in selected), selected
     assert any("--source-policy-only" in row["command"] for row in selected)
     prepared = [row for row in selected if "--checked-sources" in row["command"]]
@@ -314,6 +318,252 @@ def _assert_probes(probes, generation, versions):
     # observed mount, not a guessed count of initialization hooks.
     assert all(row["version"] == versions[row["component"]] for row in actual), actual
     assert next(row for row in actual if row["component"] == "c")["aVersion"] == versions["a"]
+
+
+def _observe_subprocess(child, row, *, limits=(STDOUT_LIMIT, STDERR_LIMIT)):
+    """Tap the consumer's reads/wait; never drain, await or signal independently."""
+    buffers = {key: bytearray() for key in ("stdout", "stderr")}
+    complete = dict.fromkeys(buffers, False)
+    waited = False
+    row["captureComplete"] = False
+
+    def failed(error):
+        row["captureError"] = type(error).__name__
+        row["captureComplete"] = False
+        row.pop("returncode", None)
+
+    def finish():
+        if not waited or not all(complete.values()) or "captureError" in row:
+            return
+        row.update({key: bytes(value).decode(errors="replace") for key, value in buffers.items()})
+        row["returncode"] = child.returncode
+        row["captureComplete"] = (
+            type(child.returncode) is int
+            and not any(row[key + "Truncated"] for key in buffers)
+        )
+
+    def tap(reader, key, limit):
+        read = reader.read
+        depth = 0
+        row[key + "Bytes"] = 0
+        row[key + "Truncated"] = False
+
+        async def capture(*args, **kwargs):
+            nonlocal depth
+            outer = depth == 0
+            depth += 1
+            try:
+                data = await read(*args, **kwargs)
+            except BaseException as error:
+                if outer:
+                    failed(error)
+                raise
+            finally:
+                depth -= 1
+            if outer:
+                # StreamReader.read(-1) calls self.read internally. Account only
+                # its returned aggregate; read(0) returning b"" is not EOF.
+                try:
+                    size = args[0] if args else kwargs.get("n", -1)
+                    row[key + "Bytes"] += len(data)
+                    buffers[key].extend(data[:max(0, limit - len(buffers[key]))])
+                    row[key + "Truncated"] = row[key + "Bytes"] > limit
+                    if size < 0 or size != 0 and not data:
+                        complete[key] = True
+                    finish()
+                except Exception as error:
+                    failed(error)  # Observer failure cannot replace command outcome.
+            return data
+
+        reader.read = capture
+
+    for (key, limit) in zip(buffers, limits):
+        tap(getattr(child, key), key, limit)
+    wait = child.wait
+
+    async def capture_wait(*args, **kwargs):
+        nonlocal waited
+        try:
+            result = await wait(*args, **kwargs)
+        except BaseException as error:
+            failed(error)
+            raise
+        waited = True
+        try:
+            finish()
+        except Exception as error:
+            failed(error)
+        return result
+
+    child.wait = capture_wait
+    return buffers
+
+
+def _observed_child(stdout=b"out", stderr=b"err", code=0):
+    readers = []
+    for data in (stdout, stderr):
+        reader = asyncio.StreamReader(limit=8)
+        reader.feed_data(data)
+        reader.feed_eof()
+        readers.append(reader)
+    return SimpleNamespace(stdout=readers[0], stderr=readers[1],
+                           wait=AsyncMock(return_value=code), returncode=code)
+
+
+@pytest.mark.parametrize("wait_first", [False, True])
+async def test_partial_observer_tracks_read_and_wait_order_without_extra_consumption(wait_first):
+    out, err = "split € output".encode(), b"stderr"
+    child, row = _observed_child(out, err, 7), {}
+    wait = child.wait
+    streams = child.stdout, child.stderr
+    _observe_subprocess(child, row)
+    assert (child.stdout, child.stderr) == streams
+    assert await child.stdout.read(0) == b""
+    if wait_first:
+        assert await child.wait() == 7
+    assert row["captureComplete"] is False and "returncode" not in row
+    # read(-1) internally recurses on this StreamReader's small buffer limit.
+    assert await child.stdout.read() == out
+    assert row["captureComplete"] is False
+    assert await child.stderr.read(n=-1) == err
+    if not wait_first:
+        assert row["captureComplete"] is False
+        assert await child.wait() == 7
+    assert row["captureComplete"] and row["returncode"] == 7
+    assert row["stdout"] == out.decode() and row["stderr"] == err.decode()
+    assert row["stdoutBytes"] == len(out) and row["stderrBytes"] == len(err)
+    wait.assert_awaited_once_with()
+
+
+async def test_partial_observer_communicate_uses_same_single_read_accounting():
+    child, row = _observed_child(b"a" * 40, b"b" * 30), {}
+    wait = child.wait
+
+    async def communicate():
+        out, err = await asyncio.gather(child.stdout.read(), child.stderr.read())
+        await child.wait()
+        return out, err
+
+    child.communicate = communicate
+    _observe_subprocess(child, row)
+    assert await child.communicate() == (b"a" * 40, b"b" * 30)
+    assert row["captureComplete"] and row["stdoutBytes"] == 40 and row["stderrBytes"] == 30
+    wait.assert_awaited_once_with()
+
+
+async def test_partial_observer_truncation_is_bounded_and_never_complete():
+    child, row = _observed_child(b"abcdef", b"ghijkl"), {}
+    _observe_subprocess(child, row, limits=(3, 4))
+    assert await child.stdout.read() == b"abcdef"
+    assert await child.stderr.read() == b"ghijkl"
+    assert await child.wait() == 0
+    assert row["stdout"] == "abc" and row["stderr"] == "ghij"
+    assert row["stdoutBytes"] == row["stderrBytes"] == 6
+    assert row["stdoutTruncated"] and row["stderrTruncated"]
+    assert row["captureComplete"] is False
+
+
+async def test_partial_observer_keeps_raw_bytes_and_read_arguments():
+    out, err = b"\xff\xfeout", b"\x80err"
+    child, row = _observed_child(), {}
+    first = out[:2]
+    child.stdout.read = AsyncMock(side_effect=[first, out[2:], b""])
+    child.stderr.read = AsyncMock(side_effect=[err, b""])
+    stdout_read, stderr_read, wait = child.stdout.read, child.stderr.read, child.wait
+    captured = _observe_subprocess(child, row)
+    assert await child.stdout.read(2) is first
+    assert await child.stdout.read(n=20) == out[2:]
+    assert await child.stdout.read(20) == b""
+    assert await child.stderr.read(10) == err
+    assert await child.stderr.read(n=10) == b""
+    assert await child.wait() == 0
+    assert bytes(captured["stdout"]) == out and bytes(captured["stderr"]) == err
+    assert row["captureComplete"]
+    from unittest.mock import call
+    assert stdout_read.await_args_list == [call(2), call(n=20), call(20)]
+    assert stderr_read.await_args_list == [call(10), call(n=10)]
+    wait.assert_awaited_once_with()
+
+
+async def test_partial_observer_bookkeeping_failure_preserves_result_and_stays_invalid():
+    class BrokenRow(dict):
+        def __setitem__(self, key, value):
+            if key == "stdoutBytes" and value:
+                raise ValueError("controlled observer fault")
+            super().__setitem__(key, value)
+
+    child, row = _observed_child(), BrokenRow()
+    _observe_subprocess(child, row)
+    assert await child.stdout.read() == b"out"
+    assert await child.stdout.read() == b""
+    assert await child.stderr.read() == b"err"
+    assert await child.wait() == 0
+    assert row["captureComplete"] is False and "returncode" not in row
+    assert row["captureError"] == "ValueError"
+
+
+@pytest.mark.parametrize("boundary", ["read", "wait"])
+@pytest.mark.parametrize("error", [OSError("controlled IO"), asyncio.CancelledError()])
+async def test_partial_observer_keeps_original_exception_and_incomplete_capture(boundary, error):
+    child, row = _observed_child(), {}
+    if boundary == "read":
+        child.stdout.read = AsyncMock(side_effect=[error, b""])
+    else:
+        child.wait = AsyncMock(side_effect=[error, 0])
+    _observe_subprocess(child, row)
+    with pytest.raises(type(error)) as raised:
+        await (child.stdout.read() if boundary == "read" else child.wait())
+    assert raised.value is error
+    await child.stdout.read()
+    await child.stderr.read()
+    await child.wait()
+    assert row["captureComplete"] is False and "returncode" not in row
+    assert row["captureError"] == type(error).__name__
+
+
+@pytest.mark.parametrize("code", [0, 7])
+async def test_partial_observer_preserves_real_process_consumer_result(monkeypatch, code):
+    from amplifier_web.update_diagnostics import CommandFailure
+
+    out, err = b"one\n" + b"x" * 70000, b"controlled diagnostic\n"
+    rows, children = [], []
+
+    async def spawn(*args, **kwargs):
+        child = _observed_child(out, err, code)
+        # A failing test must never signal a made-up process ID.
+        child.pid, child.kill, child.terminate = 901, AsyncMock(), AsyncMock()
+        children.append(child)
+        if len(children) == 2:
+            row = {}
+            rows.append(row)
+            _observe_subprocess(child, row)
+        return child
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    from unittest.mock import Mock
+    killpg = Mock()
+    monkeypatch.setattr(os, "killpg", killpg)
+    outcomes = []
+    for _ in range(2):
+        try:
+            outcomes.append(await updates.process("fixture-command"))
+        except CommandFailure as error:
+            outcomes.append(error)
+    original, observed = outcomes
+    assert type(observed) is type(original)
+    if code:
+        assert isinstance(observed, CommandFailure) and observed.args == original.args
+    else:
+        assert observed == original == out.decode().strip()
+    for key in ("exitCode", "stdoutBytes", "stderrBytes", "stdoutTruncated", "stderrTruncated"):
+        assert observed.diagnostic_facts[key] == original.diagnostic_facts[key]
+    assert rows[0]["captureComplete"] and rows[0]["returncode"] == code
+    assert rows[0]["stdout"] == out.decode() and rows[0]["stderr"] == err.decode()
+    assert rows[0]["stdoutBytes"] == len(out) and rows[0]["stderrBytes"] == len(err)
+    killpg.assert_not_called()
+    for child in children:
+        child.kill.assert_not_called()
+        child.terminate.assert_not_called()
 
 
 @pytest.mark.parametrize("dependency_kind", ["required", "optional"])
@@ -500,7 +750,8 @@ async def test_settled_fetch_retains_qualified_a_holds_c_and_advances_moving_b(m
     runtime.home = home
     manager = updates.UpdateManager(app)
     app.update_manager = manager
-    commands, probes, promotions, publications = [], [], [], []
+    commands, probes, promotions, publications, resolvers = [], [], [], [], []
+    resolver_outputs = []
     original_process = updates.process
     original_spawn = asyncio.create_subprocess_exec
     original_promote = runtime.promote_generation
@@ -524,26 +775,11 @@ async def test_settled_fetch_retains_qualified_a_holds_c_and_advances_moving_b(m
             generation = Path(kwargs["env"]["AMPLIFIER_WEB_HOME"]).name
             row = {"command": list(map(str, args)), "generation": generation}
             probes.append(row)
-            communicate = child.communicate
-
-            async def capture(*a, **kw):
-                out, err = await communicate(*a, **kw)
-                row.update(
-                    stdout=(out or b"").decode(errors="replace"),
-                    stderr=(err or b"").decode(errors="replace"),
-                    returncode=child.returncode,
-                )
-                return out, err
-
-            child.communicate = capture
+            _observe_subprocess(child, row)
         elif "lock" in args or "sync" in args:
-            communicate = child.communicate
-            async def capture_resolver(*a, **kw):
-                out, err = await communicate(*a, **kw)
-                index = len(list(work.glob("resolver-*.log")))
-                (work / f"resolver-{index}.log").write_bytes((out or b"") + b"\nSTDERR\n" + (err or b""))
-                return out, err
-            child.communicate = capture_resolver
+            row = {"command": list(map(str, args))}
+            resolvers.append(row)
+            resolver_outputs.append(_observe_subprocess(child, row))
         return child
 
     def record_promotion(generation, **kwargs):
@@ -783,20 +1019,32 @@ async def test_settled_fetch_retains_qualified_a_holds_c_and_advances_moving_b(m
         assert _tree(history) == history_before
         assert next(event for event in _journal(manager)
                     if event["id"] == failure_event["id"]) == failure_event
-        _json(work / "verified-result.json", {
+        verified_result = {
             "baseline": baseline, "partial": partial_generation, "second": second,
             "revisions": {**old, "b": b_third}, "promotions": promotions,
             "historyUnchanged": True, "sharedStoreCovered": False,
             "dependencyKind": dependency_kind,
             "incompatibleUnionRefused": True, "unchangedFailureNotRetried": True,
             "rollback": partial_generation,
-        })
+        }
     finally:
         try:
+            await app.close()
+        finally:
+            # Shutdown can finish in-flight captures; serialize only afterward.
             _json(work / "commands.json", commands)
             _json(work / "probes.json", probes)
             _json(work / "publications.json", publications)
             _json(work / "diagnostics.json", manager.diagnostics.state)
             _json(work / "updates-state.json", dict(app.state["updates"]))
-        finally:
-            await app.close()
+            _json(work / "resolver-captures.json", resolvers)
+            for index, output in enumerate(resolver_outputs):
+                # Incomplete/truncated capture stays explicit in the JSON, never
+                # a fabricated successful command or an unbounded output buffer.
+                (work / f"resolver-{index}.log").write_bytes(
+                    bytes(output["stdout"]) + b"\nSTDERR\n" + bytes(output["stderr"]))
+    # Expected incompatible-union failure must not conceal an observer failure.
+    # Nonzero process exit may still have complete evidence.
+    assert probes and resolvers
+    assert all(row.get("captureComplete") is True for row in [*probes, *resolvers]), (probes, resolvers)
+    _json(work / "verified-result.json", verified_result)
