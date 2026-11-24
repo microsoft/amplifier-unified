@@ -16,6 +16,7 @@ from fixtures.ordinary_work_image_fixture import work_root
 from test_narrow_tool_images import picture
 
 MODEL = "claude-sonnet-4-5"
+OMITTED_IMAGE = {"type": "text", "text": "[Image payload omitted from diagnostics]"}
 
 
 @pytest.fixture(autouse=True)
@@ -34,6 +35,7 @@ class LegacySDK:
     def setup(self, provider):
         from amplifier_module_provider_anthropic import AnthropicProvider
         assert type(provider) is AnthropicProvider and provider._client is None
+        assert provider.raw is True
         assert not hasattr(provider, "get_media_request_support_for_request")
         self.provider = provider
         provider._client = anthropic.AsyncAnthropic(api_key="offline-fixture", max_retries=0,
@@ -55,6 +57,154 @@ class LegacySDK:
                 for message in body["messages"]
                 for block in message["content"] if isinstance(message["content"], list)
                 if block.get("type") == "image"]
+
+
+def assert_legacy_capture(records, wire, emitted, original, session_id, *, prior_calls=()):
+    """Join this phase's real SDK body to the provider-owned diagnostic copy.
+
+    Anthropic omits whole image blocks before emitting to its first subscriber.
+    Unified fingerprints transports that reach its recorder; it cannot produce
+    an image fingerprint from the provider's already-omitted plaintext.
+    """
+    requests = [row["data"] for row in records if row["event"] == "llm:request"]
+    responses = [row["data"] for row in records if row["event"] == "llm:response"]
+    assert len(requests) == len(responses) == 1, "Expected one new captured call"
+    request, response = requests[0], responses[0]
+    for row in (request, response):
+        assert row["session_id"] == session_id
+        assert row["provider"] == "anthropic" and row["model"] == MODEL
+        assert isinstance(row.get("raw"), dict)
+        assert row["request_capture"] == {
+            "redacted": True, "truncated": False, "limit_chars": 1_000_000}
+        assert isinstance(row.get("request_id"), str) and row["request_id"]
+        assert isinstance(row.get("unified_call_id"), str) and row["unified_call_id"].startswith("llm:")
+    assert request["request_id"] == response["request_id"]
+    call_id = request["unified_call_id"]
+    assert call_id == response["unified_call_id"] and call_id not in prior_calls
+    calls = [row["event"] for row in emitted if row.get("type") == "execution.event"
+             and row["event"].get("id") == call_id]
+    assert calls and {row["phase"] for row in calls} == {"running", "completed"}
+    assert all(row["kind"] == "llm" and row["provider"] == "anthropic"
+               and row["model"] == MODEL and row["sessionId"] == session_id for row in calls)
+    assert response["status"] == "ok"
+    assert response["raw"]["model"] == MODEL
+    assert [block["text"] for block in response["raw"]["content"]
+            if block["type"] == "text"] == ["offline completion"]
+
+    # Independent expectation from the actual SDK wire, not diagnostic_copy()
+    # or the observed log. Only known message-content image positions change.
+    expected = copy.deepcopy(wire)
+    image_count = 0
+    for message in expected["messages"]:
+        if not isinstance(message["content"], list):
+            continue
+        for index, block in enumerate(message["content"]):
+            if block.get("type") == "image":
+                assert message["role"] == "user"
+                assert block["source"]["type"] == "base64"
+                assert block["source"]["media_type"] in {
+                    "image/png", "image/jpeg", "image/gif", "image/webp"}
+                assert base64.b64decode(block["source"]["data"], validate=True) == original
+                message["content"][index] = dict(OMITTED_IMAGE)
+                image_count += 1
+    assert image_count == 1, "This fixture sends exactly one inline composer image"
+    captured = copy.deepcopy(request["raw"])
+    # The SDK merges extra_body into the JSON body; it is not a wire field.
+    extra = captured.pop("extra_body", {})
+    assert isinstance(extra, dict) and not (captured.keys() & extra.keys())
+    captured.update(extra)
+    assert captured == expected, "Diagnostic messages, image slots and options must match the wire"
+    text = json.dumps(records)
+    assert base64.b64encode(original).decode() not in text and "data:image/" not in text
+    return call_id
+
+
+def capture_oracle_fixture():
+    """Small independent records for deliberate oracle-corruption controls."""
+    original = b"synthetic-image-transport"
+    wire = {"model": MODEL, "max_tokens": 100, "temperature": .7, "messages": [
+        {"role": "user", "content": [
+            {"type": "text", "text": "Keep adjacent user text"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                       "data": base64.b64encode(original).decode()}}]}]}
+    raw = {"model": MODEL, "max_tokens": 100, "extra_body": {"temperature": .7},
+           "messages": [{"role": "user", "content": [
+               {"type": "text", "text": "Keep adjacent user text"}, dict(OMITTED_IMAGE)]}]}
+    common = {"session_id": "fixture", "provider": "anthropic", "model": MODEL,
+              "request_id": "request-new", "unified_call_id": "llm:new",
+              "request_capture": {"redacted": True, "truncated": False, "limit_chars": 1_000_000}}
+    records = [
+        {"event": "llm:request", "data": {**copy.deepcopy(common), "raw": raw}},
+        {"event": "llm:response", "data": {**copy.deepcopy(common), "status": "ok",
+         "raw": {"model": MODEL, "content": [{"type": "text", "text": "offline completion"}]}}},
+    ]
+    emitted = [{"type": "execution.event", "event": {
+        "id": "llm:new", "phase": phase, "kind": "llm", "provider": "anthropic",
+        "model": MODEL, "sessionId": "fixture"}} for phase in ("running", "completed")]
+    return records, wire, emitted, original
+
+
+def test_legacy_capture_oracle_accepts_exact_provider_copy_without_mutation():
+    records, wire, emitted, original = capture_oracle_fixture()
+    before = copy.deepcopy((records, wire, emitted))
+    assert assert_legacy_capture(records, wire, emitted, original, "fixture") == "llm:new"
+    assert (records, wire, emitted) == before
+
+
+@pytest.mark.parametrize("fault", [
+    "empty", "summary-only", "missing-response", "duplicate-request", "wrong-session",
+    "wrong-provider", "wrong-model", "request-id", "call-id", "unbound-call",
+    "unfinished-call", "stale-phase", "plain-marker", "shifted-omission", "erased-text",
+    "missing-message", "raw-pixels", "unavailable", "missing-status", "truncated",
+    "options", "wrong-wire-pixels",
+])
+def test_legacy_capture_oracle_rejects_incomplete_or_unrelated_evidence(fault):
+    records, wire, emitted, original = capture_oracle_fixture()
+    request, response = (row["data"] for row in records)
+    prior = ()
+    if fault == "empty":
+        records.clear()
+    elif fault == "summary-only":
+        request.pop("raw")
+    elif fault == "missing-response":
+        records.pop()
+    elif fault == "duplicate-request":
+        records.append(copy.deepcopy(records[0]))
+    elif fault in {"wrong-session", "wrong-provider", "wrong-model"}:
+        request[{"wrong-session": "session_id", "wrong-provider": "provider",
+                 "wrong-model": "model"}[fault]] = "unrelated"
+    elif fault == "request-id":
+        response["request_id"] = "unrelated"
+    elif fault == "call-id":
+        response["unified_call_id"] = "llm:unrelated"
+    elif fault == "unbound-call":
+        emitted.clear()
+    elif fault == "unfinished-call":
+        emitted.pop()
+    elif fault == "stale-phase":
+        prior = ("llm:new",)
+    elif fault == "plain-marker":
+        request["raw"]["messages"][0]["content"] = OMITTED_IMAGE["text"]
+    elif fault == "shifted-omission":
+        request["raw"]["messages"][0]["content"].reverse()
+    elif fault == "erased-text":
+        request["raw"]["messages"][0]["content"][0]["text"] = ""
+    elif fault == "missing-message":
+        request["raw"]["messages"].clear()
+    elif fault == "raw-pixels":
+        request["raw"]["messages"] = copy.deepcopy(wire["messages"])
+    elif fault == "unavailable":
+        request["raw"] = "[capture unavailable]"
+    elif fault == "missing-status":
+        request.pop("request_capture")
+    elif fault == "truncated":
+        request["request_capture"]["truncated"] = True
+    elif fault == "options":
+        request["raw"]["max_tokens"] = 200
+    elif fault == "wrong-wire-pixels":
+        wire["messages"][0]["content"][1]["source"]["data"] = base64.b64encode(b"other").decode()
+    with pytest.raises((AssertionError, KeyError)):
+        assert_legacy_capture(records, wire, emitted, original, "fixture", prior_calls=prior)
 
 
 @pytest.mark.parametrize("format", ["PNG", "JPEG", "GIF", "WEBP"])
@@ -83,6 +233,9 @@ async def test_legacy_composer_live_sdk_wire_capture_and_reload(tmp_path, monkey
         assert finished["text"] == "offline completion" and host.sealed
         sends = [body for endpoint, body in sdk.wire if endpoint == "/v1/messages"]
         assert sends and LegacySDK.pixels(sends[-1]) == [("user", original)]
+        assert len(sends) == 1
+        counts = [body for endpoint, body in sdk.wire if endpoint.endswith("/count_tokens")]
+        assert counts and all(LegacySDK.pixels(body) == [("user", original)] for body in counts)
         assert "Image unavailable" not in json.dumps(sends[-1])
         rows = await checkpoint()
         [user] = [row for row in rows if row["role"] == "user" and
@@ -104,9 +257,12 @@ async def test_legacy_composer_live_sdk_wire_capture_and_reload(tmp_path, monkey
         assert {"llm:request", "llm:response"} <= names
         assert session.coordinator.get_capability("web.provider_request_redaction") is True
         assert encoded not in text and "data:image/" not in text
-        assert "__unified_image_transport__" in text
+        records = [json.loads(line) for line in text.splitlines()]
+        first_call = assert_legacy_capture(records, sends[0], host.emitted, original, session.session_id)
         path.unlink()
-        file_path(tmp_path / "app", upload["id"])[0].unlink()
+        upload_path = file_path(tmp_path / "app", upload["id"])[0]
+        upload_path.unlink()
+        assert not path.exists() and not upload_path.exists()
     finally:
         if not execution.done():
             await runtime.submit(Input("stop"))
@@ -118,18 +274,30 @@ async def test_legacy_composer_live_sdk_wire_capture_and_reload(tmp_path, monkey
     reopened = SessionStore(store.base_dir)
     loaded, _ = reopened.load(session.session_id)
     cold = LegacySDK()
+    previous_lines = capture.read_text().splitlines()
     resumed, _, checkpoint, checks, host = await work_root(tmp_path, monkeypatch, None,
         store=reopened, prepared_host=True, worker_observers=True, provider_setup=cold.setup,
         provider_module="provider-anthropic", model=MODEL)
     try:
         await resumed.coordinator.get("context").set_messages(loaded)
         await checkpoint()
+        assert not path.exists() and not upload_path.exists()
         assert await resumed.execute("Use the saved upload without reading its source") == "offline completion"
         sends = [body for endpoint, body in cold.wire if endpoint == "/v1/messages"]
         assert LegacySDK.pixels(sends[-1]) == [("user", original)]
+        assert len(sends) == 1
+        counts = [body for endpoint, body in cold.wire if endpoint.endswith("/count_tokens")]
+        assert counts and all(LegacySDK.pixels(body) == [("user", original)] for body in counts)
         assert host.sealed and not checks
         [capture] = list((tmp_path / "shared" / "projects").rglob("events.jsonl"))
-        assert encoded not in capture.read_text()
+        text = capture.read_text()
+        assert encoded not in text and "data:image/" not in text
+        lines = text.splitlines()
+        assert lines[:len(previous_lines)] == previous_lines
+        assert_legacy_capture([json.loads(line) for line in lines[len(previous_lines):]],
+                              sends[0], host.emitted, original, resumed.session_id,
+                              prior_calls=(first_call,))
+        assert not path.exists() and not upload_path.exists()
     finally:
         await resumed.cleanup()
 
