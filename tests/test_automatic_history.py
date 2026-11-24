@@ -370,7 +370,7 @@ async def test_fresh_workspace_availability_survives_incomplete_native_recovery(
         native.rmdir()
     else:
         native.mkdir()
-    monkeypatch.setattr(app.history.index, 'RECOVERY_STEP_BUDGET', 1)
+    monkeypatch.setattr(app.history.index, '_recovery_budget', 1)
     monkeypatch.setattr(app.history.index, '_invalidations', lambda: (True, set()))
     app.history.index._reconcile_at = 0
     # An unforced refresh can also need the full retained workspace snapshot
