@@ -54,6 +54,17 @@ const previewSnapshot=()=>bounded(page.evaluate(target=>{
    display:getComputedStyle(node).display,visibility:getComputedStyle(node).visibility})),ancestors};
 },currentDocument),5000,'Exact preview observation timed out');
 const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
+const revealPreview=async card=>{
+ await expect(card.getByRole('button',{name:'Hide preview',exact:true})).toHaveAttribute('aria-expanded','true');
+ const body=card.locator('[data-full-artifact-preview]');
+ await expect(body).toHaveCount(1);
+ await expect(body).toHaveAttribute('data-full-artifact-preview',await card.getAttribute('data-artifact-id'));
+ await expect(body).toHaveAttribute('data-artifact-version',await card.getAttribute('data-artifact-version'));
+ // The disclosure can be in view while its newly expanded body is below the
+ // chat scrollport. Lazy loading requires the body, not just its button, nearby.
+ await body.scrollIntoViewIfNeeded();
+ await expect(body).toBeInViewport();
+};
 const presentationState=()=>page.evaluate(id=>{
  const s=window.amplifier.getState(),canvas=s.canvas||{},card=document.querySelector(`.a-document-output[data-artifact-id="${id}"]`);
  return {clientId:s.client?.id,selectedSessionId:s.selectedSessionId,
@@ -240,6 +251,10 @@ try{
   assert.equal(response.status(),200);assert.equal(checkpoint.receipt.accepted,true);
   checkpoint.afterResponse=await previewSnapshot();
   await writeFile(`${evidence}/keyboard-reopen.json`,JSON.stringify(keyboardReopens,null,2));
+  await revealPreview(document);
+  checkpoint.afterReveal=await previewSnapshot();
+  assert.deepEqual(checkpoint.afterReveal.choices,checkpoint.afterResponse.choices,'Scrolling preserves the exact accepted presentation');
+  assert.equal(checkpoint.afterReveal.sessionId,checkpoint.afterResponse.sessionId);
   await document.locator('.a-canvas-viewer').waitFor();
   checkpoint.reopened=await inlineLeases();assert.equal(checkpoint.reopened.length,1);
   assert.equal(checkpoint.reopened[0].selectedVersion,version);
@@ -272,6 +287,7 @@ try{
   await expect(focused).toBeFocused();
   await page.unroute('**/api/actions',delayHide);
   await lastCard.getByRole('button',{name:'Preview in chat',exact:true}).click();
+  await revealPreview(lastCard);
   await lastCard.locator('.a-canvas-viewer').waitFor();
  }
  await writeFile(`${evidence}/delayed-hide-focus.json`,JSON.stringify({laterComposerFocusPreserved:true,laterIframeFocusPreserved:true}));
@@ -307,6 +323,7 @@ try{
  await expect(page.getByRole('alertdialog')).toHaveCount(0);
  await expect(page.locator('#provider-key')).toHaveValue('synthetic-unsaved-preview-test');
  await lastCard.getByRole('button',{name:'Preview in chat',exact:true}).click();
+ await revealPreview(lastCard);
  await lastCard.locator('.a-canvas-viewer').waitFor();
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.id),settingsId);
  await expect(page.locator('#provider-key')).toHaveValue('synthetic-unsaved-preview-test');
