@@ -751,22 +751,115 @@ jobs:
               required = {'amplifier-core', 'amplifier-foundation', 'amplifier-module-loop-live',
                           'pytest', 'pytest-asyncio', 'pytest-aiohttp', 'filelock', 'pyyaml'}
               assert required <= {row['name'] for row in rows}
+          def safe_failure(error, paths, depth=0):
+              # Never format an exception, pytest longrepr, source text or locals.
+              # Unknown types/paths are explicit omissions, not arbitrary strings.
+              kind = type(error)
+              allowed = {'AssertionError', 'RuntimeError', 'TimeoutError', 'PermissionError',
+                         'OSError', 'FileNotFoundError', 'ValueError', 'TypeError', 'KeyError',
+                         'ImportError', 'ModuleNotFoundError', 'CancelledError', 'Failed',
+                         'ExceptionGroup', 'BaseExceptionGroup', 'SystemExit'}
+              name = kind.__name__ if kind.__module__ in {
+                  'builtins', 'asyncio.exceptions', '_pytest.outcomes'} and kind.__name__ in allowed else 'other'
+              if (kind.__module__, kind.__name__) in {
+                  ('amplifier_web.runtime', 'RuntimeStartupError'),
+                  ('amplifier_web.windows_jobs', 'CleanupError'),
+                  ('json.decoder', 'JSONDecodeError')}:
+                  name = kind.__name__
+              category = {'AssertionError': 'assertion', 'Failed': 'assertion',
+                          'TimeoutError': 'timeout', 'PermissionError': 'permission',
+                          'ImportError': 'import', 'ModuleNotFoundError': 'import',
+                          'CancelledError': 'cancellation'}.get(name, 'error')
+              frames, omitted, seen = [], 0, 0
+              trace = error.__traceback__
+              while trace is not None and seen < 128:
+                  seen += 1
+                  location = paths.get(os.path.normcase(os.path.abspath(trace.tb_frame.f_code.co_filename)))
+                  if location is not None and 0 < trace.tb_lineno <= location[1] and len(frames) < 16:
+                      frames.append({'file': location[0], 'line': trace.tb_lineno})
+                  else:
+                      omitted += 1
+                  trace = trace.tb_next
+              cause = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
+              return {'type': name, 'category': category, 'frames': frames,
+                      'omittedFrames': omitted, 'traceTruncated': trace is not None,
+                      'chain': [safe_failure(cause, paths, depth + 1)] if cause is not None and depth < 3 else [],
+                      'chainTruncated': cause is not None and depth >= 3,
+                      'groupMembersOmitted': len(error.exceptions) if isinstance(error, BaseExceptionGroup) else 0}
           class Results:
-              def __init__(self):
-                  self.collected, self.phases, self.invalid = [], [], False
+              def __init__(self, paths=None):
+                  self.paths = paths or {}
+                  self.collected, self.phases, self.failures = [], [], []
+                  self.invalid, self.collection_seen = False, False
+                  self.collected_count = self.phase_count = self.failure_count = 0
+                  self.collect_failed = self.collect_skipped = self.xfailed = 0
+                  self.unexpected_collected = self.unexpected_phases = 0
+              def node(self, value):
+                  return value if value in nodes else '<unrecognized>'
               def pytest_collection_finish(self, session):
-                  self.collected = [item.nodeid for item in session.items]
+                  self.invalid |= self.collection_seen
+                  self.collection_seen = True
+                  for item in session.items:
+                      self.collected_count += 1
+                      self.unexpected_collected += int(item.nodeid not in nodes)
+                      if len(self.collected) < 32:
+                          self.collected.append(self.node(item.nodeid))
+                      else:
+                          self.invalid = True
               def pytest_collectreport(self, report):
                   self.invalid |= report.failed or report.skipped
+                  self.collect_failed += int(report.failed)
+                  self.collect_skipped += int(report.skipped)
+              def pytest_runtest_makereport(self, item, call):
+                  if call.excinfo is not None:
+                      self.failure_count += 1
+                      if len(self.failures) < 16:
+                          self.failures.append({'node': self.node(item.nodeid),
+                              'phase': call.when if call.when in ('setup', 'call', 'teardown') else 'other',
+                              **safe_failure(call.excinfo.value, self.paths)})
+                      else:
+                          self.invalid = True
+                  return None  # Observe only; pytest still makes the actual report.
               def pytest_runtest_logreport(self, report):
-                  if report.nodeid not in nodes or hasattr(report, 'wasxfail'):
+                  self.phase_count += 1
+                  xfail = hasattr(report, 'wasxfail')
+                  self.xfailed += int(xfail)
+                  self.unexpected_phases += int(report.nodeid not in nodes)
+                  if (report.nodeid not in nodes or xfail or
+                          report.when not in ('setup', 'call', 'teardown') or
+                          report.outcome not in ('passed', 'failed', 'skipped')):
                       self.invalid = True
-                  self.phases.append((report.nodeid, report.when, report.outcome))
+                  if len(self.phases) < 96:
+                      self.phases.append((self.node(report.nodeid),
+                          report.when if report.when in ('setup', 'call', 'teardown') else 'other',
+                          report.outcome if report.outcome in ('passed', 'failed', 'skipped') else 'other'))
+                  else:
+                      self.invalid = True
               def passed(self, code):
-                  return code == 0 and not self.invalid and self.collected == list(nodes) and self.phases == [
-                      (node, phase, 'passed') for node in nodes for phase in ('setup', 'call', 'teardown')]
+                  return (code == 0 and not self.invalid and self.collection_seen and
+                      self.collected_count == len(nodes) and self.phase_count == len(nodes) * 3 and
+                      not self.failure_count and self.collected == list(nodes) and self.phases == [
+                      (node, phase, 'passed') for node in nodes for phase in ('setup', 'call', 'teardown')])
+              def snapshot(self, code):
+                  # Retain extras/duplicates instead of expected-only filtering.
+                  # Private unexpected IDs stay redacted, with exact event counts.
+                  return {'collected': self.collected, 'collectedCount': self.collected_count,
+                      'collectionObserved': self.collection_seen, 'collectionExact': self.collected == list(nodes)
+                          and self.collected_count == len(nodes) and self.collection_seen,
+                      'collectionFailures': self.collect_failed, 'collectionSkips': self.collect_skipped,
+                      'unexpectedCollected': self.unexpected_collected, 'unexpectedPhases': self.unexpected_phases,
+                      'phases': [list(row) for row in self.phases], 'phaseCount': self.phase_count,
+                      'wasxfailCount': self.xfailed, 'invalid': self.invalid,
+                      'exitCode': int(code) if isinstance(code, int) and 0 <= code <= 255 else None,
+                      'failures': self.failures, 'failureCount': self.failure_count,
+                      'omittedCollected': self.collected_count - len(self.collected),
+                      'omittedPhases': self.phase_count - len(self.phases),
+                      'omittedFailures': self.failure_count - len(self.failures),
+                      'passed': self.passed(code)}
           result = {'schema': 1, 'status': 'FAIL', 'publicAcceptance': False,
-                    'qualification': 'five-locked-host-native-cases', 'nodes': list(nodes)}
+                    'qualification': 'five-locked-host-native-cases', 'nodes': list(nodes),
+                    'postTestAudit': 'not-run', 'stage': 'installed'}
+          paths, selected, code = {}, None, None
           try:
               with (base / 'private-five.log').open('x', encoding='utf-8') as logs:
                   with contextlib.redirect_stdout(logs), contextlib.redirect_stderr(logs):
@@ -793,6 +886,19 @@ jobs:
                           expected = source / 'amplifier_web' / (name + '.py')
                           assert path.is_relative_to(pathlib.Path(sys.prefix).resolve()) and path.read_bytes() == expected.read_bytes()
                           result['sourceImports'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
+                          paths[os.path.normcase(os.path.abspath(path))] = (
+                              'amplifier_web/' + name + '.py', len(expected.read_bytes().splitlines()))
+                      # Additional known startup frames, byte-bound without importing
+                      # more product modules merely for diagnostics.
+                      app_root = pathlib.Path(importlib.import_module('amplifier_web').__file__).resolve().parent
+                      result['diagnosticSources'] = {}
+                      for name in ('generation_leases.py', 'host/config.py'):
+                          actual = app_root / name
+                          expected = source / 'amplifier_web' / name
+                          assert actual.read_bytes() == expected.read_bytes()
+                          result['diagnosticSources']['amplifier_web/' + name] = hashlib.sha256(actual.read_bytes()).hexdigest()
+                          paths[os.path.normcase(os.path.abspath(actual))] = (
+                              'amplifier_web/' + name, len(expected.read_bytes().splitlines()))
                       target = base / 'five-tests'
                       files = ('tests/conftest.py', 'tests/test_runtime.py', 'tests/test_remote_test_origins.py')
                       result['testFiles'] = {}
@@ -801,21 +907,30 @@ jobs:
                           shutil.copyfile(source / name, path)
                           assert path.read_bytes() == (source / name).read_bytes()
                           result['testFiles'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
+                          paths[os.path.normcase(os.path.abspath(path))] = (name, len(path.read_bytes().splitlines()))
                       assert {p.name for p in target.iterdir()} == {'tests'}
                       import pytest
-                      selected = Results()
+                      pytest.hookimpl(tryfirst=True)(Results.pytest_runtest_makereport)
+                      result['stage'] = 'pytest'
+                      selected = Results(paths)
                       code = pytest.main(['-q', '-p', 'no:cacheprovider', '-p', 'pytest_asyncio.plugin',
                           '-p', 'aiohttp.pytest_plugin', '-o', 'asyncio_mode=auto',
                           '--rootdir', str(target), '--confcutdir', str(target),
                           '--basetemp', str(base / 'five-temp'), *(str(target / node) for node in nodes)], plugins=[selected])
-                      result['phases'] = [list(row) for row in selected.phases if row[0] in nodes
-                                          and row[1] in ('setup', 'call', 'teardown') and row[2] in ('passed', 'failed', 'skipped')][:15]
                       assert selected.passed(code)
+                      result['stage'] = 'post-test-audit'
+                      result['postTestAudit'] = 'started'
                       assert audit.installed(wheel, result) == before and host_graph() == graph
                       assert (source / 'uv.lock').read_bytes() == lock_bytes and audit.candidate(source) == candidate
+                      result['postTestAudit'] = 'passed'
+                      result['stage'] = 'complete'
                       result['status'] = 'PASS'
-          except Exception:
-              pass  # No raw exception, private path or subprocess output is public.
+          except Exception as error:
+              result['wrapperFailure'] = safe_failure(error, paths)
+              if result['postTestAudit'] == 'started':
+                  result['postTestAudit'] = 'failed'
+          finally:
+              result['selection'] = selected.snapshot(code) if selected is not None else None
           (base / 'evidence/five-native.json').write_text(json.dumps(result, sort_keys=True), encoding='utf-8')
           raise SystemExit(0 if result['status'] == 'PASS' else 1)
           '@

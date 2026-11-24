@@ -3228,6 +3228,173 @@ def test_remaining_five_phase_accounting_refuses_any_missing_native_proof(fault)
             if node == FIVE_NODES[-1] and fault == "xfail": row.wasxfail = "not a pass"
             result.pytest_runtest_logreport(row)
     assert result.passed(1 if fault == "exit-code" else 0) is (fault is None)
+    snapshot = result.snapshot(1 if fault == "exit-code" else 0)
+    assert snapshot["collectedCount"] == len(collected)
+    assert snapshot["phaseCount"] == (14 if fault == "no-call" else 15)
+    assert snapshot["exitCode"] == (1 if fault == "exit-code" else 0)
+    assert snapshot["wasxfailCount"] == (3 if fault == "xfail" else 0)
+    assert snapshot["passed"] is (fault is None)
+    if fault == "extra":
+        assert snapshot["collected"][-1] == "<unrecognized>" and snapshot["unexpectedCollected"] == 1
+    elif fault == "duplicate":
+        assert snapshot["collected"].count(FIVE_NODES[0]) == 2
+    assert "private_customer" not in json.dumps(snapshot)
+
+
+@pytest.mark.parametrize("fault", [
+    "pass", "three-call-failures", "extra", "duplicate", "xfail", "setup-error",
+    "teardown-error", "collection-error", "nonzero-exit",
+])
+def test_remaining_real_pytest_evidence_keeps_failures_and_invalid_selection(tmp_path, fault):
+    """Run the actual inline collector with real portable pytest reports, not native mocks."""
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    definitions = ast.unparse(ast.Module(body=[n for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in {"safe_failure", "Results"}],
+        type_ignores=[]))
+    (tmp_path / "collector.py").write_text(definitions, encoding="utf-8")
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    runtime = tests / "test_runtime.py"
+    runtime.write_text('''import os, pytest
+FAULT = os.environ["CAPTURE_FAULT"]
+@pytest.fixture(autouse=True)
+def lifecycle():
+    if FAULT == "setup-error": raise PermissionError("PRIVATE-SETUP")
+    yield
+    if FAULT == "teardown-error": raise OSError("PRIVATE-TEARDOWN")
+@pytest.mark.parametrize("forced", [False, True])
+def test_native_windows_runtime_worker_identity_pipes_and_job_cleanup(forced):
+    if FAULT == "xfail": pytest.xfail("PRIVATE-XFAIL")
+    if FAULT == "three-call-failures":
+        if forced: raise RuntimeError("PRIVATE-MESSAGE", "/PRIVATE-PATH")
+        raise AssertionError("PRIVATE-MESSAGE")
+def test_native_windows_runtime_cancel_before_identity_reaps_job():
+    if FAULT == "three-call-failures": raise TimeoutError("PRIVATE-TIMEOUT")
+''', encoding="utf-8")
+    (tests / "test_remote_test_origins.py").write_text('''def test_windows_junction_parent_is_not_followed(): pass
+def test_windows_shared_write_acl_cannot_authorize_retained_records(): pass
+def test_PRIVATE_CUSTOMER(): pass
+''', encoding="utf-8")
+    if fault == "collection-error":
+        (tests / "test_broken.py").write_text('raise ValueError("PRIVATE-COLLECTION")\n', encoding="utf-8")
+    runner = '''
+import json, os, pathlib, sys
+import pytest
+root, fault = pathlib.Path(sys.argv[1]), sys.argv[2]
+os.chdir(root)
+os.environ["CAPTURE_FAULT"] = fault
+nodes = tuple(json.loads(sys.argv[3]))
+exec(compile((root / "collector.py").read_text(), "<collector>", "exec"))
+paths = {os.path.normcase(str(p)): ("tests/" + p.name, len(p.read_bytes().splitlines()))
+         for p in (root / "tests").glob("test_*.py") if p.name != "test_broken.py"}
+pytest.hookimpl(tryfirst=True)(Results.pytest_runtest_makereport)
+selected = Results(paths)
+class Injection:
+    def pytest_collection_modifyitems(self, items):
+        if fault == "duplicate": items.append(items[0])
+    def pytest_sessionfinish(self, session, exitstatus):
+        if fault == "nonzero-exit": session.exitstatus = 4
+args = ["-q", "--rootdir", str(root), "--confcutdir", str(root), "-p", "no:cacheprovider", *nodes]
+if fault == "extra": args.append("tests/test_remote_test_origins.py::test_PRIVATE_CUSTOMER")
+if fault == "collection-error": args.append("tests/test_broken.py")
+code = pytest.main(args, plugins=[selected, Injection()])
+result = selected.snapshot(code)
+(root / "result.json").write_text(json.dumps(result), encoding="utf-8")
+'''
+    env = {**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}
+    child = subprocess.run([sys.executable, "-I", "-B", "-c", runner,
+        str(tmp_path), fault, json.dumps(FIVE_NODES)], env=env,
+        capture_output=True, text=True, timeout=30)
+    assert child.returncode == 0, child.stdout + child.stderr
+    report = json.loads((tmp_path / "result.json").read_text())
+    serialized = json.dumps(report)
+    assert "PRIVATE-" not in serialized and "PRIVATE_CUSTOMER" not in serialized and str(tmp_path) not in serialized
+    assert report["passed"] is (fault == "pass")
+    assert report["omittedCollected"] == report["omittedPhases"] == report["omittedFailures"] == 0
+    if fault == "three-call-failures":
+        assert report["exitCode"] == 1 and report["failureCount"] == 3
+        assert [f["node"] for f in report["failures"]] == list(FIVE_NODES[:3])
+        assert [f["type"] for f in report["failures"]] == ["AssertionError", "RuntimeError", "TimeoutError"]
+        lines = runtime.read_text().splitlines()
+        for failure in report["failures"]:
+            assert failure["phase"] == "call" and failure["frames"]
+            last = failure["frames"][-1]
+            assert last["file"] == "tests/test_runtime.py"
+            assert "raise " + failure["type"] in lines[last["line"] - 1]
+        assert sum(row[2] == "failed" for row in report["phases"]) == 3
+    elif fault in {"extra", "duplicate"}:
+        assert report["collectedCount"] == 6 and report["phaseCount"] == 18
+        if fault == "extra":
+            assert report["unexpectedCollected"] == 1 and report["unexpectedPhases"] == 3
+        else:
+            assert report["collected"].count(FIVE_NODES[0]) == 2
+    elif fault == "xfail":
+        assert report["wasxfailCount"] == 2 and report["invalid"]
+    elif fault in {"setup-error", "teardown-error"}:
+        assert report["exitCode"] == 1 and report["failureCount"] == 3
+        assert {f["phase"] for f in report["failures"]} == {fault.split("-")[0]}
+    elif fault == "collection-error":
+        assert report["collectionFailures"] == 1 and report["invalid"] and report["exitCode"] != 0
+    elif fault == "nonzero-exit":
+        assert report["exitCode"] == 4 and report["phaseCount"] == 15
+
+
+def test_remaining_evidence_overflow_is_explicit_and_never_a_pass():
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    cls = inline_definitions(tree, ["Results"], {"nodes": FIVE_NODES})["Results"]
+    result = cls()
+    result.pytest_collection_finish(types.SimpleNamespace(items=[
+        types.SimpleNamespace(nodeid=FIVE_NODES[0]) for _ in range(40)]))
+    for _ in range(100):
+        result.pytest_runtest_logreport(types.SimpleNamespace(nodeid=FIVE_NODES[0], when="call", outcome="passed"))
+    report = result.snapshot(0)
+    assert report["collectedCount"] == 40 and report["omittedCollected"] == 8
+    assert report["phaseCount"] == 100 and report["omittedPhases"] == 4
+    assert report["invalid"] and not report["passed"]
+
+
+def test_remaining_failure_projection_omits_private_types_paths_and_messages(tmp_path):
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    safe = inline_definitions(tree, ["safe_failure"], {"os": os})["safe_failure"]
+    private_type = type("PRIVATE_CUSTOMER", (Exception,), {"__module__": "customer_private"})
+    try:
+        raise private_type("PRIVATE-MESSAGE", "/PRIVATE-PATH")
+    except Exception as error:
+        report = safe(error, {})
+    assert report["type"] == "other" and report["frames"] == [] and report["omittedFrames"] > 0
+    assert "PRIVATE" not in json.dumps(report)
+
+
+def test_remaining_failure_projection_keeps_bounded_causes_without_exception_text():
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    safe = inline_definitions(tree, ["safe_failure"], {"os": os})["safe_failure"]
+    error = PermissionError("PRIVATE-FIRST")
+    for _ in range(6):
+        later = RuntimeError("PRIVATE-NEXT")
+        later.__cause__ = error
+        error = later
+    report = safe(error, {})
+    current = report
+    for _ in range(3):
+        assert len(current["chain"]) == 1 and not current["chainTruncated"]
+        current = current["chain"][0]
+    assert current["chain"] == [] and current["chainTruncated"]
+    assert "PRIVATE" not in json.dumps(report)
+    grouped = safe(ExceptionGroup("PRIVATE-GROUP", [ValueError("PRIVATE"), error]), {})
+    assert grouped["type"] == "ExceptionGroup" and grouped["groupMembersOmitted"] == 2
+
+
+def test_remaining_workflow_keeps_full_selection_and_first_result_failure_hook():
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    body = ast.unparse(tree)
+    assert "pytest.hookimpl(tryfirst=True)(Results.pytest_runtest_makereport)" in body
+    assert "selected.snapshot(code)" in body
+    assert "result['phases']" not in body and "[:15]" not in body
+    assert "postTestAudit" in body and "wrapperFailure" in body
+    assert body.index("assert selected.passed(code)") < body.index("result['postTestAudit'] = 'started'")
+    # No traceback/longrepr/source-line or locals renderer on the public route.
+    safe = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "safe_failure")
+    assert all(word not in ast.unparse(safe) for word in ("longrepr", "f_locals", "format_exc", "str(error)", "repr(error)"))
 
 
 @pytest.mark.parametrize("fault", [None, "version", "commit", "url", "ref", "subdirectory",
