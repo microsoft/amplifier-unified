@@ -7,6 +7,7 @@ import shlex
 import subprocess
 import sys
 import tarfile
+import tempfile
 import io
 import asyncio
 import time
@@ -217,6 +218,31 @@ def git(source, *args):
                                    cwd=source, text=True).strip()
 
 
+def thin_report(path, report):
+    """Fixture evidence can exceed the private setup-record reader's 64 KiB."""
+    handle, temporary = tempfile.mkstemp(prefix='.thin-report-', dir=path.parent)
+    try:
+        with os.fdopen(handle, 'w') as stream:
+            json.dump(report, stream, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def thin_require_running(result, row):
+    request = result['request']
+    assert request['state'] == 'completed' and request['resourceId'] == row['id']
+    observed = request['result']
+    assert observed['ok'] and observed['status'] == 'running', 'Cleanup crossed owners.'
+    assert observed['observation']['ownership'] == 'matched'
+    assert {key: observed['observation'][key] for key in
+            ('rootOwner', 'operationId', 'universeId', 'backendIdentity')} == {
+                'rootOwner': row['sessionId'], 'operationId': row['launchOperationId'],
+                'universeId': row['universeId'], 'backendIdentity': row['backendIdentity']}
+
+
 async def thin_call(app, report_path, report, entry, action, **args):
     """Keep this fixture's original request and custody, including lost replies."""
     if action == 'remove':
@@ -227,7 +253,7 @@ async def thin_call(app, report_path, report, entry, action, **args):
         arguments.update(id=entry['resource']['id'], expectedRevision=entry['resource']['revision'])
     call = {'owner': entry['owner'], 'action': action, 'phase': 'before-effect'}
     report.setdefault('calls', []).append(call)
-    setup.write_json(report_path, report)
+    thin_report(report_path, report)
     try:
         result = (await app.dispatch('workspace.environments.' + action, arguments,
                                     command_id='thin-' + arguments['requestId']))['result']
@@ -249,7 +275,7 @@ async def thin_call(app, report_path, report, entry, action, **args):
             raw = environments.get(app.data_dir, entry['owner'], request['resourceId'])
             entry['resource'] = environments.public(app.data_dir, raw)
             entry['state'] = entry['resource']['status']
-        setup.write_json(report_path, report)
+        thin_report(report_path, report)
 
 
 async def thin_finalize(app, report_path, report):
@@ -266,9 +292,69 @@ async def thin_finalize(app, report_path, report):
             # One owner's failed finalizer must not prevent the other's attempt.
             errors.append(exc)
     report['cleanupComplete'] = all(entry.get('state') == 'removed' for entry in report['environments'])
-    setup.write_json(report_path, report)
+    thin_report(report_path, report)
     if errors:
         raise ExceptionGroup('Thin Docker cleanup is incomplete; inspect original receipts', errors)
+
+
+async def thin_finish(app, report_path, report):
+    try:
+        await thin_finalize(app, report_path, report)
+        if report.get('journeyPassed') and report['cleanupComplete']:
+            report['result'] = 'passed'
+    finally:
+        try:
+            thin_report(report_path, report)
+        finally:
+            await app.close()
+
+
+def test_thin_report_keeps_large_evidence_and_private_mode(tmp_path):
+    path = tmp_path / 'native-result.json'
+    report = {'calls': [{'output': 'x' * 32768} for _ in range(4)], 'result': 'incomplete'}
+    thin_report(path, report)
+    assert path.stat().st_size > 65536
+    report['cleanupComplete'] = True
+    thin_report(path, report)
+    assert json.loads(path.read_text()) == report
+    assert path.stat().st_mode & 0o077 == 0
+    assert not list(tmp_path.glob('.thin-report-*'))
+
+
+async def test_thin_close_survives_report_write_failure(tmp_path, monkeypatch):
+    closed = []
+
+    async def close():
+        closed.append(True)
+
+    def fail(*args):
+        raise OSError('Evidence storage is unavailable')
+
+    monkeypatch.setattr(sys.modules[__name__], 'thin_report', fail)
+    with pytest.raises(OSError):
+        await thin_finish(SimpleNamespace(close=close), tmp_path / 'result.json', {'environments': []})
+    assert closed == [True]
+
+
+@pytest.mark.parametrize('changed', [None, 'stopped', 'rootOwner', 'operationId', 'universeId', 'backendIdentity'])
+def test_thin_running_requires_fresh_owner_bound_observation(changed):
+    row = {'id': 'second', 'sessionId': 'owner-b', 'launchOperationId': 'launch-b',
+           'universeId': 'universe-b', 'backendIdentity': {'backend': 'docker', 'daemon': 'owned'}}
+    observation = {'ownership': 'matched', 'rootOwner': row['sessionId'],
+                   'operationId': row['launchOperationId'], 'universeId': row['universeId'],
+                   'backendIdentity': row['backendIdentity']}
+    fresh = {'ok': True, 'status': 'running', 'observation': observation}
+    result = {'resource': {'status': 'running'},  # Deliberately stale projection.
+              'request': {'state': 'completed', 'resourceId': row['id'], 'result': fresh}}
+    if changed == 'stopped':
+        fresh['status'] = 'stopped'
+    elif changed:
+        observation[changed] = 'foreign'
+    if changed:
+        with pytest.raises(AssertionError):
+            thin_require_running(result, row)
+    else:
+        thin_require_running(result, row)
 
 
 @pytest.mark.parametrize('outcome', ['failed', 'outcome_unknown', 'lost-reply'])
@@ -356,8 +442,9 @@ async def test_real_smart_tool_two_owners_dirty_worktree_wheel_and_preview(monke
     # cleanup fixture. Do not alias/copy a venv or bypass configuration validation.
     assert python == str(home / 'app/smart-tools/installs' / installation_id / 'venv/bin/python')
     assert Path(python).is_file(), 'Provision the owned Smart Tool before this proof.'
+    assert {p.name for p in (home / 'app').iterdir()} == {'smart-tools'}, 'Use a fresh fixture app, not retained owners.'
     report = {'result': 'incomplete', 'environments': [], 'cleanupComplete': False}
-    setup.write_json(report_path, report)
+    thin_report(report_path, report)
     source, checkout = home / 'repository', home / 'linked-worktree'
     compose = {
         'services': {'twin': {'image': environments.APPROVED_IMAGE,
@@ -430,19 +517,15 @@ async def test_real_smart_tool_two_owners_dirty_worktree_wheel_and_preview(monke
                                         'modelCampaign': 'not_run', 'lifecycleOwner': entry['owner']}
         await thin_call(app, report_path, report, entry, 'stop')
         await thin_call(app, report_path, report, entry, 'remove')
-        observed = await thin_call(app, report_path, report, report['environments'][1], 'reconcile')
-        assert observed['resource']['status'] == 'running', 'Cleanup crossed owners.'
+        second = report['environments'][1]
+        second_row = environments.get(app.data_dir, second['owner'], second['resource']['id'])
+        observed = await thin_call(app, report_path, report, second, 'reconcile')
+        thin_require_running(observed, second_row)
         report['sourceUnchanged'] = before == {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                                               for p in checkout.iterdir() if p.is_file()}
         assert report['sourceUnchanged'] and git(source, 'rev-parse', 'HEAD') == original
         report['journeyPassed'] = True
     finally:
         # Observe exact current owners; teardown never retries an unknown remove.
-        try:
-            await thin_finalize(app, report_path, report)
-            if report.get('journeyPassed') and report['cleanupComplete']:
-                report['result'] = 'passed'
-        finally:
-            setup.write_json(report_path, report)
-            await app.close()
+        await thin_finish(app, report_path, report)
 
