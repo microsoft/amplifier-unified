@@ -625,8 +625,18 @@ class AutomaticHistory:
                             all(row.get('sessionKind') == 'worker' for row in incoming['sessions']))
                         and not locations_changed)
                     from amplifier_workspace_metadata import reconcile as reconcile_workspace_registrations
+                    # Native recovery is sliced, including forced scans. Its
+                    # retained workspace rows must not overwrite the folder
+                    # probes above. Existing registrations use only this pass's
+                    # checked slice and the reconciler's ID/path guard; new
+                    # registrations still take their qualified native location.
+                    registered = {row['id'] for row in state['workspaces']}
+                    observed_workspaces = [
+                        {key: value for key, value in row.items() if key != 'available'}
+                        if row['id'] in registered else row
+                        for row in snapshot['workspaces']]
                     reconciliation = reconcile_workspace_registrations(
-                        state['workspaces'], known, snapshot['workspaces'],
+                        state['workspaces'], availability, observed_workspaces,
                         hidden_ids=state.get('hiddenNativeWorkspaces', []), managed_paths=managed_paths)
                     workspaces = reconciliation.by_id
                     hidden_workspaces = reconciliation.hidden_ids

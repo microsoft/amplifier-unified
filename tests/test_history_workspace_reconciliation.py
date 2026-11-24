@@ -105,6 +105,103 @@ async def test_reused_catalog_revision_stays_detached_and_reconciles_in_place_ch
     assert service.state['sharedHistory']['error'] is None
 
 
+@pytest.mark.parametrize('available', [False, True])
+async def test_registered_folder_probe_wins_retained_native_availability(tmp_path, available):
+    folder = tmp_path / 'workspace'
+    if available:
+        folder.mkdir()
+    else:
+        folder.write_text('A file is not a workspace')
+    existing = workspace('workspace', 'project', str(folder), available=not available,
+                         name='Personal name', custom={'keep': True})
+    before = copy.deepcopy(existing)
+    observed = workspace('workspace', 'project', str(folder), available=not available,
+                         sessionCount=7, workerSessionCount=2)
+    service = ReconciliationService([existing])
+    history = history_for(service, [observed])
+    await history.refresh()
+    assert service.state['sharedHistory']['error'] is None
+    assert service.state['workspaces'] == [{
+        **before, 'available': available, 'sessionCount': 7, 'workerSessionCount': 2}]
+    assert existing['available'] is available
+    assert existing['name'] == 'Personal name' and existing['custom'] == {'keep': True}
+    assert history._native_snapshot['workspaces'] == [observed]
+    assert observed['available'] is not available
+    assert service.publications == 1
+
+
+async def test_availability_rotation_does_not_reapply_unsampled_or_cached_facts(tmp_path, monkeypatch):
+    from amplifier_web import workspace_selection
+    # Only 64 of these 65 registered folders may be checked in the first pass.
+    rows = [workspace(str(i), f'project-{i}', str(tmp_path), available=False) for i in range(65)]
+    observed = copy.deepcopy(rows)
+    service = ReconciliationService(rows)
+    history = history_for(service, observed)
+    probe = workspace_selection.refresh_workspace_availability
+    checked = []
+
+    def check(selected):
+        checked.append([row['id'] for row in selected])
+        probe(selected)
+
+    monkeypatch.setattr(workspace_selection, 'refresh_workspace_availability', check)
+    # A newer host observation outside the first probe slice must survive both
+    # the detached input captured before scanning and stale native metadata.
+    def scan(**kwargs):
+        assert len(kwargs['known_workspaces']) == 65
+        rows[64]['available'] = True
+        return object(), {'workspaces': copy.deepcopy(observed), 'sessions': []}
+
+    monkeypatch.setattr(history.index, 'scan_if_changed', scan)
+    await history.refresh(force=False)
+    assert checked == [[str(i) for i in range(64)]]
+    assert all(row['available'] for row in rows)
+    assert service.state['sharedHistory']['error'] is None
+    await history.refresh(force=False)
+    assert checked[-1] == ['64']
+    assert all(row['available'] for row in rows)
+    assert history._native_snapshot['workspaces'] == observed
+    assert not any(row['available'] for row in observed)
+
+
+@pytest.mark.parametrize('old_available', [False, True])
+async def test_detached_availability_cannot_overwrite_a_changed_registration_path(
+        tmp_path, monkeypatch, old_available):
+    old, new = tmp_path / 'old', tmp_path / 'new'
+    (old if old_available else new).mkdir()
+    row = workspace('workspace', 'project', str(old), available=old_available)
+    observed = copy.deepcopy(row)
+    service = ReconciliationService([row])
+    history = history_for(service, [observed])
+
+    def scan(**kwargs):
+        # Deterministic commit in the gap after the detached filesystem probe.
+        assert kwargs['known_workspaces'][0]['path'] == str(old)
+        row.update(path=str(new), available=not old_available)
+        return object(), {'workspaces': [observed], 'sessions': []}
+
+    monkeypatch.setattr(history.index, 'scan_if_changed', scan)
+    await history.refresh()
+    assert service.state['sharedHistory']['error'] is None
+    assert row['path'] == str(new)
+    assert row['available'] is not old_available
+    assert history._native_snapshot['workspaces'] == [observed]
+    assert observed['path'] == str(old) and observed['available'] is old_available
+
+
+async def test_new_and_unresolved_native_locations_keep_discovery_semantics(tmp_path):
+    known = workspace('known', 'known-project', None, available=False)
+    discovered = workspace('new', 'new-project', str(tmp_path), available=True)
+    unknown = workspace('unknown', 'unknown-project', None, available=False)
+    service = ReconciliationService([known])
+    history = history_for(service, [discovered, unknown])
+    await history.refresh()
+    assert service.state['sharedHistory']['error'] is None
+    assert service.state['workspaces'] == [known, discovered, unknown]
+    assert known['path'] is None and known['available'] is False
+    assert history._native_snapshot['workspaces'] == [discovered, unknown]
+
+
 async def test_revision_alias_is_detached_and_missing_or_null_stamp_is_preserved(monkeypatch):
     service = ReconciliationService([])
     history = AutomaticHistory(service)
