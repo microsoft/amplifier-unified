@@ -9,6 +9,59 @@ from test_service import Runtime
 from test_reset import legacy_saved_plan
 from test_runtime_controls import managed_module_source
 
+@pytest.mark.parametrize("same_folder", [False, True], ids=["new-operation", "existing-operation"])
+def test_backup_staging_race_keeps_last_complete_archive(tmp_path, monkeypatch, same_folder):
+    import os
+    import sqlite3
+    from pathlib import Path
+    from amplifier_web.recovery import _backup_files
+    from amplifier_web.storage_backup_cleanup import candidates
+
+    with sqlite3.connect(tmp_path / "app.sqlite3") as db:
+        db.execute("CREATE TABLE state (id INTEGER PRIMARY KEY)")
+    session = tmp_path / "native" / "session"
+    staging = session / "media" / "staging"
+    staging.mkdir(parents=True)
+    retired = staging / "bytes"
+    retired.write_bytes(b"old staging")
+    paths = [(session, "native/session")]
+    previous = Path(_backup_files(tmp_path, paths)["backup"])
+    os.utime(previous, (1, 1))
+    before = previous.read_bytes()
+    folder = previous.parent if same_folder else previous.parent.parent / ("a" * 32)
+    if not same_folder:
+        folder.mkdir(mode=0o700)
+    current = folder / previous.name
+
+    observed = []
+    gettarinfo = tarfile.TarFile.gettarinfo
+    def retire_after_enumeration(archive, name=None, arcname=None, fileobj=None):
+        if name is not None and Path(name) == retired:
+            observed.append((candidates(tmp_path), previous.read_bytes() == before))
+            retired.unlink()
+        return gettarinfo(archive, name, arcname, fileobj)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(tarfile.TarFile, "gettarinfo", retire_after_enumeration)
+        with pytest.raises(FileNotFoundError):
+            _backup_files(tmp_path, paths, operation_id=folder.name)
+    assert observed == [([previous.parent], True)]
+    assert candidates(tmp_path) == [previous.parent]
+    assert previous.read_bytes() == before
+    assert {p.name for p in folder.iterdir()} == (
+        {"app.sqlite3", previous.name} if same_folder else {"app.sqlite3"}
+    )
+
+    (session / "transcript.jsonl").write_bytes(b"new saved turn")
+    result = _backup_files(tmp_path, paths, operation_id=folder.name)
+    assert Path(result["backup"]) == current and candidates(tmp_path)[0] == folder
+    if os.name == "posix":
+        assert current.stat().st_mode & 0o777 == 0o600
+    with tarfile.open(current, "r:gz") as archive:
+        assert archive.extractfile("native/session/transcript.jsonl").read() == b"new saved turn"
+        assert "native/session/media/staging/bytes" not in archive.getnames()
+
+
 async def test_full_backup_and_selected_reset_are_private_and_reversible(tmp_path):
     service=AppService(tmp_path/'app',Runtime(),workspace=tmp_path)
     manager=Management(service);service.management=manager;service.update_manager=UpdateManager(service)
