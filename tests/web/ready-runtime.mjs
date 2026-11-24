@@ -1,8 +1,11 @@
 // Breadbin journey launch classification, not source or permission attestation.
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {scopedSourceRequested,scopedSourceExecution} from './question-fade-runtime.mjs';
 
-export async function readyExecution({env=process.env,read=readFile}={}){
+export async function readyExecution({env=process.env,read=readFile,scopedRead,realpath,entrypoint}={}){
+ if(scopedSourceRequested(env))return scopedSourceExecution({
+  scenario:'ready',env,read:scopedRead,realpath,entrypoint}).evidence;
  const python=env.AMPLIFIER_TEST_PYTHON;
  assert.ok(python,'AMPLIFIER_TEST_PYTHON must name the prepared interpreter; no .venv fallback');
  assert.ok(env.AMPLIFIER_TEST_ARTIFACTS,'AMPLIFIER_TEST_ARTIFACTS must name the owned evidence directory');

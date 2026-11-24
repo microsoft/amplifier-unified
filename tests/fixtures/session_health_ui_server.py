@@ -1,6 +1,7 @@
 """Disposable failed computer-tool conversation, with no provider calls."""
 import asyncio
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -66,18 +67,68 @@ async def main(home):
         if os.environ.get('ACTIVE_WORKER_FIXTURE'):
             source['workers'] = [{'id': 'still-running', 'status': 'working'}]
     original=(store.directory(source['id'])/'transcript.jsonl').read_bytes()
-    naming_calls = []
+    naming_calls, calls = [], []
+    original_start, original_stop = service.runtime.start, service.runtime.stop
     original_control = service.runtime.control
-    async def control(sid, operation, args):
+    async def start(session, emit, **kwargs):
+        calls.append({'sessionId': session['id'], 'operation': 'start'})
+        return await original_start(session, emit, **kwargs)
+    async def stop(sid, **kwargs):
+        calls.append({'sessionId': sid, 'operation': 'stop'})
+        return await original_stop(sid, **kwargs)
+    async def no_send(session, text, input_id, emit, **kwargs):
+        calls.append({'sessionId': session['id'], 'operation': 'send', 'inputId': input_id})
+        raise AssertionError('Health inspection and recovery copying must not send model input')
+    async def control(sid, operation, args, **kwargs):
+        calls.append({'sessionId': sid, 'operation': operation})
         if operation != 'session.naming':
-            return await original_control(sid, operation, args)
+            return await original_control(sid, operation, args, **kwargs)
+        if kwargs.get('guard'):
+            kwargs['guard']()
         naming_calls.append(sid)
         before = read(directory_for(home, service._session(sid)))
         await asyncio.sleep(.5)
         return {**before, 'name': 'Browser investigation', 'description': 'A fixture naming suggestion'}
+    service.runtime.start, service.runtime.stop = start, stop
+    service.runtime.send = no_send
     service.runtime.control = control
     async def check(request):
-        return web.json_response({'originalUnchanged':original==(store.directory(source['id'])/'transcript.jsonl').read_bytes(),'namingCalls':len(naming_calls),'sessions':len(service.state['sessions']),'selected':service.state['selectedSessionId']})
+        if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+            raise web.HTTPForbidden()
+        assert len(calls) <= 64, 'Unexpected runtime activity in bounded health journey'
+        recovered = []
+        for session in service.state['sessions']:
+            if (session.get('recovery') or {}).get('sourceSessionId') != source['id']:
+                continue
+            recovered_store = SessionStore.for_app(home, session['workspace'])
+            raw = (recovered_store.directory(session['runtimeSessionId'])/'transcript.jsonl').read_bytes()
+            assert len(raw) <= 65536, 'Synthetic recovery transcript must remain bounded'
+            messages = [json.loads(line) for line in raw.splitlines() if line.strip()]
+            recovered.append({
+                'id': session['id'], 'status': session['status'],
+                'sourceSessionId': session['recovery']['sourceSessionId'],
+                'workReplayed': session['recovery']['workReplayed'],
+                'selection': copy.deepcopy(session.get('selection')), 'bundle': session['bundle'],
+                'transcriptSha256': hashlib.sha256(raw).hexdigest(), 'messageCount': len(messages),
+                'hasExecutableToolHistory': any(row.get('role') == 'tool' or row.get('tool_calls')
+                    or any(isinstance(block, dict) and block.get('type') in
+                           {'tool_call', 'tool_use', 'tool_result', 'image', 'image_url', 'input_image'}
+                           for block in (row['content'] if isinstance(row.get('content'), list) else []))
+                    for row in messages),
+                'hasSafetyReference': any('Any tool safety stop remains in effect.' in str(row.get('content'))
+                    and (row.get('metadata') or {}).get('amplifier_recovery_reference') for row in messages),
+            })
+        assert len(recovered) <= 1, 'Recovery must not duplicate the requested copy'
+        current = service._session(source['id'], hydrate=False)
+        return web.json_response({
+            'originalUnchanged': original == (store.directory(source['id'])/'transcript.jsonl').read_bytes(),
+            'originalSha256': hashlib.sha256(original).hexdigest(), 'calls': calls,
+            'namingCalls': len(naming_calls), 'sessions': len(service.state['sessions']),
+            'selected': service.state['selectedSessionId'],
+            'source': {'id': current['id'], 'status': current['status'], 'bundle': current['bundle'],
+                       'selection': copy.deepcopy(current.get('selection')),
+                       'failureCategory': (current.get('failure') or {}).get('category')},
+            'recovered': recovered})
     app.router.add_get('/fixture/check',check)
     service._publish()
     await serve(app, source)

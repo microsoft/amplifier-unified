@@ -10,7 +10,7 @@ NATIVE_MESSAGE_LIMIT=100
 NODE_LIMIT=100
 TEXT_LIMIT=4096
 SUMMARY_LIMIT=512
-PRIVATE_SESSION_FIELDS = frozenset({'_externalAgentSource', '_externalRoom', '_lastPromptUsage', '_previousTurnBinding'})
+PRIVATE_SESSION_FIELDS = frozenset({'_externalAgentSource', '_externalRoom', '_lastPromptUsage', '_previousTurnBinding', '_reportedPlan'})
 
 
 def digest(text):return sha256(text.encode()).hexdigest()
@@ -389,6 +389,11 @@ def project(session, *, resolver=None, message_overlay=None, work_overlay=None):
     result.pop('messageQuotes', None)
     if 'historyActivity' in result:
         result['historyActivity']={'diagnostics':result['historyActivity'].get('diagnostics',[])}
+    # Absent legacy report means no panel; opening history never reconstructs
+    # this checklist. It is independent of the execution/message window.
+    if 'execution' in result or dict.get(status_source, '_reportedPlan') is not None:
+        result['execution'] = {**result.get('execution', {}),
+                               'plan': deepcopy(dict.get(status_source, '_reportedPlan'))}
     return result
 
 

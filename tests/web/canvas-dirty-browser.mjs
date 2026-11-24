@@ -255,7 +255,13 @@ try {
  }
  await capture('dirty-restored-same-document');
  await expect(toggle).toHaveAccessibleName('Hide canvas');
- await panel.getByRole('button',{name:'Close canvas panel',exact:true}).click();
+ // Hiding Canvas is the header visibility action; closing the document is a
+ // different, dirty-guarded operation exercised below.
+ const [hideResponse]=await Promise.all([page.waitForResponse(response=>isAction(response.request())&&
+  unwrap(response.request().postDataJSON()).action==='canvas.visibility'&&
+  unwrap(response.request().postDataJSON()).args.open===false),toggle.click()]);
+ const hideReceipt=await hideResponse.json();assert.equal(hideReceipt.accepted,true);
+ report.checks.push({name:'Header Hide uses canvas.visibility, not dirty-document close',status:'passed',receipt:hideReceipt});
  await expect(primary).toBeHidden();
  await expect(primary).toHaveCount(1);assert.equal(await primary.getAttribute('data-mount'),mount);
  await expect(toggle).toHaveAccessibleName('Open canvas');await toggle.click();await retained();

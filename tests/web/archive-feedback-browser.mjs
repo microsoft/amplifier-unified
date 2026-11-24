@@ -6,7 +6,7 @@ import {join,resolve,isAbsolute,basename} from 'node:path';
 import {createHash} from 'node:crypto';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
-import {openSettingsPage,settingsButton} from '../../.build/web-client/tests/browser-settings.mjs';
+import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {startFixture} from './fixture-readiness.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
@@ -697,9 +697,11 @@ try{
  const managed=(await state()).selectedSessionId;
  await action('session.select',{id:managed});await action('session.restore',{id:managed});
  await page.setViewportSize({width:1440,height:1050});
- await expect(settingsButton(page)).toBeVisible();
+ // Settings is inside App options, not an always-visible footer button.
+ // Open it through the normal menu only after the archive request is held.
+ await expect(page.getByRole('button',{name:'App options',exact:true})).toBeVisible();
  mode='hold';await headerArchive();await expect.poll(()=>!!release).toBe(true);
- await openSettingsPage(page,'providers');
+ await openSettingsPage(page,'providers',{activate:(_label,control,options)=>control.click(options)});
  const settings=page.locator('.a-settings-experience[data-settings-page="providers"]');
  await settings.getByRole('button',{name:'Add provider',exact:true}).click();
  await settings.getByRole('button',{name:'Show advanced configuration',exact:true}).click();

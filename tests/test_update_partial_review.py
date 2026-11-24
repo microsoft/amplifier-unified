@@ -24,7 +24,7 @@ from amplifier_web.update_sequence import app_selection
 
 # Pytest must see these fixtures explicitly; importing only a helper does not
 # register fixtures from another test module.
-from test_update_partial import git, preparation  # noqa: F401
+from test_update_partial import git, preparation, local_git_inventory  # noqa: F401
 from test_update_sequence import manager  # noqa: F401
 
 
@@ -335,17 +335,19 @@ async def test_new_unknown_check_failure_is_not_authorized_by_prior_retention(pr
 
 
 async def test_unrelated_candidate_inherits_exact_prior_retention_from_full_inventory(
-        prior_partial, monkeypatch):
+        prior_partial, local_git_inventory, monkeypatch):
     p = prior_partial
     m = p.manager
     stage = next_candidate(p)
     d = other_source(p, status='update')
     m.inventory = [d]  # Only this tier was checked; A/C are absent, not current.
     reads = []
+    local, local_files = local_git_inventory
+    local_before = copy.deepcopy(local)
 
     async def inventory(*, indexed=False):
         reads.append(indexed)
-        return copy.deepcopy(p.current_rows + [d])
+        return copy.deepcopy(p.current_rows + [d, local])
 
     monkeypatch.setattr(m, 'inventory_sources', inventory)
     fetched_before = list(p.fetched)
@@ -368,6 +370,8 @@ async def test_unrelated_candidate_inherits_exact_prior_retention_from_full_inve
         assert git(stage / 'foundation/cache' / name, 'rev-parse', 'HEAD') == expected
     assert p.fetched == fetched_before
     assert p.pointer.read_bytes() == pointer_before
+    assert local == local_before
+    assert {path: path.read_bytes() for path in local_files} == local_files
     await plan.recheck()
     # Receipt persistence, not promotion: this test does not validate or mount D.
     assert partial.read(stage) == receipt

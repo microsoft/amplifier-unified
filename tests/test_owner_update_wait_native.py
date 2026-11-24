@@ -387,11 +387,15 @@ async def test_owner_update_wait_yields_then_continues_once_on_exact_healthy_ado
             old_kernels = worker.controls.kernels
             worker.controls.kernels = SimpleNamespace(records={"held-kernel": {}})
             old_handle = worker.shared_handle
-            assert not await update_drain.prepare(manager, RELEASE)
-            row = app.state["updates"]["drain"]["workers"][sid]
-            assert not row["ready"] and "kernels" in row["waitingFor"]
-            assert old_handle.active
-            worker.controls.kernels = old_kernels
+            try:
+                assert not await update_drain.prepare(manager, RELEASE)
+                row = app.state["updates"]["drain"]["workers"][sid]
+                assert not row["ready"] and row["waitingFor"] == ["kernels"]
+                assert old_handle.active and worker.shared_handle is old_handle
+            finally:
+                # Restore even when the oracle fails: native cleanup must call
+                # the real kernels.shutdown, not an incomplete blocker fixture.
+                worker.controls.kernels = old_kernels
             assert await update_drain.prepare(manager, RELEASE)
             assert row["ready"] and not row["waitingFor"]
             assert old_handle.active and worker.shared_handle is old_handle

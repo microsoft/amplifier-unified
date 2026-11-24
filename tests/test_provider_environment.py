@@ -627,8 +627,9 @@ def test_credential_bindings_retains_exact_envrefs_and_only_rebinds_provider_lit
 
 
 @pytest.fixture
-def credential_host(mounted_host, monkeypatch):
-    """Reuse offline host infrastructure, but run real binding/schema preparation."""
+async def credential_host(mounted_host, monkeypatch):
+    """Real Core construction and binding policies, with synthetic module mounts."""
+    from amplifier_core import AmplifierSession
     from amplifier_web.host import session as host
     from amplifier_web import provider_environment
 
@@ -639,9 +640,9 @@ def credential_host(mounted_host, monkeypatch):
     loop, context = coordinator.get("orchestrator"), coordinator.get("context")
     loop.root_provider, loop.max_iterations, context.max_tokens = None, 10, None
     providers = {}
-    coordinator.get = lambda key: {"providers": providers, "orchestrator": loop,
-                                   "context": context, "tools": {}}.get(key)
-    coordinator.session_state = {}
+    h.executed = loop.execute = AsyncMock(side_effect=AssertionError("Preparation must not execute"))
+    h.cleanup = AsyncMock()
+    h.loader_calls, sessions = [], []
     loop._select_provider = lambda mounted: loop.root_provider or min(
         mounted.values(), key=lambda provider: provider.priority)
     from amplifier_foundation import SessionConfigurator
@@ -677,35 +678,46 @@ def credential_host(mounted_host, monkeypatch):
             h.prepared.mount_plan = self.to_mount_plan()
             return h.prepared
 
+    class Loader:
+        async def load(self, module_id, config, **options):
+            h.loader_calls.append((module_id, copy.deepcopy(config)))
+            async def mount(current):
+                if module_id == "loop-live":
+                    await current.mount("orchestrator", loop)
+                elif module_id == "context-simple":
+                    await current.mount("context", context)
+                else:
+                    assert module_id == "provider-anthropic"
+                    assert isinstance(config["api_key"], str) and config["api_key"]
+                    info = Info(id="fixture", defaults={"model": config["model"],
+                                "reasoning_effort": config["reasoning_effort"]},
+                                config_fields=SCHEMA["fields"])
+                    provider = SimpleNamespace(
+                        get_info=lambda: info, priority=config["priority"],
+                        complete=AsyncMock(return_value="offline result"),
+                        parse_tool_calls=lambda response: [])
+                    await current.mount("providers", provider, name="anthropic")
+            return mount
+
+        def get_on_session_ready_queue(self):
+            return []
+
+        def clear_on_session_ready_queue(self):
+            pass
+
     async def mount(**kwargs):
-        h.session.session_id = kwargs["session_id"]
-        coordinator.config = h.session.config = copy.deepcopy(h.prepared.mount_plan)
-        providers.clear()
-        async def mount_provider(kind, provider, *, name):
-            assert kind == "providers"
-            providers[name] = provider
-        coordinator.mount = mount_provider
+        # Media construction verifies actual Core endpoints before the wrapped
+        # loader runs; real initialization owns provider isolation/remapping.
+        h.session = AmplifierSession(copy.deepcopy(h.prepared.mount_plan),
+                                     session_id=kwargs["session_id"])
+        sessions.append(h.session)
+        h.session.coordinator.loader = Loader()
+        h.session.coordinator.register_cleanup(h.cleanup)
         if kwargs.get("before_initialize"):
             await kwargs["before_initialize"](h.session)
-        for row in h.prepared.mount_plan["providers"]:
-            # This host fixture exercises admission, not Core rollback (covered
-            # by test_provider_isolation_native with the real native wheel).
-            from amplifier_web.provider_isolation import ProviderUnavailable
-            before_load = coordinator.get_capability("provider.before_load")
-            if before_load:
-                try:
-                    await before_load(coordinator, row)
-                except ProviderUnavailable as error:
-                    await coordinator.get_capability("provider.load_failure")(coordinator, row, error)
-                    continue
-            config = row["config"]
-            assert isinstance(config["api_key"], str) and config["api_key"]
-            info = Info(id="fixture", defaults={"model": config["model"],
-                        "reasoning_effort": config["reasoning_effort"]},
-                        config_fields=SCHEMA["fields"])
-            providers[row["instance_id"]] = SimpleNamespace(
-                get_info=lambda info=info: info, priority=config["priority"],
-                complete=AsyncMock(return_value="offline result"))
+        await h.session.initialize()
+        providers.clear()
+        providers.update(h.session.coordinator.get("providers"))
         return h.session
 
     def load(plan):
@@ -719,7 +731,11 @@ def credential_host(mounted_host, monkeypatch):
     h.prepared.create_session.side_effect = mount
     monkeypatch.setattr(provider_environment, "provider_class", schema_class)
     monkeypatch.setattr(host, "materialize_bundle_providers", materialize_bundle_providers)
-    return h
+    try:
+        yield h
+    finally:
+        for session in sessions:
+            await session.cleanup()
 
 
 @pytest.mark.asyncio
@@ -796,7 +812,7 @@ async def test_bound_child_prepares_exact_named_sources_defaults_and_nested_keys
             assert h.providers["fable"].get_info().defaults["model"] == "exact-default"
     finally:
         await controls.close()
-    session.execute.assert_not_awaited()
+    h.executed.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -829,7 +845,9 @@ async def test_bound_child_refuses_unauthorized_credentials_before_prepare_witho
     root = h.load(authorized)
     original_root = root.to_mount_plan()
     monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-ambient-fallback")
-    with pytest.raises(ValueError, match="authorized host credential binding") as failure:
+    expected = (r"^Ambiguous authorized provider instance/source\.$" if case == "ambiguous"
+                else "authorized host credential binding")
+    with pytest.raises(ValueError, match=expected) as failure:
         await host.prepare_manager(h.config.workspace, runtime=h.runtime,
                                    runtime_plan=child, qualification_readonly=True)
     assert child == before and root.to_mount_plan() == original_root
@@ -865,10 +883,10 @@ async def test_authorized_binding_does_not_relax_required_secret_schema(
         ("fable", "provider_configuration_failed")]
     if isolated:
         h.prepared.create_session.assert_awaited_once()
-        h.session.cleanup.assert_awaited_once()
+        h.cleanup.assert_awaited_once()
     else:
         h.prepared.create_session.assert_not_awaited()
-    h.session.execute.assert_not_awaited()
+    h.executed.assert_not_awaited()
     assert len(h.prepare_calls) == 1
     assert "synthetic-" not in str(failure.value)
     assert not h.path.exists()
@@ -888,10 +906,10 @@ async def test_nonbound_runtime_plan_and_ordinary_default_prepare_compatibility(
         h.config.workspace, runtime=h.runtime, qualification_readonly=True,
         **({"runtime_plan": child} if edited else {}))
     h.prepared.create_session.assert_awaited_once()
-    assert not h.capabilities["web.provider_credentials_bound"]
+    assert not session.coordinator.get_capability("web.provider_credentials_bound")
     assert report["effective_selection"]["id"] == "fable"
     assert report["effective_selection"]["model"] == ("reviewed-model" if edited else "exact-default")
     assert root.providers[0]["config"]["api_key"] == authorized["providers"][0]["config"]["api_key"]
     assert root.providers[0]["config"]["priority"] == 1
     assert root.agents == authorized["agents"]
-    session.execute.assert_not_awaited()
+    h.executed.assert_not_awaited()

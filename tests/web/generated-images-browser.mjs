@@ -2,7 +2,7 @@ import {fixturePython} from './fixture-python.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {readFile} from 'node:fs/promises';
+import {readAppearance,settledAppearance,updateAppearance} from './settings-fixture.mjs';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const root=fileURLToPath(new URL('../../',import.meta.url));
@@ -252,9 +252,34 @@ try{
  const control=async(op,id)=>{const response=await page.request.post(boot.url+'/api/fixture/images',{data:{op,id}});assert.equal(response.status(),200);return response.json()};
  await page.goto(boot.url+'/login');await page.getByLabel('Username').fill('image-fixture');await page.getByLabel('Password').fill('fixture-password');await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.waitForSelector('#amp-one');await showFixtureConversation(page);
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this unsent');
- // A persisted older appearance is loaded after application styles.
- const legacyCss=await readFile(root+'tests/fixtures/legacy_theme.css','utf8');
- await page.evaluate(css=>window.amplifier.dispatch('theme.apply',{name:'Older image layout',css:css+' #amp-one .a-inline-gallery{width:100%;grid-template-columns:minmax(0,1fr) 60px} #amp-one .a-image-generation[data-running]{width:100%;flex:1;aspect-ratio:1}'}),legacyCss);
+ // Complete legacy skins are inert. Keep the original adverse declarations
+ // in a saved Reference delta; shared gallery geometry must still win.
+ const imageCss='#amp-one{--a-card-radius:19px} '+
+  '#amp-one .a-inline-gallery{width:100%;grid-template-columns:minmax(0,1fr) 60px} '+
+  '#amp-one .a-image-generation[data-running]{width:100%;flex:1;aspect-ratio:1}';
+ const beforeAppearance=await settledAppearance(page);
+ const savedAppearance=await page.evaluate(css=>window.amplifier.dispatch('theme.save',{name:'Saved image geometry stress',css}),imageCss);
+ assert.equal(savedAppearance.accepted,true);
+ assert.equal(savedAppearance.result.packageVersion,2);assert.equal(savedAppearance.result.base,'reference-v1');
+ assert.match(savedAppearance.result.id,/^saved:/);
+ assert.deepEqual((await readAppearance(page)).effective,beforeAppearance.effective,'Library save does not select');
+ const appliedAppearance=await updateAppearance(page,{appearanceId:savedAppearance.result.id});
+ const profile=appliedAppearance.activeScope==='client'?'local':'shared';
+ const appearanceProof=async label=>{
+  const value=await settledAppearance(page);
+  assert.equal(value.activeScope,appliedAppearance.activeScope);assert.equal(value.namespace,appliedAppearance.namespace);
+  assert.deepEqual(value[profile].values,appliedAppearance[profile].values);
+  assert.equal(value.effective.appearanceId,savedAppearance.result.id);
+  assert.equal(value.theme.id,savedAppearance.result.id);assert.equal(value.theme.fingerprint,savedAppearance.result.fingerprint);
+  assert.equal(value.theme.css,imageCss);assert.equal(value.preview,null);
+  assert.equal(value.observedCompositionId,value.composition.id);
+  await expect(page.locator('#amp-one')).toHaveAttribute('data-appearance-composition',value.composition.id);
+  assert.equal(await page.locator('#amp-one').evaluate(node=>getComputedStyle(node).getPropertyValue('--a-card-radius').trim()),'19px');
+  assert.equal(await page.locator('style').evaluateAll((nodes,css)=>nodes.filter(node=>node.textContent===css).length,imageCss),1);
+  (swapDiagnostic.appearance??=[]).push({label,scope:value.activeScope,generation:value.generation,
+   id:value.theme.id,fingerprint:value.theme.fingerprint,compositionId:value.composition.id,profileRevision:value[profile].revision});
+ };
+ await appearanceProof('selected');
  await control('start','first');
  const gallery=page.locator('.a-inline-gallery');
  const frame=gallery.locator('.a-gallery-image-frame');
@@ -270,6 +295,7 @@ try{
   return{box,frame:frameBox,scroll:pane.scrollTop,snapshot:measured.value};
  };
  await expect(gallery).toBeVisible();
+ await expect(gallery.locator(':scope > section.a-inline-artifact')).toHaveCSS('border-top-left-radius','19px');
  const single=await frame.boundingBox();assert.ok(single.width<=320);
  await control('start','second');await control('start','third');
  await expect(gallery).toHaveAttribute('aria-label','Image gallery, 3 images');
@@ -408,6 +434,7 @@ try{
  await control('unknown','uncertain');await expect(generating).toHaveCount(0);
  await expect(page.locator('.a-image-generation')).toHaveText('Image generation stopped; check activity for its outcome');
  await control('stop');await page.reload();
+ await appearanceProof('unknown-outcome-reload');
  await gallery.scrollIntoViewIfNeeded();
  await expect(rail.locator('img')).toHaveCount(3);
  await gallery.getByRole('button',{name:'Image 4: Image generation stopped; check activity for its outcome',exact:true}).click();
@@ -424,12 +451,13 @@ try{
  await gallery.getByRole('button',{name:'Image 5: Creating image…',exact:true}).click();
  await expect(generating).toHaveCount(1);
  await expect(generating).toHaveText('Creating image…');
- await page.reload();await gallery.getByRole('button',{name:'Image 5: Creating image…',exact:true}).click();await expect(generating).toHaveCount(1);
+ await page.reload();await appearanceProof('delegated-running-reload');await gallery.getByRole('button',{name:'Image 5: Creating image…',exact:true}).click();await expect(generating).toHaveCount(1);
  await control('delegated-finish');await expect(generating).toHaveCount(0);
  await expect(page.locator('.a-image-generation').filter({hasText:'Image generated'})).toHaveCount(1);
- await control('stop');await page.reload();await expect(generating).toHaveCount(0);
+ await control('stop');await page.reload();await appearanceProof('delegated-completed-reload');await expect(generating).toHaveCount(0);
+ await expect(gallery.locator(':scope > section.a-inline-artifact')).toHaveCSS('border-top-left-radius','19px');
  assert.deepEqual(errors,[]);
- console.log('Generated images passed: stable pending/result gallery slots, out-of-order completion, delayed landscape/portrait swaps preserve visible gallery/frame positions with bounded mutation observations, older saved appearance, automatic native receipt display without a model attach action, reduced motion, exact original turn, shared gallery and full view, unsent draft retained, unknown outcome settled across reload, mobile containment. Synthetic receipts; no model/image API calls.');
+ console.log('Generated images passed: stable pending/result gallery slots, out-of-order completion, delayed landscape/portrait swaps preserve visible gallery/frame positions with bounded mutation observations, saved format-2 Reference delta retaining original gallery/generation stress with acknowledged selection and reload persistence, automatic native receipt display without a model attach action, reduced motion, exact original turn, shared gallery and full view, unsent draft retained, unknown outcome settled across reload, mobile containment. Synthetic receipts; no model/image API calls or complete legacy-skin compatibility claim.');
 }catch(error){primaryFailure=error;throw error}
 finally{
  const cleanupErrors=[];

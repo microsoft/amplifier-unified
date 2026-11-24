@@ -1,4 +1,5 @@
 // Public connection setup with synthetic keys/model discovery and no provider network effects.
+import {openSettingsSection} from '../../.build/web-client/tests/browser-settings.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {fileURLToPath} from 'node:url';
@@ -23,16 +24,8 @@ for(const [id,width,height,mode] of variants.filter(([id])=>!process.env.AMPLIFI
   await page.route('**/*',route=>{const url=new URL(route.request().url());if(['http:','https:'].includes(url.protocol)&&url.hostname!=='127.0.0.1'){external.push(url.origin);return route.abort()}return route.continue()});
   const activate=async control=>{await expect(control).toBeVisible();await expect(control).toBeEnabled();if(mode==='keyboard'){await control.focus();await expect(control).toBeFocused();await control.press('Enter')}else if(mode==='touch')await control.tap();else await control.click()};
   await page.goto(boot.url);await page.waitForSelector('#amp-one');
-  const settings=page.getByRole('button',{name:/^Settings(?: \d+ unread items)?$/});
-  if(!await settings.isVisible())await activate(page.getByRole('button',{name:'Open navigation',exact:true}));
-  await activate(settings);await expect(page.locator('.a-settings-experience')).toBeVisible();
-  await page.waitForFunction(()=>{const el=document.querySelector('.a-settings-experience');return el&&el.dataset.compact===String((el.closest('.a-overlay')||el).clientWidth<960)});
+  await openSettingsSection(page,'ai',{activate:(_label,control)=>activate(control)});
   const panel=page.locator('.a-settings-experience');
-  for(let depth=0;await panel.getAttribute('data-compact')==='true'&&await panel.getAttribute('data-settings-index')!=='true';depth++){
-   if(depth>=6)throw Error('Settings Back did not reach index');const previous=await panel.getAttribute('data-settings-route');
-   await activate(panel.locator('.a-settings-mobile-head button').first());await expect(panel).not.toHaveAttribute('data-settings-route',previous);
-  }
-  await activate(page.locator('[data-settings-section="ai"]'));
   const surface=page.locator('.a-settings-page-content:not([hidden]) [data-part="ai-connections"]');
   const state=()=>page.evaluate(()=>window.amplifier.getState());
   await expect(surface.getByRole('button',{name:/OpenAI API.*one/})).toBeVisible();

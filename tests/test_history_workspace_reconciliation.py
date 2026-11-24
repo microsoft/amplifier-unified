@@ -156,9 +156,10 @@ async def test_reused_native_catalog_reconciles_local_filters_errors_and_selecti
     service.queue_sessions = {queue: saved['id']}
     selected_loads = []
 
-    async def load(identity, *, only_if_changed=False, display=False):
+    async def load(identity, *, only_if_changed=False, display=False, canonical=False):
         assert only_if_changed is True
         assert display is False  # This explicit session queue is not a web display demand.
+        assert canonical is True  # Ambient browser binding cannot redirect the stream.
         selected_loads.append(identity)
 
     monkeypatch.setattr(history, 'load', load)

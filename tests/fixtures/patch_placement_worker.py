@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -59,6 +60,25 @@ class PlacementWorker(FixtureWorker):
             self.activation_gate = SimpleNamespace(reset=lambda token: None)
             publish({'type': 'runtime.ready', 'report': {},
                      'workerIdentity': {'pid': os.getpid(), 'sessionId': sid}})
+        elif data['op'] == 'fixture.root_turn':
+            # Synthetic lifecycle only. The real host pipe, never this fixture,
+            # supplies runtimeOwnerId and binds it to the observed native turn.
+            sid = self.session.session_id
+            observed = time.time()
+            base = {'sessionId': sid, 'rootSessionId': sid}
+            publish({**base, 'type': 'generation.started',
+                     'generation_id': data['generationId'],
+                     'initial_input_id': data['inputId'], 'observedAt': observed,
+                     'interruptionRevision': data['interruptionRevision']})
+            publish({**base, 'type': 'input.delivered', 'input_id': data['inputId'],
+                     'generation_id': data['generationId'],
+                     'interruptionRevision': data['interruptionRevision']})
+            # Native work is idle, but no generation terminal was flushed. The
+            # actual process exit must settle its own routing authority later.
+            publish({**base, 'type': 'session.idle'})
+            publish({'op': 'reply', 'id': data['id'], 'result': {
+                'generationId': data['generationId'], 'inputId': data['inputId'],
+                'observedAt': observed}})
         elif data['op'] == 'fixture.tool':
             tools = self.session.coordinator.get('tools')
             result = await tools[data['name']].execute(data['arguments'])

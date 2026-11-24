@@ -4,19 +4,26 @@ from types import SimpleNamespace
 
 import pytest
 from amplifier_foundation.session import SharedSessionStore, SessionBusyError
-from amplifier_web.runtime import RuntimeManager
+from amplifier_web.runtime import RuntimeManager, normalize_event
 from amplifier_web.service import AppError
+from amplifier_web.session_health import current_terminal_failure
 from test_peer_resume import app, paused_member, submit
-from test_collaborative_workspaces import settled
+from test_collaborative_workspaces import generation, settled
 
 
 async def failed_member(app):
     source, target, human = await paused_member(app)
-    target['status'] = 'error'
-    target['failure'] = {'generationId': 'failed-turn', 'category': 'unknown',
-                         'errorType': 'ValueError', 'recordedAt': human['createdAt'] - 1,
-                         'effects': 'not_rolled_back'}
-    target['collaborationGeneration'] = {'id': 'failed-turn', 'terminal': True, 'completed': False}
+    await generation(app, target, 'failed-turn', ['failed-input'],
+                     interruption_revision=target.get('interruptionRevision', 0))
+    await app.on_runtime_event(*normalize_event({
+        'type': 'generation.failed', 'generation_id': 'failed-turn',
+        'input_ids': ['failed-input'], 'error_category': 'unknown',
+        'error_type': 'ValueError', 'error_stage': 'manager_turn',
+    }, target['id']))
+    assert target['status'] == 'error' and current_terminal_failure(target)
+    assert target['failure']['generationId'] == 'failed-turn'
+    assert target['failure']['inputIds'] == ['failed-input']
+    assert target['collaborationGeneration']['inputIds'] == ['failed-input']
     runtime = RuntimeManager()
     app.runtime.stopped_boundary = runtime.stopped_boundary
     return source, target, human, runtime

@@ -70,7 +70,7 @@ const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[
 let browser,peerBrowser,page,primaryError,log='';const transportFailures=[];
 fixture.stderr.on('data',x=>{log=(log+x).slice(-16384)});
 const noteFailure=value=>{transportFailures.push(value);if(transportFailures.length>20)transportFailures.shift()};
-const evidence={measureOnly,expectedTransport};
+const evidence={measureOnly,expectedTransport},actionResponses=[],outputRequests=[],outputResponses=[];
 try{
  const meta=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out: '+log)),60000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+': '+log))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row)}}catch{}})});
  const headers={Authorization:'Bearer fixture-demand-token','Content-Type':'application/json'};
@@ -84,8 +84,24 @@ try{
   const WS=WebSocket;window.WebSocket=class extends WS{constructor(...args){super(...args);if(String(args[0]).includes('/api/events')){record(this,'websocket',args[0]);this.addEventListener('message',e=>{const frame=JSON.parse(e.data);if(['state','state-delta'].includes(frame.event))demandFrames.push({...this.demandIdentity,name:frame.event,revision:frame.data?.revision,bytes:new TextEncoder().encode(e.data).length})})}}};
  });
  page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ page.on('request',request=>{
+  const u=new URL(request.url());
+  if(u.pathname==='/api/conversation/detail'&&u.searchParams.get('field')==='output')outputRequests.push(request);
+ });
  page.on('requestfailed',r=>noteFailure({path:new URL(r.url()).pathname,error:r.failure()?.errorText}));
- page.on('response',r=>{if(r.status()>=400)noteFailure({path:new URL(r.url()).pathname,status:r.status()})});
+ page.on('response',r=>{
+  const url=new URL(r.url());
+  if(url.pathname==='/api/actions'&&r.request().method()==='POST'){
+   const request=r.request().postDataJSON();
+   actionResponses.push(r.text().then(text=>{
+    let receipt;try{receipt=JSON.parse(text)}catch{receipt={unparseable:true}}
+    return {action:request.action,id:request.id,status:r.status(),accepted:receipt.accepted,error:receipt.error};
+   }));
+  }
+  if(url.pathname==='/api/conversation/detail'&&url.searchParams.get('field')==='output')
+   outputResponses.push(r.json().then(value=>({request:r.request(),args:Object.fromEntries(url.searchParams),status:r.status(),value,client:r.request().headers()['x-amplifier-client']})));
+  if(r.status()>=400)noteFailure({path:url.pathname,status:r.status()});
+ });
  const pending=new Set();let lastRequest=performance.now();
  page.on('request',r=>{if(r.url().includes('/api/')&&!r.url().includes('/api/events')){pending.add(r);lastRequest=performance.now()}});
  const finished=r=>{if(pending.delete(r))lastRequest=performance.now()};
@@ -94,6 +110,9 @@ try{
  const action=(name,args={})=>page.evaluate(([n,a])=>window.amplifier.dispatch(n,a),[name,args]);
  const settle=async()=>{await expect.poll(async()=>{const m=await api('/fixture/demand');return m.pending+m.catalogPending+pending.size+(performance.now()-lastRequest<500?1:0)},{timeout:30000}).toBe(0)};
  await settle();
+ const startupActions=await Promise.all(actionResponses);
+ assert.ok(startupActions.some(row=>row.action==='providers.suggestionModels'),'Exercise the ordinary-provider suggestion inventory that previously returned500');
+ assert.ok(startupActions.every(row=>row.status===200&&row.accepted===true),JSON.stringify(startupActions));
  await page.waitForFunction(transport=>demandFrames.some(f=>f.name==='state'&&f.transport===transport),expectedTransport);
  evidence.initialTransport=await page.evaluate(()=>demandStreams.at(-1).demandIdentity);
  assert.equal(evidence.initialTransport.path,expectedTransport==='websocket'?'/api/events/ws':'/api/events');
@@ -121,12 +140,36 @@ try{
  await expect(page.locator('.a-recovery-group')).toHaveCount(0);
  await expect(page.locator('[data-message-id="1-m-119"]')).toHaveCount(0);
  const work=page.locator('[data-group-id="turn@1-m-118"]');
+ const nodePagePromise=page.waitForResponse(response=>{const u=new URL(response.url());return u.pathname==='/api/conversation/detail'&&u.searchParams.get('sessionId')===meta.ids[1]&&u.searchParams.get('part')==='nodes'&&u.searchParams.get('group')==='turn@1-m-118'&&!u.searchParams.has('field')});
  await work.locator('button.a-execution-turn-line').click();
+ const nodePageResponse=await nodePagePromise;assert.equal(nodePageResponse.status(),200);
+ const issued=(await nodePageResponse.json()).items.find(row=>row.id==='node').outputDetail;assert.ok(issued);
  const result=work.locator('[data-node-id="node"]');
+ await expect(result).toBeAttached();await settle();
+ assert.equal(outputRequests.length,0,'Closed Work rows must not request retained output bodies');
  const savedResult=page.waitForResponse(response=>{const url=new URL(response.url());return url.pathname==='/api/conversation/detail'&&url.searchParams.get('field')==='output'&&response.ok()});
  await result.locator('button.a-execution-action-line').click();await savedResult;
- await result.getByRole('button',{name:'Show all 21,023 characters',exact:true}).click();
- await expect(result).toContainText('End of retained result.');
+ // Work opens the current step inspector. Its Show-all expands the complete
+ // body already fetched in bounded chunks; it is not an inline row control.
+ const inspector=page.locator('#work-step-inspector');await expect(inspector).toBeVisible();
+ await inspector.getByRole('button',{name:'Show all 21,023 characters',exact:true}).click();
+ await expect(inspector).toContainText('End of retained result.');
+ const outputChunks=await Promise.all(outputResponses),fullOutput='Saved worker result. '.repeat(1000)+'End of retained result.';
+ assert.equal(fullOutput.length,21023);assert.equal(outputChunks.length,2);assert.equal(outputRequests.length,2);
+ let outputOffset=0;
+ for(const [index,chunk] of outputChunks.entries()){
+  assert.equal(chunk.request,outputRequests[index]);
+  assert.equal(chunk.status,200);assert.equal(chunk.client,client);
+  assert.equal(chunk.args.sessionId,meta.ids[1]);assert.equal(chunk.args.part,'nodes');assert.equal(chunk.args.id,'node');assert.equal(chunk.args.field,'output');
+  for(const key of ['sessionId','part','id','field','digest','windowKey','length'])assert.equal(chunk.args[key],String(issued[key]));
+  assert.ok(chunk.args.windowKey.startsWith('resident-work:'));assert.equal(Number(chunk.args.offset),outputOffset);
+  assert.equal(chunk.value.total,fullOutput.length);
+  const length=Array.from(chunk.value.value).length;assert.ok(length>0&&length<=16000);outputOffset+=length;
+  assert.equal(chunk.value.nextOffset,outputOffset===fullOutput.length?null:outputOffset);
+ }
+ assert.equal(outputChunks.map(row=>row.value.value).join(''),fullOutput);
+ evidence.retainedOutput={characters:fullOutput.length,chunks:outputChunks.length,exactSelector:true};
+ await inspector.getByRole('button',{name:'Close step details',exact:true}).click();await expect(inspector).toHaveCount(0);
  await page.getByRole('button',{name:'Load earlier conversation',exact:true}).click();
  await expect(page.locator('[data-message-id="1-m-1"]')).toBeAttached();
  await expect(page.locator('[data-message-id="1-m-0"]')).toHaveCount(0);

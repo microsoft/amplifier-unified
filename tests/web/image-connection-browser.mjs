@@ -15,7 +15,7 @@ try{
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
- const commands=[];page.on('request',request=>{if(request.url().endsWith('/api/actions')&&request.method()==='POST'){let body=request.postDataJSON();if(body?.action==='shell.command')body=body.args.command||body.args;commands.push(body?.action)}});
+ const commands=[],modelSaves=[];page.on('request',request=>{if(request.url().endsWith('/api/actions')&&request.method()==='POST'){let body=request.postDataJSON();if(body?.action==='shell.command')body=body.args.command||body.args;commands.push(body?.action);if(body?.action==='providers.finishSetup')modelSaves.push(body.args)}});
  const effects=()=>page.request.get(url+'/fixture/image-effects').then(response=>response.json());
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const configs=state=>state.setup.providers.map(({id,config})=>({id,config}));
@@ -57,8 +57,15 @@ try{
  assert.deepEqual(configs(await state()),before,'A catalog check must not change model choices');
  const routing=(await state()).setup.active;
  await page.getByRole('button',{name:'Choose model',exact:true}).click();
- await expect(page.getByLabel('Model',{exact:true})).toBeVisible();
- await page.getByLabel('Model',{exact:true}).selectOption('fixture-alternative');
+ // This synthetic fixture has model rows but declares no verified discovery.
+ // Model is its manual text input; the separate catalog selector owns options.
+ const manual=page.getByRole('textbox',{name:'Model',exact:true});
+ await expect(manual).toBeEditable();await expect(manual).toHaveValue('fixture-model');
+ await expect(page.getByText('Manual ID — not verified by discovery. The connection checks it when you send.',{exact:true})).toBeVisible();
+ const models=page.getByRole('combobox',{name:'Choose model from catalog',exact:true});
+ await expect(models).toBeEnabled();
+ assert.deepEqual(await models.locator('option').evaluateAll(rows=>rows.map(row=>row.value)),['','fixture-model','fixture-alternative']);
+ await models.selectOption('fixture-alternative');
  await expect(page.getByText('Model saved. Existing model rules are unchanged.',{exact:true})).toBeVisible();
  const after=await state();
  assert.equal(after.setup.providers.find(row=>row.id==='one').config.default_model,'fixture-alternative');
@@ -79,11 +86,13 @@ try{
  assert.deepEqual(imageRequests,[]);
  assert.ok(commands.includes('providers.models'));
  assert.ok(commands.includes('providers.test'));
- assert.ok(commands.includes('providers.finishSetup'));
+ assert.equal(modelSaves.length,1,'The exact catalog choice saves once');
+ assert.equal(modelSaves[0].id,'one');assert.equal(modelSaves[0].model,'fixture-alternative');
+ assert.equal(modelSaves[0].initializeRouting,false);
  assert.deepEqual(errors,[]);
  // providers.test is the ordinary catalog check above, not providers.testMessage.
  const finalEffects=await effects();assert.deepEqual(finalEffects.sends,[]);assert.ok(finalEffects.probes.every(action=>['providers.models','providers.test'].includes(action)));assert.ok(finalEffects.probes.includes('providers.models'));assert.ok(finalEffects.probes.includes('providers.test'));assert.ok(finalEffects.controls.every(operation=>['configuration.inspect','configuration.apply'].includes(operation)));assert.ok(!commands.some(action=>/send|generate|testMessage/i.test(action)));
- const result={imageSettingsAbsent:true,legacyNavigationFallback:true,connectionControls:true,ordinaryModelSaved:true,routingPreserved:true,narrow:true,imageRequests:imageRequests.length,errors,inspection,finalEffects,commands,noModelOrImageSubmission:true,limits:['Synthetic catalog and runtime; real settings persistence and browser commands. No external image generation or provider acceptance is claimed.']};
+ const result={imageSettingsAbsent:true,legacyNavigationFallback:true,connectionControls:true,ordinaryModelSaved:true,modelSaves,routingPreserved:true,narrow:true,imageRequests:imageRequests.length,errors,inspection,finalEffects,commands,noModelOrImageSubmission:true,limits:['Synthetic model rows without verified-discovery metadata; current catalog selector and manual-ID warning are exercised. Real settings persistence and browser commands, not external provider or image generation acceptance.']};
  await writeFile(out+'/observations.json',JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));
 }catch(error){if(page)await page.screenshot({path:out+'/failure.png'});throw error}
 finally{try{await browser?.close()}finally{if(fixture.exitCode===null){const exited=once(fixture,'exit');fixture.kill('SIGTERM');const timer=setTimeout(()=>fixture.kill('SIGKILL'),5000);try{const [code,signal]=await exited;assert.equal(code,0);assert.equal(signal,null)}finally{clearTimeout(timer)}}}}

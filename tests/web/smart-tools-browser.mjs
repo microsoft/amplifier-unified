@@ -1,5 +1,7 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {prepareCanvasReaderInput,recordCanvasInputFailure} from './canvas-reader-input.mjs';
+import {settledAppearance} from './settings-fixture.mjs';
+import {ownFixture} from './fixture-lifecycle.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {mkdir,mkdtemp,writeFile,rm} from 'node:fs/promises';
@@ -8,7 +10,7 @@ import {join} from 'node:path';
 import {build} from 'esbuild';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
-import {settingsButton} from '../../.build/web-client/tests/browser-settings.mjs';
+import {openSettingsSection} from '../../.build/web-client/tests/browser-settings.mjs';
 const evidence=process.env.AMPLIFIER_TEST_OUTPUT||join(tmpdir(),'amplifier-smart-tools');await mkdir(evidence,{recursive:true});
 const temp=await mkdtemp(join(tmpdir(),'unified-mcp-browser-'));
 const source=`import {App} from '@modelcontextprotocol/ext-apps';
@@ -42,6 +44,7 @@ const attack=`<script>parent.parent.postMessage({jsonrpc:'2.0',id:'forged',metho
 const html=`<!doctype html><html><body><h1>Independent counter</h1><output id="count">0</output><button id="add">Add one</button><button id="media">Read media</button><output id="resource"></output><input aria-label="Unsaved tool draft"><p id="isolation"></p><iframe sandbox="allow-scripts" srcdoc="${attack.replaceAll('&','&amp;').replaceAll('"','&quot;')}"></iframe><script type="module">${built.outputFiles[0].text.replaceAll('</script','<\\/script')}</script></body></html>`;
 await writeFile(join(temp,'app.html'),html);
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/canvas_mcp_ui_server.py',import.meta.url)),join(temp,'app.html')],{stdio:'inherit'});
+const stopFixture=ownFixture(fixture,{label:'Smart Tools fixture'});
 let browser,page,failure;
 try{
  for(let i=0;i<150;i++){try{if((await fetch('http://127.0.0.1:8967/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
@@ -59,11 +62,26 @@ try{
  const observations=async()=>{const response=await page.request.get('http://127.0.0.1:8967/fixture/smart-tool-observations');assert.equal(response.status(),200);return response.json()};
  const operations=async()=>(await observations()).operations;
  const operation=async id=>(await operations()).find(row=>row.id===id);
- const appearance=async()=>{
-  const navigation=page.getByRole('button',{name:'Open navigation',exact:true});
-  if(await navigation.isVisible())await navigation.click();
-  await settingsButton(page).click();
-  await page.locator('[data-settings-section="appearance"]').click();
+ const appearance=()=>openSettingsSection(page,'appearance');
+ const appearanceChange=async(field,value,activate)=>{
+  const before=await settledAppearance(page);
+  const profile=before.activeScope==='client'?'local':'shared';
+  const expectedRevision=before[profile].revision+(before.effective[field]===value?0:1);
+  await activate(); // One ordinary UI gesture; no conflict retry or synthetic ACK.
+  await page.waitForFunction(({namespace,generation,scope,profile,expectedRevision,field,value})=>{
+   const a=window.amplifier.getState().appearance;
+   return a?.namespace===namespace&&a.generation===generation&&a.activeScope===scope
+    &&a[profile]?.revision===expectedRevision&&a.effective[field]===value&&a.renderedPreferences[field]===value;
+  },{namespace:before.namespace,generation:before.generation,scope:before.activeScope,profile,expectedRevision,field,value});
+  const after=await settledAppearance(page);
+  assert.equal(after[profile].revision,expectedRevision);assert.equal(after.effective[field],value);
+  await expect(page.locator('#amp-one')).toHaveAttribute('data-appearance-composition',after.composition.id);
+ };
+ const appearanceLayout=async value=>{
+  const advanced=page.locator('details.a-appearance-more');
+  if(!await advanced.evaluate(node=>node.open))await advanced.locator(':scope > summary').click();
+  await appearanceChange('layout',value,()=>page.getByRole('combobox',{name:'Layout',exact:true}).selectOption(value));
+  await expect(page.locator('#amp-one')).toHaveAttribute('data-layout',value);
  };
  await action('view.update',{patch:{scheme:'system'}});
  await action('canvas.show',{kind:'markdown',title:'Pinned notes',content:'# Notes beside the live tool'});
@@ -161,17 +179,32 @@ try{
  await page.waitForFunction(()=>document.querySelector('.a-canvas-panel').getBoundingClientRect().width===innerWidth);
  assert.equal(await frame.locator('body').getAttribute('data-live-marker'),'same-frame');
  await expect(page.locator('.a-canvas-artifact-toolbar')).toBeVisible();
+ await expect(page.locator('#workspace-canvas .a-canvas-html')).toHaveCount(1);
  const geometry=await page.locator('#workspace-canvas').evaluate(panel=>{
-  const rect=selector=>{const r=panel.querySelector(selector).getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom}};
+  const box=node=>{const r=node.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom}};
+  const rect=selector=>box(panel.querySelector(selector));
   return {viewport:{width:innerWidth,height:innerHeight},detailsHidden:panel.querySelector('#canvas-options').hidden,
-   readerInert:panel.querySelector('.a-canvas-reader').inert,chrome:rect('.a-canvas-chrome'),
+   panel:box(panel),appHeader:box(document.querySelector('.a-work-header')),
+   readerInert:panel.querySelector('.a-canvas-reader').inert,chrome:rect('.a-canvas-chrome'),navigation:rect('.a-canvas-head'),
+   toolbarInChrome:panel.querySelector('.a-canvas-chrome').contains(panel.querySelector('.a-canvas-artifact-toolbar')),
    toolbar:rect('.a-canvas-artifact-toolbar'),reader:rect('.a-canvas-reader'),body:rect('.a-canvas-body'),frame:rect('.a-canvas-html')};
  });
  const assertFrameBoundary=g=>{
   assert.equal(g.detailsHidden,true);assert.equal(g.readerInert,false);
-  assert.equal(g.frame.x,0);assert.equal(g.frame.width,1450);
-  assert.equal(g.reader.y,g.chrome.bottom);assert.equal(g.toolbar.y,g.reader.y);
-  assert.equal(g.frame.y,g.toolbar.bottom,'LIVE_TOOL_BOUNDARY begins immediately below the visible artifact toolbar');
+  assert.equal(g.panel.y,g.appHeader.bottom,'Focused Canvas starts below the application header');
+  assert.equal(g.chrome.y,g.panel.y);assert.equal(g.chrome.width,g.viewport.width);
+  assert.equal(g.frame.x,0);assert.equal(g.frame.width,g.viewport.width);
+  assert.equal(g.toolbarInChrome,true,'Artifact actions belong to the stable Canvas chrome');
+  for(const box of [g.navigation,g.toolbar]){
+   assert.ok(box.height>0&&box.width>0);
+   assert.ok(box.y>=g.chrome.y&&box.bottom<=g.chrome.bottom,'Navigation and toolbar remain inside chrome');
+   assert.ok(box.x>=g.chrome.x&&box.x+box.width<=g.chrome.x+g.chrome.width);
+  }
+  assert.ok(g.navigation.x+g.navigation.width<=g.toolbar.x||g.toolbar.x+g.toolbar.width<=g.navigation.x
+   ||g.navigation.bottom<=g.toolbar.y||g.toolbar.bottom<=g.navigation.y,'Navigation and artifact actions do not overlap');
+  assert.equal(g.reader.y,g.chrome.bottom);
+  assert.equal(g.frame.y,g.chrome.bottom,'LIVE_TOOL_BOUNDARY begins immediately below the complete visible Canvas chrome');
+  assert.ok(g.frame.y>=g.toolbar.bottom,'LIVE_TOOL_BOUNDARY never overlaps the visible artifact toolbar');
   assert.deepEqual(g.frame,g.body,'The live iframe fills the reader body');
   assert.equal(g.body.bottom,g.reader.bottom);assert.equal(g.reader.bottom,g.viewport.height);
   assert.ok(g.frame.height>=250,'The focused live tool retains usable vertical space');
@@ -179,10 +212,15 @@ try{
  await writeFile(join(evidence,'focused-live-tool-geometry.json'),JSON.stringify(geometry,null,2));
  assertFrameBoundary(geometry);
  await page.screenshot({path:join(evidence,'focused-live-tool-geometry.png')});
- // The obsolete nav-only boundary is rejected by this same adjacency oracle.
- const obsolete={...geometry,frame:{...geometry.frame,y:geometry.chrome.bottom}};
+ // The navigation-only boundary omits the remaining toolbar/chrome extent.
+ // In compact mode the rows can sit beside one another; chrome still owns its
+ // final border. Do not force Tabs or replace the boundary with a fixed offset.
+ assert.ok(geometry.navigation.bottom<geometry.chrome.bottom,'Nav-only negative must omit visible chrome');
+ const obsolete={...geometry,frame:{...geometry.frame,y:geometry.navigation.bottom}};
  assert.throws(()=>assertFrameBoundary(obsolete),/LIVE_TOOL_BOUNDARY/);
- await writeFile(join(evidence,'focused-live-tool-boundary-negative.json'),JSON.stringify({geometry:obsolete,rejected:true},null,2));
+ const intrusive={...geometry,frame:{...geometry.frame,y:geometry.toolbar.y}};
+ assert.throws(()=>assertFrameBoundary(intrusive),/LIVE_TOOL_BOUNDARY/);
+ await writeFile(join(evidence,'focused-live-tool-boundary-negative.json'),JSON.stringify({geometry:obsolete,intrusive,rejected:true},null,2));
  await action('view.update',{patch:{canvasFocused:false}});
  assert.equal(await frame.locator('body').getAttribute('data-live-marker'),'same-frame');
  assert.equal((await operations()).length,operationCount);
@@ -191,10 +229,9 @@ try{
  const receipt=await action('smartTools.call',{id:'counter',name:'counter_add',arguments:{amount:4,delay_ms:3000}});
  await expect.poll(async()=>(await operation(receipt.operationId))?.status).toBe('running');
  await appearance();
- await page.getByLabel('Color mode',{exact:true}).selectOption('light');
+ await appearanceChange('scheme','light',()=>page.getByRole('radiogroup',{name:'Color mode',exact:true}).getByRole('radio',{name:'Light',exact:true}).check());
  await frame.locator('body[data-theme="light"]').waitFor();
- await page.getByText('Layout & background',{exact:true}).click();
- await page.locator('#layout').selectOption('work');
+ await appearanceLayout('work');
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await action('view.update',{patch:{canvasFocused:true}});
  assert.equal(await frame.locator('body').getAttribute('data-live-marker'),'same-frame');
@@ -204,9 +241,8 @@ try{
  assert.equal((await operations()).filter(o=>o.target?.name==='counter_add').length,2,'Presentation changes must not replay accepted tool work');
  await action('view.update',{patch:{canvasFocused:false}});
  await appearance();
- await page.getByLabel('Color mode',{exact:true}).selectOption('system');
- await page.getByText('Layout & background',{exact:true}).click();
- await page.locator('#layout').selectOption('balanced');
+ await appearanceChange('scheme','system',()=>page.getByRole('radiogroup',{name:'Color mode',exact:true}).getByRole('radio',{name:'System',exact:true}).check());
+ await appearanceLayout('balanced');
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await action('canvas.close',{});
  const reopen=action('canvas.select',{id:savedId});
@@ -241,6 +277,6 @@ try{
 }catch(error){failure=await recordCanvasInputFailure(page,error,{outputDir:evidence,label:'smart-tools'});throw failure}
 finally{
  const cleanup=[];
- for(const close of [()=>browser?.close(),async()=>fixture.kill(),()=>rm(temp,{recursive:true,force:true})])try{await close()}catch(error){cleanup.push(error)}
+ for(const close of [()=>browser?.close(),async()=>{const receipt=await stopFixture();await writeFile(join(evidence,'cleanup.json'),JSON.stringify(receipt,null,2));},()=>rm(temp,{recursive:true,force:true})])try{await close()}catch(error){cleanup.push(error)}
  if(cleanup.length)throw new AggregateError([...(failure?[failure]:[]),...cleanup],'Smart Tools cleanup failure',{cause:failure||cleanup[0]});
 }

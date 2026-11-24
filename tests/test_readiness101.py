@@ -40,13 +40,41 @@ def test_settings_legacy_routes_are_pure_and_global_inventory_has_no_chat_contro
 
 def test_automatic_update_work_has_no_badge_but_errors_and_manual_choices_do():
     from amplifier_web.attention import snapshot
-    state={'settings':{'updates':{'autoInstall':True}},'updates':{'phase':'available','items':[{'id':'component','label':'Included','status':'update'}]}}
-    assert not snapshot(state)['items']
-    state['updates']['error']='Could not finish'
-    assert any(i['id']=='updates:error' for i in snapshot(state)['items'])
-    state['updates'].pop('error')
+    from amplifier_web.update_health import current
+    state={'settings':{'updates':{'autoInstall':True}},'updates':{'phase':'available','available':1,'items':[{'id':'component','label':'Included','status':'update'}]}}
+
+    def project():
+        # UpdateManager publishes current health before attention consumes it.
+        state['updates']['currentStatus']=current(state['updates'])
+        return snapshot(state)
+
+    automatic=project()
+    assert state['updates']['currentStatus']['status']=='available'
+    assert not automatic['items']
+    assert automatic['badgeUnread']==automatic['settingsUnread']==0
+
+    state['updates'].update(phase='error',error='Could not finish')
+    failed=project()
+    error=next(i for i in failed['items'] if i['id']=='updates:current')
+    assert error['actionRequired'] is True
+    assert error['title']=='Update could not finish'
+    assert error['detail']=='Could not finish'
+    assert error['updateAction']=='diagnostics'
+    assert failed['badgeUnread']>0 and failed['settingsUnread']>0
+    state['attentionRead']={i['id']:i['fingerprint'] for i in failed['items']}
+    reviewed=project()
+    assert reviewed['badgeUnread']==reviewed['settingsUnread']==1
+    assert state['updates']['error']=='Could not finish'
+
+    state['updates'].update(phase='available',error=None)
+    automatic=project()
+    assert not automatic['items']
+    assert automatic['badgeUnread']==automatic['settingsUnread']==0
+    state.pop('attentionRead')  # Exercise a manual choice not already reviewed.
     state['settings']['updates']['autoInstall']=False
-    assert any(i['id']=='source:component' for i in snapshot(state)['items'])
+    manual=project()
+    assert [i['id'] for i in manual['items']]==['source:component']
+    assert manual['badgeUnread']==manual['settingsUnread']==1
 
 
 @pytest.mark.asyncio

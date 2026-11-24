@@ -1,5 +1,41 @@
-"""Read-only Plan projection from successful, canonical todo receipts."""
+"""Bounded reported checklists; historical summaries remain an explicit read."""
 import json
+
+
+def items(value):
+    """Detach the display fields of one checklist, or reject the entire value."""
+    if not isinstance(value, list) or len(value) > 200:
+        raise ValueError('Missing or oversized list')
+    result = []
+    for item in value:
+        if not isinstance(item, dict) or item.get('status') not in {'pending', 'in_progress', 'completed'}:
+            raise ValueError('Invalid task')
+        if not isinstance(item.get('content'), str) or not isinstance(item.get('activeForm', ''), str):
+            raise ValueError('Invalid task text')
+        if len(item['content']) > 4000 or len(item.get('activeForm', '')) > 4000:
+            raise ValueError('Oversized task')
+        result.append({key: item[key] for key in ('content', 'status', 'activeForm') if key in item})
+    if sum(len(item['content']) + len(item.get('activeForm', '')) for item in result) > 16000:
+        raise ValueError('Oversized plan')
+    return result
+
+
+def accepted_report(result, proposed=None):
+    """A successful live todo result, never proposed work or a history lookup."""
+    if hasattr(result, 'model_dump'):
+        result = result.model_dump()
+    if not isinstance(result, dict) or result.get('success') is False:
+        return None
+    output = result.get('output', result)
+    if not isinstance(output, dict):
+        return None
+    value = output.get('todos')
+    if value is None and output.get('status') in {'created', 'updated'}:
+        value = proposed
+    try:
+        return items(value)
+    except (ValueError, TypeError):
+        return None
 
 
 def latest_plan(nodes, aliases, read_field):
@@ -32,20 +68,7 @@ def latest_plan(nodes, aliases, read_field):
             args = field('input')
             if isinstance(args, dict) and args.get('action') in {'create', 'update'}:
                 todos = args.get('todos')
-        if not isinstance(todos, list) or len(todos) > 200:
-            raise ValueError('Missing or oversized list')
-        items = []
-        for item in todos:
-            if not isinstance(item, dict) or item.get('status') not in {'pending', 'in_progress', 'completed'}:
-                raise ValueError('Invalid task')
-            if not isinstance(item.get('content'), str) or not isinstance(item.get('activeForm', ''), str):
-                raise ValueError('Invalid task text')
-            if len(item['content']) > 4000 or len(item.get('activeForm', '')) > 4000:
-                raise ValueError('Oversized task')
-            items.append({key: item[key] for key in ('content', 'status', 'activeForm') if key in item})
-        if sum(len(item['content']) + len(item.get('activeForm', '')) for item in items) > 16000:
-            raise ValueError('Oversized plan')
-        return {**result, 'items': items}
+        return {**result, 'items': items(todos)}
     except (ValueError, KeyError, TypeError, OSError):
         # Do not substitute an older list and present it as the latest one.
         return {**result, 'unavailable': True}

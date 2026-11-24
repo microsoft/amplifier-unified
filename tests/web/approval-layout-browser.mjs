@@ -26,19 +26,20 @@ const sameGeometry=(a,b)=>typeof a==='number'&&typeof b==='number'?near(a,b)
 // Independent fixture expectations, not the product's fitPanels calculation.
 // Equal approval/composer widths alone also accept a stale docked mobile nav.
 const layoutMatches=(s,e)=>{
- const narrow=e.width<=900,right=box=>box.x+box.width;
+ const narrow=e.width<=900,navigationNarrow=e.width<=640,right=box=>box.x+box.width,gap=s.panelGap;
+ if(!Number.isFinite(gap)||gap<0)return false;
  if(s.viewport.width!==e.width||s.viewport.height!==e.height||s.scheme!==e.scheme
-  ||s.narrow!==narrow||s.canvasOpen!==!!e.canvasOpen||s.canvasOverlay
+  ||s.narrow!==narrow||s.navigationNarrow!==navigationNarrow||s.canvasOpen!==!!e.canvasOpen||s.canvasOverlay
   ||!near(s.workspace.x,0)||!near(s.workspace.width,e.width))return false;
- if(narrow){
+ if(navigationNarrow){
   if(s.nav.docked||!s.nav.hidden||!s.nav.inert||s.nav.rendered||!near(s.chat.x,0)||!near(s.chat.width,e.width))return false;
  }else if(!s.nav.docked||s.nav.hidden||s.nav.inert||!s.nav.rendered
-  ||!near(s.nav.bounds.x,0)||!near(s.nav.bounds.width,e.navWidth)||!near(s.chat.x,right(s.nav.bounds)))return false;
+  ||!near(s.nav.bounds.x,0)||!near(s.nav.bounds.width,e.navWidth)||!near(s.chat.x,right(s.nav.bounds)+gap))return false;
  if(e.canvasOpen){
-  if(!s.canvas.rendered||s.canvas.hidden||!near(s.canvas.bounds.x,right(s.chat))||!near(right(s.canvas.bounds),e.width))return false;
+  if(!s.canvas.rendered||s.canvas.hidden||!near(s.canvas.bounds.x,right(s.chat)+gap)||!near(right(s.canvas.bounds),e.width))return false;
  }else if(s.canvas.rendered||!near(right(s.chat),e.width))return false;
  if(e.chatWidth!==undefined&&!near(s.chat.width,e.chatWidth))return false;
- const width=Math.min(760,s.chat.width-(s.chat.width<=520?28:48)),x=s.chat.x+(s.chat.width-width)/2;
+ const width=Math.min(760,s.chatContent.width-(s.chatContent.width<=520?28:48)),x=s.chatContent.x+(s.chatContent.width-width)/2;
  return columnMatches(s)&&[s.approvals,s.composer].every(box=>near(box.x,x)&&near(box.width,width))
   &&s.approvals.height>0&&s.approvals.height<=e.height*.3+1;
 };
@@ -68,12 +69,16 @@ try{
  const geometry=()=>page.evaluate(()=>{
   const rect=el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};
   const workspace=document.querySelector('[data-part=workspace]'),nav=document.querySelector('#workspace-navigation'),
-   canvas=document.querySelector('#workspace-canvas'),card=document.querySelector('[data-part=approvals]'),c=card.getBoundingClientRect();
+   canvas=document.querySelector('#workspace-canvas'),card=document.querySelector('[data-part=approvals]'),c=card.getBoundingClientRect(),
+   chat=document.querySelector('[data-part=conversation]'),chatBox=chat.getBoundingClientRect(),chatStyle=getComputedStyle(chat),
+   left=parseFloat(chatStyle.borderLeftWidth)+parseFloat(chatStyle.paddingLeft),right=parseFloat(chatStyle.borderRightWidth)+parseFloat(chatStyle.paddingRight);
   return {viewport:{width:innerWidth,height:innerHeight},scheme:document.querySelector('#amp-one').dataset.themeScheme,
-   narrow:workspace.dataset.narrow==='true',canvasOpen:workspace.dataset.canvasOpen==='true',canvasOverlay:workspace.dataset.canvasOverlay==='true',
+   panelGap:parseFloat(getComputedStyle(workspace).columnGap),
+   narrow:workspace.dataset.narrow==='true',navigationNarrow:workspace.dataset.navigationNarrow==='true',canvasOpen:workspace.dataset.canvasOpen==='true',canvasOverlay:workspace.dataset.canvasOverlay==='true',
    workspace:rect(workspace),nav:{docked:nav.dataset.docked==='true',hidden:nav.hidden,inert:nav.inert,rendered:!!nav.getClientRects().length,bounds:rect(nav)},
    canvas:{hidden:!canvas||canvas.hidden,rendered:!!canvas?.getClientRects().length,bounds:canvas?rect(canvas):null},
-   approvals:rect(card),composer:rect(document.querySelector('[data-part=composer]')),chat:rect(document.querySelector('[data-part=conversation]')),
+   approvals:rect(card),composer:rect(document.querySelector('[data-part=composer]')),chat:rect(chat),
+   chatContent:{x:chatBox.x+left,width:chatBox.width-left-right},
    approvalScrollTop:card.scrollTop,controls:[...card.querySelectorAll('button[data-action="approval.respond"]')].map(button=>{
     const r=button.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);
     return {id:button.closest('[data-approval-id]').dataset.approvalId,label:button.textContent.trim(),bounds:rect(button),focused:document.activeElement===button,

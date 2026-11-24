@@ -261,7 +261,7 @@ async def test_queued_completion_rechecks_replaced_source_after_lock(app):
     assert app.assignments.tasks.get(app.assignments.current(replacement), task['id'])['status'] == 'claimed'
 
 
-@pytest.mark.parametrize('state,label', [('blocked', 'Work blocked'), ('paused', 'Task paused'),
+@pytest.mark.parametrize('state,label', [('blocked', 'Blocked — details unavailable'), ('paused', 'Paused'),
     ('stopped', 'Stopped'), ('error', 'Needs attention'), ('approval', 'Approval requested')])
 async def test_worker_observation_is_live_but_never_changes_claim_or_readiness(app, monkeypatch, state, label):
     owner = app.state['sessions'][0]; peer, _ = await child(app, owner)
@@ -283,6 +283,7 @@ async def test_worker_observation_is_live_but_never_changes_claim_or_readiness(a
     projected = observed['result']['tasks'][0]
     assert observed['changed'] and not observed['timedOut']
     assert projected['worker']['label'] == label
+    assert projected['worker']['attention'] is (state in {'error', 'approval'})
     assert projected['worker']['blockedReason'] == ('Waiting for owner decision' if state == 'blocked' else '')
     assert projected['status'] == 'claimed' and projected['readiness'] == 'ready'
     assert projected['claim'] == claimed['claim']

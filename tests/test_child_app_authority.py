@@ -1,7 +1,6 @@
 """Real Core/Foundation mounting must not lend a child its root's identity."""
 import importlib.util
 import asyncio
-import ast
 import json
 import os
 from dataclasses import dataclass
@@ -151,17 +150,11 @@ async def test_scripted_child_returns_result_after_root_only_refusal(app, tmp_pa
     await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator), execution_role='root')
     store = SessionStore(tmp_path / 'guidance-children')
     registry = await install_children(parent, prepared, Runtime('root'), store, approvals)
-    # As in test_provider_capture_live, execute the exact production late
-    # installer, with only its unrelated external activity IO replaced.
+    # Use the production factory, including its module globals and closure.
+    # Only unrelated external activity/checkpoint IO is replaced.
     worker.install_activity = lambda c: late_preparations.append(c.session_id)
     worker.install_collaboration_checkpoint = lambda c: None
-    original_host = registry.host_adapter
-    tree = ast.parse(Path(runtime_worker.__file__).read_text())
-    node = next(n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == 'ObservedHost')
-    scope = {'original_host': original_host, 'host': worker, 'install_app_access': install_app_access}
-    exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])),
-                 runtime_worker.__file__, 'exec'), scope)
-    registry.host_adapter = scope['ObservedHost']()
+    registry.host_adapter = worker.execution_host(registry.host_adapter)
     monkeypatch.setattr(runtime_worker, 'publish', lambda value: None)
     try:
         async with asyncio.timeout(30):

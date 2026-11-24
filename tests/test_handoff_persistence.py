@@ -46,7 +46,10 @@ async def test_recovery_preflight_failure_retains_fence_and_explicit_reconciliat
         await settle(app)
         saved = app.worktrees.read(sid, record['id'])
         assert saved['phase'] == 'unknown'
-        assert 'target folder is unavailable' in saved['detail']
+        assert saved['failureType'] == 'ValueError'
+        assert 'writer release or folder placement is not confirmed' in saved['detail']
+        assert saved['step'] == 'released' and saved['release']['quiesced'] is True
+        assert saved['inputsReplayed'] is False
         assert app.worktrees.execution_state(sid)['fenced']
         assert app._session(sid)['configurationBusy']
         owner = app.worktrees.saved_owner(sid, durable=True)
@@ -56,6 +59,9 @@ async def test_recovery_preflight_failure_retains_fence_and_explicit_reconciliat
         with pytest.raises(AppError, match=r'\AApplying or reconciling conversation settings; new input must wait\.\Z') as blocked:
             await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'must remain fenced'})
         assert blocked.value.status == 409
+        runtime.quiesce_for_handoff.assert_not_awaited()
+        runtime.collaboration_input.assert_not_awaited()
+        assert app._session(sid)['messages'] == []
         response = await app.dispatch('worktree.reconcile', {'sessionId': sid,
             'id': saved['id'], 'expectedRevision': saved['revision'],
             'destination': 'source', 'evidence': 'The original folder is intact; keep it.'}, command_id='reconcile')
@@ -64,8 +70,41 @@ async def test_recovery_preflight_failure_retains_fence_and_explicit_reconciliat
         assert app.worktrees.read(sid, saved['id'])['phase'] == 'reconciled'
         assert not app.worktrees.execution_state(sid)['fenced']
         assert not app._session(sid)['configurationBusy']
+        runtime.quiesce_for_handoff.assert_awaited_once()
+        runtime.collaboration_input.assert_not_awaited()
+        owner = app.worktrees.saved_owner(sid, durable=True)
+        assert owner['workingDirectory'] == str(root) and owner['executionRevision'] == 1
+        assert owner['executionHandoffId'] == response['result']['id']
         assert app._session(sid)['messages'] == []
         assert (tmp_path / 'retained-checkout/a.txt').read_text() == 'original\n'
+    finally:
+        await app.close()
+
+
+async def test_source_choice_does_not_reconcile_without_confirmed_release(tmp_path, monkeypatch):
+    app, runtime, root, sid = await fixture(tmp_path, monkeypatch)
+    target, record = await completed(app, sid)
+    record.update(phase='unknown')
+    app.worktrees.save(record)
+    app.worktrees.changed()
+    runtime.quiesce_for_handoff.reset_mock()
+    runtime.quiesce_for_handoff.return_value = {'quiesced': False}
+    runtime.collaboration_input = AsyncMock()
+    try:
+        response = await app.dispatch('worktree.reconcile', {
+            'sessionId': sid, 'id': record['id'], 'expectedRevision': record['revision'],
+            'destination': 'source', 'evidence': 'The folder exists, but writer release is not confirmed.',
+        }, command_id='unconfirmed-reconcile')
+        await settle(app)
+        assert app.worktrees.read(sid, response['result']['id'])['phase'] == 'unknown'
+        assert app.worktrees.read(sid, record['id']) == record
+        assert app.worktrees.execution_state(sid)['fenced']
+        owner = app.worktrees.saved_owner(sid, durable=True)
+        assert owner['workingDirectory'] == target['path'] and owner['executionRevision'] == 1
+        assert (root / 'a.txt').read_text() == 'original\n'
+        runtime.quiesce_for_handoff.assert_awaited_once()
+        runtime.collaboration_input.assert_not_awaited()
+        assert app._session(sid)['messages'] == []
     finally:
         await app.close()
 

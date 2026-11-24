@@ -274,7 +274,10 @@ def test_mcp_workflow_is_fixed_default_off_with_separate_bounded_job():
     assert job['if'] == "${{ !inputs.permissions_history && !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
     assert job['timeout-minutes'] == '30' and job['runs-on'] == 'ubuntu-latest'
     steps = job['steps']
-    assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
+    [checkout] = [step for step in steps
+                  if step.get('uses', '').startswith('actions/checkout@')]
+    assert checkout['uses'] == 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262'
+    assert checkout['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
     commands = '\n'.join(step.get('run', '') for step in steps)
     assert 'uv sync --locked --group dev --group artifacts' in commands
     assert 'npm ci --prefix .build/web-client' in commands and 'npm ci --prefix tests/web' in commands

@@ -1,5 +1,5 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
-import {settingsButton} from '../../.build/web-client/tests/browser-settings.mjs';
+import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.mjs';
 import './composer-test-helpers.mjs';
 import {startCoordinationFixture} from './coordination-fixture.mjs';
 import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
@@ -53,9 +53,7 @@ try{
  const secondGrant=(await response.json()).result;
  const secondApproval=page.locator(`[data-approval-id="${secondGrant.id}"]`);
  await expect(secondApproval).toBeVisible();
- await settingsButton(page).click();
- await page.getByRole('button',{name:'Privacy & files',exact:true}).click();
- await page.getByRole('button',{name:/Access & approvals/}).click();
+ await openSettingsPage(page,'access-approvals',{activate:(_label,control,options)=>control.click(options)});
  const controls=page.getByRole('region',{name:'Access and approvals'});
  await expect(controls).toBeVisible();
  await expect(controls.getByLabel('Access scope')).toHaveCount(0);

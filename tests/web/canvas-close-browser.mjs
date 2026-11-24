@@ -74,7 +74,9 @@ try{
   const closeTab=title=>layout==='compact'
    ?panel.getByRole('button',{name:`Close tab ${title}`,exact:true,includeHidden:true}).and(panel.locator('.a-canvas-close-current'))
    :panel.locator('.a-canvas-document-tabs').getByRole('button',{name:`Close tab ${title}`,exact:true,includeHidden:true});
-  const dismiss=panel.getByRole('button',{name:'Close canvas panel',exact:true,includeHidden:true});
+  // One header toggle hides the pane; per-document close controls stay in
+  // Canvas. Neither operation is a substitute for the other.
+  const dismiss=page.locator('#canvas-toggle');
   const overview=panel.locator('.a-chat-overview-trigger');
   const toggle=page.locator('#canvas-toggle');
   const artifactRows=async()=>{const s=await state();return s.canvasArtifacts.filter(row=>row.sessionId===s.selectedSessionId)};
@@ -92,7 +94,8 @@ try{
   const targetGeometry=locator=>locator.evaluate(el=>{
    const r=el.getBoundingClientRect(),points=[[r.x+4,r.y+4],[r.right-4,r.y+4],[r.right-4,r.bottom-4],[r.x+4,r.bottom-4],[r.x+r.width/2,r.y+r.height/2]];
    const hits=points.map(([x,y])=>{const node=document.elementFromPoint(x,y);return {x,y,inside:el.contains(node),target:node?.getAttribute('aria-label')||node?.className}});
-   const chrome=[...el.closest('#workspace-canvas').querySelectorAll('.a-canvas-chrome,.a-canvas-head,.a-canvas-navigation,.a-open-documents,.a-canvas-close-current,.a-canvas-more,.a-canvas-head>[aria-label]')].map(node=>{
+   const owner=el.closest('#workspace-canvas')||el.closest('header');
+   const chrome=[...owner.querySelectorAll('.a-canvas-chrome,.a-canvas-head,.a-canvas-navigation,.a-open-documents,.a-canvas-close-current,.a-canvas-more,.a-canvas-head>[aria-label],#canvas-toggle')].map(node=>{
     const b=node.getBoundingClientRect(),s=getComputedStyle(node);
     return {class:node.className,label:node.getAttribute('aria-label'),left:b.left,right:b.right,width:b.width,height:b.height,minWidth:s.minWidth,flex:s.flex,display:s.display,overflow:s.overflow};
    });
@@ -101,7 +104,7 @@ try{
   });
   const reachable=async(locator,settle=false)=>{
    let box=await targetGeometry(locator);
-   const minimum=width<500?{width:44,height:44}:await locator.evaluate(el=>el.classList.contains('a-canvas-dismiss')?{width:32,height:32}:{width:28,height:30});
+   const minimum=width<500?{width:44,height:44}:await locator.evaluate(el=>el.id==='canvas-toggle'?{width:32,height:32}:{width:28,height:30});
    if(settle&&!(box.width>=minimum.width&&box.height>=minimum.height&&box.hit)){
     const initial=box;
     // Native strip scrolling changes the Overview width for 140ms. Wait on
@@ -138,8 +141,10 @@ try{
    else await expect(panel.locator('button.a-open-documents')).toContainText(title);
    await expect(panel.getByRole('heading',{name:title==='Beta report'?'Beta retained':'Alpha revised',exact:true})).toBeVisible();
   };
-  await expect(dismiss).toHaveAccessibleName('Close canvas panel');
-  await expect(dismiss).toHaveAttribute('title',/Hide Canvas.*keeps/i);
+  await expect(dismiss).toHaveAccessibleName('Hide canvas');
+  await expect(dismiss).toHaveAttribute('aria-controls','workspace-canvas');
+  await expect(dismiss).toHaveAttribute('aria-expanded','true');
+  await expect(dismiss).toHaveAttribute('data-action','canvas.visibility');
   const label=await dismiss.evaluate(el=>({name:el.getAttribute('aria-label'),title:el.title,icon:!!el.querySelector('svg')}));
   assert.equal(label.icon,true,'Approved compact icon still has a named, distinct hide affordance');
   report.geometry.push({width,label});
@@ -150,7 +155,7 @@ try{
    // reject the pre-fix discovery failure, not merely accept existing actions.
    // Preserve layout/scroll position: this negative removes discoverability,
    // not width. display:none would also clamp the document strip's scroll.
-   const hidden=await page.addStyleTag({content:'.a-canvas-tab-close,.a-canvas-dismiss{visibility:hidden!important}'});
+   const hidden=await page.addStyleTag({content:'.a-canvas-tab-close,#canvas-toggle{visibility:hidden!important}'});
    await assert.rejects(()=>reachable(closeTab('Beta report')),/unclipped hit target/);
    await assert.rejects(()=>reachable(dismiss),/unclipped hit target/);
    await hidden.evaluate(el=>el.remove());

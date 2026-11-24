@@ -193,6 +193,9 @@ async def test_runtime_computer_read_only_denies_writes_before_backend_effects(
     class FakeBackend:
         name = "runtime-safety-fake"
         is_remote = False
+        # Current backend contract checks this explicit capability even when
+        # no coexistence guard is active; the fake never delivers real input.
+        type_text_guarded = False
 
         def __init__(self):
             self.calls = []
@@ -245,9 +248,10 @@ async def test_runtime_computer_read_only_denies_writes_before_backend_effects(
     for payload in writes:
         result = await tool.execute(payload)
         assert result.success is False, payload
-        assert result.error["message"] == (
-            f"action {payload['action']!r} blocked: computer-use is mounted read_only"
-        ), (payload, result.error)
+        assert result.error == {
+            "type": "PermissionError",
+            "message": "write blocked: computer-use is mounted read_only",
+        }, (payload, result.error)
         assert backend.calls == [], (payload, backend.calls)
 
     # Discriminating write control: change only read_only on a second instance.

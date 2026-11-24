@@ -239,10 +239,11 @@ _SAVED_TOOL_PLACEMENT_FIELDS = {
     'id', 'revision', 'producerId', 'parentId', 'turnId', 'sessionId',
     'rootSessionId', 'kind', 'phase', 'label', 'tool', 'toolCallId',
     'toolObservationId', 'startedAt', 'endedAt', 'lifecycle', 'liveObservation',
+    'admissionInputId', 'generationId',
 }
 
 
-def _host_placed_tool(session=None, *, arguments=None, result=None):
+def _host_placed_tool(session=None, *, arguments=None, result=None, generation_id=None):
     from amplifier_web import execution
     from amplifier_web.execution_events import ExecutionEvents
 
@@ -261,6 +262,9 @@ def _host_placed_tool(session=None, *, arguments=None, result=None):
     observer = ExecutionEvents(session['id'], emit)
     observer.lifecycle({'type': 'input.delivered', 'source': 'user',
                         'input_id': 'original'})
+    if generation_id is not None:
+        observer.lifecycle({'type': 'generation.started', 'initial_input_id': 'original',
+                            'generation_id': generation_id})
     events = tool_records(sid=session['id'], arguments=arguments, result=result)
     for event in events:
         # Preserve the real hook's exact observation UUID in canonical data.
@@ -268,6 +272,8 @@ def _host_placed_tool(session=None, *, arguments=None, result=None):
     execution.finish(session)
     node, = session['execution']['nodes']
     assert node['turnId'] == 'original'
+    assert node['admissionInputId'] == 'original'
+    assert node['generationId'] == generation_id
     assert session['execution']['turns'][0]['anchorMessageId'] == 'user'
     assert node['toolObservationId'] == events[-1]['data']['unified_tool_observation_id']
     return session, events, node
@@ -355,12 +361,15 @@ def test_stored_execution_rejects_unqualified_tool_placement(case):
     assert tree == original
 
 
-@pytest.mark.parametrize('field', ['parentId', 'label', 'startedAt', 'endedAt'])
-def test_stored_tool_placement_never_persists_nested_metadata(field):
+@pytest.mark.parametrize('field', ['parentId', 'label', 'startedAt', 'endedAt',
+                                  'admissionInputId', 'generationId'])
+@pytest.mark.parametrize('shape', ['mapping', 'list'])
+def test_stored_tool_placement_never_persists_nested_metadata(field, shape):
     from amplifier_web.session_projection import stored_execution
 
     session, _, node = _host_placed_tool()
-    node[field] = {'hiddenBody': ['NESTED-BODY-MUST-NOT-BE-SAVED']}
+    poison = {'hiddenBody': ['NESTED-BODY-MUST-NOT-BE-SAVED']}
+    node[field] = poison if shape == 'mapping' else [poison]
     original = copy.deepcopy(session['execution'])
 
     saved = stored_execution(session['execution'])
@@ -373,6 +382,27 @@ def test_stored_tool_placement_never_persists_nested_metadata(field):
                for row in saved['nodes'])
     assert 'NESTED-BODY-MUST-NOT-BE-SAVED' not in json.dumps(saved)
     assert session['execution'] == original
+
+
+@pytest.mark.parametrize('field', ['admissionInputId', 'generationId'])
+@pytest.mark.parametrize('length', [200, 201, None])
+def test_saved_tool_bindings_are_bounded_and_legacy_absence_is_not_synthesized(field, length):
+    from amplifier_web.session_projection import stored_execution
+
+    session, _, node = _host_placed_tool(generation_id='generation-original')
+    if length is None:
+        node.pop(field)
+    else:
+        node[field] = 'x' * length
+    original = copy.deepcopy(session['execution'])
+    saved = stored_execution(session['execution'])
+    retained, = saved['nodes']
+    if length == 200:
+        assert retained[field] == 'x' * length
+    else:
+        assert field not in retained
+    assert session['execution'] == original
+    assert stored_execution(saved) == saved
 
 
 @pytest.mark.asyncio
@@ -463,8 +493,9 @@ async def _read_exact_placed_fields(owner, session, node, expected, later_events
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('later_events', [0, 140])
+@pytest.mark.parametrize('generation_id', [None, 'generation-original'])
 async def test_stored_tool_placement_reopens_exact_paged_unicode_fields(
-        tmp_path, monkeypatch, later_events):
+        tmp_path, monkeypatch, later_events, generation_id):
     """JSON saved-view transform plus new owners, not a full AppService restart."""
     from amplifier_web import execution
     from amplifier_web.execution_events import ExecutionEvents
@@ -478,7 +509,8 @@ async def test_stored_tool_placement_reopens_exact_paged_unicode_fields(
         arguments = {'command': '入力-é-𝄞\n' * 4096 + 'INPUT-END'}
         output = {'success': True, 'output': {
             'stdout': '結果-ø-𐍈\n' * 4096 + 'OUTPUT-END', 'returncode': 0}}
-        _, events, node = _host_placed_tool(session, arguments=arguments, result=output)
+        _, events, node = _host_placed_tool(session, arguments=arguments, result=output,
+                                          generation_id=generation_id)
         original_node = copy.deepcopy(node)
         # A later real host turn must not pull the original observed tool forward.
         session['messages'].append({
@@ -509,6 +541,8 @@ async def test_stored_tool_placement_reopens_exact_paged_unicode_fields(
         saved_node, = saved_tree['nodes']
         assert saved_node == {key: value for key, value in original_node.items()
                               if key in _SAVED_TOOL_PLACEMENT_FIELDS}
+        assert saved_node['admissionInputId'] == 'original'
+        assert saved_node['generationId'] == generation_id
         assert saved_tree['turns'] == original['execution']['turns']
         warm_refs = await _read_exact_placed_fields(
             owner, session, original_node, expected, later_events)
@@ -530,6 +564,8 @@ async def test_stored_tool_placement_reopens_exact_paged_unicode_fields(
         reopened_owner.projector = FakeProjector(service.data_dir)
         assert source_identity(reopened) == source_identity(session)
         assert reopened['execution']['nodes'][0]['turnId'] == 'original'
+        assert reopened['execution']['nodes'][0]['admissionInputId'] == 'original'
+        assert reopened['execution']['nodes'][0]['generationId'] == generation_id
         assert reopened['execution']['currentTurnId'] == 'later'
         before_reads = copy.deepcopy(reopened)
         with pytest.raises(ValueError, match='expired'):

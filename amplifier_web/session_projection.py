@@ -239,6 +239,9 @@ def _stored_nodes(rows, turn_ids, receipts):
 
 def _stored_execution_fields(tree, *, _retired=None):
     """Canonical fields and placement dependencies, before projecting nodes."""
+    # execution.plan is an explicit historical reader's derived value. The
+    # last live report lives separately in the existing session view, so a
+    # history refresh cannot replace it or force a cold execution-body read.
     accounting = accounting_projection(tree, _retired=_retired)
     receipts = {(row.get('sessionId'), row['id']): row for row in accounting}
     turns = [row for row in tree.get('turns', []) if not any(
@@ -296,12 +299,15 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
                 or session.get('titleSource') not in {None, 'native'}
                 or bool(session.get('draftAttachments')) or bool(session.get('draft'))
                 or bool(session.get('messageAnnotations')) or bool(session.get('messageQuotes'))
+                or '_reportedPlan' in session
                 or session.get('recentActivityAt', 0) > baseline
                 or bool(dict.get(session, MARKER)))
             if customized:
                 # Keep an explicit Stop revision in this saved reference only;
                 # native index/default projections are not its authority.
                 result['sessions'].append({**{key: session[key] for key in (*INDEX_FIELDS, 'interruptionRevision') if key in session}, '$native': True,
+                    **({'_reportedPlan': copy.deepcopy(session['_reportedPlan'])}
+                       if '_reportedPlan' in session else {}),
                     **({MARKER: copy.deepcopy(dict.get(session, MARKER)),
                         '_coldMessageCount': session.get('_coldMessageCount', 0),
                         '_coldNotifications': copy.deepcopy(session.get('_coldNotifications', []))}

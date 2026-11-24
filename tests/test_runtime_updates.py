@@ -171,6 +171,15 @@ def write_fixture_project(path, name, dependencies=()):
 
 @pytest.fixture
 def environment(tmp_path, monkeypatch):
+    return runtime_environment_fixture(tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def remote_environment(tmp_path, monkeypatch):
+    return runtime_environment_fixture(tmp_path, monkeypatch, remote=True)
+
+
+def runtime_environment_fixture(tmp_path, monkeypatch, *, remote=False):
     # This fixture exercises one synthetic Git dependency, independently of the
     # real support packs installed in the interpreter running the test suite.
     # uv forbids --refresh-package together with UV_OFFLINE even for file://
@@ -189,10 +198,24 @@ def environment(tmp_path, monkeypatch):
     git(repo, 'add', '.')
     git(repo, 'commit', '-m', 'first')
     old = git(repo, 'rev-parse', 'HEAD')
+    url = repo.as_uri()
+    if remote:
+        # UpdateManager groups remote repository identities; file:// is only
+        # the local transport used by the lower-level resolver fixtures.
+        # Give this journey a real HTTPS identity without any network access.
+        url = 'https://example.invalid/fixture-runtime'
+        transport = tmp_path / 'gitconfig'
+        transport.write_text('[url ' + json.dumps(repo.as_uri()) + ']\n insteadOf = ' + url + '\n')
+        monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(transport))
+        monkeypatch.setenv('GIT_CONFIG_NOSYSTEM', '1')
+        monkeypatch.setenv('GIT_CONFIG_COUNT', '0')
+        monkeypatch.setenv('GIT_ALLOW_PROTOCOL', 'file')
+        monkeypatch.setenv('UV_PYTHON_DOWNLOADS', 'never')
+        monkeypatch.setenv('UV_CACHE_DIR', str(tmp_path / 'uv-cache'))
     manifest = tmp_path / 'pyproject.toml'
     manifest.write_text('[project]\nname="fixture-worker"\nversion="0.1.0"\n'
                         'requires-python=">=3.13"\ndependencies=["fixture-runtime"]\n'
-                        '[tool.uv.sources]\nfixture-runtime={git="' + repo.as_uri() + '",branch="main"}\n')
+                        '[tool.uv.sources]\nfixture-runtime={git="' + url + '",branch="main"}\n')
     monkeypatch.setattr(environments, 'manifest_path', lambda: manifest)
     monkeypatch.setattr('amplifier_web.update_sequence.included_sources', lambda: ({'fixture-runtime'}, []))
     home = tmp_path / 'app'
@@ -346,11 +369,26 @@ def test_cold_inventory_does_not_prepare_worker(tmp_path):
     assert not (tmp_path / 'runtime').exists()
 
 
-async def test_update_manager_installs_runtime_only_and_manifest_updates(environment, monkeypatch):
+async def test_update_manager_installs_runtime_only_and_manifest_updates(remote_environment, monkeypatch, record_property):
     from amplifier_web import app_updates
+    from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
+    from amplifier_web.host.config import amplifier_home, write_private
+    from amplifier_web.runtime_qualification import freeze, installed_graph, verify_recorded
     from amplifier_web.service import AppService
-    from amplifier_web.updates import UpdateManager
-    manager, current, row, old, new, repo = environment
+    from amplifier_web.updates import UpdateManager, process, source_key
+    manager, current, row, old, new, repo = remote_environment
+    remote_url = 'https://example.invalid/fixture-runtime'
+    assert row['url'] == remote_url and source_key(row['url'], row['ref']) == (remote_url, 'main')
+    with pytest.raises(ValueError, match='Unsupported Git source'):
+        source_key(repo.as_uri(), 'main')  # Do not weaken the production remote-source guard.
+    # This fixture installs and freezes only its local synthetic worker graph. The ordinary
+    # app profile still requires a connection before admitting any installation;
+    # unrelated default behavior sources must not enter the second check.
+    settings_path = amplifier_home() / 'settings.yaml'
+    settings = {'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)}}
+    write_private(settings_path, json.dumps(settings), owned_root=amplifier_home())
+    baseline_lock = (current / 'uv.lock').read_bytes()
+    baseline_pointer = active_release(manager.home)
     closed = []
     class Runtime:
         async def close(self):
@@ -360,27 +398,99 @@ async def test_update_manager_installs_runtime_only_and_manifest_updates(environ
     monkeypatch.setattr(app_updates, 'check', app_check)
     app = AppService(manager.home, Runtime(), workspace=manager.home.parent)
     updater = UpdateManager(app)
+    qualified, validation_steps = [], []
     async def validate(stage, release):
-        await environments.stage(updater, release, [r for r in updater.inventory if r.get('status') == 'update'])
+        validation_steps.append('stage')
+        project = await environments.stage(updater, release,
+            [r for r in updater.inventory if r.get('status') == 'update'], finalize=False)
+        validation_steps.append('sync')
+        await process(shutil.which('uv'), 'sync', '--locked', '--project', str(project), timeout=90)
+        validation_steps.append('freeze')
+        final = await freeze(updater, release, project)
+        validation_steps.append('verify')
+        graph = installed_graph(final)
+        assert {r['name'] for r in graph} == {'fixture-runtime'}
+        assert graph[0]['directUrl']['url'] == remote_url
+        assert graph[0]['directUrl']['vcs_info']['commit_id'] == new
+        assert json.loads((stage / 'runtime-installed.json').read_text()) == graph
+        verify_recorded(final, stage)
+        qualified.append(release)
     updater.validate = validate
+    def evidence():
+        # Failure evidence survives pytest temporary-directory retention without
+        # exposing settings, command text, credentials or arbitrary exceptions.
+        fields = ('phase', 'status', 'errorType', 'failureLocation', 'reason', 'exitCode', 'osError')
+        return {
+            'phase': app.state['updates'].get('phase'),
+            'sameAppHome': updater.home == manager.home,
+            'updatesDirectoryExists': updater.directory.is_dir(),
+            'validationSteps': list(validation_steps), 'validatedCount': len(qualified),
+            'runtimeCloseCount': len(closed),
+            'lastFailure': {k: v for k, v in updater.diagnostics.state.get('lastFailure', {}).items() if k in fields},
+            'events': [{k: v for k, v in row.items() if k in fields}
+                       for row in updater.diagnostics.state.get('events', [])[-12:]],
+        }
     try:
         await updater.check()
         assert any(r['id'] == 'runtime:fixture-runtime' and r['status'] == 'update' for r in updater.inventory)
+        assert not any(r['id'].startswith('included:') for r in updater.inventory)
+        # Availability alone is not installation. With no connection, admission
+        # must keep the actual baseline and start no stage or validation.
         await updater.install()
-        assert app.state['updates']['phase'] == 'installed'
+        assert app.state['updates']['phase'] == 'available'
+        assert not qualified and not closed
+        assert active_release(manager.home) == baseline_pointer
+        assert (current / 'uv.lock').read_bytes() == baseline_lock
+        assert not list((manager.home / 'updates/releases').glob('*'))
+        settings['config'] = {'providers': [
+            {'module': 'provider-anthropic', 'config': {'default_model': 'fixture-model'}}]}
+        write_private(settings_path, json.dumps(settings), owned_root=amplifier_home())
+        settings_bytes = settings_path.read_bytes()
+        await updater.check()
+        await updater.install()
+        assert app.state['updates']['phase'] == 'installed', evidence()
         assert environments.inventory(manager.home)[0]['current'] == new
         assert closed
+        first = active_release(manager.home)['current']
+        assert qualified == [first] and first
+        assert (current / 'uv.lock').read_bytes() == baseline_lock
+        assert environments.locked_sources(current)['fixture-runtime'].fragment == old
+        first_receipt = environments.receipt_directory(manager.home, first)
+        frozen = {name: (first_receipt / name).read_bytes()
+                  for name in ('runtime.toml', 'runtime.lock', 'runtime-base.toml', 'runtime-installed.json')}
+        first_project = environments.project_path(manager.home, first)
+        verify_recorded(first_project, first_receipt)
         # A changed application manifest is a local update, not a Git URL.
         path = environments.manifest_path()
         path.write_text(path.read_text().replace('version="0.1.0"', 'version="0.1.1"'))
         await updater.check()
         assert any(r['id'] == 'runtime:environment' and r['status'] == 'update' for r in updater.inventory)
+        assert not any(r['id'].startswith('included:') for r in updater.inventory)
         await updater.install()
-        assert app.state['updates']['phase'] == 'installed'
+        assert app.state['updates']['phase'] == 'installed', evidence()
+        second = active_release(manager.home)['current']
+        assert second != first and qualified == [first, second]
+        second_receipt = environments.receipt_directory(manager.home, second)
+        assert (second_receipt / 'runtime-base.toml').read_bytes() == environments.declared_manifest()
+        assert not any(r['kind'] == 'runtime environment' for r in environments.inventory(manager.home))
+        verify_recorded(environments.project_path(manager.home, second), second_receipt)
+        assert {name: (first_receipt / name).read_bytes() for name in frozen} == frozen
         await updater.rollback()
+        assert app.state['updates']['phase'] == 'installed', evidence()
+        assert app.state['updates']['release'] == first and not app.state['updates'].get('pendingRollback')
+        assert active_release(manager.home)['current'] == first
+        assert {name: (first_receipt / name).read_bytes() for name in frozen} == frozen
+        verify_recorded(first_project, first_receipt)
+        assert environments.locked_sources(
+            environments.project_path(manager.home, first))['fixture-runtime'].fragment == new
         assert any(r['kind'] == 'runtime environment' for r in environments.inventory(manager.home))
+        assert (current / 'uv.lock').read_bytes() == baseline_lock
+        assert settings_path.read_bytes() == settings_bytes
     finally:
-        await app.close()
+        try:
+            record_property('runtimeUpdateFixture', json.dumps(evidence()))
+        finally:
+            await app.close()
 
 
 @pytest.fixture

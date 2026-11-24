@@ -272,12 +272,27 @@ async def mount(coordinator, config=None):
                 'id', 'workspace', 'runtimeSessionId', 'nativeIdentity', 'status', 'collaborationGeneration', 'messages', 'error', 'failure',
                 'interruptionRevision', 'nextMessageRevision', 'pendingModelSelection', 'execution')},
             'toolRunning': stage('tool-running'), 'workers': len(runtime.workers)})
+    async def native_status(request):
+        # Read only the already-running worker. The guard is checked under
+        # runtime admission too, so retirement cannot turn this into a start.
+        row = runtime.workers.get(sid)
+        def current():
+            if (row is None or runtime.workers.get(sid) is not row
+                    or row['process'].returncode is not None
+                    or not row['ready'].done() or row['ready'].cancelled()
+                    or row['ready'].exception() is not None):
+                raise RuntimeError('Native status requires the same ready fixture worker')
+        current()
+        async with asyncio.timeout(5):
+            result = await runtime.control(sid, 'native.status', {}, guard=current)
+        return web.json_response(result)
     async def release(request):
         name = (await request.json())['stage']
         assert name in {'accept', 'apply', 'finish', 'pending', 'ordinary-release', 'tool-release', 'complete'}
         (root / name).touch()
         return web.json_response({'released': name})
     app.router.add_get('/fixture', inspect)
+    app.router.add_get('/fixture/native-status', native_status)
     app.router.add_post('/fixture/release', release)
     app.router.add_post('/fixture/shutdown', shutdown)
     runner = web.AppRunner(app)

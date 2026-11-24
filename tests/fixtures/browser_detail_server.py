@@ -102,6 +102,18 @@ async def main():
                     return web.json_response({'sessions':[{key:copy.deepcopy(row.get(key)) for key in ('id','messages','execution')} for row in service._state['sessions']],
                         'runtimeStarts':service.runtime.starts,'runtimeSends':service.runtime.sends,
                         'delegateCapture':getattr(service,'fixture_delegate_capture',None)})
+            if op == 'inspect-native-history':
+                # Observe the explicitly seeded fixture without publication,
+                # history refresh, chmod or admitting any dormant owner.
+                async with service.lock:
+                    row = next(row for row in service._state['sessions'] if row['id'] == args['id'])
+                    native = service.fixture_native_path
+                    return web.json_response({
+                        'session': {key: copy.deepcopy(row.get(key)) for key in (
+                            'id', 'messages', 'sharedHistoryOffset', 'sharedHistoryTotal', 'status', 'streaming')},
+                        'files': {name: hashlib.sha256((native/name).read_bytes()).hexdigest()
+                                  for name in ('metadata.json', 'transcript.jsonl')},
+                        'runtimeStarts': service.runtime.starts, 'runtimeSends': service.runtime.sends})
             if op == 'agent-bridge':
                 try:
                     result = await service.app_bridge(args['operation'], args.get('args', {}), args['sessionId'])
@@ -121,7 +133,9 @@ async def main():
                 (native/'metadata.json').write_text(json.dumps({'session_id':'paging-fixture',
                     'working_dir':str(alpha),'name':'Live saved history','bundle':'bundle:anchors'}))
                 (native/'transcript.jsonl').write_text(''.join(json.dumps({'role':'user' if i%2==0 else 'assistant',
-                    'content':f'Saved message {i}\n\n'+('A retained paragraph. '*25)})+'\n' for i in range(305)))
+                    'content':f'Saved message {i}\n\n'+(
+                        ('Long retained paragraph. '*1500)+'LONG-HISTORY-END'
+                        if args.get('longMessage') and i == 150 else 'A retained paragraph. '*25)})+'\n' for i in range(305)))
                 native_receipt = {name: hashlib.sha256((native/name).read_bytes()).hexdigest()
                                   for name in ('metadata.json', 'transcript.jsonl')}
                 service.fixture_native_receipt = native_receipt
@@ -150,6 +164,8 @@ async def main():
                 await service.on_runtime_event('runtime.status',{'sessionId':row['id'],'status':'working'})
                 await service.on_runtime_event('assistant.message',{'sessionId':row['id'],'text':'A new live response.'})
                 await service.on_runtime_event('assistant.delta',{'sessionId':row['id'],'text':'Still writing...'})
+            elif op=='live-history-idle':
+                await service.on_runtime_event('runtime.status',{'sessionId':args['id'],'status':'idle'})
             elif op=='reset':
                 revision=service.state['revision']
                 service.state.clear();service.state.update(copy.deepcopy(baseline));service.state['revision']=revision

@@ -357,7 +357,8 @@ async def test_denial_size_is_bounded_and_later_admission_retires_observation(ap
         BINDING.reset(token)
 
 
-async def test_exact_host_observation_survives_process_restart(app, monkeypatch):
+@pytest.mark.parametrize('terminal_before_restart', [False, True])
+async def test_exact_host_observation_survives_process_restart(app, monkeypatch, terminal_before_restart):
     from amplifier_web import capacity_wait
     from amplifier_web.collaboration import BINDING
     from amplifier_web.model_admission import admit
@@ -376,18 +377,36 @@ async def test_exact_host_observation_survives_process_restart(app, monkeypatch)
     finally:
         BINDING.reset(token)
     before = copy.deepcopy(target['modelAdmission'])
+    terminal = normalize_event({
+        'type': 'generation.failed', 'generation_id': before['generationId'],
+        'input_ids': before['inputIds'], 'error_type': 'ValueError',
+        'error_category': 'unknown', 'error_stage': 'manager_turn'}, target['id'])
+    if terminal_before_restart:
+        await app.on_runtime_event(*terminal)
+        failure_before = copy.deepcopy(target['failure'])
+        assert failure_before['category'] == 'model_capacity'
+        assert failure_before['admission']['callId'] == row['id']
+        assert failure_before['admission']['providerRequestSent'] is False
     await app.close()
     reopened = AppService(app.data_dir, workspace=target['workspace'])
     try:
         restored = reopened._session(target['id'])
         assert restored['modelAdmission'] == before
+        assert before['callId'] == row['id'] and before['providerRequestSent'] is False
         assert reopened.runtime is None
-        await reopened.on_runtime_event(*normalize_event({
-            'type': 'generation.failed', 'generation_id': before['generationId'],
-            'input_ids': before['inputIds'], 'error_type': 'ValueError',
-            'error_category': 'unknown', 'error_stage': 'manager_turn'}, target['id']))
-        assert restored['failure']['admission']['callId'] == row['id']
-        assert restored['failure']['admission']['providerRequestSent'] is False
+        assert restored['collaborationGeneration']['terminal']
+        if terminal_before_restart:
+            assert restored['failure'] == failure_before
+        else:
+            assert (restored.get('failure') or {}).get('category') != 'model_capacity'
+        prior_failure = copy.deepcopy(restored.get('failure'))
+        prior_generation = copy.deepcopy(restored['collaborationGeneration'])
+        prior_status = restored['status']
+        await reopened.on_runtime_event(*terminal)
+        assert restored['modelAdmission'] == before
+        assert restored.get('failure') == prior_failure
+        assert restored['collaborationGeneration'] == prior_generation
+        assert restored['status'] == prior_status
     finally:
         await reopened.close()
 
