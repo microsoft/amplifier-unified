@@ -3595,9 +3595,15 @@ def test_native_checkpoint_guard_compares_state_assertion_structure(monkeypatch,
     """Exercise the whole maintained guard against source variants, not native code."""
     path = ROOT / "tests/test_runtime.py"
     original = path.read_text()
+    case = next(n for n in ast.parse(original).body if isinstance(n, ast.AsyncFunctionDef)
+                and n.name == "test_native_windows_runtime_cancel_before_identity_reaps_job")
+    lines = original.splitlines(keepends=True)
+    body = "".join(lines[case.lineno - 1:case.end_lineno])
     retained = "        assert not manager.workers and not manager._preparations\n"
-    assert original.count(retained) == 1
-    changed = original.replace(retained, "        " + statement + "\n")
+    assert body.count(retained) == 1
+    changed = ("".join(lines[:case.lineno - 1])
+               + body.replace(retained, "        " + statement + "\n")
+               + "".join(lines[case.end_lineno:]))
     read_text = Path.read_text
 
     def read(source, *args, **kwargs):
