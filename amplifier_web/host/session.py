@@ -91,6 +91,7 @@ class _SelectedRequest:
     choices: dict
     selected: object
     refitted: bool = False
+    foreground: object = None
     execution: object = None
     release_options: object = None
 
@@ -360,6 +361,8 @@ class SelectedProvider:
         candidate = active()
         if candidate is not None and candidate.selection is self and candidate.original is request:
             candidate.check_selection(execution, kwargs)
+        elif any(row.original is request and row.foreground is not None for row in self._selected_requests):
+            raise ValueError("Ordinary request belongs to another preparation task")
         self._check_media_fit(request, execution)
         selected, kwargs = self._selected_request(request, kwargs)
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]

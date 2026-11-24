@@ -284,6 +284,8 @@ class SurfaceProvider:
             candidate = None
         if candidate is not None:
             candidate.check_surface(entry, request_options or {})
+        elif commit and entry is not None and len(entry) > 5:
+            raise ValueError("Ordinary request belongs to another preparation task")
         media_row = self._media.get(id(request))
         if media_row is not None:
             from .host.media import effective_options
@@ -351,6 +353,9 @@ class SurfaceProvider:
             entry = (request, cached, cached.model_dump_json() if boundary or projection_validate is not None else None,
                      binding,
                      projection_validate)
+            preparation = active()
+            if preparation is not None and preparation.surface is self and preparation.request is request:
+                entry += (preparation,)
             if refit_binding is not None:
                 from .request_refit import RequestFitChanged
                 self.delivery.check_execution_scope(refit_binding['executionScope'])
@@ -416,8 +421,12 @@ class SurfaceProvider:
                     self.refused.pop(0)
                     self.refusal_overflow = True
                 raise
-            if candidate is not None and cached.model_dump_json() != candidate.encoded:
-                raise ValueError("Ordinary request contents changed before dispatch")
+            if candidate is not None:
+                candidate.check_surface(next((row for row in self.prepared if row is entry), None), request_options or {})
+                if candidate.selection is not None:
+                    candidate.check_selection(candidate.selection._execution_provider(), candidate.original_options)
+                if cached.model_dump_json() != candidate.encoded:
+                    raise ValueError("Ordinary request contents changed before dispatch")
             self.delivery.commit(cached)
             if candidate is not None:
                 candidate.consume()
