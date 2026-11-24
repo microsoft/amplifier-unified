@@ -242,10 +242,18 @@ async def test_a_component_update_completes_with_an_openai_api_connection(tmp_pa
 
     # Setup's own step for a new installation: it prepares the environment and
     # writes its record (updates/baseline-runtime) before any AI connection.
-    _json(work / "baseline-inputs.json", {
+    baseline_inputs = {
         "case": case, "providerStart": start, "providerLater": moved,
         "manifestSha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
-    })
+    }
+
+    def save_baseline_inputs(**facts):
+        try:
+            _json(work / "baseline-inputs.json", {**baseline_inputs, **facts})
+        except (OSError, ValueError, TypeError):
+            pass  # Optional evidence must not change the preparation outcome.
+
+    save_baseline_inputs()
     try:
         prepared = await installation_runtime.prepare(home)
     except CommandFailure as error:
@@ -255,7 +263,13 @@ async def test_a_component_update_completes_with_an_openai_api_connection(tmp_pa
         diagnostics = SimpleNamespace(
             manager=SimpleNamespace(home=home, directory=home / "updates"),
             state={"attemptId": "baseline-runtime"})
-        retain(diagnostics, error, "pinned-provider-baseline", "initial-runtime-preparation")
+        retained = retain(diagnostics, error, "pinned-provider-baseline", "initial-runtime-preparation")
+        status = retained.get("localDetailStatus", "absent")
+        safe = {"localDetailStatus": status if status in {"saved", "unavailable", "absent"} else "unavailable"}
+        slot = retained.get("localDetailSlot")
+        if status == "saved" and type(slot) is int and 0 <= slot < 16:
+            safe["localDetailSlot"] = slot
+        save_baseline_inputs(**safe)
         raise
     assert prepared.get("ok") and prepared.get("prepared") and prepared.get("generation") is None, prepared
     seed = runtime_environment.project_path(home)
