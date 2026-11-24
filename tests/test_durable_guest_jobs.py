@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shlex
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -18,6 +19,20 @@ from amplifier_web import test_job_guest as guest
 
 pytestmark = pytest.mark.skipif(not sys.platform.startswith('linux') or os.geteuid() != 0,
                                reason='Actual supervisor qualification requires isolated Linux root')
+
+
+def remove_owned_scratch(scratch):
+    """Remove only this fixture's workload scratch, with its owner's permissions."""
+    if not os.path.lexists(scratch):
+        return  # Reservation-only cases and the final cache iteration leave none.
+    subprocess.run([
+        '/usr/bin/python3', '-I', '-c',
+        'import os,shutil,sys; '
+        'assert os.getuid() == os.geteuid() == os.getgid() == os.getegid() == 65534; '
+        'assert os.getgroups() == []; shutil.rmtree(sys.argv[1])', str(scratch),
+    ], user=65534, group=65534, extra_groups=(), env={}, cwd=scratch.parent,
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, check=True, timeout=5)
+    assert not os.path.lexists(scratch), 'Workload scratch cleanup left its path behind'
 
 
 @pytest.fixture
@@ -40,16 +55,19 @@ def owned(monkeypatch):
         monkeypatch.setattr(guest, 'WORKSPACE', str(work))
         monkeypatch.setattr(guest, 'SCRATCH', scratch)
         monkeypatch.setattr(guest, 'SCRIPT', source, raising=False)
-        yield work, control
-        for path in control.glob('*/state.json'):
-            state = json.loads(path.read_text())
-            for key in ('process', 'supervisor'):
-                identity = state.get(key)
-                if identity and guest.process_identity(identity['pid']) == identity:
-                    try:
-                        os.killpg(identity['pid'], signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
+        try:
+            yield work, control
+        finally:
+            for path in control.glob('*/state.json'):
+                state = json.loads(path.read_text())
+                for key in ('process', 'supervisor'):
+                    identity = state.get(key)
+                    if identity and guest.process_identity(identity['pid']) == identity:
+                        try:
+                            os.killpg(identity['pid'], signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+            remove_owned_scratch(scratch)
 
 
 def payload(command='true', identity='job', root='root', seconds=1200):
@@ -85,7 +103,6 @@ def test_lost_response_repeated_identity_and_fresh_observer_do_not_replay(owned)
 
 
 def test_real_worker_keeps_cache_outside_saved_results_and_recreates_it(owned):
-    import shutil
     work, _ = owned
     code = """import json, os
 from pathlib import Path
@@ -106,7 +123,7 @@ print(json.dumps({'uid': os.getuid(), 'home': os.environ['HOME'], 'cache': os.en
         assert observed['home'] == str(guest.SCRATCH / 'home')
         assert observed['cache'] == str(guest.SCRATCH / 'cache')
         assert sorted(path.name for path in work.iterdir()) == ['report.xml']
-        shutil.rmtree(guest.SCRATCH)
+        remove_owned_scratch(guest.SCRATCH)
         assert (work / 'report.xml').read_text() == '<testsuite/>'
 
 

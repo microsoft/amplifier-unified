@@ -54,6 +54,7 @@ DESKTOP_CASES = {
 }
 ROOT_GUEST_CASES = (
     'test_lost_response_repeated_identity_and_fresh_observer_do_not_replay',
+    'test_real_worker_keeps_cache_outside_saved_results_and_recreates_it',
     'test_cancel_is_prompt_and_terminal_requires_actual_exit',
     'test_timeout_is_enforced_in_guest_and_output_is_bounded',
     'test_worker_cannot_modify_supervisor_receipts_and_profile_environment_survives',
@@ -824,7 +825,7 @@ def root_guest_preflight(env):
 
 
 def fixed_result(path, stage, exit_code):
-    """No extra, duplicate, parameter-suffixed or absent case can satisfy 8/1."""
+    """No extra, duplicate, parameter-suffixed or absent case can satisfy 9/1."""
     file, functions = FIXED_CASES[stage]
     expected = {('tests.' + file.removesuffix('.py'), name) for name in functions}
     root = ET.parse(path).getroot()
@@ -1331,7 +1332,7 @@ def main():
     stages = parser.add_mutually_exclusive_group()
     stages.add_argument('--desktop-safety', action='store_true',
                         help='Run only the separate fixed 22+3 desktop proof, not the IC-13 baseline')
-    stages.add_argument('--root-guest', action='store_true', help='Run only eight isolated UID-separated guest checks')
+    stages.add_argument('--root-guest', action='store_true', help='Run only nine isolated UID-separated guest checks')
     stages.add_argument('--installed-pwa', action='store_true', help='Run only the headed installed-PWA check')
     args = parser.parse_args()
     if args.command == 'run':

@@ -213,14 +213,20 @@ adapter arguments are `--root-guest` and `--installed-pwa`. Conflicting stages
 fail before preparation. This is a route definition, **not a qualification
 result or permission to dispatch**.
 
-The root owner runs all eight unchanged `test_durable_guest_jobs.py` cases in
+The root owner runs all nine `test_durable_guest_jobs.py` behavior cases in
 an offline, read-only, private-PID container. Only SETUID, SETGID and KILL are
 added after dropping all capabilities. The Python 3.13 supervisor remains
 root; workloads use actual `/usr/bin/python3` as UID 65534. Temporary ancestors
 are traversable, but supervisor controls and receipts stay private. Preflight
 must demonstrate the UID transition, `/proc` identity reads, cross-UID
 termination and denied workload access to private control storage. This never
-runs pytest as root on the host.
+runs pytest as root on the host. The cache delete/recreate case is explicitly
+selected alongside the original eight selectors; the frozen audit is unchanged.
+The fixture removes only its own workload scratch in a bounded UID/GID-65534
+subprocess with empty supplementary groups, requiring zero exit and actual path
+absence. The same removal runs after recorded-process cleanup at teardown.
+It does not grant DAC override, widen scratch permissions, or weaken the cache,
+saved-report, replay, cancellation or private-receipt assertions.
 
 The existing `browser-installed` owner retains its single unchanged behavior
 case. Its adapter stage uses an unprivileged container, a private Xvfb display,
@@ -234,7 +240,7 @@ from pytest temporary storage before teardown, never the profile, cookies or
 app state. This is Linux headed-browser evidence, not physical-device, macOS,
 native-control or dragging acceptance.
 
-Both stages require exactly eight or one unique named JUnit cases, respectively,
+Both stages require exactly nine or one unique named JUnit cases, respectively,
 with no extras, skips, failures or errors; nonzero exit or unresolved cleanup
 cannot pass. They retain the existing two-CPU, 4-GiB, 256-PID and workflow limits,
 one running owned container at a time, exact source/wheel/dependency identity

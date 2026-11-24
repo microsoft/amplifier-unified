@@ -415,6 +415,7 @@ def test_new_runtime_owners_are_additive_to_frozen_skip_baseline():
         'tests/test_browser_auth.py::test_installed_pwa_launch': 'browser-installed',
         **{'tests/test_durable_guest_jobs.py::test_' + name: 'root-guest' for name in (
             'lost_response_repeated_identity_and_fresh_observer_do_not_replay',
+            'real_worker_keeps_cache_outside_saved_results_and_recreates_it',
             'cancel_is_prompt_and_terminal_requires_actual_exit',
             'timeout_is_enforced_in_guest_and_output_is_bounded',
             'worker_cannot_modify_supervisor_receipts_and_profile_environment_survives',
@@ -507,11 +508,35 @@ def test_native_search_owner_prepares_actual_ripgrep():
 
 
 def test_root_and_installed_pwa_have_separate_fixed_manual_routes(tmp_path):
+    import ast
+    import xml.etree.ElementTree as ET
     coverage = checks.manifest()
     root = coverage['lanes']['root-guest']
     assert root['mode'] == 'manual' and root['runner'] == 'owned-container'
     assert root['command'] == ['python', 'scripts/qualify_default_installed.py', 'run', '--root-guest']
-    assert len(root['selectors']) == len(set(root['selectors'])) == 8
+    assert len(root['selectors']) == len(set(root['selectors'])) == 9
+    file = 'tests/test_durable_guest_jobs.py'
+    tree = ast.parse((ROOT / file).read_text())
+    names = [node.name for node in tree.body
+             if isinstance(node, ast.FunctionDef) and node.name.startswith('test_')]
+    assert root['selectors'] == [file + '::' + name for name in names]
+    adapter = ast.parse((ROOT / 'scripts/qualify_default_installed.py').read_text())
+    selected = next(node.value for node in adapter.body if isinstance(node, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == 'ROOT_GUEST_CASES'
+                            for target in node.targets))
+    assert list(ast.literal_eval(selected)) == names
+    xml = ET.Element('testsuite')
+    for name in names:
+        ET.SubElement(xml, 'testcase', classname='tests.test_durable_guest_jobs', name=name)
+    receipt = tmp_path / 'root.xml'
+    ET.ElementTree(xml).write(receipt)
+    assert checks.verify_junit(receipt, root['selectors']) == 9
+    cache = next(case for case in xml if case.get('name') ==
+                 'test_real_worker_keeps_cache_outside_saved_results_and_recreates_it')
+    xml.remove(cache)  # The old eight-case receipt must not satisfy the owner.
+    ET.ElementTree(xml).write(receipt)
+    with pytest.raises(ValueError, match='Required integration selector did not execute'):
+        checks.verify_junit(receipt, root['selectors'])
     pwa = coverage['lanes']['browser-installed']
     assert pwa['mode'] == 'manual' and pwa['selectors'] == [
         'tests/test_browser_auth.py::test_installed_pwa_launch']

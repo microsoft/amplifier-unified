@@ -908,7 +908,11 @@ def test_fixed_stage_requires_exact_successful_identities(tmp_path, stage, chang
     path = tmp_path / 'junit.xml'
     root = fixed_junit(path, stage)
     if change == 'missing':
-        root.remove(root[-1])
+        # The former eight-case ROOT receipt must fail, even with exit zero.
+        missing = next(case for case in root if case.get('name') ==
+                       'test_real_worker_keeps_cache_outside_saved_results_and_recreates_it'
+                       ) if stage == 'root-guest' else root[-1]
+        root.remove(missing)
     elif change == 'duplicate':
         root.append(ET.fromstring(ET.tostring(root[-1])))
     elif change == 'extra':
@@ -928,7 +932,7 @@ def test_fixed_stage_requires_exact_successful_identities(tmp_path, stage, chang
     else:
         result = adapter.fixed_result(path, stage, 1 if change == 'exit' else 0)
         assert result['passed'] is (change == 'none')
-        assert len(result['cases']) == (8 if stage == 'root-guest' else 1)
+        assert len(result['cases']) == (9 if stage == 'root-guest' else 1)
 
 
 def test_container_default_options_remain_unprivileged_and_unchanged():
@@ -940,6 +944,12 @@ def test_container_default_options_remain_unprivileged_and_unchanged():
     assert adapter.test_container_options('ic13') == expected
     assert adapter.test_container_options('desktop-safety') == expected
     root = adapter.test_container_options('root-guest')
+    expected_root = [*expected[:8], '--cap-add=SETUID', '--cap-add=SETGID', '--cap-add=KILL']
+    expected_root[1] = '--user=0:0'
+    for folder in ('home', 'tmp', 'run', 'cache', 'evidence'):
+        mode = '0755' if folder == 'tmp' else '0700'
+        expected_root += ['--tmpfs', f'/opt/defaults/{folder}:rw,uid=0,gid=0,mode={mode},size=512m']
+    assert root == expected_root
     assert '--user=0:0' in root
     assert {v for v in root if v.startswith('--cap-add=')} == {
         '--cap-add=KILL', '--cap-add=SETUID', '--cap-add=SETGID'}
@@ -948,6 +958,132 @@ def test_container_default_options_remain_unprivileged_and_unchanged():
     pwa = adapter.test_container_options('installed-pwa')
     assert pwa == expected + ['--tmpfs', '/tmp:rw,uid=0,gid=0,mode=1777,size=512m']
     assert not any('privileged' in v or 'pid=host' in v or v == '--mount' for v in root + pwa)
+
+
+def root_fixture_functions(*names, namespace):
+    """Load only test-owned functions, never the root module or product imports."""
+    import ast
+    tree = ast.parse((ROOT / 'tests/test_durable_guest_jobs.py').read_text())
+    nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
+    assert {node.name for node in nodes} == set(names)
+    for node in nodes:
+        node.decorator_list = []
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), '<root-fixture>', 'exec'), namespace)
+    return namespace
+
+
+@pytest.mark.parametrize('outcome', ['removed', 'absent', 'left-path', 'nonzero', 'timeout', 'launch-error'])
+def test_root_scratch_cleanup_requires_owner_exit_and_actual_absence(tmp_path, outcome):
+    import os
+    import shutil
+    from types import SimpleNamespace
+    scratch = tmp_path / 'unified-test'
+    saved = tmp_path / 'workspace'
+    saved.mkdir()
+    report = saved / 'report.xml'
+    report.write_text('<testsuite/>')
+    if outcome != 'absent':
+        scratch.mkdir(mode=0o700)
+        (scratch / 'cache').write_text('disposable')
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        assert argv[:3] == ['/usr/bin/python3', '-I', '-c']
+        assert argv[4:] == [str(scratch)]
+        assert argv[3] == (
+            'import os,shutil,sys; '
+            'assert os.getuid() == os.geteuid() == os.getgid() == os.getegid() == 65534; '
+            'assert os.getgroups() == []; shutil.rmtree(sys.argv[1])')
+        assert kwargs == {
+            'user': 65534, 'group': 65534, 'extra_groups': (), 'env': {}, 'cwd': tmp_path,
+            'stdin': subprocess.DEVNULL, 'capture_output': True, 'text': True, 'check': True, 'timeout': 5,
+        }
+        if outcome == 'nonzero':
+            raise subprocess.CalledProcessError(1, argv)
+        if outcome == 'timeout':
+            raise subprocess.TimeoutExpired(argv, 5)
+        if outcome == 'launch-error':
+            raise OSError('synthetic launch error')
+        if outcome == 'removed':
+            shutil.rmtree(scratch)  # Synthetic child effect, no UID change here.
+        return subprocess.CompletedProcess(argv, 0)
+
+    scope = root_fixture_functions('remove_owned_scratch', namespace={
+        'os': os, 'subprocess': SimpleNamespace(run=run, DEVNULL=subprocess.DEVNULL)})
+    if outcome in {'removed', 'absent'}:
+        scope['remove_owned_scratch'](scratch)
+        assert not os.path.lexists(scratch)
+    else:
+        error = {'left-path': AssertionError, 'nonzero': subprocess.CalledProcessError,
+                 'timeout': subprocess.TimeoutExpired, 'launch-error': OSError}[outcome]
+        with pytest.raises(error):
+            scope['remove_owned_scratch'](scratch)
+        assert scratch.exists()
+    assert len(calls) == (0 if outcome == 'absent' else 1)
+    assert report.read_text() == '<testsuite/>'
+
+
+@pytest.mark.parametrize('outcome', ['passed', 'body-error', 'cleanup-error'])
+def test_root_fixture_teardown_cleans_only_its_scratch_after_recorded_processes(tmp_path, monkeypatch, outcome):
+    import signal
+    import tempfile
+    from types import SimpleNamespace
+    events = []
+    source = tmp_path / 'guest.py'
+    source.write_text("CONTROL = Path('/var/lib/unified-jobs')\nWORKSPACE = '/workspace'\n"
+                      "SCRATCH = Path('/tmp/unified-test')\n")
+
+    def identity(pid):
+        events.append(('identity', pid))
+        return {'pid': pid, 'start': 'same' if pid == 11 else 'different'}
+
+    guest = SimpleNamespace(__file__=str(source), CONTROL=None, WORKSPACE=None, SCRATCH=None,
+                            process_identity=identity)
+
+    def cleanup(scratch):
+        assert scratch == guest.SCRATCH == Path(guest.WORKSPACE).parent / 'tmp/unified-test'
+        events.append(('scratch', scratch))
+        if outcome == 'cleanup-error':
+            raise RuntimeError('synthetic cleanup failure')
+
+    scope = root_fixture_functions('owned', namespace={
+        'Path': Path, 'json': json, 'guest': guest, 'signal': signal,
+        'tempfile': SimpleNamespace(TemporaryDirectory=lambda **kw: tempfile.TemporaryDirectory(dir=tmp_path, **kw)),
+        'os': SimpleNamespace(killpg=lambda pid, sig: events.append(('kill', pid, sig))),
+        'remove_owned_scratch': cleanup,
+    })
+    fixture = scope['owned'](monkeypatch)
+    work, control = next(fixture)
+    (control / 'job').mkdir(parents=True)
+    (control / 'job/state.json').write_text(json.dumps({
+        'process': {'pid': 11, 'start': 'same'}, 'supervisor': {'pid': 12, 'start': 'same'}}))
+    if outcome == 'passed':
+        with pytest.raises(StopIteration):
+            next(fixture)
+    else:
+        with pytest.raises(RuntimeError, match='synthetic ' + ('body' if outcome == 'body-error' else 'cleanup')):
+            if outcome == 'body-error':
+                fixture.throw(RuntimeError('synthetic body failure'))
+            else:
+                next(fixture)
+    assert events == [('identity', 11), ('kill', 11, signal.SIGKILL), ('identity', 12), ('scratch', guest.SCRATCH)]
+    assert not work.parent.exists()
+
+
+def test_root_nine_behavior_oracles_remain_unchanged_except_owned_cleanup():
+    import ast
+    import hashlib
+    tree = ast.parse((ROOT / 'tests/test_durable_guest_jobs.py').read_text())
+    functions = [node for node in tree.body
+                 if isinstance(node, ast.FunctionDef) and node.name.startswith('test_')]
+    assert tuple(node.name for node in functions) == adapter.ROOT_GUEST_CASES
+    # Frozen original nine bodies from dfc77f85, with only the cache test's
+    # shutil import removed and its rmtree call changed to remove_owned_scratch.
+    # Includes the actual workload string, range(2), second start, HOME/cache
+    # ownership, report.xml, UNKNOWN/no-replay, cancellation and privacy oracles.
+    fingerprint = hashlib.sha256(ast.dump(ast.Module(body=functions, type_ignores=[])).encode()).hexdigest()
+    assert fingerprint == '3a20fe9a78c095644dbd60c26c8ecd0219b5f39fa4c15a728672d205dbe3b741'
 
 
 @pytest.mark.parametrize('stage', ['ic13', 'desktop-safety', 'root-guest', 'installed-pwa'])
@@ -1089,7 +1225,7 @@ def test_failed_fixed_stage_preserves_raw_result_and_outer_attestation(monkeypat
     assert json.loads((tmp_path / 'evidence/result.json').read_text())['attestation']
     fixed = json.loads((tmp_path / 'evidence/fixed-stage-result.json').read_text())
     assert fixed['passed'] is False and fixed['exitCode'] == 0
-    assert len(fixed['cases']) == 8 and fixed['cases'][0]['outcome'] == 'skipped'
+    assert len(fixed['cases']) == 9 and fixed['cases'][0]['outcome'] == 'skipped'
     assert ET.parse(tmp_path / 'evidence/junit.xml').find('.//skipped') is not None
 
 
