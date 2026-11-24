@@ -343,6 +343,57 @@ async def test_workspace_availability_tracks_real_folders_without_removing_histo
     assert files_snapshot(saved) == original_files
 
 
+@pytest.mark.parametrize('force', [False, True])
+@pytest.mark.parametrize('initially_available', [False, True])
+async def test_fresh_workspace_availability_survives_incomplete_native_recovery(
+        tmp_path, app_factory, monkeypatch, record_property, force, initially_available):
+    native = tmp_path / 'native-workspace'
+    saved = native_session(native, 'cli-root', folder=initially_available)
+    original_files = files_snapshot(saved)
+    app = app_factory()
+    project = project_slug(native)
+    # Settle discovery only during setup. The actual folder change below must
+    # appear after ONE refresh even while native reconciliation is incomplete.
+    for _ in range(16):
+        await app.history.refresh()
+        assert app.state['sharedHistory']['error'] is None
+        if app.history.last_scan['reconciliation']['phase'] == 'complete':
+            break
+    assert app.history.last_scan['reconciliation']['phase'] == 'complete'
+    row = next(row for row in app.state['workspaces'] if row.get('nativeProject') == project)
+    assert row['available'] is initially_available
+    cached = copy.deepcopy(app.history._catalog_workspaces[project])
+    assert cached['available'] is initially_available
+    identities = [(row['id'], row['path']) for row in app.state['workspaces']]
+    selected = app.state.get('selectedSessionId')
+    if initially_available:
+        native.rmdir()
+    else:
+        native.mkdir()
+    monkeypatch.setattr(app.history.index, 'RECOVERY_STEP_BUDGET', 1)
+    monkeypatch.setattr(app.history.index, '_invalidations', lambda: (True, set()))
+    app.history.index._reconcile_at = 0
+    # An unforced refresh can also need the full retained workspace snapshot
+    # after local state changed. It must still probe only its ordinary slice.
+    app.history._local_revision = -1
+    await app.history.refresh(force=force)
+    assert app.state['sharedHistory']['error'] is None
+    assert app.history.last_scan['reconciliation']['phase'] == 'running'
+    assert app.history._catalog_workspaces[project] == cached
+    actual = {row['path']: row['available'] for row in app.state['workspaces']}
+    record_property('workspace-availability', json.dumps({
+        'force': force, 'cached': cached['available'],
+        'expected': not initially_available, 'actual': actual[str(native)],
+        'phase': app.history.last_scan['reconciliation']['phase'],
+    }))
+    assert actual[str(native)] is not initially_available, actual
+    assert [(row['id'], row['path']) for row in app.state['workspaces']] == identities
+    assert app.state.get('selectedSessionId') == selected
+    assert not app.state['sessions'], 'Availability must not admit dormant history'
+    assert files_snapshot(saved) == original_files
+    assert not app.runtime.started and not app.runtime.sent
+
+
 async def select(app, identity):
     await app.dispatch('session.select', {'id': identity})
     await finish_actions(app)
