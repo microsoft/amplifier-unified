@@ -239,7 +239,7 @@ async def test_explicit_configuration_target_is_not_replaced_by_selected_chat(ap
 
 
 async def test_durable_stop_revokes_full_permission_before_async_cancellation(app_factory, tmp_path, monkeypatch):
-    from acp.schema import PermissionOption
+    from acp.schema import PermissionOption, ToolCallUpdate
     app = app_factory()
     session = await create(app, tmp_path)
     report = (await app.dispatch('access.get', {'sessionId': session['id']}))['result']
@@ -247,6 +247,14 @@ async def test_durable_stop_revokes_full_permission_before_async_cancellation(ap
                        'mode': 'full', 'expectedRevision': report['revision']})
     await app.dispatch('conversation.send', {'sessionId': session['id'], 'text': 'wait-for-stop'}, command_id='permission-stop-work')
     await until(lambda: bool(session.get('streaming')))
+    turn = app.external_conversations.turns[session['id']]
+    tool = ToolCallUpdate(tool_call_id='stop-permission', title='Synthetic permission')
+    options = [PermissionOption(option_id='allow-this', name='Allow', kind='allow_once')]
+    assert turn.dispatched and not turn.stop
+    assert session.get('interruptionRevision', 0) == turn.revision
+    assert await app.external_conversations._permission(
+        session['id'], 'fixture', options, tool=tool) == {
+            'outcome': {'outcome': 'selected', 'optionId': 'allow-this'}}
     entered, release = asyncio.Event(), asyncio.Event()
     original = app._stop
 
@@ -260,9 +268,14 @@ async def test_durable_stop_revokes_full_permission_before_async_cancellation(ap
     stopping = asyncio.create_task(app.dispatch('conversation.stop', {'sessionId': session['id']}))
     try:
         await asyncio.wait_for(entered.wait(), 5)
-        result = await app.external_conversations._permission(session['id'], 'fixture',
-            [PermissionOption(option_id='allow-this', name='Allow', kind='allow_once')])
-        assert result == {'outcome': {'outcome': 'cancelled'}}
+        assert app.external_conversations.turns[session['id']] is turn
+        assert not turn.stop  # Underlying cancellation is still held.
+        assert session['interruptionRevision'] != turn.revision
+        assert app.access_mode.full(session)
+        with pytest.raises(asyncio.CancelledError):
+            await app.external_conversations._permission(
+                session['id'], 'fixture', options, tool=tool)
+        assert session['approvals'] == []
     finally:
         release.set()
         await stopping
