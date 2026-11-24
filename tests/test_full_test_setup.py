@@ -1,6 +1,7 @@
 """Full setup through real dispatch/mounted children; backend effects are controlled."""
 import asyncio
 from copy import deepcopy
+import json
 import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -97,7 +98,8 @@ async def test_mounted_full_child_setup_survives_completed_turn_without_browser(
     backend.installed.assert_awaited_once()
 
 
-async def test_later_full_child_observes_and_cleans_original_unknown_setup(mounted, backend, monkeypatch):
+async def test_later_full_child_observes_and_cleans_original_unknown_setup(
+        mounted, backend, monkeypatch, record_property):
     from amplifier_web.collaboration import BINDING, PRINCIPAL
 
     h = mounted
@@ -189,6 +191,9 @@ async def test_later_full_child_observes_and_cleans_original_unknown_setup(mount
     assert original['id'] not in getattr(h.app, '_test_setup_tasks', {})
     reconciled = await h.app.dispatch('workspace.environments.setup.reconcile', args,
         origin='system', caller_session_id=h.source['id'])
+    # Persist the finite synthetic trace on success as well as assertion failure;
+    # a passing isolated run is not an explanation of an earlier ordered failure.
+    record_property('setup_reconciliation_trace', json.dumps(reconciliation_calls, sort_keys=True))
     assert len(reconciliation_calls) == 2, reconciliation_calls
     system_actor = {'sessionId': h.source['id'], 'principal': None,
                     'origin': 'system', 'generationId': None}
