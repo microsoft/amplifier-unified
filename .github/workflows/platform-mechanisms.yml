@@ -15,6 +15,14 @@ on:
         description: Run only deterministic native event-publication sharing controls; no cold worker or full trial
         type: boolean
         default: false
+      remaining_runtime_only:
+        description: Five locked-host Windows cases then one unchanged cold declared-worker case, on one runner
+        type: boolean
+        default: false
+      candidate_ref:
+        description: Full immutable application SHA required only for remaining_runtime_only; workflow and product sources stay distinct
+        type: string
+        default: ''
   pull_request:
     paths:
       - 'components/web-client.source.json'
@@ -137,7 +145,7 @@ permissions:
   contents: read
 jobs:
   instance-branding-storage:
-    if: ${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -171,7 +179,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   passive-process-check:
-    if: ${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -224,7 +232,7 @@ jobs:
           print('native replaced-while-read cases:', count, 'run:', result.testsRun, 'skipped:', len(result.skipped));
           sys.exit(not (result.wasSuccessful() and count and count == result.testsRun and not result.skipped))"
   windows-private-config-tls:
-    if: ${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
     runs-on: windows-latest
     timeout-minutes: 5
     env:
@@ -300,7 +308,7 @@ jobs:
     # disposable runner's MACHINE store, because a hosted runner cannot answer
     # the question Windows asks for a person's own store. The product never uses
     # the machine store. The test removes the root in every case.
-    if: ${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
     runs-on: windows-latest
     timeout-minutes: 12
     env:
@@ -484,7 +492,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows uninstall delete-choice checks failed.' }
           if (($log -join "`n") -match '\d+ skipped') { throw 'A native uninstall case was skipped on this lane.' }
   windows-user-trial:
-    if: ${{ inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only) }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.candidate_ref && (inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only)) }}
     # Candidate-only combined boundary, not a universal suite/release gate.
     # The existing 5-minute stdlib/PowerShell and private-config lanes are unchanged.
     runs-on: windows-latest
@@ -583,7 +591,7 @@ jobs:
     # Public dependency setup is intentional ONLY here. Do not relax the
     # separate offline qualifier or supply a preinstalled replacement command.
     needs: windows-user-trial
-    if: ${{ !inputs.bootstrap_only && !inputs.storage_only && !cancelled() && (inputs.foreground_only || needs.windows-user-trial.result == 'success') }}
+    if: ${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && (inputs.remaining_runtime_only || inputs.candidate_ref != '')) || (!inputs.remaining_runtime_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.storage_only && (inputs.foreground_only || needs.windows-user-trial.result == 'success'))) }}
     runs-on: windows-latest
     # 6-minute setup + 2-minute metadata check + unchanged 21-minute cold check
     # + 4-minute CLI cell + overhead. The step budgets stay below this budget.
@@ -594,9 +602,40 @@ jobs:
       UV_NO_BUILD_PACKAGE: amplifier-core
       UV_PYTHON_DOWNLOADS: never
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      REMAINING_RUNTIME_ONLY: ${{ inputs.remaining_runtime_only && 'true' || 'false' }}
     steps:
+      - name: Validate the isolated remaining-runtime selection before setup
+        env:
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+          BOOTSTRAP_ONLY: ${{ inputs.bootstrap_only && 'true' || 'false' }}
+          FOREGROUND_ONLY: ${{ inputs.foreground_only && 'true' || 'false' }}
+          STORAGE_ONLY: ${{ inputs.storage_only && 'true' || 'false' }}
+        shell: pwsh
+        run: |
+          $check = @'
+          import os, re
+          def validate_selection(env):
+              selected = env['REMAINING_RUNTIME_ONLY'] == 'true'
+              candidate = env['CANDIDATE_REF']
+              if selected:
+                  assert env['GITHUB_EVENT_NAME'] == 'workflow_dispatch'
+                  assert re.fullmatch('[a-f0-9]{40}', candidate)
+                  assert all(env[key] == 'false' for key in ('BOOTSTRAP_ONLY', 'FOREGROUND_ONLY', 'STORAGE_ONLY'))
+              else:
+                  assert candidate == '', 'candidate_ref belongs only to remaining_runtime_only'
+          validate_selection(os.environ)
+          '@
+          python -I -S -B -c $check
+          if ($LASTEXITCODE -ne 0) { throw 'Invalid remaining-runtime selection; no candidate setup started.' }
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
+      - name: Read the exact remaining-runtime application candidate
+        if: ${{ inputs.remaining_runtime_only }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.candidate_ref }}
+          path: .ci/remaining-candidate
           persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
@@ -604,6 +643,7 @@ jobs:
           architecture: x64
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - name: Build and install candidate host for cold default-command setup
+        if: ${{ !inputs.remaining_runtime_only }}
         timeout-minutes: 6
         shell: pwsh
         run: |
@@ -611,6 +651,7 @@ jobs:
           $base = Join-Path $env:RUNNER_TEMP 'dr-ci'
           New-Item -ItemType Directory -Path "$base/evidence" -ErrorAction Stop | Out-Null
           "DEFAULT_TRIAL_BASE=$base" >> $env:GITHUB_ENV
+          "DEFAULT_CANDIDATE_SOURCE=$env:GITHUB_WORKSPACE" >> $env:GITHUB_ENV
           python -I -B tests/fixtures/windows_user_trial_probe.py --candidate . --receipt "$base/candidate.json"
           if ($LASTEXITCODE -ne 0) { throw 'Default-command candidate identity check failed.' }
           python -I -S -B -c "import sys,sysconfig,struct; assert sys.platform=='win32'; assert sys.implementation.name=='cpython'; assert sys.version_info[:2]==(3,13); assert struct.calcsize('P')==8; assert not sysconfig.get_config_var('Py_GIL_DISABLED')"
@@ -625,7 +666,163 @@ jobs:
           if ($wheel.Count -ne 1) { throw 'Expected exactly one default-command candidate wheel.' }
           uv pip install --python "$base/env/Scripts/python.exe" --only-binary amplifier-core $wheel[0].FullName "pytest>=8,<10" "pytest-asyncio>=1.4,<2" "pytest-aiohttp>=1.1,<2" @modules
           if ($LASTEXITCODE -ne 0) { throw 'Default-command candidate host installation failed.' }
+      - name: Build and install the locked host for the remaining native cases
+        if: ${{ inputs.remaining_runtime_only }}
+        timeout-minutes: 6
+        shell: pwsh
+        env:
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $env:GITHUB_WORKSPACE '.ci/remaining-candidate'
+          $base = Join-Path $env:RUNNER_TEMP 'dr-ci'
+          New-Item -ItemType Directory -Path "$base/evidence" -ErrorAction Stop | Out-Null
+          "DEFAULT_TRIAL_BASE=$base" >> $env:GITHUB_ENV
+          "DEFAULT_CANDIDATE_SOURCE=$source" >> $env:GITHUB_ENV
+          python -I -S -B -c "import sys,sysconfig,struct; assert sys.platform=='win32'; assert sys.implementation.name=='cpython'; assert sys.version_info[:2]==(3,13); assert struct.calcsize('P')==8; assert not sysconfig.get_config_var('Py_GIL_DISABLED'); assert sys._base_executable"
+          if ($LASTEXITCODE -ne 0) { throw 'Ordinary native Python preflight failed.' }
+          foreach ($hostSpec in @(@('powershell.exe', '5.1'), @('pwsh.exe', '7'))) {
+            $hostCommand = Get-Command $hostSpec[0] -CommandType Application -ErrorAction Stop
+            & $hostCommand.Source -NoProfile -NonInteractive -Command "`$version = `$PSVersionTable.PSVersion; if (-not `$version.ToString().StartsWith('$($hostSpec[1])')) { exit 1 }"
+            if ($LASTEXITCODE -ne 0) { throw 'A required PowerShell host is unavailable.' }
+          }
+          python -I -B "$source/tests/fixtures/windows_user_trial_probe.py" --candidate $source --receipt "$base/candidate.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Selected candidate identity check failed.' }
+          python -I -S -B -c "import json,os,pathlib,sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8')); assert r['candidate']['head']==os.environ['CANDIDATE_REF']" "$base/candidate.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Selected candidate differs from the immutable input.' }
+          $lockBefore = (Get-FileHash "$source/uv.lock" -Algorithm SHA256).Hash
+          $env:UV_PROJECT_ENVIRONMENT = "$base/env"
+          try {
+            uv sync --project $source --locked --group dev --no-install-project --python (Get-Command python).Source
+            if ($LASTEXITCODE -ne 0) { throw 'Locked host preparation failed.' }
+          } finally {
+            Remove-Item Env:UV_PROJECT_ENVIRONMENT -ErrorAction SilentlyContinue
+          }
+          uv build --project $source --wheel --out-dir "$base/wheels"
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate wheel build failed.' }
+          $wheel = @(Get-ChildItem "$base/wheels/*.whl")
+          if ($wheel.Count -ne 1) { throw 'Expected one candidate wheel.' }
+          uv pip install --python "$base/env/Scripts/python.exe" --no-deps $wheel[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Noneditable candidate installation failed.' }
+          uv pip check --python "$base/env/Scripts/python.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Locked installed host dependency check failed.' }
+          if ((Get-FileHash "$source/uv.lock" -Algorithm SHA256).Hash -ne $lockBefore) { throw 'Candidate lock changed during setup.' }
+      - name: Require the five exact locked-host native cases
+        if: ${{ inputs.remaining_runtime_only }}
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $check = @'
+          import contextlib, hashlib, importlib, importlib.metadata as metadata, importlib.util, json, os, pathlib, re, shutil, sys, tomllib
+          from urllib.parse import parse_qs, urlsplit, urlunsplit
+          source, base, workflow = map(pathlib.Path, sys.argv[1:])
+          nodes = (
+              "tests/test_runtime.py::test_native_windows_runtime_worker_identity_pipes_and_job_cleanup[False]",
+              "tests/test_runtime.py::test_native_windows_runtime_worker_identity_pipes_and_job_cleanup[True]",
+              "tests/test_runtime.py::test_native_windows_runtime_cancel_before_identity_reaps_job",
+              "tests/test_remote_test_origins.py::test_windows_junction_parent_is_not_followed",
+              "tests/test_remote_test_origins.py::test_windows_shared_write_acl_cannot_authorize_retained_records",
+          )
+          def host_graph():
+              rows = []
+              for dist in metadata.distributions():
+                  name = re.sub(r'[-_.]+', '-', dist.metadata['Name']).lower()
+                  if name == 'amplifier-unified':
+                      continue  # Independently byte-bound to the selected wheel.
+                  direct = json.loads(dist.read_text('direct_url.json') or '{}')
+                  rows.append({'name': name, 'version': dist.version, 'direct': direct})
+              assert len({row['name'] for row in rows}) == len(rows)
+              return sorted(rows, key=lambda row: row['name'])
+          def verify_locked_graph(rows, lock):
+              for row in rows:
+                  choices = [p for p in lock['package'] if p['name'] == row['name'] and p['version'] == row['version']]
+                  assert len(choices) == 1
+                  selected, direct = choices[0]['source'], row['direct']
+                  if 'git' in selected:
+                      url = urlsplit(selected['git'])
+                      assert direct == {'url': urlunsplit((url.scheme, url.netloc, url.path, '', '')),
+                          'vcs_info': {'vcs': 'git', 'commit_id': url.fragment,
+                                       'requested_revision': parse_qs(url.query)['rev'][0]},
+                          **({'subdirectory': parse_qs(url.query)['subdirectory'][0]}
+                             if 'subdirectory' in parse_qs(url.query) else {})}
+                  else:
+                      assert set(selected) == {'registry'} and not direct
+              required = {'amplifier-core', 'amplifier-foundation', 'amplifier-module-loop-live',
+                          'pytest', 'pytest-asyncio', 'pytest-aiohttp', 'filelock', 'pyyaml'}
+              assert required <= {row['name'] for row in rows}
+          class Results:
+              def __init__(self):
+                  self.collected, self.phases, self.invalid = [], [], False
+              def pytest_collection_finish(self, session):
+                  self.collected = [item.nodeid for item in session.items]
+              def pytest_collectreport(self, report):
+                  self.invalid |= report.failed or report.skipped
+              def pytest_runtest_logreport(self, report):
+                  if report.nodeid not in nodes or hasattr(report, 'wasxfail'):
+                      self.invalid = True
+                  self.phases.append((report.nodeid, report.when, report.outcome))
+              def passed(self, code):
+                  return code == 0 and not self.invalid and self.collected == list(nodes) and self.phases == [
+                      (node, phase, 'passed') for node in nodes for phase in ('setup', 'call', 'teardown')]
+          result = {'schema': 1, 'status': 'FAIL', 'publicAcceptance': False,
+                    'qualification': 'five-locked-host-native-cases', 'nodes': list(nodes)}
+          try:
+              with (base / 'private-five.log').open('x', encoding='utf-8') as logs:
+                  with contextlib.redirect_stdout(logs), contextlib.redirect_stderr(logs):
+                      spec = importlib.util.spec_from_file_location('installed_audit', source / 'tests/fixtures/windows_user_trial_probe.py')
+                      audit = importlib.util.module_from_spec(spec); spec.loader.exec_module(audit)
+                      wheel, = (base / 'wheels').glob('*.whl')
+                      before = audit.installed(wheel, result)
+                      graph = host_graph()
+                      lock_bytes = (source / 'uv.lock').read_bytes()
+                      verify_locked_graph(graph, tomllib.loads(lock_bytes.decode()))
+                      candidate = json.loads((base / 'candidate.json').read_text(encoding='utf-8'))['candidate']
+                      assert audit.candidate(source) == candidate
+                      result.update(candidate=candidate, workflow=audit.candidate(workflow),
+                          lockSha256=hashlib.sha256(lock_bytes).hexdigest(), installed=before)
+                      # This private witness includes PEP610 URLs. Only its digest and
+                      # already audited public graph leave this runner.
+                      (base / 'locked-host.json').write_text(json.dumps(graph, sort_keys=True), encoding='utf-8')
+                      result['hostGraphSha256'] = hashlib.sha256(json.dumps(graph, sort_keys=True).encode()).hexdigest()
+                      members = ('runtime', 'runtime_worker', 'windows_jobs', 'windows_launch_guard',
+                                 'test_origin_files', 'test_origin_storage', 'test_origin_snapshot', 'windows_files')
+                      result['sourceImports'] = {}
+                      for name in members:
+                          path = pathlib.Path(importlib.import_module('amplifier_web.' + name).__file__).resolve()
+                          expected = source / 'amplifier_web' / (name + '.py')
+                          assert path.is_relative_to(pathlib.Path(sys.prefix).resolve()) and path.read_bytes() == expected.read_bytes()
+                          result['sourceImports'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
+                      target = base / 'five-tests'
+                      files = ('tests/conftest.py', 'tests/test_runtime.py', 'tests/test_remote_test_origins.py')
+                      result['testFiles'] = {}
+                      for name in files:
+                          path = target / name; path.parent.mkdir(parents=True, exist_ok=True)
+                          shutil.copyfile(source / name, path)
+                          assert path.read_bytes() == (source / name).read_bytes()
+                          result['testFiles'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
+                      assert {p.name for p in target.iterdir()} == {'tests'}
+                      import pytest
+                      selected = Results()
+                      code = pytest.main(['-q', '-p', 'no:cacheprovider', '-p', 'pytest_asyncio.plugin',
+                          '-p', 'aiohttp.pytest_plugin', '-o', 'asyncio_mode=auto',
+                          '--rootdir', str(target), '--confcutdir', str(target),
+                          '--basetemp', str(base / 'five-temp'), *(str(target / node) for node in nodes)], plugins=[selected])
+                      result['phases'] = [list(row) for row in selected.phases if row[0] in nodes
+                                          and row[1] in ('setup', 'call', 'teardown') and row[2] in ('passed', 'failed', 'skipped')][:15]
+                      assert selected.passed(code)
+                      assert audit.installed(wheel, result) == before and host_graph() == graph
+                      assert (source / 'uv.lock').read_bytes() == lock_bytes and audit.candidate(source) == candidate
+                      result['status'] = 'PASS'
+          except Exception:
+              pass  # No raw exception, private path or subprocess output is public.
+          (base / 'evidence/five-native.json').write_text(json.dumps(result, sort_keys=True), encoding='utf-8')
+          raise SystemExit(0 if result['status'] == 'PASS' else 1)
+          '@
+          & "$env:DEFAULT_TRIAL_BASE/env/Scripts/python.exe" -I -B -c $check $env:DEFAULT_CANDIDATE_SOURCE $env:DEFAULT_TRIAL_BASE $env:GITHUB_WORKSPACE
+          if ($LASTEXITCODE -ne 0) { throw 'Five locked-host native cases failed; cold work was not started.' }
       - name: Check closed metadata observation and original-outcome preservation
+        if: ${{ !inputs.remaining_runtime_only }}
         timeout-minutes: 2
         shell: pwsh
         run: |
@@ -682,10 +879,54 @@ jobs:
           $env:AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_PYTHON = "$base/env/Scripts/python.exe"
           $env:AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_WHEEL = $wheel[0].FullName
           $env:AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_REPORT = "$base/probe-result.json"
+          if ($env:REMAINING_RUNTIME_ONLY -eq 'true') {
+            # Only this invocation's scratch can be inspected after confirmed
+            # cleanup. This does not supply a worker project, lock or command.
+            New-Item -ItemType Directory -Path "$base/cold-temp" -ErrorAction Stop | Out-Null
+            $env:TEMP = "$base/cold-temp"
+            $env:TMP = "$base/cold-temp"
+          }
           $check = @'
-          import contextlib, hashlib, importlib.util, json, os, pathlib, shutil, sys
+          import contextlib, hashlib, importlib.metadata as metadata, importlib.util, json, os, pathlib, re, shutil, sys, tomllib
+          from urllib.parse import parse_qs, urlsplit, urlunsplit
           source, base = map(pathlib.Path, sys.argv[1:])
           node = "tests/test_runtime.py::test_native_windows_default_runtime_command_cold_prepare_turn_and_stop"
+          focused = os.environ.get('REMAINING_RUNTIME_ONLY') == 'true'
+          def host_graph():
+              rows = []
+              for dist in metadata.distributions():
+                  name = re.sub(r'[-_.]+', '-', dist.metadata['Name']).lower()
+                  if name == 'amplifier-unified':
+                      continue  # Independently byte-bound to the selected wheel.
+                  direct = json.loads(dist.read_text('direct_url.json') or '{}')
+                  rows.append({'name': name, 'version': dist.version, 'direct': direct})
+              assert len({row['name'] for row in rows}) == len(rows)
+              return sorted(rows, key=lambda row: row['name'])
+          def worker_lock_graph(raw):
+              rows = []
+              for package in tomllib.loads(raw.decode())['package']:
+                  name, version, origin = package['name'], package['version'], package['source']
+                  assert re.fullmatch('[A-Za-z0-9_.-]{1,100}', name)
+                  assert re.fullmatch('[A-Za-z0-9_.+!-]{1,100}', version)
+                  row = {'name': name, 'version': version}
+                  if set(origin) == {'registry'}:
+                      assert origin['registry'] == 'https://pypi.org/simple'
+                      row['kind'] = 'registry'
+                  elif set(origin) == {'git'}:
+                      url = urlsplit(origin['git'])
+                      assert url.scheme == 'https' and url.netloc == 'github.com'
+                      assert re.fullmatch('/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', url.path)
+                      assert re.fullmatch('[a-f0-9]{40}', url.fragment)
+                      sub = parse_qs(url.query).get('subdirectory', [''])[0]
+                      assert re.fullmatch('[A-Za-z0-9_./-]{0,200}', sub) and '..' not in sub.split('/')
+                      row.update(kind='git', url=urlunsplit((url.scheme, url.netloc, url.path, '', '')),
+                                 commit=url.fragment, subdirectory=sub)
+                  else:
+                      assert origin == {'virtual': '.'} and name == 'amplifier-web-runtime'
+                      row['kind'] = 'virtual'
+                  rows.append(row)
+              assert len(rows) <= 1000 and len({row['name'] for row in rows}) == len(rows)
+              return sorted(rows, key=lambda row: row['name'])
           def load(name, path):
               spec = importlib.util.spec_from_file_location(name, path)
               module = importlib.util.module_from_spec(spec)
@@ -715,10 +956,23 @@ jobs:
                       wheel = pathlib.Path(os.environ["AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_WHEEL"])
                       assert pathlib.Path(sys.executable).samefile(os.environ["AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_PYTHON"])
                       before = audit.installed(wheel, result)
+                      if focused:
+                          five = json.loads((base / 'evidence/five-native.json').read_text(encoding='utf-8'))
+                          assert five['status'] == 'PASS' and five['installed'] == before
+                          graph = json.loads((base / 'locked-host.json').read_text(encoding='utf-8'))
+                          assert host_graph() == graph
+                          assert hashlib.sha256(json.dumps(graph, sort_keys=True).encode()).hexdigest() == five['hostGraphSha256']
+                          result.update(qualification='cold-declared-worker-with-locked-host',
+                              workerGraphScope='fresh-shipped-manifest-not-host-lock',
+                              workflow=five['workflow'], hostGraphSha256=five['hostGraphSha256'],
+                              hostLockSha256=five['lockSha256'])
                       candidate = json.loads((base / "candidate.json").read_text(encoding="utf-8"))["candidate"]
                       assert set(candidate) == {"head", "tree"} and all(
                           audit.re.fullmatch(r"[0-9a-f]{40,64}", value) for value in candidate.values())
                       result["candidate"] = candidate
+                      if focused:
+                          assert candidate == five['candidate'] == audit.candidate(source)
+                          assert hashlib.sha256((source / 'uv.lock').read_bytes()).hexdigest() == five['lockSha256']
                       target = base / "selected-tests"
                       files = ("tests/conftest.py", "tests/test_runtime.py", "tests/fixtures/windows_default_runtime_probe.py")
                       for name in files:
@@ -737,21 +991,37 @@ jobs:
                           "callPassed": selected.phases.count(("call", "passed")) == 1,
                           "noSkips": not any(outcome == "skipped" for _, outcome in selected.phases)}
                       assert audit.installed(wheel, result) == before
+                      if focused:
+                          assert host_graph() == graph
                       probe = load("default_command_report", target / "tests/fixtures/windows_default_runtime_probe.py")
                       report = json.loads(pathlib.Path(os.environ["AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_REPORT"]).read_text(encoding="utf-8"))
                       probe.validate_report(report)
                       result["probe"] = report
                       assert report["wheelSha256"] == hashlib.sha256(wheel.read_bytes()).hexdigest()
                       assert selected.passed(code) and report["status"] == "PASS"
+                      if focused:
+                          # Read ONLY the one new private root in this invocation's
+                          # TEMP, after the unchanged probe proved both owned Jobs
+                          # settled. Never delete scratch or inspect another run.
+                          roots = list((base / 'cold-temp').glob('dr-*'))
+                          assert len(roots) == 1 and re.fullmatch('dr-[a-f0-9]{12}', roots[0].name)
+                          from amplifier_web.windows_files import directory
+                          project = roots[0] / 'app/runtime' / report['manifestSha256'][:16]
+                          with directory(project, owned_root=roots[0]) as pinned:
+                              raw = pinned.read_private('uv.lock', limit=1024 * 1024)
+                          assert hashlib.sha256(raw).hexdigest() == report['lockSha256']
+                          result['workerLockPackages'] = worker_lock_graph(raw)
+                          result['workerImportsScope'] = 'probe-observed-imports-only-not-every-locked-package'
                       result["status"] = "PASS"
           except Exception:
               pass  # Fixed FAIL facts only. Never publish exception or subprocess prose.
           (base / "evidence/publicresult.json").write_text(json.dumps(result, sort_keys=True), encoding="utf-8")
           raise SystemExit(0 if result["status"] == "PASS" else 1)
           '@
-          & "$base/env/Scripts/python.exe" -I -B -c $check $env:GITHUB_WORKSPACE $base
+          & "$base/env/Scripts/python.exe" -I -B -c $check $env:DEFAULT_CANDIDATE_SOURCE $base
           if ($LASTEXITCODE -ne 0) { throw 'Native default-command check failed; inspect bounded publicresult.json.' }
       - name: Require installed foreground CLI TLS, public open and graceful cleanup
+        if: ${{ !inputs.remaining_runtime_only }}
         # Default success() sequencing: never run this cell after cold failure.
         timeout-minutes: 4
         shell: pwsh
@@ -774,15 +1044,23 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Upload only bounded foreground CLI facts
-        if: always()
+        if: ${{ always() && !inputs.remaining_runtime_only }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-foreground-cli
           path: ${{ runner.temp }}/dr-ci/evidence/foreground.json
           if-no-files-found: warn
           retention-days: 7
+      - name: Upload only bounded five-case locked-host facts
+        if: ${{ always() && inputs.remaining_runtime_only }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-remaining-locked-host
+          path: ${{ runner.temp }}/dr-ci/evidence/five-native.json
+          if-no-files-found: warn
+          retention-days: 7
   windows-bootstrap-offline:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.candidate_ref && github.event_name == 'workflow_dispatch' && inputs.bootstrap_only }}
     runs-on: windows-latest
     timeout-minutes: 12
     env:
