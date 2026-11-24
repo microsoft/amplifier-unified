@@ -190,6 +190,118 @@ def test_catalog_preparation_admits_only_one_exact_setup_launch(change):
         sys.executable, gate.command, None, gate.environment])
 
 
+@pytest.mark.parametrize('after_popen', [False, True])
+@pytest.mark.parametrize('event', ['os.posix_spawn', 'os.system', 'os.exec', 'socket.connect'])
+def test_catalog_preparation_rejects_unpaired_events(after_popen, event):
+    import sys
+    gate = catalog_preparation_class()()
+    gate.open = True
+    gate.command = [sys.executable, '-I', '/installed/decision_account_catalog.py']
+    gate.environment = {'PATH': '/owned/bin'}
+    if after_popen:
+        assert gate.permits('subprocess.Popen', [
+            sys.executable, list(gate.command), None, dict(gate.environment)])
+    # Matching bytes, even after a Popen event, are not a second spawn permit.
+    assert not gate.permits(event, [
+        sys.executable, list(gate.command), dict(gate.environment)])
+    assert gate.launches == int(after_popen)
+
+
+def test_catalog_preparation_real_audit_family_is_one_reaped_child(tmp_path):
+    """Exercise native audit delivery in a disposable process, never the host hook."""
+    import sys
+    helper = tmp_path / 'decision_account_catalog.py'
+    marker = tmp_path / 'started.jsonl'
+    helper.write_text(
+        'import os,json\nfrom pathlib import Path\n'
+        f'with Path({str(marker)!r}).open("a") as f: f.write(json.dumps(os.getpid())+"\\n")\n'
+        'print("{}")\n')
+    driver = r'''
+import ast, json, os, subprocess, sys
+from pathlib import Path
+
+tree = ast.parse(Path(sys.argv[1]).read_text())
+node = next(n for n in tree.body if isinstance(n, ast.ClassDef)
+            and n.name == "DecisionCatalogPreparation")
+scope = {"sys": sys}
+exec(compile(ast.Module(body=[node], type_ignores=[]), "<catalog-preparation>", "exec"), scope)
+gate = scope["DecisionCatalogPreparation"]()
+gate.command = [sys.executable, "-I", sys.argv[2]]
+gate.environment = {key: value for key, value in os.environ.items()
+                    if key in {"PATH", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL",
+                               "TZ", "TMPDIR", "TEMP", "TMP"}}
+gate.open = True
+active = True
+allowed, refused = [], []
+injected = False
+
+def audit(event, args):
+    global injected
+    if not active or event not in {"subprocess.Popen", "os.posix_spawn", "os.system"}:
+        return
+    if not gate.permits(event, args):
+        refused.append(event)
+        raise RuntimeError("fixture rejected " + event)
+    allowed.append(event)
+    if event == "subprocess.Popen" and not injected:
+        injected = True
+        # Reentry while the original Popen is still on the stack is NOT its
+        # native _posix_spawn call. None of these may start another child.
+        deny(lambda: subprocess.run(gate.command, env=gate.environment, check=True))
+        if hasattr(os, "posix_spawn"):
+            deny(lambda: os.posix_spawn(sys.executable, gate.command, gate.environment))
+        deny(lambda: os.system("exit 99"))
+
+def deny(call):
+    try:
+        call()
+    except RuntimeError as exc:
+        assert str(exc).startswith("fixture rejected "), exc
+    else:
+        raise AssertionError("An extra process was admitted")
+
+sys.addaudithook(audit)
+try:
+    result = subprocess.run(gate.command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            env=gate.environment, timeout=10, check=True)
+    assert json.loads(result.stdout) == {}
+    assert allowed in (["subprocess.Popen"], ["subprocess.Popen", "os.posix_spawn"]), allowed
+    assert gate.launches == 1
+    # The canonical run has returned/reaped, but leave open=True to prove that
+    # the earlier event cannot be spent on a direct identical second spawn.
+    if hasattr(os, "posix_spawn"):
+        deny(lambda: os.posix_spawn(sys.executable, gate.command, gate.environment))
+    deny(lambda: subprocess.run(gate.command, env=gate.environment, check=True))
+    gate.open = False
+    deny(lambda: subprocess.run(gate.command, env=gate.environment, check=True))
+    pids = [json.loads(row) for row in Path(sys.argv[3]).read_text().splitlines()]
+    assert len(pids) == 1, pids
+    if hasattr(os, "waitpid"):
+        try:
+            os.waitpid(pids[0], os.WNOHANG)
+        except ChildProcessError:
+            pass
+        else:
+            raise AssertionError("Canonical run did not reap its child")
+finally:
+    gate.open = active = False
+print(json.dumps({"allowed": allowed, "refused": refused, "launches": gate.launches,
+                  "children": len(pids), "reaped": True}))
+'''
+    result = subprocess.run([
+        sys.executable, '-I', '-B', '-c', driver,
+        str(ROOT / 'tests/test_default_behaviors_integration.py'), str(helper), str(marker),
+    ], cwd=tmp_path, capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report['launches'] == report['children'] == 1 and report['reaped']
+    assert report['refused'].count('subprocess.Popen') == 3
+    assert report['refused'].count('os.system') == 1
+    if hasattr(__import__('os'), 'posix_spawn'):
+        assert report['refused'].count('os.posix_spawn') == 2
+    print('CATALOG_AUDIT_FAMILY ' + json.dumps(report, sort_keys=True))
+
+
 @pytest.mark.parametrize('change', [
     'none', 'unexpected-entrypoint', 'changed-helper', 'missing-record', 'wrong-origin',
     'warm-cache', 'timeout', 'nonzero', 'malformed-result', 'no-launch', 'second-launch',
