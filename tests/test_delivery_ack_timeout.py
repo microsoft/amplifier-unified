@@ -279,7 +279,7 @@ for line in sys.stdin:
         task = asyncio.create_task(service.dispatch('conversation.send', {'text': 'one input'},
                                                    command_id='cancel-input'))
         async with asyncio.timeout(3):
-            while not inputs.exists():
+            while not inputs.exists() or not inputs.read_text().endswith('\n'):
                 await asyncio.sleep(.005)
             await ready_dispatch.wait()
         row = runtime.workers[service._session()['id']]
@@ -288,6 +288,8 @@ for line in sys.stdin:
         assert inputs.read_text().splitlines() == ['cancel-input']
         assert row['ready'].done() and not reading.is_set() and reads == 1
         assert not task.done() and runtime.has_pending_operations()
+        inflight = set(row['inflight'])
+        assert len(inflight) == 1
         if phase == 'read':
             release_ready.set()
             async with asyncio.timeout(3):
@@ -316,7 +318,8 @@ for line in sys.stdin:
         duplicate = await service.dispatch('conversation.send', {'text': 'one input'}, command_id='cancel-input')
         assert duplicate['duplicate'] and duplicate['delivery'] == 'unknown'
         assert inputs.read_text().splitlines() == ['cancel-input']
-        assert not runtime.has_pending_operations()
+        assert not row['pending']  # The caller wait has settled, not the input.
+        assert row['inflight'] == inflight and runtime.has_pending_operations()
         receipt = json.loads(service.db.execute(
             'SELECT receipt FROM commands WHERE id=?', ('cancel-input',)).fetchone()[0])
         assert receipt['delivery'] == 'unknown'
@@ -324,6 +327,7 @@ for line in sys.stdin:
             'expectedPhase': phase, 'shutdown': shutdown, 'readCalls': reads,
             'readyDispatchEntered': ready_dispatch.is_set(), 'readerEnteredRead': reading.is_set(),
             'reader': witness['reader'], 'delivery': receipt['delivery'],
+            'inflightRetained': sorted(row['inflight']), 'callerWaits': len(row['pending']),
             'inputs': inputs.read_text().splitlines()}))
     finally:
         release_ready.set()
