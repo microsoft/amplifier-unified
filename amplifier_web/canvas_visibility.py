@@ -64,21 +64,4 @@ def update(service, args, command_id, fingerprint, *, include_state):
             'view': {**cached['view'], **({} if args['open'] else {'canvasFocused': False})},
             'canvasWorkspace': service.canvas_views.project(),
         }
-    # Unchanged client snapshots can retain their expensive history projections.
-    for key, snapshot in list(service._client_snapshots.items()):
-        if snapshot['revision'] == revision:
-            service._client_snapshots[key] = {**snapshot, 'revision': revision + 1}
-    if getattr(service, '_browser_snapshot', None) and service._browser_snapshot['revision'] == revision:
-        service._browser_snapshot = {**service._browser_snapshot, 'revision': revision + 1}
-    snapshot = None
-    for queue in service.queues:
-        if service.queue_clients.get(queue) != identity:
-            continue
-        session_id = service.queue_sessions.get(queue)
-        current = service.session_state(session_id) if session_id is not None else service.browser_state()
-        if session_id is None:
-            snapshot = current
-        if queue.full():
-            queue.get_nowait()
-        queue.put_nowait(current)
-    return {**receipt, **({'state': snapshot or service.browser_state()} if include_state else {})}
+    return service.clients.publish_presentation(identity, revision, receipt, include_state=include_state)
