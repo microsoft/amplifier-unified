@@ -26,6 +26,34 @@ upload and a nonexpiring, committed original in that conversation. Revoking
 the binding prevents further downloads. The reader verifies each snapshot
 without starting the worker, taking a writer lock, or authorizing model replay.
 
-The current composer still saves inline images and original attachment files.
-Enabling a reference writer also requires the other local-file consumers and
-each supported history reader to preserve their existing behavior.
+## Smaller image histories for new chats
+
+A private POSIX Unified instance can store new PNG and JPEG uploads by reference
+in its conversation history. Each separately named upload keeps its download
+link and its original local file for agents. The native session retains a
+verified copy of each distinct image for replay and backup. Two uploads of the
+same bytes remain two separate occurrences in the chat.
+
+To opt in, use an instance with a dedicated `AMPLIFIER_WEB_HOME` and set
+`AMPLIFIER_HOME` to its `native` subdirectory. Set
+`AMPLIFIER_UNIFIED_COMPACT_CHAT_IMAGES=1` in the service environment, then
+create a chat normally. Use a fresh private instance if your current
+installation shares its native history with the CLI. Changing the native home
+on an existing installation changes where it looks for *all* conversations.
+
+The setting applies at creation to ordinary native chats. Existing chats,
+shared native homes, external agents and Windows continue to use their usual
+format. Turning the setting off keeps future chats inline. Previously enrolled
+chats retain their choice across worker restarts in the same private home.
+Older Foundation selections that keep staging files after a checkpoint use inline uploads.
+GIF and WebP uploads retain their existing inline representation. Images that
+cannot be safely admitted follow the existing image policy.
+
+For another client such as the standalone CLI, fork the chat in Unified or use
+its signed task transfer. These paths include ordinary inline pixels at their
+original positions. The current CLI does not resolve Unified's private image
+references when pointed directly at the private native home.
+
+This mode reduces the size of image-heavy transcripts and standalone backups.
+Checkpointing can take longer because the native session verifies the saved
+transcript and image records before acknowledging them.

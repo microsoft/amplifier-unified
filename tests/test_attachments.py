@@ -156,13 +156,13 @@ def test_image_snapshot_failure_uses_closed_notice_and_keeps_other_attachments(t
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
     bad, good = upload(tmp_path, 'bad.png'), upload(tmp_path, 'good.png')
     bad_path, _ = attachments.file_path(tmp_path, bad['id'])
-    original = attachments._image_source
+    original = attachments._image_bytes
     secret = 'data:image/png;base64,' + base64.b64encode(PNG).decode()
     def read(path, row, policy=None):
         if path == bad_path:
             raise OSError(secret)
         return original(path, row, policy)
-    monkeypatch.setattr(attachments, '_image_source', read)
+    monkeypatch.setattr(attachments, '_image_bytes', read)
     content = attachments.encode(SimpleNamespace(text='Keep user text', attachments=[bad, good]))
     assert content[0]['text'] == 'Keep user text'
     assert secret not in json.dumps(content)

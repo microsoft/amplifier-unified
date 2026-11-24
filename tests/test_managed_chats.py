@@ -288,3 +288,55 @@ def test_managed_marker_rejects_noncanonical_layout_before_filesystem_access(mon
     assert metadata('/app/chats/not-a-uuid/files') is None
     assert metadata('/app/chats/00000000000000000000000000000000/files') is None
     assert metadata('/app/workspaces/00000000-0000-0000-0000-000000000000/files') is None
+
+
+@pytest.mark.parametrize('when', ['before-allocation', 'during-allocation'])
+async def test_derived_managed_identity_cannot_claim_existing_native_history(
+        app, monkeypatch, when):
+    from amplifier_web import managed_chats
+    from amplifier_web.host.storage import SessionStore
+
+    monkeypatch.setenv('AMPLIFIER_HOME', str(app.data_dir / 'native'))
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(app.data_dir))
+    monkeypatch.setenv('AMPLIFIER_UNIFIED_COMPACT_CHAT_IMAGES', '1')
+    args = {'location': {'kind': 'managed'}}
+    receipt = 'create-without-an-explicit-id'
+    sid = managed_chats.creation_identity(app.data_dir, args, receipt)
+    folder = app.data_dir / 'chats' / sid / 'files'
+    store = SessionStore.for_app(app.data_dir, folder)
+    saved = [{'role': 'user', 'content': 'An older saved conversation'}]
+
+    def restore():
+        store.save(sid, saved, {})
+        return (store.directory(sid) / 'transcript.jsonl').read_bytes()
+
+    originals = []
+    if when == 'before-allocation':
+        originals.append(restore())
+    else:
+        def allocate_then_restore(*args):
+            result = allocate(*args)
+            originals.append(restore())
+            return result
+        monkeypatch.setattr(managed_chats, 'allocate', allocate_then_restore)
+
+    with pytest.raises(AppError, match='identity already exists'):
+        await command(app, 'web', 'session.create', args, command_id=receipt)
+    assert not app.state['sessions']
+    assert originals == [(store.directory(sid) / 'transcript.jsonl').read_bytes()]
+    assert not app.db.execute('SELECT 1 FROM commands WHERE id=?', (receipt,)).fetchone()
+    assert folder.exists() == (when == 'during-allocation')
+
+
+async def test_managed_creation_recovers_owned_folder_and_replays_completed_receipt(app):
+    from amplifier_web.managed_chats import creation_identity
+    args = {'location': {'kind': 'managed'}}
+    receipt = 'prepared-owned-folder'
+    sid = creation_identity(app.data_dir, args, receipt)
+    folder = Path(allocate(app.data_dir, sid, receipt))
+    (folder / 'keep').write_text('Original workspace file')
+    assert (await command(app, 'web', 'session.create', args, command_id=receipt))['sessionId'] == sid
+    again = await command(app, 'web', 'session.create', args, command_id=receipt)
+    assert again['duplicate'] and again['sessionId'] == sid
+    assert (folder / 'keep').read_text() == 'Original workspace file'
+    assert [row['id'] for row in app.state['sessions']] == [sid]

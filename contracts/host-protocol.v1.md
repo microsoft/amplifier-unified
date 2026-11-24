@@ -104,3 +104,15 @@ Which command receipts can be recovered with upstream identities alone before an
 | 2026-11-07 | Preserve admission and legacy exact retries independently of disposable detail expiry. | User-approved finite-lifetime design; [Storage policy](../docs/STORAGE.md#approved-prospective-retention-policy). |
 | 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
 | 2026-10-02 | Initial HP1–6. | [Protocol review](../docs/architecture/protocol-fit.md). |
+
+## Opt-in composer image storage
+
+On an explicitly configured private POSIX instance, creation of an ordinary
+native root chat may select compact storage of newly admitted PNG/JPEG uploads.
+The creation decision persists with the chat. Resume and import must preserve
+historical chats. The upload ID, original local file, authenticated download,
+message order and attribution survive independently of the transcript encoding.
+Replay uses the active session's model-read policy and verified checkpoint.
+Fork and signed transfer to consumers of ordinary transcripts must materialize
+the selected original user inputs without granting access to unrelated media.
+See the [operator and client behavior](../docs/attachments.md).

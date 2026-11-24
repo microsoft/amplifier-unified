@@ -148,13 +148,13 @@ def template(service, source):
                     'configurationParts': {key: fingerprint(value) for key, value in categories.items()}}
 
 
-def prepare(service, args, origin, caller_session_id):
+def prepare(service, args, origin, caller_session_id, *, prepared_identity=None):
     from .collaboration import CREATION
     if creation := CREATION.get():
         receipt = service.collaboration.receipt(creation[4]['requestId'])
         if reason := service.collaboration.creation_guard(receipt):
             raise ValueError(reason)
-    identity = args.get('id')
+    identity = args.get('id') or prepared_identity
     from .managed_deletion import removed
     if removed(service.db, identity, args.get('workspace')):
         raise ValueError('This conversation was permanently deleted. Start a new chat instead.')
