@@ -350,3 +350,67 @@ asyncio.run(main())
             await process.wait()
     assert process.returncode == 0, errors.decode()
     assert output.strip().decode() == hashlib.sha256(original).hexdigest()
+
+@pytest.mark.parametrize("issued", [True, False], ids=["admitted-upload", "unissued-history"])
+async def test_resumed_composer_refs_share_count_and_send_without_rewriting_history(tmp_path, monkeypatch, issued):
+    """Seed a future reference-format row beside a real legacy inline image."""
+    from io import BytesIO
+    from uuid import uuid4
+    from amplifier_module_loop_live.runtime import Input
+    from amplifier_web.attachments import save, encode
+
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path / "app"))
+    path, png = picture(tmp_path, "PNG")
+    _, jpeg = picture(tmp_path, "JPEG")
+    original = ScriptedReadProvider(path, read=False)
+    session, store, checkpoint, _, _, _ = await actual_root(tmp_path, original)
+    try:
+        media_store = session.coordinator.get_capability("web.media.store")
+        refs = []
+        content = []
+        for label, body, mime in (("first", png, "image/png"), ("second", jpeg, "image/jpeg"),
+                                  ("repeat", png, "image/png")):
+            origin = {"kind": "upload", "session_id": session.session_id, "id": uuid4().hex}
+            staged = media_store.ingest_sync({"stream": BytesIO(body), "mime": mime},
+                source_format="image-bytes", origin=origin, policy=None)["staged_refs"]
+            media_store.classify_origin(origin, classification="composer-upload")
+            media_store.publish_sync(staged, origin=origin, disposition="retain")
+            refs.extend(staged)
+            content.extend([{"type": "text", "text": label},
+                            {"type": "text", "text": f"[Session image {staged[0]['sha256']}]"}])
+        reference = {"role": "user", "content": content, "metadata": {media.NAMESPACE: {"refs": refs}}}
+        upload = save(tmp_path / "app", "legacy.jpg", base64.b64encode(jpeg).decode())
+        command = Input("user", "Already inline", attachments=({"id": upload["id"]},))
+        legacy = {"role": "user", "content": list(encode(command, session.coordinator if issued else None)),
+                  "metadata": {"amplifier_input": {"id": command.id}}}
+        rows = [legacy, {"role": "assistant", "content": "OK"}, reference]
+        await session.coordinator.get("context").set_messages(rows)
+        rows = await checkpoint()
+    finally:
+        await session.cleanup()
+    path.unlink()
+    class ReplayProvider(ScriptedReadProvider):
+        async def complete(self, request, **kwargs):
+            assert request is self.counted and self.checkpoint_seen()
+            self.reference_blocks = [
+                [b.text if b.type == "text" else b.source["media_type"] for b in m.content]
+                for m in request.messages if isinstance(m.content, list) and
+                any(getattr(b, "text", None) == "first" for b in m.content)]
+            return await super().complete(request, **kwargs)
+
+    replay = ReplayProvider(path, read=False)
+    resumed, _, checkpoint, _, tool_calls, host = await actual_root(tmp_path, replay, store=store)
+    try:
+        loaded, _ = store.load(resumed.session_id)
+        assert loaded == rows
+        await resumed.coordinator.get("context").set_messages(loaded)
+        await checkpoint()
+        await resumed.execute("Compare the saved images")
+        assert host.sealed and not tool_calls
+        expected = ([jpeg] if issued else []) + [png, jpeg, png]
+        assert replay.observed == [[("user", None, body) for body in expected]]
+        assert replay.reference_blocks == [["first", "image/png", "second", "image/jpeg",
+                                            "repeat", "image/png"]]
+        assert (await checkpoint())[:len(rows)] == rows
+    finally:
+        await resumed.cleanup()
