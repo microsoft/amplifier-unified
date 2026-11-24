@@ -20,6 +20,16 @@ def target(manager):
             **{key: release[key] for key in ('revision', 'generation', 'attemptId')}}
 
 
+def publish_targets(manager):
+    state = manager.service.state['updates']
+    prepared = target(manager)
+    state['forceRestartTarget'] = prepared
+    drain = state.get('drain') or {}
+    state['safeResumeTarget'] = prepared if (prepared
+        and not (state.get('pendingApp') or {}).get('featureSelection')
+        and not (drain.get('safeUpdate') and drain.get('phase') != 'released')) else None
+
+
 WINDOWS_REFUSAL = 'Amplifier on Windows cannot interrupt work to restart. The update was not changed.'
 
 

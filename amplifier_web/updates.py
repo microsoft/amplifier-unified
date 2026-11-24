@@ -686,9 +686,9 @@ class UpdateManager:
         self._start_check_open = True
         self._activation_failed = None  # See _activation_held.
         self._update_health_seen_revision = service.state.get('configurationRevision')
-        from .update_restart import target
+        from .update_restart import publish_targets
         state['activation'] = activation(self)
-        state['forceRestartTarget'] = target(self)
+        publish_targets(self)
         publish_health(self)
         from .windows_launcher_follow import project
         project(self)
@@ -727,7 +727,7 @@ class UpdateManager:
     def _derive_state(self):
         """Refresh the publication fields under service.lock; report any change."""
         state = self.service.state['updates']
-        fields = ('blockers', 'activation', 'detail', 'currentStatus', 'forceRestartTarget')
+        fields = ('blockers', 'activation', 'detail', 'currentStatus', 'forceRestartTarget', 'safeResumeTarget')
         before = tuple(state.get(key) for key in fields)
         from .update_health import activation, publish as publish_health, PREPARED_STARTING, PREPARED_WAITING
         state['blockers'] = (self.app_blockers() if state.get('pendingApp')
@@ -741,10 +741,10 @@ class UpdateManager:
         # text replaces or extends it (no IO; it never raises).
         from .windows_launcher_follow import project
         project(self)
-        from .update_restart import target
+        from .update_restart import publish_targets
         # Also the identity that task.waitForUpdate names. The page's offer to
         # interrupt work is a matter of its view (update_health.browser_view).
-        state['forceRestartTarget'] = target(self)
+        publish_targets(self)
         return before != tuple(state.get(key) for key in fields)
 
     def configuration_changed(self):
