@@ -87,9 +87,15 @@ results, approval/question text, objective text, and raw exceptions are excluded
   start times remain available; missing data is null/unknown, not an invented fact.
 - Plans come from successfully accepted `todo` tool receipts. Failed or invalid
   updates become unavailable. At most 200 statuses/counts/current-step indexes are
-  retained. Unified's worker sends only a sanitized status receipt across its
-  process boundary. Unified **never exposes plan labels**. CLI labels require
-  explicit `include_plan_text: true`; default is redacted in both adapters.
+  retained. Unified's worker sends a sanitized `statusPlan` receipt for this
+  adapter across its process boundary. Unified's **local status registry never
+  exposes plan labels**. The ordinary execution event may separately carry a
+  bounded `reportedPlan` with checklist text for the authenticated chat's
+  [last-reported Plan display](../contracts/working-set.v1.md#the-promises);
+  that value is not the status publisher's input. A failed update can therefore
+  make this status observation unavailable while the chat keeps its last
+  successful checklist. CLI status labels require explicit
+  `include_plan_text: true`; default is redacted in both status adapters.
 - Usage, when available, states its scope; cumulative tokens never claim to be
   current context occupancy. Unsupported usage/provider/model fields remain null.
 - `lifecycle` distinguishes live observation, orderly producer/session end, and

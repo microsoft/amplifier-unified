@@ -32,7 +32,7 @@ async def eventually(fn, timeout=3):
     raise AssertionError("Status observation did not arrive")
 
 
-def test_redaction_exact_plan_counts_and_explicit_text_policy():
+def test_redaction_exact_plan_counts_and_explicit_text_policy(tmp_path):
     secret = "private prompt token=secret"
     value = {"where": {"sessionId": "id", "provider": "https://user:secret@host/path"},
              "now": {"status": "tool", "tools": [{"id": "c", "name": "bash", "arguments": secret}]},
@@ -45,6 +45,21 @@ def test_redaction_exact_plan_counts_and_explicit_text_policy():
     assert clean['plan']['currentSteps'] == [0]
     assert snapshot(value, include_text=True)['plan']['items'][0]['text'] == secret
     assert clean['usage']['inputTokens'] is None
+    # Redaction also applies when rich input reaches the real default writer,
+    # independently of the Unified adapter's already-textless status receipt.
+    directory = tmp_path/'status'
+    publisher = Publisher(directory, host='unified', version='test')
+    try:
+        assert publisher.submit('id', value)
+        records = until(lambda: discover(directory)['sessions'])
+        assert records[0]['plan'] == clean['plan']
+        assert records[0]['textPolicy'] == 'redacted'
+        assert secret not in json.dumps(records)
+    finally:
+        publisher.close()
+    assert not publisher._thread.is_alive()
+    files = list(publisher.directory.glob('*.json'))
+    assert files and all(secret not in path.read_text() for path in files)
 
 
 def test_atomic_private_coalesced_snapshots_stale_ended_and_identity(tmp_path):
@@ -294,21 +309,104 @@ def test_observed_pending_identity_counts_and_opted_in_plan_labels(tmp_path):
         publisher.close()
 
 
-def test_native_execution_observer_plan_crosses_process_normalization_without_payload(tmp_path, monkeypatch):
+async def test_native_execution_observer_plan_crosses_process_normalization_without_payload(tmp_path, monkeypatch):
     from amplifier_web.execution_events import ExecutionEvents
     from amplifier_web.runtime import normalize_event
+    from amplifier_web.service import AppService
+    from amplifier_web.browser_detail import project
     from amplifier_core import ToolResult
-    monkeypatch.setenv('AMPLIFIER_STATUS_DIR', str(tmp_path))
-    events = []
-    observer = ExecutionEvents('root', events.append)
-    observer.hook('root', 'tool:pre', {'session_id': 'root', 'tool_name': 'todo', 'tool_call_id': 'call',
-        'tool_input': {'action': 'update', 'todos': [{'content': 'SECRET', 'status': 'in_progress'}]}})
-    observer.hook('root', 'tool:post', {'session_id': 'root', 'tool_name': 'todo', 'tool_call_id': 'call',
-        'result': ToolResult(success=True, output={'status': 'updated'})})
-    _, payload = normalize_event(events[-1], 'root')
-    assert payload['statusPlan'] == [{'status': 'in_progress'}]
-    assert 'SECRET' not in json.dumps(events)
-    assert 'input' not in payload and 'output' not in payload
+    directory = tmp_path/'status'
+    monkeypatch.setenv('AMPLIFIER_STATUS_DIR', str(directory))
+    app = AppService(tmp_path/'app', workspace=tmp_path)
+    emitter = app.status_emitter
+    try:
+        session = app._new_session({'title': 'Status boundary'})
+        session['status'] = 'working'
+        app._state['sessions'].append(session)
+        sid = session['id']
+        app._state['selectedSessionId'] = sid
+        app.projections.invalidate(state=app._state)
+        events = []
+        observer = ExecutionEvents(sid, events.append)
+        checklist = [{'content': 'SECRET', 'activeForm': 'SECRET active form', 'status': 'in_progress'}]
+        observer.hook(sid, 'tool:pre', {'session_id': sid, 'tool_name': 'todo', 'tool_call_id': 'call',
+            'tool_input': {'action': 'update',
+                          'todos': [{**checklist[0], 'private': 'PRIVATE_RAW_SENTINEL'}]}})
+        assert 'reportedPlan' not in events[-1]['event']
+        assert 'SECRET' not in json.dumps(events)
+        observer.hook(sid, 'tool:post', {'session_id': sid, 'tool_name': 'todo', 'tool_call_id': 'call',
+            'result': ToolResult(success=True, output={'status': 'updated', 'private': 'PRIVATE_RAW_SENTINEL'})})
+        normalized = [normalize_event(event, sid) for event in events]
+        _, payload = normalized[-1]
+        # WS3's authenticated chat display and the optional local-status
+        # registry are different consumers of this worker observation.
+        assert payload['reportedPlan'] == checklist
+        assert payload['statusPlan'] == [{'status': 'in_progress'}]
+        assert events[-1]['event']['reportedPlan'] == checklist
+        for event in events:
+            for key, value in event['event'].items():
+                if key != 'reportedPlan':
+                    assert 'SECRET' not in json.dumps(value)
+            assert 'PRIVATE_RAW_SENTINEL' not in json.dumps(event)
+        assert 'input' not in payload and 'output' not in payload and 'error' not in payload
+        assert 'PRIVATE_RAW_SENTINEL' not in json.dumps(normalized)
+        assert all('reportedPlan' not in row for row in observer.calls.values())
+        assert all('reportedPlan' not in row for row in observer.nodes.values())
+        for kind, value in normalized:
+            await app.on_runtime_event(kind, value)
+        assert project(session)['execution']['plan'] == {'items': checklist}
+        assert emitter.plans[sid] == [{'status': 'in_progress'}]
+        assert emitter.publisher.include_text is False
+
+        def published():
+            return next((row for row in discover(directory)['sessions']
+                         if row['where']['sessionId'] == sid), None)
+
+        expected_status = {'state': 'observed',
+            'items': [{'index': 0, 'status': 'in_progress'}],
+            'counts': {'pending': 0, 'in_progress': 1, 'completed': 0}, 'currentSteps': [0]}
+        record = await eventually(lambda: (row if (row := published())
+            and row['plan'] == expected_status else None))
+        assert record['textPolicy'] == 'redacted'
+        assert record['plan'] == expected_status
+        files = list(emitter.publisher.directory.glob('*.json'))
+        assert files
+        for encoded in [json.dumps(record), *(path.read_text() for path in files)]:
+            assert 'SECRET' not in encoded and 'PRIVATE_RAW_SENTINEL' not in encoded
+
+        # Failed status receipts become unavailable in the status protocol,
+        # while the chat keeps its last successful checklist.
+        # A retained legacy execution.plan must not override an unavailable
+        # status receipt or replace the independent last-reported chat Plan.
+        session['execution']['plan'] = {'items': checklist}
+        for call, result in (
+            ('failed', ToolResult(success=False, output={'todos': []})),
+            ('invalid', ToolResult(success=True, output={'todos': [{'status': 'invalid'}]})),
+        ):
+            observer.hook(sid, 'tool:post', {'session_id': sid, 'tool_name': 'todo', 'tool_call_id': call,
+                'result': result})
+            failed = normalize_event(events[-1], sid)
+            assert failed[1]['statusPlan'] is None and 'reportedPlan' not in failed[1]
+            await app.on_runtime_event(*failed)
+            assert sid in emitter.plans and emitter.plans[sid] is None
+            await eventually(lambda: (row := published()) and row['plan'] == {
+                'state': 'unavailable', 'items': [], 'counts': {}})
+            assert project(session)['execution']['plan'] == {'items': checklist}
+            assert 'SECRET' not in json.dumps(emitter.plans)
+        observer.hook(sid, 'tool:post', {'session_id': sid, 'tool_name': 'todo', 'tool_call_id': 'clear',
+            'result': ToolResult(success=True, output={'todos': []})})
+        cleared = normalize_event(events[-1], sid)
+        assert cleared[1]['statusPlan'] == cleared[1]['reportedPlan'] == []
+        await app.on_runtime_event(*cleared)
+        await eventually(lambda: (row := published()) and row['plan'] == {
+            'state': 'observed', 'items': [], 'currentSteps': [],
+            'counts': {'pending': 0, 'in_progress': 0, 'completed': 0}})
+        assert project(session)['execution']['plan'] == {'items': []}
+    finally:
+        await app.close()
+    assert not emitter.publisher._thread.is_alive()
+    for path in emitter.publisher.directory.glob('*.json'):
+        assert 'SECRET' not in path.read_text() and 'PRIVATE_RAW_SENTINEL' not in path.read_text()
 
 
 async def test_old_idle_catalog_does_not_fill_capacity_and_resume_is_observable(tmp_path, monkeypatch):

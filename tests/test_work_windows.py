@@ -46,7 +46,8 @@ def fixture(tmp_path, monkeypatch, count=140):
 
 
 @pytest.mark.asyncio
-async def test_loading_work_window_defers_terminal_workers_without_losing_evidence(tmp_path, monkeypatch):
+@pytest.mark.parametrize('report', ['absent', 'saved', 'cleared'])
+async def test_loading_work_window_defers_terminal_workers_without_losing_evidence(tmp_path, monkeypatch, report):
     from amplifier_web import browser_detail
     from amplifier_web.browser_state import SnapshotCopies
 
@@ -54,7 +55,22 @@ async def test_loading_work_window_defers_terminal_workers_without_losing_eviden
         def __deepcopy__(self, memo):
             raise AssertionError('A deferred terminal report was copied')
 
-    owner, session, _, _ = fixture(tmp_path, monkeypatch, count=1)
+    owner, session, path, _ = fixture(tmp_path, monkeypatch, count=1)
+    original_source = path.read_bytes()
+    expected_plan = None if report == 'absent' else {'items': (
+        [{'content': 'Last reported root checklist', 'status': 'in_progress'}]
+        if report == 'saved' else [])}
+    if expected_plan is not None:
+        session['_reportedPlan'] = json.loads(json.dumps(expected_plan))
+
+    def assert_report(view):
+        assert view['execution']['plan'] == expected_plan
+        assert '_reportedPlan' not in view
+        if expected_plan is not None:
+            assert view['execution']['plan'] is not session['_reportedPlan']
+            assert view['execution']['plan']['items'] is not session['_reportedPlan']['items']
+            assert all(projected is not saved for projected, saved in
+                       zip(view['execution']['plan']['items'], session['_reportedPlan']['items']))
     statuses = ['completed'] * 201 + ['cancelled'] * 5 + ['error'] + ['interrupted'] * 3
     session['workers'] = [{'id': f'w-{i}', 'callId': f'c-{i % 133}',
         'kind': 'job' if i < 109 else 'session', 'name': f'Worker {i}', 'status': status,
@@ -66,6 +82,7 @@ async def test_loading_work_window_defers_terminal_workers_without_losing_eviden
         runtimeEvents=[{'type': 'runtime.tool', 'phase': 'pre', 'callId': 'current-tool', 'tool': 'read'}])
     original = json.dumps(session, sort_keys=True)
     legacy = browser_detail.project(session)
+    assert legacy['execution']['plan'] == expected_plan and '_reportedPlan' not in legacy
     owner.projector.gate = asyncio.Event()
     pending = owner.request('s')
     try:
@@ -80,14 +97,20 @@ async def test_loading_work_window_defers_terminal_workers_without_losing_eviden
 
         with monkeypatch.context() as patch:
             patch.setattr(browser_detail, 'digest', unexpected_hash)
-            loading = SnapshotCopies().detach(browser_detail.project(session, work_overlay=overlay), 'web')
+            projected = browser_detail.project(session, work_overlay=overlay)
+            assert_report(projected)  # SnapshotCopies must not hide a projection alias.
+            loading = SnapshotCopies().detach(projected, 'web')
         assert loading['workers'] == []
         assert loading['workerSummary']['bounded'] is True
         assert loading['workerSummary']['total'] == loading['workerSummary']['finished'] == 210
         assert len(loading['workerSummary']['recentFinished']) == 5
         assert loading['workProjection'] == overlay['workProjection']
         assert loading['executionWindow'] == overlay['executionWindow']
-        assert loading['execution'] == overlay['execution']
+        # WS3 Plan is a saved display value independent of Work readiness:
+        # absent legacy reports are explicit null; a valid clear keeps items[].
+        assert 'plan' not in overlay['execution']
+        assert loading['execution'] == {**overlay['execution'], 'plan': expected_plan}
+        assert_report(loading)
         assert loading['status'] == session['status']
         assert loading['activity'] == session['activity'] and loading['runtimeEvents'] == session['runtimeEvents']
         assert len(json.dumps(loading).encode()) < len(json.dumps(legacy).encode()) / 10
@@ -113,14 +136,28 @@ async def test_loading_work_window_defers_terminal_workers_without_losing_eviden
         assert current['workers'] == retained
         assert current['workerSummary']['total'] == 217
         assert loading['workerSummary']['total'] == 210 and loading['workers'] == []
+        assert_report(current)
 
         owner.projector.gate.set()
         await pending
-        ready = browser_detail.project(session, work_overlay=owner.project(session))
+        ready_overlay = owner.project(session)
+        ready = browser_detail.project(session, work_overlay=ready_overlay)
         assert ready['workProjection']['status'] == 'ready'
         assert ready['execution']['turns'] and ready['workerSummary']['bounded']
         assert ready['workers'] == retained
+        assert ready['execution'] == {**ready_overlay['execution'], 'plan': expected_plan}
+        assert_report(ready)
+        if expected_plan is not None:
+            # Mutating a detached browser result cannot change the saved value
+            # or another observation, including the explicit empty-list case.
+            loading['execution']['plan']['items'].append({'content': 'Not saved', 'status': 'pending'})
+            assert ready['execution']['plan'] == current['execution']['plan'] == session['_reportedPlan'] == expected_plan
+            projected['execution']['plan']['items'].append({'content': 'Also not saved', 'status': 'pending'})
+            assert ready['execution']['plan'] == session['_reportedPlan'] == expected_plan
+            ready['execution']['plan']['items'].append({'content': 'Still not saved', 'status': 'pending'})
+            assert current['execution']['plan'] == session['_reportedPlan'] == expected_plan
         assert json.dumps({**session, 'workers': session['workers'][:210]}, sort_keys=True) == original
+        assert path.read_bytes() == original_source
     finally:
         await owner.close()
 
