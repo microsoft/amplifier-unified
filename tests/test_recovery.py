@@ -88,6 +88,73 @@ async def test_backup_skips_native_index_files_and_keeps_owned_artifacts(tmp_pat
     await service.close()
 
 
+async def test_backup_restores_sent_and_draft_attachment_downloads(tmp_path, authenticated_client, monkeypatch):
+    import asyncio
+    import base64
+    from amplifier_web import recovery
+    from amplifier_web.server import create_app
+    from test_attachments import PNG
+
+    async def open_app(home):
+        monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / (home.name + '-shared')))
+        app = await create_app(home, workspace=tmp_path, runtime=Runtime(), voice=False,
+                               background_updates=False, background_work=False, preload_providers=False)
+        return app['service'], await authenticated_client(app)
+
+    async def check_download(client, row, data):
+        response = await client.get(row['url'])
+        assert response.status == 200
+        assert response.headers['Content-Type'] == row['mime']
+        assert await response.read() == data
+
+    original, client = await open_app(tmp_path / 'original')
+    await original.dispatch('session.create', {})
+    uploads = []
+    for name, data in [('sent.png', PNG), ('draft.bin', b'\x00\xff\x10')]:
+        await original.dispatch('attachment.add', {'name': name, 'base64': base64.b64encode(data).decode()})
+        row = original.clients.attachments(original._session())[-1]
+        await check_download(client, row, data)
+        metadata = original.data_dir / 'attachments' / row['id'] / 'metadata.json'
+        uploads.append((row, data, metadata.read_bytes()))
+        if name == 'sent.png':
+            await original.dispatch('conversation.send', {'text': 'Review', 'attachmentIds': [row['id']]})
+            await asyncio.gather(*original.tasks)
+
+    backup = await recovery.backup(original)
+    restored_home = tmp_path / 'restored'
+    restored_home.mkdir(mode=0o700)
+    with tarfile.open(backup['backup']) as archive:
+        # Restore the app-owned files into an empty app home.
+        archive.extractall(restored_home, members=[m for m in archive if m.name.split('/')[0] in
+                           {'app.sqlite3', 'sessions', 'artifacts', 'attachments'}], filter='data')
+    await client.close()
+    restored, client = await open_app(restored_home)
+    session = restored.get_state()['sessions'][0]
+    assert session['messages'][0]['attachments'] == [uploads[0][0]]
+    assert session['draftAttachments'] == [uploads[1][0]]
+    for row, data, metadata in uploads:
+        await check_download(client, row, data)
+        assert (restored_home / 'attachments' / row['id'] / 'metadata.json').read_bytes() == metadata
+
+
+async def test_backup_omits_linked_attachment_files_and_directories(tmp_path):
+    from amplifier_web import recovery
+    service = AppService(tmp_path / 'app', Runtime(), workspace=tmp_path)
+    try:
+        uploads = service.data_dir / 'attachments'
+        uploads.mkdir()
+        outside = tmp_path / 'outside'
+        outside.mkdir()
+        (outside / 'private').write_bytes(b'outside the upload store')
+        (uploads / 'directory-link').symlink_to(outside, target_is_directory=True)
+        (uploads / 'file-link').symlink_to(outside / 'private')
+        backup = await recovery.backup(service)
+        with tarfile.open(backup['backup']) as archive:
+            assert [name for name in archive.getnames() if name.startswith('attachments/')] == []
+    finally:
+        await service.close()
+
+
 async def test_backup_path_failure_releases_in_progress_flag(tmp_path, monkeypatch):
     from amplifier_web import recovery, session_files
     service=AppService(tmp_path/'app',Runtime(),workspace=tmp_path)
