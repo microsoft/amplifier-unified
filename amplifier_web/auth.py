@@ -513,6 +513,12 @@ async def auth_required(request: web.Request, handler):
     cross_site = request.headers.get("Sec-Fetch-Site") == "cross-site"
     if not extension and ((cross_site and not is_entry_navigation(request)) or not allowed_origin(request)):
         return web.json_response({"error": "Cross-origin requests are not permitted."}, status=403)
+    if request.method == "POST" and request.path in request.app.get("linked_instance_peer_paths", ()):
+        # These exact routes authenticate their own narrowly scoped requests.
+        # A link credential never acquires a normal app principal.
+        return await handler(request)
+    if request.headers.get("Authorization", "").lower().startswith("bearer ali_"):
+        return web.json_response({"error": "A link cannot access that operation."}, status=403)
     if request.path == '/api/room-context/mcp' and request.method == 'POST':
         # This exact handler checks a room/source-bound transport capability.
         # Neither that capability nor an owner cookie grants other API access.

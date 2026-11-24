@@ -128,6 +128,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     if hasattr(runtime, 'retention'):
         service.state['runtime']['retention'] = dict(runtime.retention.settings)
     app["service"] = service
+    from .linked_instances import install as setup_linked_instances
+    setup_linked_instances(app, service)
     from .acp_server import setup_routes as setup_acp
     setup_acp(app)
     from .room_context import setup_routes as setup_room_context
