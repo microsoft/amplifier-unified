@@ -496,6 +496,35 @@ class ClientViews:
         db.commit()
         self.acknowledge(written)
 
+    def publish_presentation(self, identity, previous_revision, receipt, *, include_state):
+        """Publish committed layout or Canvas changes to the initiating client's subscriptions."""
+        service = self.service
+        revision = receipt['revision']
+        # The caller updated or invalidated its own projection. Unchanged peers
+        # keep their expensive history projections, and receive no frame.
+        for key, snapshot in service._client_snapshots.items():
+            if snapshot['revision'] == previous_revision:
+                service._client_snapshots[key] = {**snapshot, 'revision': revision}
+        shared = getattr(service, '_browser_snapshot', None)
+        if shared and shared['revision'] == previous_revision:
+            service._browser_snapshot = {**shared, 'revision': revision}
+
+        browser = None
+        for queue in service.queues:
+            if service.queue_clients.get(queue) != identity:
+                continue
+            session_id = service.queue_sessions.get(queue)
+            if session_id is None:
+                current = browser = service.browser_state()
+            else:
+                current = service.session_state(session_id)
+            if queue.full():
+                queue.get_nowait()
+            queue.put_nowait(current)
+        if include_state:
+            return {**receipt, 'state': browser or service.browser_state()}
+        return receipt
+
     def save(self, identity=None, *, defer_ack=False):
         pending = set(self.dirty) if identity is None else self.dirty.intersection({identity})
         written = {}

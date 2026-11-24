@@ -3,7 +3,7 @@ import copy
 
 import pytest
 
-from amplifier_web import registered_test_runners, service, task_environments
+from amplifier_web import integration_evidence, registered_test_runners, service, storage_cleanup, task_environments
 from amplifier_web import test_capacity_settings, test_execution_settings, workspace_resources
 from test_configuration_authority import app
 
@@ -12,6 +12,7 @@ FACTORIES = (
     'workspace_resource_definitions', 'environment_definitions',
     'test_capacity_definitions', 'test_runner_definitions',
     'test_execution_definitions', 'test_queue_definitions',
+    'storage_cleanup_definitions', 'integration_definitions',
 )
 
 
@@ -39,6 +40,8 @@ def observe_domains(app, monkeypatch):
 
     monkeypatch.setattr(app.configuration_authority, 'capture', captured)
     for name, owner, attribute, action_index in (
+        ('cleanup', storage_cleanup, 'dispatch', 1),
+        ('integration', integration_evidence, 'dispatch', 1),
         ('runner', registered_test_runners, 'dispatch', 1),
         ('capacity', test_capacity_settings, 'dispatch', 1),
         ('execution', test_execution_settings, 'dispatch', 1),
@@ -70,6 +73,8 @@ async def test_repeated_view_dispatch_does_not_build_unrelated_domain_schemas(ap
 
 
 @pytest.mark.parametrize('action,domain,fields', [
+    ('storage.cleanup.read', 'cleanup', ()),
+    ('integration.list', 'integration', ('sessionId',)),
     ('testing.runners.read', 'runner', ()),
     ('testing.capacity.read', 'capacity', ()),
     ('testing.execution.read', 'execution', ()),
@@ -99,7 +104,8 @@ async def test_unregistered_names_do_not_inherit_domain_membership(app, monkeypa
     events = observe_domains(app, monkeypatch)
     for action in ('testing.runners.unregistered', 'testing.capacity.unregistered',
                    'testing.execution.unregistered', 'workspace.tests.unregistered',
-                   'workspace.environments.unregistered', 'workspace.resources.unregistered'):
+                   'workspace.environments.unregistered', 'workspace.resources.unregistered',
+                   'storage.cleanup.unregistered', 'integration.unregistered'):
         with pytest.raises(service.AppError, match='Unknown action:') as error:
             await app.dispatch(action, {}, include_state=False)
         assert error.value.status == 404

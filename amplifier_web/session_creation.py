@@ -118,6 +118,8 @@ def template(service, source):
     if not path.exists():
         raise ValueError('Prepare the source configuration before previewing a new-task schedule')
     plan = json.loads(path.read_text())
+    from .host.hook_config import omit_inherited_literals
+    diagnostics = omit_inherited_literals(plan)
     state_path = directory / 'control-state.json'
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
     # Never inherit task/goal/history, usage, receipts, active jobs or approvals.
@@ -140,7 +142,7 @@ def template(service, source):
     categories.update({'plan.' + key: plan.get(key) for key in PLAN_KEYS})
     categories['plan.other'] = {key: value for key, value in plan.items() if key not in PLAN_KEYS}
     categories.update({'controls.' + key: value for key, value in config['controls'].items()})
-    return config, {**location, 'workspace': config['workspace'], 'bundle': config['bundle'],
+    return config, {**location, **diagnostics, 'workspace': config['workspace'], 'bundle': config['bundle'],
                     'selection': public_config(selection), 'configurationHash': fingerprint(config),
                     'legacyConfigurationHash': legacy,
                     'configurationParts': {key: fingerprint(value) for key, value in categories.items()}}
