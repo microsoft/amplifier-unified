@@ -581,6 +581,9 @@ class SurfaceProvider:
         return method
 
     async def complete(self, request, **kwargs):
+        return await self._complete(request, kwargs)
+
+    async def _complete(self, request, kwargs, observe_dispatch=None):
         original_request = request
         self._overflow_feedback.forget(request)
         from . import provider_capture as capture
@@ -607,6 +610,8 @@ class SurfaceProvider:
         try:
             from .request_projection import dispatch as projection_dispatch
             with projection_dispatch(self.original, request, *projection, kwargs), capture.dispatch(ticket, self.original, request, trace):
+                if observe_dispatch is not None:
+                    observe_dispatch(request)
                 response = await self.original.complete(request, **kwargs)
             if hasattr(self.delivery, 'finish_work'):
                 self.delivery.finish_work(attempt, response)

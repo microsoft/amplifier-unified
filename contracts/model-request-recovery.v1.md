@@ -119,6 +119,22 @@ and Sol switches; the direct Anthropic adapter preserves the signed block
 across qualified Claude switches. The source boundary, scope and target fit
 must validate before installation. Reuse consumes zero additional compactions.
 
+A completed plain-text summary can also travel with an explicit model change
+on the same verified connection when the destination lacks an exact request
+counter. Unified binds the saved summary to the connection that produced it.
+On a fresh ordinary Send, it checks that binding, the saved source prefix and
+configuration, and the selected destination. The source checkpoint stays on
+disk while the destination receives the verified note and its retained history.
+Only a successful foreground response to the request carrying that note permits
+the writer to save it for the new model. The input, selection, source and Stop
+state must still match at that point. A later worker can then reopen the new
+model's checkpoint without regenerating the covered history.
+
+A failed or interrupted request leaves the original checkpoint available.
+Partial notes, opaque provider state and older records lacking proof of their
+origin follow their existing recovery paths. A reused account alias alone
+cannot establish that two models share the same connection.
+
 When native reuse is unavailable, Managed Context uses original messages that
 fit, or a validated readable checkpoint and its recent suffix that fit. If
 summarization is needed, it budgets for the target's instructions, tools, output

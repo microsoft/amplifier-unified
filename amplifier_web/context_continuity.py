@@ -127,6 +127,10 @@ class ContextContinuity:
         self._prepared_identity = None
         self._preserved_identity = None
         self._reconciling = None
+        from .portable_handoff import PortableHandoff
+        self.portable = PortableHandoff(self)
+        coordinator.register_capability("context.portable_handoff.generated", self.portable.generated)
+        coordinator.register_capability("context.portable_handoff.source", self.portable.offer)
         self.status = {"supported": bool(coordinator.get_capability("context.checkpoint.export")), "status": "pending"}
         coordinator.register_capability("context.checkpoint_identity", self.current_identity)
         coordinator.register_capability("context.preserve_evidence", self.preserve)
@@ -336,16 +340,20 @@ class ContextContinuity:
             self._check_writer()
         record = export(self._identity)
         if record is not None:
-            text = json.dumps(record, ensure_ascii=False)
-            if self.writer_guard is not writer:
-                raise ContextRecoveryError("recovery_writer_unavailable")
-            if writer is not None:
-                self._check_writer()
-            write_private(self.path, text)
-            self._accepted_record = copy.deepcopy(record)
-            self._prepared_identity = None
-            self._suppress_save = False
-            self.status = {"supported": True, "status": "progress_saved" if record.get("progress") else "saved", "sourceRevision": record["sourceRevision"], "originalsAvailable": True}
+            self.portable.stamp(record)
+            self._write_record(record, writer)
+
+    def _write_record(self, record, writer):
+        text = json.dumps(record, ensure_ascii=False)
+        if self.writer_guard is not writer:
+            raise ContextRecoveryError("recovery_writer_unavailable")
+        if self.writer_guard is not None:
+            self._check_writer()
+        write_private(self.path, text)
+        self._accepted_record = copy.deepcopy(record)
+        self._prepared_identity = None
+        self._suppress_save = False
+        self.status = {"supported": True, "status": "progress_saved" if record.get("progress") else "saved", "sourceRevision": record["sourceRevision"], "originalsAvailable": True}
 
     def _ordinary_restore_allowed(self):
         try:

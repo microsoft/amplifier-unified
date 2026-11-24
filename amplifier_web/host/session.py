@@ -102,6 +102,7 @@ class SelectedProvider:
         self.execution_adapter = execution_adapter
         self._selected_requests = []
         self._refused_requests = []
+        self.portable_handoff = None
         from ..overflow_feedback import OverflowFeedback
         self._overflow_feedback = OverflowFeedback()
     def _execution_provider(self):
@@ -358,6 +359,10 @@ class SelectedProvider:
                                                    execution, binding=self.selection)
         retained = False
         try:
+            if self.portable_handoff and not (getattr(selected, "metadata", None) or {}).get("purpose"):
+                from ..portable_handoff import complete
+                handoff, self.portable_handoff = self.portable_handoff, None
+                return await complete(self, execution, selected, kwargs, handoff)
             return await execution.complete(selected, **kwargs)
         except BaseException as error:
             retained = self._retain_refusal(request, selected, execution, error)
