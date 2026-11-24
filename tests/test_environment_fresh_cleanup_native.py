@@ -119,7 +119,7 @@ async def test_native_unknown_cleanup_keeps_history_and_preserves_current_files(
 
     helper, foreign, row = None, None, None
     try:
-        launched = await act('start', profileId='linux-python')
+        launched = await act('start', profileId='linux-python', preserveSource=True)
         save(output, 'launch.json', launched)
         assert launched['request']['state'] == 'completed', launched
         row = launched['resource']
