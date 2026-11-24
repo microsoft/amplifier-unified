@@ -786,6 +786,43 @@ jobs:
                       'chain': [safe_failure(cause, paths, depth + 1)] if cause is not None and depth < 3 else [],
                       'chainTruncated': cause is not None and depth >= 3,
                       'groupMembersOmitted': len(error.exceptions) if isinstance(error, BaseExceptionGroup) else 0}
+          def safe_lease_witness(value, paths):
+              # Only the fixed test-local schema leaves private pytest capture.
+              # Never include rejected input, exception text or descriptors.
+              invalid = {'status': 'invalid'}
+              if type(value) is not dict or set(value) != {
+                      'version', 'acquisitions', 'failure', 'observerError', 'restored'}:
+                  return invalid
+              if (type(value['version']) is not int or value['version'] != 1 or
+                      type(value['acquisitions']) is not int or not 0 <= value['acquisitions'] <= 4 or
+                      type(value['observerError']) is not bool or type(value['restored']) is not bool):
+                  return invalid
+              failure = value['failure']
+              if failure is not None:
+                  if type(failure) is not dict or set(failure) != {
+                          'role', 'private', 'owner', 'daclPresent', 'daclNonNull',
+                          'beforeAcquisition', 'firstOpen', 'observation', 'stage', 'validatorLine'}:
+                      return invalid
+                  choices = {
+                      'role': ('ancestor', 'app-root', 'updates', 'worker-leases', 'non-directory', 'other', 'unknown'),
+                      'owner': ('current-user', 'OS-authority', 'other', 'unknown'),
+                      'beforeAcquisition': ('not-observed',),
+                      'firstOpen': ('returned', 'missing', 'error', 'not-observed'),
+                      'observation': ('in-call-read-results',),
+                      'stage': ('validator-entry', 'security-info', 'descriptor-control', 'owner-read', 'acl-entries')}
+                  if any(type(failure[key]) is not str or failure[key] not in options for key, options in choices.items()):
+                      return invalid
+                  if type(failure['private']) is not bool or any(
+                          failure[key] is not None and type(failure[key]) is not bool
+                          for key in ('daclPresent', 'daclNonNull')):
+                      return invalid
+                  line = failure['validatorLine']
+                  bounds = [size for name, size in paths.values() if name == 'amplifier_web/windows_files.py']
+                  if line is not None and (type(line) is not int or not bounds or not 0 < line <= min(bounds)):
+                      return invalid
+                  failure = dict(failure)
+              return {'status': 'observed', 'version': 1, 'acquisitions': value['acquisitions'],
+                      'failure': failure, 'observerError': value['observerError'], 'restored': value['restored']}
           class Results:
               def __init__(self, paths=None):
                   self.paths = paths or {}
@@ -795,6 +832,7 @@ jobs:
                   self.collect_failed = self.collect_skipped = self.xfailed = 0
                   self.unexpected_collected = self.unexpected_phases = 0
                   self.unknown_nodes = {}
+                  self.lease_witnesses = []
               def node(self, value):
                   if value in nodes:
                       return value
@@ -819,6 +857,15 @@ jobs:
                   self.collect_failed += int(report.failed)
                   self.collect_skipped += int(report.skipped)
               def pytest_runtest_makereport(self, item, call):
+                  witness = getattr(item, '_native_lease_witness', None)
+                  if witness is not None:
+                      if len(self.lease_witnesses) < 15:
+                          safe = safe_lease_witness(witness, self.paths)
+                          self.invalid |= safe['status'] == 'invalid'
+                          self.lease_witnesses.append({'node': self.node(item.nodeid),
+                              'phase': call.when if call.when in ('setup', 'call', 'teardown') else 'other', **safe})
+                      else:
+                          self.invalid = True
                   if call.excinfo is not None:
                       self.failure_count += 1
                       if len(self.failures) < 16:
@@ -860,6 +907,7 @@ jobs:
                       'wasxfailCount': self.xfailed, 'invalid': self.invalid,
                       'exitCode': int(code) if isinstance(code, int) and 0 <= code <= 255 else None,
                       'failures': self.failures, 'failureCount': self.failure_count,
+                      'leaseWitnesses': self.lease_witnesses,
                       'omittedCollected': self.collected_count - len(self.collected),
                       'omittedPhases': self.phase_count - len(self.phases),
                       'omittedFailures': self.failure_count - len(self.failures),

@@ -3244,13 +3244,13 @@ def test_remaining_five_phase_accounting_refuses_any_missing_native_proof(fault)
 
 @pytest.mark.parametrize("fault", [
     "pass", "three-call-failures", "extra", "duplicate", "xfail", "setup-error",
-    "teardown-error", "collection-error", "nonzero-exit",
+    "teardown-error", "collection-error", "nonzero-exit", "lease-witness",
 ])
 def test_remaining_real_pytest_evidence_keeps_failures_and_invalid_selection(tmp_path, fault):
     """Run the actual inline collector with real portable pytest reports, not native mocks."""
     _, _, tree = remaining_ci_code(FIVE_STEP)
     definitions = ast.unparse(ast.Module(body=[n for n in tree.body
-        if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in {"safe_failure", "Results"}],
+        if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in {"safe_failure", "safe_lease_witness", "Results"}],
         type_ignores=[]))
     (tmp_path / "collector.py").write_text(definitions, encoding="utf-8")
     tests = tmp_path / "tests"
@@ -3259,18 +3259,23 @@ def test_remaining_real_pytest_evidence_keeps_failures_and_invalid_selection(tmp
     runtime.write_text('''import os, pytest
 FAULT = os.environ["CAPTURE_FAULT"]
 @pytest.fixture(autouse=True)
-def lifecycle():
+def lifecycle(request):
     if FAULT == "setup-error": raise PermissionError("PRIVATE-SETUP")
+    if FAULT == "lease-witness":
+        request.node._native_lease_witness = {
+            "version": 1, "acquisitions": 1, "failure": None,
+            "observerError": False, "restored": False}
     yield
+    if FAULT == "lease-witness": request.node._native_lease_witness["restored"] = True
     if FAULT == "teardown-error": raise OSError("PRIVATE-TEARDOWN")
 @pytest.mark.parametrize("forced", [False, True])
 def test_native_windows_runtime_worker_identity_pipes_and_job_cleanup(forced):
     if FAULT == "xfail": pytest.xfail("PRIVATE-XFAIL")
-    if FAULT == "three-call-failures":
+    if FAULT in {"three-call-failures", "lease-witness"}:
         if forced: raise RuntimeError("PRIVATE-MESSAGE", "/PRIVATE-PATH")
         raise AssertionError("PRIVATE-MESSAGE")
 def test_native_windows_runtime_cancel_before_identity_reaps_job():
-    if FAULT == "three-call-failures": raise TimeoutError("PRIVATE-TIMEOUT")
+    if FAULT in {"three-call-failures", "lease-witness"}: raise TimeoutError("PRIVATE-TIMEOUT")
 ''', encoding="utf-8")
     (tests / "test_remote_test_origins.py").write_text('''def test_windows_junction_parent_is_not_followed(): pass
 def test_windows_shared_write_acl_cannot_authorize_retained_records(): pass
@@ -3312,7 +3317,7 @@ result = selected.snapshot(code)
     assert "PRIVATE-" not in serialized and "PRIVATE_CUSTOMER" not in serialized and str(tmp_path) not in serialized
     assert report["passed"] is (fault == "pass")
     assert report["omittedCollected"] == report["omittedPhases"] == report["omittedFailures"] == 0
-    if fault == "three-call-failures":
+    if fault in {"three-call-failures", "lease-witness"}:
         assert report["exitCode"] == 1 and report["failureCount"] == 3
         assert [f["node"] for f in report["failures"]] == list(FIVE_NODES[:3])
         assert [f["type"] for f in report["failures"]] == ["AssertionError", "RuntimeError", "TimeoutError"]
@@ -3323,6 +3328,13 @@ result = selected.snapshot(code)
             assert last["file"] == "tests/test_runtime.py"
             assert "raise " + failure["type"] in lines[last["line"] - 1]
         assert sum(row[2] == "failed" for row in report["phases"]) == 3
+        if fault == "lease-witness":
+            assert len(report["leaseWitnesses"]) == 9
+            for node in FIVE_NODES[:3]:
+                rows = [row for row in report["leaseWitnesses"] if row["node"] == node]
+                assert [row["phase"] for row in rows] == ["setup", "call", "teardown"]
+                assert [row["restored"] for row in rows] == [False, False, True]
+                assert all(row["status"] == "observed" for row in rows)
     elif fault in {"extra", "duplicate"}:
         assert report["collectedCount"] == 6 and report["phaseCount"] == 18
         if fault == "extra":
@@ -3615,6 +3627,256 @@ def test_native_checkpoint_guard_compares_state_assertion_structure(monkeypatch,
     else:
         with pytest.raises(AssertionError):
             test_native_checkpoint_fixture_wait_preserves_budget_and_cancellation_oracles()
+
+
+@pytest.mark.parametrize("scenario", [
+    "pass", "other-owner", "os-owner-private", "os-owner-ancestor", "dacl-absent",
+    "dacl-null", "security-error", "control-error", "owner-error", "acl-error",
+    "missing-first", "handle-reuse", "unmapped-handle", "constructor-error",
+    "owner-after-acl", "role-error",
+])
+def test_native_lease_observer_forwards_real_validator_reads_and_restores(scenario):
+    """Real validator with synthetic API outputs; no Windows query or ACL write."""
+    import ctypes as C
+    from pathlib import PureWindowsPath
+    from amplifier_web import windows_files as wf
+
+    tree = ast.parse((ROOT / "tests/test_runtime.py").read_text())
+    observe = inline_definitions(tree, ["_observe_native_lease"], {"pytest": pytest})["_observe_native_lease"]
+    sentinel = PermissionError("PRIVATE-ERROR /PRIVATE-PATH S-PRIVATE")
+    returned = object()
+    instances, calls, slot = [], [], [37]
+    root = PureWindowsPath("C:/PRIVATE-HOME/native-app")
+    owner = "PRIVATE-SID" if scenario == "other-owner" else (
+        next(iter(wf._OS_AUTHORITIES)) if scenario.startswith("os-owner") else "CURRENT-SID")
+    c = types.SimpleNamespace(**{name: getattr(C, name) for name in ("c_void_p", "cast", "POINTER")})
+    c.get_last_error = lambda: slot[0]
+    c.set_last_error = lambda value: slot.__setitem__(0, value)
+
+    class API:
+        validate_acl = wf._API.validate_acl
+        sid = "CURRENT-SID"
+
+        def __init__(self):
+            calls.append("constructor")
+            if scenario == "constructor-error":
+                raise sentinel
+            self.opens = 0
+            self.in_acl = False
+            instances.append(self)
+
+        @staticmethod
+        def ok(value):
+            if not value:
+                raise sentinel
+
+        def open(self, path, *, directory=False):
+            calls.append(("open", str(path), directory))
+            self.opens += 1
+            if scenario == "missing-first" and self.opens == 1:
+                raise FileNotFoundError("PRIVATE-OPEN")
+            return 41  # Deliberately reuse a numeric handle.
+
+        def close(self, handle):
+            calls.append(("close", handle))
+
+        def GetSecurityInfo(self, *args):
+            calls.append(("security", args[0]))
+            if scenario == "security-error":
+                raise sentinel
+            C.cast(args[3], C.POINTER(wf.PVOID))[0] = 101
+            C.cast(args[5], C.POINTER(wf.PVOID))[0] = None if scenario == "dacl-null" else 202
+            C.cast(args[7], C.POINTER(wf.PVOID))[0] = 303
+            slot[0] = 71
+            return 0
+
+        def GetSecurityDescriptorControl(self, descriptor, control, revision):
+            calls.append(("control", descriptor.value))
+            if scenario == "control-error":
+                raise sentinel
+            C.cast(control, C.POINTER(wf.WORD))[0] = 0 if scenario == "dacl-absent" or descriptor.value == 404 else 4
+            slot[0] = 72
+            return 1
+
+        def sid_text(self, value):
+            calls.append(("sid", value.value))
+            if scenario == "owner-error":
+                raise sentinel
+            slot[0] = 73
+            return "PRIVATE-ACE-SID" if self.in_acl else owner
+
+        def GetAclInformation(self, dacl, info, size, kind):
+            calls.append(("acl", dacl.value))
+            if scenario == "owner-after-acl":
+                self.in_acl = True
+                self.GetSecurityDescriptorControl(wf.PVOID(404), C.byref(wf.WORD()), C.byref(wf.DWORD()))
+                self.sid_text(wf.PVOID(101))  # Not another owner read.
+                raise sentinel
+            if scenario in {"acl-error", "missing-first", "handle-reuse", "unmapped-handle", "role-error"}:
+                raise sentinel
+            C.cast(info, C.POINTER(wf.ACL_INFO))[0].count = 0
+            return 1
+
+        def LocalFree(self, descriptor):
+            calls.append(("free", descriptor.value))
+
+    files = types.SimpleNamespace(C=c, _API=API, PVOID=wf.PVOID, WORD=wf.WORD,
+                                  _OS_AUTHORITIES=wf._OS_AUTHORITIES)
+    path = root.parent if scenario == "os-owner-ancestor" else root
+    if scenario == "role-error":
+        path = object()  # Original synthetic API accepts it; observer role parsing refuses.
+
+    def acquire(home, generation, pid):
+        assert (home, generation, pid) == (root, "PRIVATE-GENERATION", 999)
+        api = files._API()
+        try:
+            try:
+                handle = api.open(path, directory=True)
+            except FileNotFoundError:
+                handle = api.open(path, directory=True)  # No creation claim.
+            if scenario == "handle-reuse":
+                api.close(handle)
+                handle = api.open(root / "updates/worker-leases", directory=True)
+            if scenario == "unmapped-handle":
+                api.close(handle)
+            api.validate_acl(handle, private=scenario != "os-owner-ancestor")
+            return returned
+        finally:
+            api.close(41)
+
+    def run(observed):
+        calls.clear()
+        slot[0] = 37
+        report = {"version": 1, "acquisitions": 1, "failure": None, "observerError": False, "restored": False}
+        try:
+            result = observe(files, acquire, (root, "PRIVATE-GENERATION", 999), {}, report) if observed else acquire(root, "PRIVATE-GENERATION", 999)
+            outcome = result
+        except PermissionError as error:
+            outcome = error
+        assert files._API is API
+        for instance in instances:
+            for name in ("open", "close", "validate_acl", "GetSecurityInfo",
+                         "GetSecurityDescriptorControl", "sid_text", "GetAclInformation"):
+                assert getattr(instance, name).__func__ is getattr(API, name)
+        return outcome, list(calls), slot[0], report
+
+    plain, original_calls, original_last_error, _ = run(False)
+    observed, observed_calls, observed_last_error, report = run(True)
+    assert observed_calls == original_calls  # No additional native calls/opens/queries.
+    assert observed_last_error == original_last_error
+    if plain is returned:
+        assert observed is returned and report["failure"] is None
+    elif plain is sentinel:
+        assert observed is sentinel  # Same exception and cause, not a substitute.
+    else:
+        assert type(observed) is type(plain) and observed.args == plain.args
+    assert report["observerError"] is (scenario == "role-error")
+    assert not any(private in json.dumps(report) for private in ("PRIVATE", "CURRENT-SID", "S-1-", "101", "202", "303"))
+    if scenario == "constructor-error":
+        assert report["failure"] is None
+    elif report["failure"] is not None:
+        fact = report["failure"]
+        assert fact["beforeAcquisition"] == "not-observed" and fact["observation"] == "in-call-read-results"
+        assert fact["private"] is (scenario != "os-owner-ancestor")
+        assert fact["firstOpen"] == ("missing" if scenario == "missing-first" else
+                                    "not-observed" if scenario in {"unmapped-handle", "role-error"} else "returned")
+        assert fact["role"] == ("worker-leases" if scenario == "handle-reuse" else
+                               "unknown" if scenario in {"unmapped-handle", "role-error"} else "app-root")
+        assert fact["validatorLine"] is not None
+        if scenario in {"other-owner", "os-owner-private", "dacl-absent", "dacl-null"}:
+            assert fact["stage"] == "owner-read"
+            assert fact["owner"] == ("other" if scenario == "other-owner" else
+                                    "OS-authority" if scenario == "os-owner-private" else "current-user")
+            assert fact["daclPresent"] is (scenario != "dacl-absent")
+            assert fact["daclNonNull"] is (scenario != "dacl-null")
+        if scenario == "owner-after-acl":
+            assert fact["stage"] == "acl-entries" and fact["owner"] == "current-user"
+            assert fact["daclPresent"] is True  # The unrelated descriptor's false bit is ignored.
+
+
+def test_native_lease_fixture_is_bounded_and_restores_original_acquire(monkeypatch):
+    from amplifier_web import generation_leases
+    tree = ast.parse((ROOT / "tests/test_runtime.py").read_text())
+    calls = []
+    failure = {"stage": "synthetic-only"}
+    original = lambda *args, **kwargs: (args, kwargs)
+
+    def observe(files, acquire, args, kwargs, report):
+        calls.append((acquire, args, kwargs))
+        return acquire(*args, **kwargs)
+
+    namespace = inline_definitions(tree, ["native_lease_witness"],
+                                   {"pytest": pytest, "_observe_native_lease": observe})
+    monkeypatch.setattr(generation_leases, "acquire", original)
+    node = types.SimpleNamespace()
+    fixture = namespace["native_lease_witness"].__wrapped__(
+        types.SimpleNamespace(node=node), monkeypatch)
+    report = next(fixture)
+    try:
+        for i in range(6):
+            assert generation_leases.acquire("private-home", i, pid=100) == (("private-home", i), {"pid": 100})
+        assert report["acquisitions"] == len(calls) == 4
+        report["failure"] = failure  # First failure is frozen; later calls stay ordinary.
+        assert generation_leases.acquire("private-home", 7, pid=100) == (("private-home", 7), {"pid": 100})
+        assert len(calls) == 4
+    finally:
+        fixture.close()
+    assert generation_leases.acquire is original and report["restored"]
+    assert node._native_lease_witness is report
+
+
+@pytest.mark.parametrize("fault", [
+    None, "private-extra", "owner-sid", "raw-role", "bool-as-count", "oversize-count",
+    "dacl-integer", "before-invented", "line-unbound", "line-bool", "missing-key",
+])
+def test_native_lease_public_projection_is_closed_and_fails_without_payload(fault):
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    project = inline_definitions(tree, ["safe_lease_witness"], {})["safe_lease_witness"]
+    raw = {"version": 1, "acquisitions": 1, "observerError": False, "restored": True,
+           "failure": {"role": "app-root", "private": True, "owner": "other",
+                       "daclPresent": True, "daclNonNull": True, "beforeAcquisition": "not-observed",
+                       "firstOpen": "returned", "observation": "in-call-read-results",
+                       "stage": "owner-read", "validatorLine": 258}}
+    if fault == "private-extra": raw["descriptor"] = "PRIVATE-SDDL"
+    elif fault == "owner-sid": raw["failure"]["owner"] = "S-PRIVATE"
+    elif fault == "raw-role": raw["failure"]["role"] = "/PRIVATE-PATH"
+    elif fault == "bool-as-count": raw["acquisitions"] = True
+    elif fault == "oversize-count": raw["acquisitions"] = 5
+    elif fault == "dacl-integer": raw["failure"]["daclPresent"] = 1
+    elif fault == "before-invented": raw["failure"]["beforeAcquisition"] = "existed"
+    elif fault == "line-unbound": raw["failure"]["validatorLine"] = 999
+    elif fault == "line-bool": raw["failure"]["validatorLine"] = True
+    elif fault == "missing-key": del raw["failure"]["private"]
+    projected = project(raw, {"source": ("amplifier_web/windows_files.py", 675)})
+    if fault:
+        assert projected == {"status": "invalid"}
+    else:
+        assert projected == {"status": "observed", **raw}
+        raw["failure"]["owner"] = "PRIVATE-LATE"
+        assert projected["failure"]["owner"] == "other"
+    assert "PRIVATE" not in json.dumps(projected)
+
+
+def test_native_lease_capture_observes_each_phase_without_replacing_failure():
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    namespace = inline_definitions(tree, ["safe_failure", "safe_lease_witness", "Results"],
+                                   {"os": os, "nodes": FIVE_NODES})
+    result = namespace["Results"]({"source": ("amplifier_web/windows_files.py", 675)})
+    raw = {"version": 1, "acquisitions": 0, "failure": None, "observerError": False, "restored": False}
+    item = types.SimpleNamespace(nodeid=FIVE_NODES[0], _native_lease_witness=raw)
+    error = PermissionError("PRIVATE-MESSAGE")
+    for phase in ("setup", "call", "teardown"):
+        raw["restored"] = phase == "teardown"
+        call = types.SimpleNamespace(when=phase, excinfo=types.SimpleNamespace(value=error) if phase == "call" else None)
+        assert result.pytest_runtest_makereport(item, call) is None
+    report = result.snapshot(1)
+    assert report["failureCount"] == 1 and report["failures"][0]["type"] == "PermissionError"
+    assert [r["restored"] for r in report["leaseWitnesses"]] == [False, False, True]
+    assert not report["passed"] and "PRIVATE" not in json.dumps(report)
+    raw["PRIVATE"] = "PRIVATE"
+    result.pytest_runtest_makereport(item, types.SimpleNamespace(when="call", excinfo=None))
+    assert result.invalid and result.lease_witnesses[-1] == {
+        "node": FIVE_NODES[0], "phase": "call", "status": "invalid"}
 
 
 @pytest.mark.parametrize("token_owner", ["TokenUser", "Administrators"])
