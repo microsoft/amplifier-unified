@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from fixtures import pinned_provider_command_witness as witness
+from test_partial_update_native import _transport
 
 
 SECRET = "UNRELATED_PRIVATE_VALUE"
@@ -41,7 +42,7 @@ def test_exact_ref_vocabulary_never_outputs_input(ref, expected):
 
 
 def test_source_exact_match_and_cwd_do_not_manufacture_cache_identity():
-    row = witness.git_record(["fetch", SOURCES.keys().__iter__().__next__(),
+    row = witness.git_record(["fetch", next(iter(SOURCES)),
                               "+refs/heads/main:refs/remotes/origin/main"],
                              ROOT + "/uv-cache/git-v1/db/opaque", ROOT, SOURCES)
     assert row["source"] == "provider" and row["ref"] == "branch-refspec"
@@ -54,6 +55,18 @@ def test_source_exact_match_and_cwd_do_not_manufacture_cache_identity():
     assert row["source"] == "ambiguous"
     assert witness.git_record(["--git-dir", SECRET, "rev-parse", "main"], ROOT, ROOT, SOURCES)["verb"] == "unknown"
     assert witness.git_record(["rev-parse", "main", "origin/main^0"], ROOT, ROOT, {})["ref"] == "ambiguous"
+
+
+@pytest.mark.parametrize("args,expected", [
+    (["rev-parse", "main", SECRET], "ambiguous"),
+    (["rev-parse", "main", "--", SECRET], "unknown"),
+    (["rev-parse", "--prefix", SECRET, "main"], "unknown"),
+    (["rev-parse", "--short=8", "main"], "unknown"),
+    (["rev-parse", "--verify", "origin/main^0"], "origin-main-peel"),
+    (["fetch", next(iter(SOURCES)), "main", SECRET], "ambiguous"),
+])
+def test_unrecognized_operand_is_not_dropped(args, expected):
+    assert witness.git_record(args, ROOT, ROOT, SOURCES)["ref"] == expected
 
 
 @pytest.mark.parametrize("args", [["rev-parse", "x" * 2049], ["main"] * 65])
@@ -80,7 +93,7 @@ def test_header_context_and_nested_error_are_separate_closed_facts():
 
 def test_stderr_unknown_ambiguous_and_invalid_shapes():
     row = witness.stderr_record(capture(
-        "Failed to download `amplifier-core` and `amplifier-foundation`\n"
+        "Failed to download `amplifier-core`\nFailed to download `amplifier-foundation`\n"
         "process didn't exit successfully: `git rev-parse main`\n"
         "process didn't exit successfully: `git rev-parse origin/main^0`\n"))
     assert row["packageContext"] == "ambiguous" and row["headerRef"] == "ambiguous"
@@ -90,6 +103,21 @@ def test_stderr_unknown_ambiguous_and_invalid_shapes():
     assert row["packageContext"] == row["headerVerb"] == "unknown"
     row = witness.stderr_record(capture("process didn't exit successfully: `git 'unterminated`"))
     assert row["headerSeen"] and row["headerRef"] == "unknown"
+
+
+@pytest.mark.parametrize("text", [
+    "Failed to fetch into: /private/amplifier-core",
+    "Failed to download `https://example.invalid/amplifier-core`",
+    "Failed to download `/private/amplifier-core`",
+    "Unrelated message: Failed to download `amplifier-core`",
+    "Unrelated message: process didn't exit successfully: `git rev-parse main`",
+    "\x1b[31mFailed to download `amplifier-core`",
+    "\x00process didn't exit successfully: `git rev-parse main`",
+    "Failed to download `amplifier-core` and `amplifier-foundation`",
+])
+def test_stderr_embedded_names_headers_and_controls_are_not_attribution(text):
+    row = witness.stderr_record(capture(text))
+    assert row["packageContext"] == row["headerVerb"] == row["headerRef"] == "unknown"
 
 
 @pytest.mark.parametrize("text,truncated", [("x" * 2049, False), ("\n" * 257, False),
@@ -173,31 +201,46 @@ async def test_one_prepare_preserves_original_failure_or_stops_before_tail(tmp_p
 
 
 def shim_file(tmp_path):
-    path = tmp_path / "git"
-    path.write_text("import os, sys\nargs = sys.argv[1:]\nflags = []\n"
-                    "os.execv('/usr/bin/git', ['/usr/bin/git', *flags, *args])\n")
-    return path
+    transport = tmp_path / "transport.json"
+    transport.write_text(json.dumps({next(iter(SOURCES)): "file:///local-mirror"}))
+    _transport(tmp_path, transport, tmp_path / "no-failure.json", tmp_path / "app")
+    return tmp_path / "git"
 
 
 @pytest.mark.parametrize("observer_failure", [False, True])
-def test_generated_shim_keeps_same_exec_arguments_and_exception(tmp_path, monkeypatch, observer_failure):
+@pytest.mark.parametrize("args", [
+    ["rev-parse", "main"],
+    ["fetch", "--force", next(iter(SOURCES)), "+refs/heads/main:refs/remotes/origin/main"],
+    ["clone", next(iter(SOURCES)), "/synthetic/destination"],
+])
+def test_generated_shim_keeps_same_exec_arguments_and_exception(tmp_path, monkeypatch, observer_failure, args):
     shim = shim_file(tmp_path)
     before = shim.read_bytes()
     redactor = Mock()
     details = SimpleNamespace(local_excerpt=redactor)
     monkeypatch.setitem(sys.modules, "pinned_provider_command_witness", witness)
     monkeypatch.setattr(sys, "path", list(sys.path))
-    monkeypatch.setattr(sys, "argv", [str(shim), "rev-parse", "main"])
+    monkeypatch.setattr(sys, "argv", [str(shim), *args])
     error = OSError("original exec failure")
     execute = Mock(side_effect=error)
     monkeypatch.setattr(os, "execv", execute)
+    with pytest.raises(OSError) as baseline:
+        exec(compile(before, "original-maintained-shim", "exec"), {})
+    assert baseline.value is error
+    expected = execute.call_args
+    if args[0] in {"fetch", "clone"}:
+        assert expected.args == ("/usr/bin/git", ["/usr/bin/git", "-c",
+            "url.file:///local-mirror.insteadOf=" + next(iter(SOURCES)), *args])
+    else:
+        assert expected.args == ("/usr/bin/git", ["/usr/bin/git", *args])
+    execute.reset_mock()
     if observer_failure:
         monkeypatch.setattr(witness, "git_record", Mock(side_effect=ValueError(SECRET)))
     with pytest.raises(OSError) as caught:
         with witness.installed_witness(tmp_path, shim, SOURCES, details):
             exec(compile(shim.read_text(), "synthetic-shim", "exec"), {})
     assert caught.value is error
-    execute.assert_called_once_with("/usr/bin/git", ["/usr/bin/git", "rev-parse", "main"])
+    assert execute.call_count == 1 and execute.call_args == expected
     assert shim.read_bytes() == before and details.local_excerpt is redactor
     assert {"kind": "lifecycle", "restored": True} in records(tmp_path / "command-witness")
     assert SECRET not in json.dumps(records(tmp_path / "command-witness"))
