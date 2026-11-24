@@ -540,8 +540,12 @@ async def serve(home, *, pre_import=None):
                 observer.hook(sid, 'tool:post', {'session_id': sid, 'tool_name': 'todo',
                     'tool_call_id': call,
                     'result': {'success': True, 'output': {'status': 'updated'}}})
+                result['planEvents'] = []
                 for event in emitted:
-                    await service.on_runtime_event(*normalize_event(event, sid, 'canvas-plan-fixture'))
+                    kind, payload = normalize_event(event, sid, 'canvas-plan-fixture')
+                    await service.on_runtime_event(kind, payload)
+                    result['planEvents'].append({key: payload[key] for key in (
+                        'id', 'revision', 'toolCallId', 'sessionId', 'rootSessionId', 'kind', 'label', 'phase')})
                 session = service._session(sid)
                 result['reportedPlan'] = session.get('_reportedPlan')
             session['status'] = data.get('status', 'working')

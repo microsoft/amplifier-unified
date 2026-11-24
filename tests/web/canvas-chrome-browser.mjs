@@ -279,8 +279,15 @@ try{
   assert.equal(response.ok(),true);
   const activity=await response.json();assert.equal(activity.ok,true);
   assert.deepEqual(activity.reportedPlan,{items:reportedItems});
+  assert.equal(activity.planEvents.length,2);
+  const [proposed,completed]=activity.planEvents;
+  assert.match(proposed.toolCallId,/^canvas-plan-\d+$/);
+  for(const [index,event] of activity.planEvents.entries())assert.deepEqual(event,{
+   id:`tool:${sessionId}:${proposed.toolCallId}`,revision:index+1,toolCallId:proposed.toolCallId,
+   sessionId,rootSessionId:sessionId,kind:'tool',label:'todo',phase:index?'completed':'running'});
   await expect.poll(currentPlan).toEqual(activity.reportedPlan);
-  report.reportedPlan={source:'Synthetic successful todo through production event ingress',receipt:activity.reportedPlan};
+  report.reportedPlan={source:'Synthetic successful todo through production event ingress',
+   events:[proposed,completed],receipt:activity.reportedPlan};
   for(const [index,title] of titles.entries()){
    await action('canvas.show',{kind:'markdown',title,content:`# Document ${index+1}\n\nRetained source ${index+1}.`});
    if(index===0)await navigation('tabs');
