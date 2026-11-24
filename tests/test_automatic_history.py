@@ -141,11 +141,14 @@ async def test_history_tool_does_not_wait_for_unrelated_browser_history(
     query = None
     try:
         await asyncio.wait_for(entered.wait(), 5)
-        # Metadata discovered after the browser read began must still arrive:
-        # skipping catalog freshness would also evade the original contention.
+        # A targeted watcher notification must be consumed by the tool's own
+        # catalog refresh while the unrelated browser body read stays blocked.
+        # A project-wide hint only schedules bounded discovery; one slice is
+        # not a promise that every new session in that project was enumerated.
         native_session(workspace, 'new-history')
+        assert app.directory.resolve('new-history') is None
         monkeypatch.setattr(app.history.index, '_invalidations',
-                            lambda: (True, {project_slug(workspace)}))
+                            lambda: (True, {(project_slug(workspace), 'new-history', 'metadata')}))
         args = {'action': action}
         if action == 'read':
             args['session_id'] = caller['id']

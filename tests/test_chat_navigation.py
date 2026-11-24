@@ -404,14 +404,47 @@ async def test_attention_boundaries_commit_activity(app_factory,monkeypatch,kind
     assert chat_navigation.navigation_activity(root)==30
 
 
-async def test_history_refresh_does_not_move_running_chat(tmp_path,app_factory):
+@pytest.mark.parametrize('bounded', [False, True])
+async def test_history_refresh_does_not_move_running_chat(tmp_path,app_factory,monkeypatch,record_property,bounded):
     directory=native_session(tmp_path/'native','root')
     transcript=directory/'transcript.jsonl';os.utime(transcript,(100,100))
-    app=app_factory();await app.history.refresh()
+    app=app_factory()
+    if bounded:
+        # Exercise missed notifications with deliberately incomplete slices;
+        # force=True requests reconciliation, not an eager full-library scan.
+        monkeypatch.setattr(app.history.index, '_invalidations', lambda: (True, set()))
+        app.history.index._recovery_budget=1
+    phases=[]
+    async def refresh():
+        for _ in range(16):
+            await app.history.refresh()
+            assert app.state['sharedHistory']['error'] is None
+            phase=app.state['sharedHistory']['reconciliation']['phase']
+            phases.append(phase)
+            if phase=='complete':
+                return
+        pytest.fail('The small native fixture did not finish bounded reconciliation')
+    await refresh()
     row=app._session(native_rows(app)[0]['id']);row.update(historyManaged=False,status='working')
-    os.utime(transcript,(200,200));await app.history.refresh()
+    assert row['recentActivityAt']==100
+    from amplifier_web import automatic_history
+    monkeypatch.setattr(automatic_history, 'read_transcript',
+                        lambda *a, **kw: pytest.fail('Catalog recency must not hydrate history'))
+    original=transcript.read_bytes()
+    os.utime(transcript,(200,200));await refresh()
+    catalog=app.history.index._catalog.get(row['nativeProject'], row['nativeIdentity'])
+    assert catalog['recentActivityAt']==200
+    assert catalog['transcriptRevision']==[200_000_000_000,len(original)]
     assert row['recentActivityAt']==200
     assert chat_navigation.navigation_activity(row)==100
+    assert row['status']=='working' and row['historyManaged'] is False
+    assert transcript.read_bytes()==original
+    assert not app.runtime.started and not app.runtime.sent and not app.runtime.stopped
+    if bounded:
+        assert 'running' in phases
+    record_property('running-history-recency', json.dumps({
+        'bounded':bounded,'phases':phases,'catalogRecent':catalog['recentActivityAt'],
+        'residentRecent':row['recentActivityAt'],'navigation':chat_navigation.navigation_activity(row)}))
 
 
 def test_recent_origin_is_positive_bounded_and_never_ancestry_or_selection_authority():
