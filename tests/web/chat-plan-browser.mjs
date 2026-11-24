@@ -2,7 +2,6 @@ import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {settledAppearance} from './settings-fixture.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {spawn} from 'node:child_process';
-import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -13,17 +12,22 @@ import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.m
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/browser_detail_server.py',root],{stdio:['ignore','pipe','inherit']});
 const stopFixture=ownFixture(fixture,{label:'Chat plan fixture'});
-let browser,vite,failure;const errors=[];
+let browser,failure;const errors=[];
 try{
  const ready=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exit '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.port){clearTimeout(timer);resolve(value)}}catch{}})});
  const target=`http://127.0.0.1:${ready.port}`,headers={Authorization:'Bearer fixture-detail-token','content-type':'application/json'};
- const control=async body=>{const response=await fetch(target+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)});assert.equal(response.status,200);return response.json()};
+ const control=async body=>{
+  const response=await fetch(target+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)});
+  const text=await response.text();assert.equal(response.status,200,text.slice(0,4000));
+  return JSON.parse(text);
+ };
  const {alpha,beta}=await control({op:'heavy',messages:100,otherMessages:1,chars:50,nodes:0});
  await control({op:'chat-plan'});
- vite=await createServer({configFile:false,root:root+'.build/web-client',server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,request=>request.setHeader('Origin',target))}},'/branding':target}}});await vite.listen();
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});
  const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:headers});page.on('pageerror',e=>errors.push(e.message));
- await page.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(page);
+ // Use the already built exact client served by the real host, not a second
+ // development-server rendering path or a new production asset build.
+ await page.goto(target);await showFixtureConversation(page);
  const placement=async value=>{
   await openSettingsPage(page,'appearance',{activate:(_label,control,options)=>control.click(options)});
   const advanced=page.locator('details.a-appearance-more');
@@ -42,7 +46,8 @@ try{
  };
  const plan=page.getByRole('region',{name:'Plan',exact:true});
  await expect(plan).toHaveCount(1);await expect(plan).toHaveClass(/a-chat-plan-composer/);
- await expect(plan).toContainText('1 of 3 done');await expect(plan).toContainText('Drafting the team update');
+ await expect(plan).toContainText('1 of 3 done');await expect(plan).toContainText('Reported in progress · Draft the team update');
+ await expect(plan).not.toContainText('Drafting the team update');
  assert.equal(await plan.evaluate(el=>!!el.closest('.a-messages')),false);
  // Expansion renders optimistically. Reload only after its durable save responds.
  const expandedSaved=page.waitForResponse(response=>{if(response.request().method()!=='POST'||!response.url().includes('/api/actions'))return false;const raw=response.request().postDataJSON(),body=raw.action==='shell.command'?raw.args:raw;return body.action==='view.update'&&body.args?.patch?.planExpanded?.[alpha]===true&&response.ok()});
@@ -57,16 +62,27 @@ try{
  await expect(plan).toHaveClass(/a-chat-plan-inline/);
  assert.equal(await plan.evaluate(el=>!!el.closest('.a-messages')),true);
  await page.reload();await expect(plan).toHaveClass(/a-chat-plan-inline/);await expect(plan).toContainText('1 of 3 done');
- await control({op:'patch',sessions:{[alpha]:{status:'interrupted'}}});
- await expect(plan).toContainText('Outcome unknown · Draft the team update');
+ const reported=await page.evaluate(id=>window.amplifier.getState().sessions.find(row=>row.id===id).execution.plan,alpha);
+ const patchStatus=async status=>{
+  const receipt=await control({op:'patch',sessions:{[alpha]:{status}}});
+  await page.waitForFunction(([id,status,revision])=>{
+   const state=window.amplifier.getState();
+   return state.revision>=revision&&state.sessions.find(row=>row.id===id)?.status===status;
+  },[alpha,status,receipt.revision]);
+  assert.deepEqual(await page.evaluate(id=>window.amplifier.getState().sessions.find(row=>row.id===id).execution.plan,alpha),reported);
+ };
+ await patchStatus('interrupted');
+ await expect(plan).toContainText('Reported in progress · Draft the team update');
+ await expect(plan).not.toContainText('Outcome unknown');
  await expect(plan).not.toContainText('Drafting the team update');
  await placement('composer');
- await control({op:'patch',sessions:{[alpha]:{status:'paused'}}});
- await expect(plan).toContainText('Paused · Draft the team update');
+ await patchStatus('paused');
+ await expect(plan).toContainText('Reported in progress · Draft the team update');
+ await expect(plan).not.toContainText('Paused ·');
  await placement('active');
  await expect(plan).toHaveCount(0);
  await control({op:'chat-plan',status:'working'});await expect(plan).toHaveClass(/a-chat-plan-composer/);
- await control({op:'patch',sessions:{[alpha]:{status:'idle'}}});await expect(plan).toHaveCount(0);
+ await patchStatus('idle');await expect(plan).toHaveCount(0);
  await placement('overview');
  await page.evaluate(()=>window.amplifier.dispatch('canvas.visibility',{open:true}));
  await expect(page.locator('#workspace-canvas')).toHaveAttribute('data-navigation','compact');
@@ -81,6 +97,6 @@ try{
  await page.screenshot({path:join(output,'chat-plan-app-mobile.png')});
  await control({op:'chat-plan',items:[],status:'idle'});await expect(plan).toHaveCount(0);
  assert.deepEqual(errors,[]);
- console.log('Plan passed: canonical todo result, paginated history, reload, persisted placement, pause, mobile, and cleared list.');
+ console.log('Plan passed: ordinary successful root report, bounded history, reload, persisted placement, status-independent checklist, mobile, and cleared list.');
 }catch(error){failure=error;throw error}
-finally{await finishFixture({label:'Chat plan fixture',close:[['browser',()=>browser?.close()],['Vite',()=>vite?.close()]],stop:stopFixture,originalError:failure})}
+finally{await finishFixture({label:'Chat plan fixture',close:[['browser',()=>browser?.close()]],stop:stopFixture,originalError:failure})}

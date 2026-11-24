@@ -45,8 +45,22 @@ try{
   if(url.pathname==='/api/conversation/detail'&&url.searchParams.get('field')==='text')textResponses.push(observed(response.json().then(value=>({status:response.status(),value}))));
  });
  await page.addInitScript(()=>{
-  const original=window.fetch;window.fixtureHistoryReads=[];
-  window.fetch=(url,options)=>{if(String(url).startsWith('/api/conversation/detail?')&&String(url).includes('before='))window.fixtureHistoryReads.push({url:String(url),signal:options?.signal});return original(url,options)};
+  const original=window.fetch;window.fixtureHistoryReads=[];window.fixtureHistoryMotion=[];
+  const record=(kind,pane,extra={})=>{
+   window.fixtureHistoryMotion.push({kind,at:performance.now(),top:pane.scrollTop,
+    busy:pane.getAttribute('aria-busy'),height:pane.scrollHeight,clientHeight:pane.clientHeight,...extra});
+   if(window.fixtureHistoryMotion.length>48)window.fixtureHistoryMotion.shift();
+  };
+  for(const type of ['wheel','scroll','focusin','click'])document.addEventListener(type,event=>{
+   const pane=event.target instanceof Element?event.target.closest('.a-messages'):null;
+   if(!pane)return;
+   record(type,pane,{trusted:event.isTrusted,...type==='wheel'?{deltaY:event.deltaY,deltaX:event.deltaX}:{}});
+   if(type==='wheel')requestAnimationFrame(()=>record('wheel-frame',pane));
+  },{capture:true,passive:true});
+  window.fetch=(url,options)=>{if(String(url).startsWith('/api/conversation/detail?')&&String(url).includes('before=')){
+   window.fixtureHistoryReads.push({url:String(url),signal:options?.signal});
+   const pane=document.querySelector('.a-messages');if(pane)record('older-request',pane);
+  }return original(url,options)};
  });
  await page.goto(base);await showFixtureConversation(page);
  const view=()=>page.evaluate(id=>{const s=window.amplifier.getState();return {client:s.client.id,selected:s.selectedSessionId,row:s.sessions.find(row=>row.id===id)}},native.id);
@@ -193,7 +207,8 @@ try{
  assert.deepEqual(current.session.messages.slice(0,100),before.session.messages);assert.deepEqual(current.files,before.files);
  assert.equal(current.runtimeSends,prepared.runtimeSends);assert.equal(current.runtimeStarts,prepared.runtimeStarts);
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep this draft');assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,initialMessages:20,completeNativeMessages:305,earlierPages:3,explicitLongText:true,staleResponseRejected:true,stableReaderWhileWorkingAndIdle:true,explicitLatest:true,scrollAnchorDelta:after.y-anchor.y}));
+ console.log(JSON.stringify({passed:true,initialMessages:20,completeNativeMessages:305,earlierPages:3,explicitLongText:true,staleResponseRejected:true,stableReaderWhileWorkingAndIdle:true,explicitLatest:true,scrollAnchorDelta:after.y-anchor.y,
+  historyMotion:await page.evaluate(()=>window.fixtureHistoryMotion)}));
 }catch(error){
  primary=error;
  console.error(JSON.stringify({liveHistoryFailure:{stage,name:error.name,message:error.message,stack:error.stack}}));
@@ -205,7 +220,8 @@ try{
     return {rendered:document.querySelectorAll('[data-message-id]').length,busy:pane?.getAttribute('aria-busy'),
      top:pane?.scrollTop,height:pane?.scrollHeight,clientHeight:pane?.clientHeight,
      status:state?.sessions?.find(row=>row.id===state.selectedSessionId)?.status,
-     reads:window.fixtureHistoryReads?.map(row=>({aborted:row.signal?.aborted}))};
+     reads:window.fixtureHistoryReads?.map(row=>({aborted:row.signal?.aborted})),
+     historyMotion:window.fixtureHistoryMotion};
    }),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Failure observation timed out')),2000)})]);
    console.error(JSON.stringify({liveHistoryObservation:observation}));
   }catch(diagnostic){console.error(JSON.stringify({diagnosticFailure:String(diagnostic)}))}finally{clearTimeout(timer)}

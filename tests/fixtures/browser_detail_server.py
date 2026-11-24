@@ -608,15 +608,19 @@ async def main():
                     await observed('llm','model-small',23,24,label='Model call',model='fixture')
                 await service.event_log_view.refresh(aid)
             elif op=='chat-plan':
+                from amplifier_web.runtime import normalize_event
                 row=service._session(aid)
                 call='plan-'+str(time.time_ns())
                 items=args.get('items',[{'content':'Find decisions','activeForm':'Finding decisions','status':'completed'},
                     {'content':'Draft the team update','activeForm':'Drafting the team update','status':'in_progress'},
                     {'content':'Prepare a document to share','activeForm':'Preparing a document','status':'pending'}])
-                log_hook(aid,'tool:pre',{'tool_call_id':call,'tool_name':'todo','tool_input':{'action':'update','todos':items}})
-                log_hook(aid,'tool:post',{'tool_call_id':call,'tool_name':'todo','result':{'success':True,'output':{'status':'updated','count':len(items)}}})
-                await service.event_log_view.refresh(aid)
-                row['execution']['currentTurnId']=row['execution']['plan']['turnId']
+                # The ordinary successful root report owns the saved checklist.
+                # Logged history is not an automatic Plan reconstruction input.
+                emitted=[];events=LoggedEvents(aid,emitted.append)
+                events.hook(aid,'tool:pre',{'tool_call_id':call,'tool_name':'todo','tool_input':{'action':'update','todos':items}})
+                events.hook(aid,'tool:post',{'tool_call_id':call,'tool_name':'todo','result':{'success':True,'output':{'status':'updated','count':len(items)}}})
+                for event in emitted:
+                    await service.on_runtime_event(*normalize_event(event,aid))
                 row['status']=args.get('status','working')
             elif op=='delegate-observer':
                 # Real host metadata observer and stamped canonical fixture

@@ -1346,8 +1346,11 @@ def test_completed_call_index_preserves_exact_matching_and_bounds_candidates():
     assert list(index.candidates(appended)) == [appended]
 
 
-def test_projection_diagnostics_count_requested_descendants_without_contents(source):
+def test_projection_diagnostics_count_requested_descendants_without_contents(source, monkeypatch):
     from amplifier_web.performance_diagnostics import PerformanceDiagnostics
+    from amplifier_web import chat_plan
+    monkeypatch.setattr(chat_plan, 'latest_plan',
+                        lambda *a, **kw: pytest.fail('Execution projection must not reconstruct Plan'))
     session, path = source
     append(path, 'tool:pre', {'tool_call_id': 'delegate-a', 'tool_name': 'delegate'})
     append(path, 'delegate:agent_spawned', {'tool_call_id': 'delegate-a', 'sub_session_id': 'child-a'})
@@ -1364,8 +1367,9 @@ def test_projection_diagnostics_count_requested_descendants_without_contents(sou
     snapshot = diagnostics.snapshot()
     assert {key: snapshot['counters']['events.project.' + key] for key in ('indexes', 'paths', 'workers', 'nodes')} == {
         'indexes': 3, 'paths': 4, 'workers': 2, 'nodes': 3}
-    for stage in ('scan', 'bindings', 'rows', 'associate', 'join', 'plan', 'usage', 'retain'):
+    for stage in ('scan', 'bindings', 'rows', 'associate', 'join', 'usage', 'retain'):
         assert snapshot['operations']['events.' + stage]['count'] == 1
+    assert 'plan' not in expected and 'events.plan' not in snapshot['operations']
     encoded = json.dumps(snapshot)
     assert str(path) not in encoded and 'private diagnostic sentinel' not in encoded
 

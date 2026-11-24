@@ -19,10 +19,6 @@ async def main(home):
     (directory / 'transcript.jsonl').write_text(transcript)
     (directory / 'metadata.json').write_text(json.dumps({'session_id': 'imported-report', 'working_dir': str(workspace),
         'name': '', 'name_source': 'fallback', 'created': '2026-01-01T12:00:00Z', 'turn_count': 1}))
-    await service.history.refresh()
-    # Discovery keeps unselected native chats in the indexed directory. Resolve
-    # this exact owner without loading its transcript or selecting it in the UI.
-    source = service.directory.resolve('imported-report', project_slug(workspace))
     release = asyncio.Event()
     calls = []
     original_probe = fixture.SetupManager.probe
@@ -35,6 +31,20 @@ async def main(home):
         return {'text': json.dumps({'action': 'set', 'name': 'Quarterly report summary'})}
 
     fixture.SetupManager.probe = probe
+    # Install the synthetic naming responder before yielding to discovery or
+    # its background naming loop. One refresh is only a bounded catalog slice.
+    source = None
+    async with asyncio.timeout(10):
+        for _ in range(64):
+            await service.history.refresh()
+            shared = service.state.get('sharedHistory', {})
+            if shared.get('error'):
+                raise AssertionError(f'Imported naming discovery failed: {shared}')
+            source = service.directory.resolve('imported-report', project_slug(workspace))
+            if source is not None:
+                break
+        else:
+            raise AssertionError(f'Imported report was not discovered: {shared}')
 
     async def check(request):
         current = service._session(source['id'], hydrate=False)
