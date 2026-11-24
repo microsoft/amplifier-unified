@@ -1377,7 +1377,7 @@ class VoiceService:
             # request can start; activation then sees the connecting status.
             async with self.service.lock:
                 if new_work_paused(self.service.state):
-                    raise VoiceError("An update is in progress. Start the call after the update.", 409, "update_activating")
+                    raise VoiceError("An update is activating. Please retry in a moment.", 409, "update_activating")
                 session = next((s for s in self.service.state['sessions'] if s['id'] == session_id), None)
                 if session is None:
                     raise VoiceError('The conversation is no longer available.', 409, 'no_session')
