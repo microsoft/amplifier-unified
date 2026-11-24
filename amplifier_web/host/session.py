@@ -108,6 +108,10 @@ class SelectedProvider:
     def _execution_provider(self):
         return self.execution_adapter(self.original) if callable(self.execution_adapter) else self.original
 
+    def prepared_foreground(self, request, *, request_options=None):
+        from ..foreground_preparation import prepare
+        return prepare(self._execution_provider(), request, request_options, selection=self)
+
     def owns_budget_route(self, provider):
         """Recognize the loop's exact pre-transport wrapper around this selection."""
         if provider is self:
@@ -352,6 +356,10 @@ class SelectedProvider:
         options = dict(kwargs)
         self._overflow_feedback.forget(request)
         execution = self._execution_provider()
+        from ..foreground_preparation import active
+        candidate = active()
+        if candidate is not None and candidate.selection is self and candidate.original is request:
+            candidate.check_selection(execution, kwargs)
         self._check_media_fit(request, execution)
         selected, kwargs = self._selected_request(request, kwargs)
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]

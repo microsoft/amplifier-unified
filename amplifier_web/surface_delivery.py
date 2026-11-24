@@ -246,6 +246,10 @@ class SurfaceProvider:
             self._prepare = time_preparation(coordinator, 'surface.prepare', self._prepare)
             self.refit_request = time_preparation(coordinator, 'provider.refit', self.refit_request)
 
+    def prepared_foreground(self, request, *, request_options=None):
+        from .foreground_preparation import prepare
+        return prepare(self, request, request_options)
+
     def release_media_request(self, canonical, *, request_options=None):
         row = self._media.get(id(canonical))
         if row is None or row[0] is not canonical:
@@ -274,6 +278,12 @@ class SurfaceProvider:
     async def _prepare(self, request, commit=False, *, explicit_budget=False, refit_binding=None,
                        projection_out=None, request_options=None):
         entry = next((row for row in self.prepared if row[0] is request), None)
+        from .foreground_preparation import active
+        candidate = active() if commit else None
+        if candidate is not None and (candidate.surface is not self or candidate.request is not request):
+            candidate = None
+        if candidate is not None:
+            candidate.check_surface(entry, request_options or {})
         media_row = self._media.get(id(request))
         if media_row is not None:
             from .host.media import effective_options
@@ -406,7 +416,11 @@ class SurfaceProvider:
                     self.refused.pop(0)
                     self.refusal_overflow = True
                 raise
+            if candidate is not None and cached.model_dump_json() != candidate.encoded:
+                raise ValueError("Ordinary request contents changed before dispatch")
             self.delivery.commit(cached)
+            if candidate is not None:
+                candidate.consume()
             self.prepared = [row for row in self.prepared if row[0] is not request]
         return cached
 
