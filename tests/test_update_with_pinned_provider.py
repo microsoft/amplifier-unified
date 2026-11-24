@@ -35,6 +35,11 @@ head of a branch of such an address and does not use the local mirror. The
 cases set `UV_NO_GITHUB_FAST_PATH=1`, so that uv reads the mirror as Git does.
 Without it a case can run with another commit than the one that it made.
 
+The supplied local repository must have complete history, not a depth-limited
+fetch. A bare clone preserves a shallow boundary; Git can receive its objects
+but refuse the branch ref that uv subsequently resolves. The fixture rejects
+that input rather than changing uv's fetch flags or manufacturing cache refs.
+
 Limits. The module is the real public module at the reference that the product
 names; Git reads it from a local mirror. The commit after it is made here (one
 added text file), so it is not a commit of the public module. Core, Foundation
@@ -184,7 +189,7 @@ async def test_a_component_update_completes_with_an_openai_api_connection(tmp_pa
     url = composed["url"]
     pinned = updates.pinned(composed["ref"])
     mirror = work / "provider-module.git"
-    git(work, "clone", "--bare", public, mirror)
+    git(work, "clone", "--bare", "--reject-shallow", public, mirror)
     start = git(mirror, "rev-parse", composed["ref"] if pinned else "refs/heads/main")
     # A later commit of the branch, made here: the product's rule must not
     # depend on which commit the public branch has today.
