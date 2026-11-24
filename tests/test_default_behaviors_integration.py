@@ -78,15 +78,57 @@ class DecisionCatalogPreparation:
         self.command = None
         self.environment = None
         self.evidence = None
+        self._spawn_pair = None
+        self.spawn_events = 0
+        self._working_directory = None
 
     def permits(self, event, args):
-        if not self.open or event != "subprocess.Popen" or self.launches:
+        if not self.open or event not in {"subprocess.Popen", "os.posix_spawn"}:
+            return False
+        # CPython may emit both events for one Popen. os.posix_spawn alone has
+        # no cwd or Popen identity, so matching argument bytes is insufficient.
+        import os as process_os
+        import subprocess
+        import sys as process_sys
+
+        if (self._working_directory is not None
+                and process_os.getcwd() != self._working_directory):
+            return False
+        if event == "os.posix_spawn":
+            if len(args) != 3 or self._spawn_pair is None or self.spawn_events:
+                return False
+            frame, process, spawn_code, argv, environment, cwd = self._spawn_pair
+            emitter = process_sys._getframe(2)  # native emitter -> audit -> permits
+            if (args != (sys.executable, argv, environment)
+                    or process_os.getcwd() != cwd
+                    or emitter.f_code is not spawn_code or emitter.f_back is not frame
+                    or emitter.f_locals.get("self") is not process
+                    or process.pid is not None or process.returncode is not None
+                    or process._child_created is not False):
+                return False
+            self.spawn_events += 1
+            self._spawn_pair = None
+            return True
+        if self.launches or len(args) != 4:
             return False
         executable, argv, cwd, environment = args
         if (executable != sys.executable or argv != self.command or cwd is not None
                 or environment != self.environment):
             return False
         self.launches += 1
+        emitter = process_sys._getframe(2)
+        execute = getattr(subprocess.Popen, "_execute_child", None)
+        spawn = getattr(subprocess.Popen, "_posix_spawn", None)
+        process = emitter.f_locals.get("self")
+        if (execute is not None and spawn is not None
+                and emitter.f_code is execute.__code__
+                and type(process) is subprocess.Popen
+                and process.pid is None and process.returncode is None
+                and process._child_created is False):
+            # Retain only this still-executing launch. A direct/nested spawn,
+            # another Popen, or a returned/reaped process cannot spend the pair.
+            self._spawn_pair = (emitter, process, spawn.__code__,
+                                list(argv), dict(environment), process_os.getcwd())
         return True
 
     def warm(self):
@@ -120,11 +162,15 @@ class DecisionCatalogPreparation:
         effective_timeout = min(original_timeout, self.timeout_seconds)
         assert 0 < effective_timeout <= 10  # Below the 60/90s enclosing probes.
         try:
+            import os as process_os
+            self._working_directory = process_os.getcwd()
             accounts._CATALOG_START_SECONDS = effective_timeout
             self.open = True
             actual = accounts.catalogs()  # Canonical bounded subprocess; run() reaps it.
         finally:
             self.open = False
+            self._spawn_pair = None
+            self._working_directory = None
             accounts._CATALOG_START_SECONDS = original_timeout
         assert actual == {} and self.launches == 1
         assert accounts._catalog_snapshot.cache_info().currsize == 1
@@ -133,6 +179,7 @@ class DecisionCatalogPreparation:
         assert helper.read_bytes() == data
         self.evidence = {"helperSha256": digest.hexdigest(), "entryPointCount": len(entries),
                          "catalog": actual, "launches": self.launches, "cacheReused": True,
+                         "posixSpawnEvents": self.spawn_events,
                          "configuredTimeoutSeconds": original_timeout,
                          "probeTimeoutSeconds": effective_timeout,
                          "environmentNames": sorted(self.environment), "parentProviderImports": 0}

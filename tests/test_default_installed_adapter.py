@@ -207,6 +207,18 @@ def test_catalog_preparation_rejects_unpaired_events(after_popen, event):
     assert gate.launches == int(after_popen)
 
 
+def test_catalog_preparation_rejects_changed_inherited_working_directory(tmp_path):
+    import sys
+    gate = catalog_preparation_class()()
+    gate.open = True
+    gate.command = [sys.executable, '-I', '/installed/decision_account_catalog.py']
+    gate.environment = {'PATH': '/owned/bin'}
+    gate._working_directory = str(tmp_path / 'not-the-current-directory')
+    assert not gate.permits('subprocess.Popen', (
+        sys.executable, list(gate.command), None, dict(gate.environment)))
+    assert gate.launches == 0
+
+
 def test_catalog_preparation_real_audit_family_is_one_reaped_child(tmp_path):
     """Exercise native audit delivery in a disposable process, never the host hook."""
     import sys
@@ -231,6 +243,7 @@ gate.environment = {key: value for key, value in os.environ.items()
                     if key in {"PATH", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL",
                                "TZ", "TMPDIR", "TEMP", "TMP"}}
 gate.open = True
+gate._working_directory = os.getcwd()
 active = True
 allowed, refused = [], []
 injected = False
@@ -250,7 +263,12 @@ def audit(event, args):
         deny(lambda: subprocess.run(gate.command, env=gate.environment, check=True))
         if hasattr(os, "posix_spawn"):
             deny(lambda: os.posix_spawn(sys.executable, gate.command, gate.environment))
+        if hasattr(os, "posix_spawnp"):
+            deny(lambda: os.posix_spawnp(sys.executable, gate.command, gate.environment))
         deny(lambda: os.system("exit 99"))
+    elif event == "os.posix_spawn":
+        # A second audit event cannot reuse the consumed original pair.
+        deny(lambda: sys.audit("os.posix_spawn", *args))
 
 def deny(call):
     try:
@@ -297,8 +315,11 @@ print(json.dumps({"allowed": allowed, "refused": refused, "launches": gate.launc
     assert report['launches'] == report['children'] == 1 and report['reaped']
     assert report['refused'].count('subprocess.Popen') == 3
     assert report['refused'].count('os.system') == 1
-    if hasattr(__import__('os'), 'posix_spawn'):
-        assert report['refused'].count('os.posix_spawn') == 2
+    import os
+    expected_spawn_refusals = (2 * int(hasattr(os, 'posix_spawn'))
+                              + int(hasattr(os, 'posix_spawnp'))
+                              + int('os.posix_spawn' in report['allowed']))
+    assert report['refused'].count('os.posix_spawn') == expected_spawn_refusals
     print('CATALOG_AUDIT_FAMILY ' + json.dumps(report, sort_keys=True))
 
 
