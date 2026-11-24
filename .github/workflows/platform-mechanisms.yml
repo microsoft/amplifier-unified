@@ -794,8 +794,16 @@ jobs:
                   self.collected_count = self.phase_count = self.failure_count = 0
                   self.collect_failed = self.collect_skipped = self.xfailed = 0
                   self.unexpected_collected = self.unexpected_phases = 0
+                  self.unknown_nodes = {}
               def node(self, value):
-                  return value if value in nodes else '<unrecognized>'
+                  if value in nodes:
+                      return value
+                  if value not in self.unknown_nodes:
+                      if len(self.unknown_nodes) >= 32:
+                          self.invalid = True
+                          return '<unrecognized-overflow>'
+                      self.unknown_nodes[value] = '<unrecognized-' + str(len(self.unknown_nodes) + 1) + '>'
+                  return self.unknown_nodes[value]
               def pytest_collection_finish(self, session):
                   self.invalid |= self.collection_seen
                   self.collection_seen = True

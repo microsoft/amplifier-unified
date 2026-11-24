@@ -3235,7 +3235,7 @@ def test_remaining_five_phase_accounting_refuses_any_missing_native_proof(fault)
     assert snapshot["wasxfailCount"] == (3 if fault == "xfail" else 0)
     assert snapshot["passed"] is (fault is None)
     if fault == "extra":
-        assert snapshot["collected"][-1] == "<unrecognized>" and snapshot["unexpectedCollected"] == 1
+        assert snapshot["collected"][-1] == "<unrecognized-1>" and snapshot["unexpectedCollected"] == 1
     elif fault == "duplicate":
         assert snapshot["collected"].count(FIVE_NODES[0]) == 2
     assert "private_customer" not in json.dumps(snapshot)
@@ -3351,6 +3351,10 @@ def test_remaining_evidence_overflow_is_explicit_and_never_a_pass():
     assert report["collectedCount"] == 40 and report["omittedCollected"] == 8
     assert report["phaseCount"] == 100 and report["omittedPhases"] == 4
     assert report["invalid"] and not report["passed"]
+    opaque = cls()
+    assert opaque.node("PRIVATE-FIRST") == opaque.node("PRIVATE-FIRST") == "<unrecognized-1>"
+    assert opaque.node("PRIVATE-SECOND") == "<unrecognized-2>"
+    assert "PRIVATE" not in json.dumps(opaque.snapshot(0))
 
 
 def test_remaining_failure_projection_omits_private_types_paths_and_messages(tmp_path):
