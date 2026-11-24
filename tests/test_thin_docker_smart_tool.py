@@ -217,15 +217,147 @@ def git(source, *args):
                                    cwd=source, text=True).strip()
 
 
+async def thin_call(app, report_path, report, entry, action, **args):
+    """Keep this fixture's original request and custody, including lost replies."""
+    if action == 'remove':
+        assert not entry.get('removalAttempted'), 'Unknown removal must not replay.'
+        entry['removalAttempted'] = True
+    arguments = {**entry['scope'], 'requestId': entry['owner'] + '-' + action, **args}
+    if entry.get('resource'):
+        arguments.update(id=entry['resource']['id'], expectedRevision=entry['resource']['revision'])
+    call = {'owner': entry['owner'], 'action': action, 'phase': 'before-effect'}
+    report.setdefault('calls', []).append(call)
+    setup.write_json(report_path, report)
+    try:
+        result = (await app.dispatch('workspace.environments.' + action, arguments,
+                                    command_id='thin-' + arguments['requestId']))['result']
+        call['result'] = result
+        assert result['request']['state'] == 'completed', result
+        if action == 'remove':
+            proof = result['request']['cleanupExecution']
+            assert proof['kind'] == 'qualification-test-checkout'
+            assert proof['status'] == 'permit-recorded'
+            assert set(proof) == {'schema', 'kind', 'ready', 'readySha256', 'status', 'delivery'}
+            assert result['resource']['status'] == 'removed'
+        return result
+    finally:
+        # A dispatch exception may follow admission. Read the original journal,
+        # never issue another request just to discover its resource.
+        request = app.operations.requests.read(entry['owner'], arguments['requestId'])
+        call['request'] = request
+        if request and request.get('resourceId'):
+            raw = environments.get(app.data_dir, entry['owner'], request['resourceId'])
+            entry['resource'] = environments.public(app.data_dir, raw)
+            entry['state'] = entry['resource']['status']
+        setup.write_json(report_path, report)
+
+
+async def thin_finalize(app, report_path, report):
+    errors = []
+    for entry in report['environments']:
+        if not entry.get('resource') or entry['state'] == 'removed' or entry.get('removalAttempted'):
+            continue
+        try:
+            assert entry['state'] in {'running', 'stopped', 'not-started'}, 'Unsettled owner; inspect original receipt.'
+            if entry['state'] == 'running':
+                await thin_call(app, report_path, report, entry, 'stop')
+            await thin_call(app, report_path, report, entry, 'remove')
+        except Exception as exc:
+            # One owner's failed finalizer must not prevent the other's attempt.
+            errors.append(exc)
+    report['cleanupComplete'] = all(entry.get('state') == 'removed' for entry in report['environments'])
+    setup.write_json(report_path, report)
+    if errors:
+        raise ExceptionGroup('Thin Docker cleanup is incomplete; inspect original receipts', errors)
+
+
+@pytest.mark.parametrize('outcome', ['failed', 'outcome_unknown', 'lost-reply'])
+async def test_thin_call_retains_original_failure_and_fences_removal(tmp_path, monkeypatch, outcome):
+    """Portable wrapper check only; no helper, permit or backend is fabricated."""
+    state = 'failed' if outcome == 'failed' else 'outcome_unknown'
+    request = {'requestId': 'owner-remove', 'resourceId': 'resource', 'state': state}
+    row = {'id': 'resource', 'revision': 2, 'status': 'stopped' if state == 'failed' else 'unknown'}
+    entry = {'owner': 'owner', 'scope': {'sessionId': 'owner', 'workspaceId': 'workspace'},
+             'resource': {'id': 'resource', 'revision': 1}, 'state': 'stopped'}
+    calls = []
+
+    async def dispatch(action, args, **kwargs):
+        calls.append((action, args))
+        if outcome == 'lost-reply':
+            raise TimeoutError('Lost original dispatch reply')
+        return {'result': {'request': request, 'resource': row}}
+
+    app = SimpleNamespace(data_dir=tmp_path, dispatch=dispatch,
+        operations=SimpleNamespace(requests=SimpleNamespace(read=lambda *a: request)))
+    monkeypatch.setattr(environments, 'get', lambda *a: row)
+    monkeypatch.setattr(environments, 'public', lambda *a: row)
+    report, path = {'environments': [entry]}, tmp_path / 'result.json'
+    with pytest.raises(TimeoutError if outcome == 'lost-reply' else AssertionError):
+        await thin_call(app, path, report, entry, 'remove')
+    assert entry['removalAttempted'] and entry['state'] == row['status']
+    assert setup.read_json(path)['calls'][0]['request'] == request
+    with pytest.raises(AssertionError, match='must not replay'):
+        await thin_call(app, path, report, entry, 'remove')
+    await thin_finalize(app, path, report)
+    assert len(calls) == 1 and report['cleanupComplete'] is False
+
+
+@pytest.mark.parametrize('failure', ['stop', 'remove'])
+async def test_thin_finalizers_are_independent_and_never_repeat_removal(tmp_path, monkeypatch, failure):
+    entries = [{'owner': name, 'resource': {'id': name}, 'state': 'running'} for name in ('a', 'b')]
+    report, path, calls = {'environments': entries}, tmp_path / 'result.json', []
+
+    async def call(app, report_path, report, entry, action):
+        calls.append((entry['owner'], action))
+        if action == 'remove':
+            entry['removalAttempted'] = True
+        if entry['owner'] == 'a' and action == failure:
+            entry['state'] = 'unknown'
+            raise TimeoutError('Original finalizer outcome is unknown')
+        entry['state'] = 'stopped' if action == 'stop' else 'removed'
+
+    monkeypatch.setattr(sys.modules[__name__], 'thin_call', call)
+    with pytest.raises(ExceptionGroup):
+        await thin_finalize(None, path, report)
+    assert calls == ([('a', 'stop')] + ([('a', 'remove')] if failure == 'remove' else [])
+                     + [('b', 'stop'), ('b', 'remove')])
+    assert entries[1]['state'] == 'removed' and report['cleanupComplete'] is False
+    before = list(calls)
+    if failure == 'stop':
+        with pytest.raises(ExceptionGroup):
+            await thin_finalize(None, path, report)
+    else:
+        await thin_finalize(None, path, report)
+    assert calls == before
+
+
 @pytest.mark.skipif(not os.environ.get('UNIFIED_DTU_PROOF_ROOT'),
                     reason='Opt-in real Docker Smart Tool proof requires an owned registered proof root.')
-def test_real_smart_tool_two_owners_dirty_worktree_wheel_and_preview():
-    """No model/provider campaign. Uses installed Smart Tool, never its bundle."""
+async def test_real_smart_tool_two_owners_dirty_worktree_wheel_and_preview(monkeypatch):
+    """No model campaign. Provision the Smart Tool under proof-root/app beforehand."""
+    from amplifier_web.service import AppService
+    from amplifier_web.smart_tools import SmartToolsManager
+    from native_cleanup_fixture import checkout_cleanup
+
+    class NoModelRuntime:
+        async def start(self, *args, **kwargs):
+            raise AssertionError('Thin Docker proof must not start a model')
+
+        async def close(self):
+            pass
+
     home = Path(os.environ['UNIFIED_DTU_PROOF_ROOT']).resolve()
     python = os.environ['UNIFIED_DTU_PYTHON']
     home.mkdir(mode=0o700, parents=True, exist_ok=True)
     report_path = home / 'native-result.json'
     assert not report_path.exists(), 'Inspect an existing result; never replay this proof.'
+    installation_id = hashlib.sha256(environments.DTU_COMMIT.encode()).hexdigest()[:24]
+    # Use the same actual managed installation layout as the maintained native
+    # cleanup fixture. Do not alias/copy a venv or bypass configuration validation.
+    assert python == str(home / 'app/smart-tools/installs' / installation_id / 'venv/bin/python')
+    assert Path(python).is_file(), 'Provision the owned Smart Tool before this proof.'
+    report = {'result': 'incomplete', 'environments': [], 'cleanupComplete': False}
+    setup.write_json(report_path, report)
     source, checkout = home / 'repository', home / 'linked-worktree'
     compose = {
         'services': {'twin': {'image': environments.APPROVED_IMAGE,
@@ -246,38 +378,35 @@ def test_real_smart_tool_two_owners_dirty_worktree_wheel_and_preview():
     (checkout / 'dirty_proof.py').write_text("VALUE = 'dirty-selected-worktree'\n")
     before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
               for p in checkout.iterdir() if p.is_file()}
-    config = {'python': python, 'backend': 'docker', 'dockerHost': 'unix:///var/run/docker.sock',
-              'image': environments.APPROVED_IMAGE, 'admissionRoot': str(home / 'admission')}
-    rows, removal_attempted, report = [], set(), {'originalCommit': original, 'result': 'incomplete', 'environments': []}
-    def call(row, action, **args):
-        if action == 'remove':
-            assert row['id'] not in removal_attempted, 'Unknown removal must not replay.'
-            removal_attempted.add(row['id'])
-        result = environments.invoke(config, home, row, action,
-            {'requestId': row['id'] + '-' + action, 'expectedRevision': row['revision'], **args})
-        report.setdefault('calls', []).append({'owner': row['sessionId'], 'action': action, 'result': result})
-        setup.write_json(report_path, report)
-
-
-        assert result.get('ok'), result
-        return result
+    report['originalCommit'] = original
+    monkeypatch.setenv('AMPLIFIER_HOME', str(home / 'native-home'))
+    app = AppService(home / 'app', NoModelRuntime(), workspace=checkout)
     try:
-        for suffix in ('a', 'b'):
-            row = {'sessionId': 'thin-dtu-proof-' + suffix, 'id': 'owner-' + suffix,
-                   'launchOperationId': 'thin-dtu-proof-' + suffix, 'revision': 1,
-                   'backendKey': environments.config_key(config),
-                   'source': str(checkout), 'profileId': 'linux-python',
-                   'composeFile': 'compose.json', 'offline': False, 'preserveSource': False}
-            environments.storage.directory(home, row).mkdir(parents=True, mode=0o700)
-            prepared = call(row, 'prepare')
-            row.update(universeId=prepared['universeId'], snapshot=prepared['snapshot'], backendIdentity=prepared['backendIdentity'])
-            rows.append(row)
-            report['environments'].append({'id': row['universeId'], 'owner': row['sessionId'], 'state': 'prepared'})
-            # Registration is done before this test's launch using these stable
-            # roots/operation identities, not by scanning or adopting old guests.
-            launched = call(row, 'start')
-            report['environments'][-1].update(state='running', urls=launched['urls'])
-        row = rows[0]
+        app.smart_tools = SmartToolsManager(app)
+        app.smart_tools.state['installations'].append({
+            'id': installation_id, 'status': 'installed', 'commit': environments.DTU_COMMIT,
+            'repository': environments.REPOSITORY, 'extras': [], 'python': python})
+        setup.write_json(app.data_dir / 'test-environments.json', {
+            'enabled': True, 'installationId': installation_id, 'commit': environments.DTU_COMMIT,
+            'backend': 'docker', 'dockerHost': 'unix:///var/run/docker.sock',
+            'image': environments.APPROVED_IMAGE, 'maxRunning': 2, 'maxInstances': 2})
+        _, availability, reason = environments.configuration(app)
+        assert availability == 'ready', reason
+        sessions = [app._new_session({'title': 'Thin Docker owner ' + suffix}) for suffix in ('a', 'b')]
+        app.state['sessions'] = sessions
+        app.state['selectedSessionId'] = sessions[0]['id']
+        app._publish()
+        workspace = next(w for w in app.state['workspaces'] if w['path'] == str(checkout))
+        # Only the source-evidence adapter is test-scoped. AppService issues the
+        # original durable permit and retains every production recheck.
+        checkout_cleanup(monkeypatch)
+        for session in sessions:
+            entry = {'owner': session['id'], 'state': 'not-started',
+                     'scope': {'sessionId': session['id'], 'workspaceId': workspace['id']}}
+            report['environments'].append(entry)
+            await thin_call(app, report_path, report, entry, 'start', profileId='linux-python',
+                            composeFile='compose.json', offline=False, preserveSource=False)
+        entry = report['environments'][0]
         command = (
             'unset PYTHONPATH; cd /workspace; python -m pip wheel --no-deps . -w /artifacts/dist'
             ' && python -m venv /tmp/installed'
@@ -285,9 +414,9 @@ def test_real_smart_tool_two_owners_dirty_worktree_wheel_and_preview():
             ' && cd /artifacts && /tmp/installed/bin/python -I -c '
             + shlex.quote("import dirty_proof,sys; assert dirty_proof.VALUE=='dirty-selected-worktree'; assert dirty_proof.__file__.startswith(sys.prefix+'/'); print(dirty_proof.__file__)")
             + ' > /artifacts/installed-proof.txt')
-        installed = call(row, 'execute', command=command, timeoutSeconds=300)
-        assert installed['result']['exit_code'] == 0, installed
-        url = report['environments'][0]['urls'][0]['url'].rstrip('/') + '/installed-proof.txt'
+        installed = await thin_call(app, report_path, report, entry, 'execute', command=command, timeoutSeconds=300)
+        assert installed['request']['result']['result']['exit_code'] == 0, installed
+        url = entry['resource']['urls'][0]['url'].rstrip('/') + '/installed-proof.txt'
         with urlopen(url, timeout=10) as response:
             assert '/tmp/installed/' in response.read().decode()
         handoff = {'target': url, 'request': 'Inspect the installed dirty-worktree package proof only.', 'keep_running': True}
@@ -298,22 +427,22 @@ def test_real_smart_tool_two_owners_dirty_worktree_wheel_and_preview():
                 json.dumps(handoff)], text=True)
             report['realityCheckSignature'] = json.loads(signature)
         report['realityCheckHandoff'] = {**handoff,
-                                        'modelCampaign': 'not_run', 'lifecycleOwner': row['sessionId']}
-        call(row, 'stop')
-        call(row, 'remove')
-        report['environments'][0]['state'] = 'removed'
-        assert call(rows[1], 'read')['status'] == 'running', 'Cleanup crossed owners.'
+                                        'modelCampaign': 'not_run', 'lifecycleOwner': entry['owner']}
+        await thin_call(app, report_path, report, entry, 'stop')
+        await thin_call(app, report_path, report, entry, 'remove')
+        observed = await thin_call(app, report_path, report, report['environments'][1], 'reconcile')
+        assert observed['resource']['status'] == 'running', 'Cleanup crossed owners.'
         report['sourceUnchanged'] = before == {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                                               for p in checkout.iterdir() if p.is_file()}
         assert report['sourceUnchanged'] and git(source, 'rev-parse', 'HEAD') == original
-        report['result'] = 'passed'
+        report['journeyPassed'] = True
     finally:
         # Observe exact current owners; teardown never retries an unknown remove.
-        for index, row in enumerate(rows):
-            if report['environments'][index]['state'] == 'removed' or row['id'] in removal_attempted:
-                continue
-            call(row, 'stop')
-            call(row, 'remove')
-            report['environments'][index]['state'] = 'removed'
-        setup.write_json(report_path, report)
+        try:
+            await thin_finalize(app, report_path, report)
+            if report.get('journeyPassed') and report['cleanupComplete']:
+                report['result'] = 'passed'
+        finally:
+            setup.write_json(report_path, report)
+            await app.close()
 
