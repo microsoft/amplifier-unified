@@ -61,3 +61,46 @@ def test_bundled_notes_use_utf8(tmp_path, monkeypatch, legacy_locale):
         assert release_notes.bundled()[0]['title'] == '“Ready”'
     finally:
         release_notes.bundled.cache_clear()
+
+@pytest.mark.parametrize('note', ['café', '“Completed” 🧭'])
+async def test_continuity_reopens_utf8_summary_without_repeating_work(tmp_path, legacy_locale, note):
+    from test_context_continuity import mount
+
+    original = [{'role': 'user', 'content': 'Keep originals.'},
+        {'role': 'assistant', 'content': 'Evidence ' * 2400},
+        {'role': 'user', 'content': 'Correction'}, {'role': 'assistant', 'content': 'Working'},
+        {'role': 'user', 'content': 'Continue'}]
+    first, provider, adapter, _, _ = await mount(tmp_path, original)
+    provider.complete.return_value.content[0].text = note
+    await first.context.get_messages_for_request(provider=provider)
+    adapter.save()
+    saved = adapter.path.read_bytes()
+    assert json.loads(saved)['summary']['text'] == note
+
+    second, model, reopened, _, _ = await mount(tmp_path, original)
+    await second.context.get_messages_for_request(provider=model)
+    assert reopened.public()['status'] == 'restored'
+    model.complete.assert_not_awaited()
+    assert second.context.summary == first.context.summary
+    assert await second.context.get_messages() == original
+    assert reopened.path.read_bytes() == saved
+
+
+async def test_continuity_reopens_utf8_recovery_journal(tmp_path, legacy_locale):
+    from test_context_continuity import mount
+
+    _, _, adapter, _, _ = await mount(tmp_path, [])
+    command = 'recover-café'
+    record = {'commandId': command, 'state': 'pending', 'interruptionRevision': 1,
+              'targetBytes': 1024, 'identity': {'provider': 'fixture', 'model': 'model-a'},
+              'contract': {'version': 1, 'sha256': '0' * 64},
+              'sourceRevision': {'messages': 1, 'sha256': '1' * 64}, 'completedParts': 0}
+    adapter.writer_guard = lambda: True
+    adapter._journal = {'version': 1, 'current': command, 'attempts': {command: record}}
+    adapter._write_recovery()
+    saved = adapter.recovery_path.read_bytes()
+
+    _, _, reopened, _, _ = await mount(tmp_path, [])
+    status = reopened.recovery_status()
+    assert (status['state'], status['commandId']) == ('pending', command)
+    assert reopened.recovery_path.read_bytes() == saved
