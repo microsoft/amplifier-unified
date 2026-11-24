@@ -798,8 +798,8 @@ class UpdateManager:
         return await inventory(self, lambda: self._scan_inventory(app_only=True))
 
     async def _scan_inventory(self, *, app_only=False):
-        from .update_sequence import app_selection
-        selection = await asyncio.to_thread(app_selection, self.home)
+        from .update_sequence import app_selection, diagnostic_app_selection
+        selection = await asyncio.to_thread(diagnostic_app_selection, self.home)
         base = foundation_home(self.home)
         # Capture only selection metadata before yielding. The history catalog
         # can change while filesystem/settings reads run outside the event loop.
@@ -819,7 +819,8 @@ class UpdateManager:
         snapshot.app_only = app_only
         snapshot.source_issues = []
         snapshot.settings_cache = self.settings_cache
-        configured, incomplete = await asyncio.to_thread(configured_sources, snapshot)
+        configured, incomplete = (await asyncio.to_thread(configured_sources, snapshot)
+                                  if selection is not None else ({}, False))
         rows = []
         semaphore = asyncio.Semaphore(8)
         async def inspect(meta):
@@ -864,6 +865,17 @@ class UpdateManager:
                 'detail': 'These older conversations use bundles that are no longer registered. Their history is kept. Choose an available bundle if you resume one; cached-source updates are unaffected.'})
         from .update_sources import bindings
         rows.extend(await bindings(self.home, base, configured))
+        if selection is None:
+            # Existing cache identities can be inspected independently of the
+            # unreadable selection. Do not infer included sources or a worker
+            # environment from defaults, or confer an installation witness.
+            for row in rows:
+                row['updateTier'] = 'other'
+            rows.append({'id': 'source-configuration', 'label': 'Source configuration',
+                'status': 'check_failed', 'eligible': False, 'kind': 'configuration',
+                'updateTier': 'included', 'checkReason': 'app-selection-unresolved',
+                'detail': 'App settings could not be resolved. Correct the shared settings and check again before installing components. Existing cache checks are shown below.'})
+            return rows
         from .runtime_environment import update_inventory
         rows.extend(await update_inventory(self.home))
         from .update_sequence import classify
@@ -1187,6 +1199,24 @@ class UpdateManager:
                         row['availabilityFailure'] = bool(isinstance(error, CommandFailure)
                             and type(facts.get('exitCode')) is int and facts['exitCode'] > 0
                             and not facts.get('timedOut'))
+                configuration = [row for row in rows if row.get('checkReason') == 'app-selection-unresolved']
+                if configuration:
+                    # Diagnostic publication is not a checked installation
+                    # batch. Check existing caches, keep their actual outcomes,
+                    # and leave the strict installation witness unsatisfied.
+                    await asyncio.gather(*(check_row(row) for row in rows))
+                    self.inventory = rows
+                    write_private(self.directory/'inventory.json', json.dumps(rows))
+                    public = group_sources(rows)
+                    sequence.update(stage='included', install=False,
+                        included=summary(group_sources(configuration)),
+                        other=summary([row for row in public if row.get('updateTier') == 'other']))
+                    await self.publish(phase='error', sequence=sequence,
+                        items=public+[application], application=application,
+                        includedCanProceed=False, available=0, lastCheck=time.time(),
+                        error=configuration[0]['detail'],
+                        detail='Cached sources were checked. Component installation needs corrected app settings.')
+                    return
                 checked = []
                 for stage in (['included', 'other'] if tier == 'included' else ['other']):
                     selected = [row for row in rows if row.get('updateTier', 'other') == stage]

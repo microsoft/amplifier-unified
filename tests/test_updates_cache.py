@@ -344,20 +344,7 @@ async def test_configured_sources_include_scoped_settings_and_session_choices(re
     assert before == {p: p.read_bytes() for p in (home/'config').rglob('*') if p.is_file()}
 
 
-# Since pull request 1725 the check reads the app's behavior selection from the shared
-# settings file first, with no handling of a file that cannot be read. The check then ends
-# with "Update check failed. Your installed sources are unchanged." and lists nothing.
-# docs/UPDATES.md says that such a file gives a warning row and that cached sources are
-# still checked. docs/validation/ordered-updates.md says that an unresolvable app
-# selection requires correction. The owner of the update check decides which holds.
-# Strict: these rows fail when the check lists the rows again, and the marks then go.
-UNREADABLE_SHARED_SETTINGS = pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    'a shared settings file that cannot be read ends the whole update check ("Update check failed."); '
-    'docs/UPDATES.md says that it gives a warning row and that cached sources are still checked'))
-
-
-@pytest.mark.parametrize('failure', ['alias', 'cycle', *(
-    pytest.param(name, marks=UNREADABLE_SHARED_SETTINGS) for name in ('yaml', 'module-shape', 'recursive-yaml'))])
+@pytest.mark.parametrize('failure', ['alias', 'cycle', 'yaml', 'module-shape', 'recursive-yaml'])
 async def test_unresolvable_configuration_does_not_hide_cache_failures(repository, service, monkeypatch, failure):
     from amplifier_web import updates, app_updates
     from amplifier_web.session_files import amplifier_home

@@ -20,7 +20,11 @@ def signature(manager):
     from .session_files import amplifier_home
     from .source_store_repair import change
     from .updates import active_release, foundation_home
-    from .update_sequence import app_selection
+    from .update_sequence import diagnostic_app_selection
+
+    app = diagnostic_app_selection(manager.home)
+    if app is None:
+        return None  # Do not reuse a valid index for unreadable settings.
 
     home = Path(manager.home)
     base = foundation_home(home)
@@ -48,7 +52,7 @@ def signature(manager):
         json.dumps(
             [
                 __version__,
-                app_selection(home)['witness'],
+                app['witness'],
                 active_release(home),
                 stamps,
                 tools,
@@ -72,6 +76,9 @@ async def inventory(manager, scan):
     path = manager.directory / "inventory-index.json"
     key = signature(manager)
     now = time.time()
+    if key is None:
+        manager.inventory_evidence = {"source": "configuration-diagnostics", "scannedAt": now}
+        return await scan()  # No diagnostic-only inventory enters the index.
     try:
         saved = json.loads(path.read_text())
         if (
@@ -93,7 +100,8 @@ async def inventory(manager, scan):
         pass
     rows = await scan()
     # A concurrent registry edit must not be blessed with the new signature.
-    if signature(manager) == key:
+    if (not any(row.get('checkReason') == 'app-selection-unresolved' for row in rows)
+            and signature(manager) == key):
         write_private(
             path,
             json.dumps({"schema": 1, "signature": key, "scannedAt": now, "rows": rows}),

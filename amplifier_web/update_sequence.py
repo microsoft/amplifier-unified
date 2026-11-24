@@ -128,6 +128,17 @@ def app_selection(home, *, config=None, original_home=None):
     return {'sources': list(sources.values()), 'witness': hashlib.sha256(text.encode()).hexdigest()}
 
 
+def diagnostic_app_selection(home):
+    """An unavailable selection permits diagnostics, never a substitute witness."""
+    import yaml
+    try:
+        return app_selection(home)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, yaml.YAMLError):
+        # Settings/parser exceptions can contain credentials and source text.
+        # Installation continues to use the strict reader and verifier below.
+        return None
+
+
 def verify_app_selection(manager, rows, *, stage=None):
     """Require the checked selection, including the copied candidate settings."""
     expected = {row.get('appSelection') for row in rows if row.get('kind') != 'smart tool'}

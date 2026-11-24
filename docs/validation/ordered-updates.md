@@ -29,7 +29,16 @@ and the copied candidate configuration before using that batch. This witness is
 not installation authority: source identity, dirty-tree protection, authored
 dependency constraints, exact checked revisions and offered-profile qualification
 still apply. An unresolvable or ambiguous app selection requires correction
-rather than substitution with a default branch. Discovery reads configuration
+rather than substitution with a default branch. This blocks component installation,
+not diagnostics for already-existing, independently identified app-owned caches.
+Those checks retain actual source failures and an actionable configuration warning,
+without an app-selection witness or new missing-source installation candidates.
+They do not reuse or populate the selected inventory index. Correcting settings
+requires a fresh successful check before installation; diagnostic rows do not
+become authorized merely because settings were repaired during a lookup.
+An unresolved saved-chat or workspace selection that affects usage labels alone
+does not invalidate an otherwise verified global app selection.
+Discovery reads configuration
 and selected shipped declarations, not conversation history or arbitrary cached
 bundle contents.
 
