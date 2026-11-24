@@ -154,16 +154,22 @@ try{
  // group above, not that hidden label, carries the retained-work meaning.
  await expect(workspaceCard.locator('.a-work-status')).toHaveAttribute('data-kind','idle');
  await expect(workspaceCard.locator('.a-work-status')).toHaveText('Saved conversation');
- // Completed todo steps are agent reports, not a completed durable task.
- // Current workspace cards retain the chat; its checklist lives in Overview.
- const planReceipt=await dispatch(page,'session.plans',{ids:[info.sessionId],includeItems:true});
- assert.equal(planReceipt.accepted,true);
- assert.equal(planReceipt.result.items.length,1);
- const recorded=planReceipt.result.items[0];
- assert.equal(recorded.sessionId,info.sessionId);assert.ok(recorded.plan.id);
- assert.equal(recorded.plan.done,1);assert.equal(recorded.plan.total,1);
- assert.deepEqual(recorded.plan.items,[{content:'Review the demo',status:'completed'}]);
- assert.deepEqual(recorded.plan.history.map(({done,total})=>({done,total})),[{done:0,total:1},{done:1,total:1}]);
+ // Verify the actual reported trajectory, not a historical-plan lookup.
+ // Completed checklist items remain agent reports, never durable-task completion.
+ assert.equal(info.planReports.length,2);
+ for(const [index,report] of info.planReports.entries()){
+  const status=index?'completed':'pending',call=`plan-${index}`;
+  assert.deepEqual(report.plan,{items:[{content:'Review the demo',status}]});
+  assert.equal(report.events.length,2);
+  for(const [step,event] of report.events.entries())assert.deepEqual(event,{
+   id:`tool:${info.sessionId}:${call}`,revision:step+1,toolCallId:call,
+   sessionId:info.sessionId,rootSessionId:info.sessionId,kind:'tool',label:'todo',
+   phase:step?'completed':'running'});
+ }
+ const reportedHistory=info.planReports.map(({plan})=>({
+  done:plan.items.filter(item=>item.status==='completed').length,total:plan.items.length}));
+ assert.deepEqual(reportedHistory,[{done:0,total:1},{done:1,total:1}]);
+ const lastReported=info.planReports.at(-1).plan;
  const canvasWasOpen=await page.evaluate(()=>!!window.amplifier.getState().canvas.open);
  await view(page,{workSurface:'chat'});
  if(!canvasWasOpen)await page.getByRole('button',{name:'Open canvas',exact:true}).click();
@@ -177,9 +183,9 @@ try{
  await expect(plan.locator('li')).toHaveCount(1);
  await expect(plan.locator('li > span')).toHaveText('Review the demo');
  await expect(plan.locator('li > small')).toHaveText('Done');
- await expect(plan.getByText('Steps reported by the agent.',{exact:true})).toBeVisible();
+ await expect(plan.getByText('Last checklist reported by the agent.',{exact:true})).toBeVisible();
  const displayedPlan=await page.evaluate(()=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId)?.execution?.plan);
- assert.equal(displayedPlan.id,recorded.plan.id);assert.deepEqual(displayedPlan.items,recorded.plan.items);
+ assert.deepEqual(displayedPlan,lastReported);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),info.sessionId);
  if(!canvasWasOpen)await page.getByRole('button',{name:'Hide canvas',exact:true}).click();
  await expect.poll(()=>page.evaluate(()=>!!window.amplifier.getState().canvas.open)).toBe(canvasWasOpen);
@@ -267,10 +273,10 @@ try{
  assert.ok(await page.locator('#amp-one').evaluate(el=>el.scrollWidth<=el.clientWidth));
  assert.deepEqual(errors,[]);
  await writeFile(output+'/observations.json',JSON.stringify({passed:true,clientSource:component.source,build:component.build,
-  recordedPlan:recorded,displayedPlan,planSemantics:'Initialized canonical-plan DISPLAY coverage only; successful agent-reported todo trajectory, not cold saved-plan rehydration or durable-task/deliverable completion',
+  reportedPlanEvents:info.planReports,reportedHistory,displayedPlan,planSemantics:'Last successful checklist reported through synthetic production event ingress, not historical recovery or durable-task/deliverable completion',
   canvasVisibilityRestored:true,initialCanvasOpen:canvasWasOpen,retainedSessionId:info.sessionId,oldBackupRemoved:true,newBackupKept:true,
   workspaceFilesDeleted:true,chatRetained:true,errors},null,2)+'\n');
- console.log('Readiness102 workspace browser passed: two-device unread acknowledgement, recorded plan expansion, archive/search/reload/restore, storage drilldown and exact-path cleanup with retained chat, dark/reduced-motion narrow layout.');
+ console.log('Readiness102 workspace browser passed: two-device unread acknowledgement, last-reported plan expansion, archive/search/reload/restore, storage drilldown and exact-path cleanup with retained chat, dark/reduced-motion narrow layout.');
 }catch(error){
  failure=error;
  try{await captureQueryFailure(error)}catch(capture){failure=new AggregateError([error,capture],'Readiness failure and evidence retention failure',{cause:error})}

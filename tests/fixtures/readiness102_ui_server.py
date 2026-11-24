@@ -7,7 +7,8 @@ import tempfile
 
 from aiohttp import web
 import settings_ui_server as fixture
-from amplifier_web.event_log_view import event_path
+from amplifier_web.execution_events import ExecutionEvents
+from amplifier_web.runtime import normalize_event
 
 
 async def main(home):
@@ -36,25 +37,33 @@ async def main(home):
     source = service._session()
     sid = source['id']
     source['messages'] = [{'id': 'fixture-message', 'role': 'assistant', 'text': 'This conversation will be retained.'}]
-    path = event_path(source, sid)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    records = []
+    emitted, plan_reports = [], []
+    observer = ExecutionEvents(sid, emitted.append)
     for index, status in enumerate(['pending', 'completed']):
-        records += [{'event': event, 'timestamp': 10+index*2+offset, 'data': {
-            'session_id': sid, 'tool_name': 'todo', 'tool_call_id': f'plan-{index}', **data}}
-            for offset, (event, data) in enumerate([
-                ('tool:pre', {'tool_input': {'action': 'update', 'todos': [{'content': 'Review the demo', 'status': status}]}}),
-                ('tool:post', {'result': {'success': True, 'output': {'status': 'updated', 'count': 1}}}),
-            ])]
-    path.write_text(''.join(json.dumps(row)+'\n' for row in records))
-    # Initialize the visible Plan from the canonical receipts, not invented state.
-    # This fixture covers initialized display, not cold saved-plan rehydration.
-    await service.event_log_view.refresh(sid)
+        call = f'plan-{index}'
+        # Last-reported Plan comes from successful live observations. Do not seed
+        # execution.plan or reconstruct it from retired historical event scans.
+        observer.hook(sid, 'tool:pre', {'session_id': sid, 'tool_name': 'todo',
+            'tool_call_id': call,
+            'tool_input': {'action': 'update', 'todos': [{'content': 'Review the demo', 'status': status}]}})
+        observer.hook(sid, 'tool:post', {'session_id': sid, 'tool_name': 'todo',
+            'tool_call_id': call,
+            'result': {'success': True, 'output': {'status': 'updated', 'count': 1}}})
+        observations = []
+        for event in emitted:
+            kind, payload = normalize_event(event, sid, 'readiness-plan-fixture')
+            await service.on_runtime_event(kind, payload)
+            observations.append({key: payload[key] for key in (
+                'id', 'revision', 'toolCallId', 'sessionId', 'rootSessionId', 'kind', 'label', 'phase')})
+        emitted.clear()
+        plan_reports.append({'events': observations,
+                             'plan': service._session(sid, hydrate=False).get('_reportedPlan')})
     service.state['view'].update(panel=None, workSurface='chat')
     service._publish()
 
     async def info(request):
         return web.json_response({'sessionId': sid, 'workspaceId': wid, 'workspace': str(workspace),
+                                  'planReports': plan_reports,
                                   'filesExist': workspace.exists(),'managedSessionId':managed,'oldBackupExists':(home/'backups'/('a'*32)).exists(),'newBackupExists':(home/'backups'/('b'*32)).exists()})
     app.router.add_get('/api/fixture/readiness', info)
     runner = web.AppRunner(app)
