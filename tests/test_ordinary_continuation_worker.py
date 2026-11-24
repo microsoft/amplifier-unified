@@ -43,6 +43,7 @@ class Provider:
         self.summary_cancelled = asyncio.Event()
         self.summary_returned = asyncio.Event()
         self.summary_requests = []
+        self.summary_budgets = []
         self.maintenance_counts = []
         self.count_unavailable = False
         self.count_failures = 0
@@ -55,6 +56,9 @@ class Provider:
     async def request_budget(self, request, *, require_measurement=False, **kwargs):
         self.counted.append(request.model_copy(deep=True))
         count = len(request.model_dump_json().encode()) // 4
+        if (request.metadata or {}).get("purpose") == "context-compaction":
+            self.summary_budgets.append({"input": count, "limit": 20000,
+                                         "output": request.max_output_tokens})
         if asyncio.current_task().get_name() == "context-managed-settled-compaction":
             self.maintenance_counts.append(count)
             if self.count_unavailable:
@@ -491,10 +495,35 @@ async def automatic_worker(app, config, monkeypatch):
         assert not failures, failures
 
 
-def reducible_history():
+async def wait_for_maintenance_admission(case, task):
+    """An ended maintenance task must not masquerade as an admission timeout."""
+    admitted = asyncio.create_task(case['before_admission'].wait())
+    try:
+        done, _ = await asyncio.wait({admitted, task}, timeout=10,
+                                     return_when=asyncio.FIRST_COMPLETED)
+        if task in done:
+            # Propagate the actual exception/cancellation, without invoking or
+            # retrying maintenance. Successful early exit is also not admission.
+            await task
+            pytest.fail('Maintenance ended before model admission')
+        assert admitted in done, 'Maintenance neither ended nor reached model admission in 10s'
+    finally:
+        case['admissionWait'] = {'admitted': case['before_admission'].is_set(),
+                                 'maintenanceDone': task.done(),
+                                 'maintenanceCancelled': task.cancelled()}
+        if task.done() and not task.cancelled() and (error := task.exception()) is not None:
+            case['admissionWait']['error'] = {
+                'type': type(error).__name__, 'code': getattr(error, 'code', None), 'message': str(error)}
+        admitted.cancel()
+        await asyncio.gather(admitted, return_exceptions=True)
+
+
+def reducible_history(filler_size=24000):
+    # Above the measured 4k maintenance trigger, but small enough for the FULL
+    # summary request plus its unchanged 8192-token output reservation.
     return [
         {'role': 'user', 'content': 'SOURCE-OBJECTIVE: preserve originals and never replay.'},
-        {'role': 'assistant', 'content': 'Settled research ' + 'e' * 50000},
+        {'role': 'assistant', 'content': 'Settled research ' + 'e' * filler_size},
         {'role': 'assistant', 'content': '', 'tool_calls': [
             {'id': 'history-tool', 'name': 'already_completed', 'arguments': {}}]},
         {'role': 'tool', 'tool_call_id': 'history-tool', 'content': 'Completed once: source-receipt.'},
@@ -506,7 +535,8 @@ def reducible_history():
 
 
 @pytest.mark.parametrize('outcome', ['success', 'host-stop', 'worker-stop', 'late-stop',
-                                    'configuration', 'generation', 'persist-failure', 'count-unavailable'])
+                                    'configuration', 'generation', 'persist-failure', 'count-unavailable',
+                                    'oversized-summary'])
 async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, monkeypatch, outcome):
     from amplifier_web.service import AppService
     from amplifier_web import context_continuity
@@ -514,13 +544,16 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
     workspace, bundle = offline_bundle(tmp_path, monkeypatch, 'automatic' + outcome.replace('-', ''))
     app = AppService(tmp_path / 'service', workspace=workspace)
     record = {'outcome': outcome}
+    case = None
     try:
         await app.dispatch('session.create', {})
         session = app._session()
         sid = session['id']
         await app.dispatch('assignment.start', {'sessionId': sid}, origin='ui')
         config = {'id': sid, 'workspace': str(workspace), 'bundle': str(bundle)}
-        source = reducible_history()
+        # Retain the original contradictory workload as a separate refusal
+        # control, not as the precondition of the seven admission scenarios.
+        source = reducible_history(50000 if outcome == 'oversized-summary' else 24000)
         async with automatic_worker(app, config, monkeypatch) as case:
             worker, context, raw = case['worker'], case['context'], case['raw']
             record['origins'] = case['origins']
@@ -553,8 +586,13 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
             canonical = copy.deepcopy(await context.get_messages())
             assert canonical[:len(source)] == source
 
-            if outcome != 'count-unavailable':
-                await asyncio.wait_for(case['before_admission'].wait(), 10)
+            if outcome not in {'count-unavailable', 'oversized-summary'}:
+                await wait_for_maintenance_admission(case, task)
+                assert raw.maintenance_counts[0] > 20000 * .2
+                assert len(raw.summary_budgets) == 1
+                budget = raw.summary_budgets[0]
+                assert budget['output'] == 8192
+                assert budget['input'] + budget['output'] <= budget['limit'] == 20000
             if outcome == 'host-stop':
                 session['interruptionRevision'] = session.get('interruptionRevision', 0) + 1
             elif outcome == 'configuration':
@@ -614,6 +652,16 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
                     assert isinstance(settled[0], TimeoutError), settled
                     assert raw.count_failures == 1 and not maintenance
                     assert not raw.summary_entered.is_set()
+                elif outcome == 'oversized-summary':
+                    from amplifier_module_context_managed.errors import CompactionError
+                    assert isinstance(settled[0], CompactionError), settled
+                    assert settled[0].code == 'summary_archive_required'
+                    assert context.config['archive_recovery'] is False
+                    assert not maintenance and not raw.summary_entered.is_set()
+                    assert len(raw.summary_budgets) == 1
+                    budget = raw.summary_budgets[0]
+                    assert budget['output'] == 8192
+                    assert budget['input'] + budget['output'] > budget['limit'] == 20000
             assert [e['text'] for e in case['events'] if e.get('type') == 'assistant.message'] == ['Ordinary answer completed.']
             assert not any(e.get('type') in {'generation.failed', 'runtime.error'} or
                            e.get('op') == 'reply' and e.get('error') for e in case['events'])
@@ -650,7 +698,11 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
                     'input_id': 'replacement-input', 'text': 'Answer about the newer evidence.'})
                 await asyncio.wait_for(case['scheduled'].wait(), 30)
                 await asyncio.wait_for(case['finished'].wait(), 30)
-                await asyncio.wait_for(case['before_admission'].wait(), 10)
+                await wait_for_maintenance_admission(case, case['schedules'][-1]['task'])
+                assert len(raw.summary_budgets) == 2
+                budget = raw.summary_budgets[-1]
+                assert budget['output'] == 8192
+                assert budget['input'] + budget['output'] <= budget['limit'] == 20000
                 await until(worker.idle)
                 assert raw.calls == ['foreground', 'summary', 'foreground']
                 second_canonical = copy.deepcopy(await context.get_messages())
@@ -713,5 +765,11 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
                                       'restoreTransitions': restores,
                                       'calls': next_raw.calls, 'counted': len(next_raw.counted)}
     finally:
+        if case is not None:
+            record.update(
+                scheduler=[{k: v for k, v in row.items() if k != 'task'} for row in case['schedules']],
+                admissions=case['admissions'], events=case['events'],
+                maintenanceCounts=case['raw'].maintenance_counts, calls=case['raw'].calls,
+                summaryBudgets=case['raw'].summary_budgets, admissionWait=case.get('admissionWait'))
         print('AUTOMATIC-WORKER-COMPACTION', json.dumps(record, default=str))
         await app.close()
