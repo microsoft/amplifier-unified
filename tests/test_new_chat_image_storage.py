@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import copy
+import os
 
 import pytest
 
@@ -31,10 +32,10 @@ async def test_only_new_root_chats_in_the_opted_in_private_home_keep_the_choice(
     restored = AppService(home, ServiceRuntime(), workspace=tmp_path)
     try:
         marked = restored._session(new)
-        assert marked['composerImageReferences'] is True
+        assert (marked.get('composerImageReferences') is True) == (os.name == 'posix')
         assert attachments.encoder_for_session(marked) is attachments.encode
         monkeypatch.setenv('AMPLIFIER_HOME', str(home / 'native'))
-        assert attachments.encoder_for_session(marked) is not attachments.encode
+        assert (attachments.encoder_for_session(marked) is not attachments.encode) == (os.name == 'posix')
         for sid in (old, internal, shared):
             session = restored._session(sid)
             assert 'composerImageReferences' not in session
@@ -43,6 +44,7 @@ async def test_only_new_root_chats_in_the_opted_in_private_home_keep_the_choice(
         await restored.close()
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='Native compact writes are POSIX-only')
 async def test_ordinary_inline_provider_sees_only_the_same_admitted_composer_upload(tmp_path, monkeypatch):
     from amplifier_core.message_models import ChatRequest, Message
     from amplifier_module_loop_live.runtime import Input, Runtime
@@ -130,3 +132,21 @@ async def test_ordinary_inline_provider_sees_only_the_same_admitted_composer_upl
             await runtime.submit(Input('stop'))
         await asyncio.wait_for(execution, 5)
         await session.cleanup()
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='Private POSIX native home')
+def test_linked_shared_history_never_enables_compact_writes(tmp_path, monkeypatch):
+    native = tmp_path / 'app' / 'native'
+    native.mkdir(parents=True)
+    monkeypatch.setenv('AMPLIFIER_HOME', str(native))
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('AMPLIFIER_UNIFIED_COMPACT_CHAT_IMAGES', '1')
+    args = (native.parent, tmp_path, 'test-session')
+    assert attachments.compact_images_for_new_chat(*args)
+    shared = tmp_path / '.amplifier'
+    shared.symlink_to(native, target_is_directory=True)
+    assert not attachments.compact_images_for_new_chat(*args)
+    shared.unlink()
+    shared.mkdir()
+    (native / 'projects').symlink_to(shared, target_is_directory=True)
+    assert not attachments.compact_images_for_new_chat(*args)

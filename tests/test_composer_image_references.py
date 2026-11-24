@@ -109,7 +109,7 @@ async def test_compact_images_preserve_positions_and_the_original_files(root):
         prepared.release()
 
 
-@pytest.mark.parametrize("reason", ["default", "not-ready", "missing-checkpoint", "service", "literal-marker", "ttl",
+@pytest.mark.parametrize("reason", ["default", "not-ready", "missing-checkpoint", "older-store", "service", "literal-marker", "ttl",
                                     "request-only", "drop", "over-limit", "corrupt", "static-gif"])
 def test_ineligible_and_invalid_uploads_do_not_create_media(root, reason):
     png = image_bytes("PNG", "pink")
@@ -120,6 +120,8 @@ def test_ineligible_and_invalid_uploads_do_not_create_media(root, reason):
     cmd = command(upload)
     if reason == "not-ready":
         root.caps[NAMESPACE].enabled = False
+    if reason == "older-store":
+        root.media._retire_committed_stage = None
     if reason == "missing-checkpoint":
         root.caps.pop("session.durable_checkpoint")
     if reason == "literal-marker":
@@ -158,3 +160,23 @@ async def test_mixed_png_and_gif_keep_distinct_issuance_and_positions(root):
     request = ChatRequest(messages=[Message(**user)], model="offline", conversation_id=root.sid)
     assert root.registry.bind(request)
     assert root.registry.validate(request, message_index=0, block_index=2, purpose="count")
+
+
+async def test_failed_publication_leaves_same_input_retryable(root, monkeypatch):
+    uploads = [add(root, name + '.png', image_bytes('PNG', name)) for name in ('red', 'blue')]
+    cmd = command(*uploads)
+    publish = root.media.publish_sync
+
+    def fail_second(refs, *, origin, disposition):
+        if origin['id'] == uploads[1]['id']:
+            raise OSError('storage unavailable')
+        return publish(refs, origin=origin, disposition=disposition)
+
+    monkeypatch.setattr(root.media, 'publish_sync', fail_second)
+    with pytest.raises(OSError, match='storage unavailable'):
+        attachments.encode(cmd, root.coordinator, image_references=True)
+    assert cmd.id not in root.registry.uploads and not root.rows
+    monkeypatch.setattr(root.media, 'publish_sync', publish)
+    content = attachments.encode(cmd, root.coordinator, image_references=True)
+    await root.context.add_message({'role': 'user', 'metadata': {'amplifier_input': {'id': cmd.id}}, 'content': content})
+    assert [r['provenance']['id'] for r in content.refs] == [u['id'] for u in uploads]

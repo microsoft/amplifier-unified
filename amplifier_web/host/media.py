@@ -217,10 +217,10 @@ class RequestOnlyRegistry:
             entry["refs"] = _digest(refs)
         if input_id in self.uploads and self.uploads[input_id] != entry:
             raise ValueError("Admitted upload input identity cannot be rebound")
-        self.uploads[input_id] = entry
         if self.issuance_path is not None:
             from .config import write_private
-            write_private(self.issuance_path, json.dumps({"v": 1, "inputs": self.uploads}))
+            write_private(self.issuance_path, json.dumps({"v": 1, "inputs": {**self.uploads, input_id: entry}}))
+        self.uploads[input_id] = entry
 
     def issued_composer_refs(self, input_id, content, refs):
         """Only the exact ordered images and content admitted with this user input."""
@@ -253,14 +253,14 @@ class RequestOnlyRegistry:
             self.requests[id(request)] = (request, slots)
         return bool(slots)
 
-    def validate(self, request, *, message_index, block_index, purpose):
+    def validate(self, request, *, message_index, block_index, purpose, upload_only=False):
         row = self.requests.get(id(request))
         if row is None or row[0] is not request:
             return False
         block = request.messages[message_index].content[block_index]
         return any(i == message_index and j == block_index and original is block
                    and _digest(block.source) == digest
-                   and (owner is None or owner is asyncio.current_task() and not owner.done())
+                   and (owner is None or not upload_only and owner is asyncio.current_task() and not owner.done())
                    and (validate is None or validate() is True)
                    for i, j, original, digest, validate, owner in row[1])
 
@@ -514,6 +514,11 @@ class WarningProjection:
         self.source, self.snapshot = request, request.model_copy(deep=True)
         self.options = effective_options(request, options)
         self.request = request.model_copy(deep=True)
+        # Clear the private sources even when a provider retains the request or
+        # a block after its fit. The canonical messages are never touched.
+        self.image_sources = [block.source for message in self.request.messages
+                              if isinstance(message.content, list) for block in message.content
+                              if block.type == "image"]
         for message in self.request.messages:
             if NAMESPACE in (message.metadata or {}):
                 message.metadata = {key: value for key, value in message.metadata.items() if key != NAMESPACE}
@@ -531,6 +536,12 @@ class WarningProjection:
             raise ValueError("Reference-only request changed after fitting")
 
     def release(self):
+        if self.request is None:
+            return
+        for source in self.image_sources:
+            source.clear()
+        self.image_sources.clear()
+        self.request.messages = []
         registry = self.coordinator.get_capability("web.media.request_only") if self.coordinator is not None else None
         if registry is not None:
             registry.release(self.source)
@@ -555,6 +566,10 @@ async def prepare_media(coordinator, provider, request, *, request_options=None)
         return await legacy_projection(coordinator, provider, request, options)
     model = _effective_model(provider, request, options)
     support = _support(provider, request, model, options)
+    from .composer_replay import ordinary_upload_projection
+    ordinary = await ordinary_upload_projection(coordinator, provider, request, options, model, support)
+    if ordinary is not None:
+        return ordinary
     if not support["positions"]:
         # Valid unsupported facts are an initial, unmarked text-only fit.
         # Never hydrate or hand a marked warning to a provider that correctly

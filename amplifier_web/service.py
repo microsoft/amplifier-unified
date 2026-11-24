@@ -2664,7 +2664,9 @@ class AppService:
                     raise AppError('The app changed. Refresh its state and retry.', 409)
                 try:
                     selection(args.get('selection', {}))
-                    prepare(self, args, origin, caller_session_id)
+                    if managed_creation:
+                        prepared_identity = creation_identity(self.data_dir, args, command_id)
+                    prepare(self, args, origin, caller_session_id, prepared_identity=prepared_identity)
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
                 if args.get('select', True):
@@ -2676,10 +2678,6 @@ class AppService:
             # Opening/editing a draft never creates directories. First submit
             # creates only its explicit path, away from the event loop and lock.
             if managed_creation:
-                prepared_identity = creation_identity(self.data_dir, args, command_id)
-                from .managed_deletion import removed
-                if removed(self.db, prepared_identity):
-                    raise AppError("This conversation was permanently deleted. Start a new chat instead.", 409)
                 try:
                     prepared_workspace = await asyncio.to_thread(allocate, self.data_dir, prepared_identity, command_id or prepared_identity)
                 except (ValueError, OSError) as exc:
@@ -3277,7 +3275,7 @@ class AppService:
                     raise AppError('Choose a workspace folder before starting this chat.')
                 from .session_creation import prepare, apply
                 try:
-                    inherited = prepare(self, args, origin, caller_session_id)
+                    inherited = prepare(self, args, origin, caller_session_id, prepared_identity=prepared_identity)
                     session = self._new_session({**args, 'workspace': prepared_workspace} if prepared_workspace else args,
                                                 new_root=True)
                     if args.get('id') or prepared_identity: session['id'] = args.get('id') or prepared_identity
@@ -3329,7 +3327,7 @@ class AppService:
                     from .attachments import compact_images_for_new_chat
                     if (session.get('sessionKind') == 'root' and not session.get('externalAgent')
                             and origin in {'ui', 'user'} and not args.get('inheritConfiguration')
-                            and not caller_session_id and compact_images_for_new_chat(self.data_dir)):
+                            and not caller_session_id and compact_images_for_new_chat(self.data_dir, session['workspace'], session['id'])):
                         session['composerImageReferences'] = True
                     if args.get('fromDraft') and command_id:
                         session['creationCommandId'] = command_id

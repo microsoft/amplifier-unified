@@ -17,6 +17,7 @@ def inline_content(content, refs, image_source):
         start = pos + 1
     return blocks
 
+
 def _uploads(row):
     from .host.media import NAMESPACE
     carrier = (row.get('metadata') or {}).get(NAMESPACE)

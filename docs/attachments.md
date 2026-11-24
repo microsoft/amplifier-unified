@@ -45,6 +45,7 @@ The setting applies at creation to ordinary native chats. Existing chats,
 shared native homes, external agents and Windows continue to use their usual
 format. Turning the setting off keeps future chats inline. Previously enrolled
 chats retain their choice across worker restarts in the same private home.
+Older Foundation selections that keep staging files after a checkpoint use inline uploads.
 GIF and WebP uploads retain their existing inline representation. Images that
 cannot be safely admitted follow the existing image policy.
 
