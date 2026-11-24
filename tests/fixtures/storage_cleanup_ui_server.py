@@ -83,6 +83,13 @@ async def main(home):
                 result = row['lastOperation']['result']
                 result['retention'].update(archiveBytes=10240, totalBytes=11264, policy='full')
                 result['archives'] = [{'id': 'test-environment', 'source': '/', 'bytes': 10240, 'sha256': 'f'*64, 'verified': True}]
+            if index == 30:
+                result = row['lastOperation']['result']
+                archive = result['archives'][1]
+                archive['logicalBytes'] = 512
+                result['archives'] = [archive]
+                result['retention'] = {'verified': True, 'policy': 'selected-artifacts', 'format': 'tar',
+                    'selection': ['/artifacts'], 'sourceSha256': 'c'*64, 'archiveBytes': 2048, 'logicalBytes': 512}
             if index == 31:
                 row['testMachine'] = {'id': 'fixture-remote'}
                 result = row['lastOperation']['result']
