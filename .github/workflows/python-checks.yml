@@ -17,6 +17,7 @@ on:
           - managed-removal-recovery
           - fresh-cleanup-native
           - prepared-runtime-native
+          - prepared-default-native
           - shared-work-continuity
           - manager-exception-boundary
           - remote-test-origins
@@ -33,7 +34,7 @@ on:
           - live-first-send
           - live-first-accepted-graph
       candidate_ref:
-        description: Optional full same-repository candidate SHA for prepared-runtime-native (tests remain at the selected workflow revision)
+        description: Optional full same-repository candidate SHA for either prepared native suite (tests remain at the selected workflow revision)
         type: string
         default: ''
       core_wheels:
@@ -52,7 +53,7 @@ permissions:
   contents: read
 jobs:
   python:
-    if: ${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' && inputs.suite != 'updater-omitted-ref' && inputs.suite != 'updater-public-selected-source' && inputs.suite != 'updater-synthetic-acquisition' && inputs.suite != 'updater-expanded-lock' && inputs.suite != 'fresh-cleanup-native' && inputs.suite != 'prepared-runtime-native' }}
+    if: ${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' && inputs.suite != 'updater-omitted-ref' && inputs.suite != 'updater-public-selected-source' && inputs.suite != 'updater-synthetic-acquisition' && inputs.suite != 'updater-expanded-lock' && inputs.suite != 'fresh-cleanup-native' && inputs.suite != 'prepared-runtime-native' && inputs.suite != 'prepared-default-native' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -1032,13 +1033,13 @@ jobs:
           retention-days: 14
 
   prepared-runtime-native:
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && inputs.suite == 'prepared-runtime-native' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && (inputs.suite == 'prepared-runtime-native' || inputs.suite == 'prepared-default-native') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     permissions:
       contents: read
     env:
-      CHECK_SUITE: prepared-runtime-native
+      CHECK_SUITE: ${{ inputs.suite }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -1095,13 +1096,13 @@ jobs:
         run: |
           set -euo pipefail
           if test -n "$CANDIDATE_REF"; then export NATIVE_CANDIDATE_ROOT="$GITHUB_WORKSPACE/.ci/candidate"; fi
-          mkdir -p output/prepared-runtime-native
-          python -u scripts/fresh_cleanup_native_checks.py 2>&1 | tee output/prepared-runtime-native/driver.log
+          mkdir -p "output/$CHECK_SUITE"
+          python -u scripts/fresh_cleanup_native_checks.py 2>&1 | tee "output/$CHECK_SUITE/driver.log"
       - name: Retain results and failed prerequisites
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: prepared-runtime-native-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: output/prepared-runtime-native/
+          name: ${{ inputs.suite }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/${{ inputs.suite }}/
           if-no-files-found: error
           retention-days: 14

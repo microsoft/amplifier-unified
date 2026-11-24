@@ -16,7 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SUITES = {'fresh-cleanup-native': ('test_environment_fresh_cleanup_native.py',
                                   ['test_native_unknown_cleanup_keeps_history_and_preserves_current_files']),
           'prepared-runtime-native': ('test_prepared_preset_native.py',
-              ['test_native_default_prepared_preset_runtime[' + p + ']' for p in ('python-project', 'browser-test')])}
+              ['test_native_default_prepared_preset_runtime[' + p + ']' for p in ('python-project', 'browser-test')]),
+          'prepared-default-native': ('test_prepared_preset_native.py',
+              ['test_native_current_prepared_preset_defaults[' + p + ']' for p in ('python-project', 'browser-test')])}
 
 
 def run(args, *, cwd=ROOT, **kwargs):
@@ -51,7 +53,8 @@ def verify_cases(code, xml, suite):
 
 def main():
     suite = os.environ['CHECK_SUITE']
-    filename, _ = SUITES[suite]
+    filename, names = SUITES[suite]  # Reject unknown scope before any native effect.
+    targets = [filename + '::' + name for name in names]
     output = ROOT / 'output' / suite
     output.mkdir(parents=True, exist_ok=True)
     source = Path(os.environ.get('NATIVE_CANDIDATE_ROOT', str(ROOT))).resolve()
@@ -60,7 +63,7 @@ def main():
     root.mkdir(mode=0o700)
     assert sys.platform == 'linux' and os.environ['GITHUB_ACTIONS'] == 'true'
     assert git(ROOT, 'rev-parse', 'HEAD') == os.environ['GITHUB_SHA']
-    selected = {'suite': suite, 'fullSuite': False, 'targets': ['tests/' + filename],
+    selected = {'suite': suite, 'fullSuite': False, 'targets': ['tests/' + target for target in targets],
                 'revision': git(ROOT, 'rev-parse', 'HEAD'), 'tree': git(ROOT, 'rev-parse', 'HEAD^{tree}'),
                 'candidate': git(source, 'rev-parse', 'HEAD'), 'candidateTree': git(source, 'rev-parse', 'HEAD^{tree}'),
                 'runId': os.environ['GITHUB_RUN_ID'], 'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
@@ -101,7 +104,7 @@ wheel,source=map(Path,sys.argv[1:]);d=m.distribution('amplifier-unified');out={}
 assert json.loads(d.read_text('direct_url.json'))['url']==wheel.as_uri()
 with zipfile.ZipFile(wheel) as z:
  records=dict((r[0],r[1:]) for r in csv.reader(io.StringIO(z.read(next(n for n in z.namelist() if n.endswith('.dist-info/RECORD'))).decode())))
- for n in ('task_environments','test_environment_worker','environment_cleanup_execution','environment_cleanup_launcher','environment_retention'):
+ for n in ('task_environments','test_environment_worker','test_environment_profiles','test_environment_preparation','test_environment_initialize_guest','environment_cleanup_execution','environment_cleanup_launcher','environment_retention'):
   p=Path(importlib.import_module('amplifier_web.'+n).__file__).resolve();member='amplifier_web/'+n+'.py'
   assert p.is_relative_to(Path(sys.prefix)) and p.read_bytes()==z.read(member)==(source/member).read_bytes()
   assert records[member]==['sha256='+base64.urlsafe_b64encode(hashlib.sha256(p.read_bytes()).digest()).decode().rstrip('='),str(len(p.read_bytes()))]
@@ -120,7 +123,7 @@ print(json.dumps({'prefix':sys.prefix,'wheelSha256':hashlib.sha256(wheel.read_by
     with (output / 'pytest.log').open('w') as stream:
         result = subprocess.run([str(python), '-I', '-c', bootstrap, str(harness), '-p', 'pytest_asyncio.plugin',
             '-c', '/dev/null', '--rootdir=' + str(harness), '-p', 'no:cacheprovider',
-            '-o', 'asyncio_mode=auto', '-v', '-s', '--tb=short', filename,
+            '-o', 'asyncio_mode=auto', '-v', '-s', '--tb=short', *targets,
             '--junitxml=' + str(output / 'junit.xml')], cwd=harness, env=env, stdout=stream, stderr=subprocess.STDOUT, timeout=2100)
     count = verify_cases(result.returncode, (output / 'junit.xml').read_bytes(), suite)
     record(output / 'result.json', {**selected, 'native': 'passed', 'passed': True, 'cases': count, 'returncode': result.returncode})
