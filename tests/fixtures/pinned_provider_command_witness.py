@@ -35,7 +35,7 @@ SCHEMA = {
     "stderr": {"headerVerb": VERBS, "headerRef": REF_VALUES, "contextRef": REF_VALUES,
                "nestedRef": REF_VALUES, "packageContext": ROLES,
                "headerSeen": bool, "nestedMarkerSeen": bool, "overflow": bool,
-               "captureTruncated": bool},
+               "captureTruncated": bool, "unsupportedControl": bool},
     "prepare": {"entered": {0, 1}, "refusedSecond": {0, 1},
                 "outcome": {"raised", "interrupted", "returned", "refused"}},
     "overflow": {"overflow": {True}},
@@ -124,7 +124,7 @@ def stderr_record(capture):
     result = {"headerVerb": "unknown", "headerRef": "unknown", "contextRef": "unknown",
               "nestedRef": "unknown", "packageContext": "unknown", "headerSeen": False,
               "nestedMarkerSeen": False, "overflow": len(data) > SCAN_BYTES,
-              "captureTruncated": capture.truncated}
+              "captureTruncated": capture.truncated, "unsupportedControl": False}
     headers, contexts, nested, packages = [], [], [], []
     names = {"amplifier-module-provider-openai": "provider", "amplifier-core": "core",
              "amplifier-foundation": "foundation"}
@@ -136,6 +136,7 @@ def stderr_record(capture):
             result["overflow"] = True
             continue
         if any(ord(char) < 32 or 127 <= ord(char) < 160 for char in line):
+            result["unsupportedControl"] = True
             continue
         # Only known display decoration is removable, not arbitrary prefixes.
         line = line.lstrip(" \u2502\u251c\u2514\u2570\u2500\u25b6\u00d7")
@@ -177,9 +178,11 @@ def stderr_record(capture):
                   packageContext=_choice(packages))
     # A prefix is not complete command evidence. Preserve that the shape was seen,
     # but do not certify its reference/package classification.
-    if result["overflow"] or result["captureTruncated"]:
+    if result["overflow"] or result["captureTruncated"] or result["unsupportedControl"]:
         for field in ("headerVerb", "headerRef", "contextRef", "nestedRef", "packageContext"):
             result[field] = "unknown"
+        if result["unsupportedControl"]:
+            result["headerSeen"] = result["nestedMarkerSeen"] = False
     return result
 
 

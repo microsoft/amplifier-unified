@@ -85,7 +85,8 @@ def test_header_context_and_nested_error_are_separate_closed_facts():
     row = witness.stderr_record(value)
     assert row == {"headerVerb": "rev-parse", "headerRef": "origin-main-peel", "contextRef": "main",
                    "nestedRef": "origin-main-peel", "packageContext": "provider", "headerSeen": True,
-                   "nestedMarkerSeen": True, "overflow": False, "captureTruncated": False}
+                   "nestedMarkerSeen": True, "overflow": False, "captureTruncated": False,
+                   "unsupportedControl": False}
     assert bytes(value.data) == before
     assert all(marker not in json.dumps(row) for marker in (SECRET, "private", "example.invalid", "user:secret"))
     assert witness.stderr_record(capture("--- stderr\nprocess didn't exit successfully: `git rev-parse main`"))["headerVerb"] == "unknown"
@@ -118,6 +119,18 @@ def test_stderr_unknown_ambiguous_and_invalid_shapes():
 def test_stderr_embedded_names_headers_and_controls_are_not_attribution(text):
     row = witness.stderr_record(capture(text))
     assert row["packageContext"] == row["headerVerb"] == row["headerRef"] == "unknown"
+
+
+@pytest.mark.parametrize("separator", ["--- stderr\r", "\x1b[31m--- stderr", "--- stderr\x00",
+                                       "\x85--- stderr", "\t--- stderr"])
+def test_unsupported_control_cannot_erase_nested_boundary(separator):
+    row = witness.stderr_record(capture(
+        "Failed to download `amplifier-core`\n" + separator + "\n"
+        "process didn't exit successfully: `git rev-parse main`\n"))
+    assert row["unsupportedControl"] and not row["overflow"] and not row["captureTruncated"]
+    assert not row["headerSeen"] and not row["nestedMarkerSeen"]
+    assert all(row[field] == "unknown" for field in (
+        "headerVerb", "headerRef", "contextRef", "nestedRef", "packageContext"))
 
 
 @pytest.mark.parametrize("text,truncated", [("x" * 2049, False), ("\n" * 257, False),
