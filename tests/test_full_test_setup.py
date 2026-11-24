@@ -98,10 +98,25 @@ async def test_mounted_full_child_setup_survives_completed_turn_without_browser(
 
 
 async def test_later_full_child_observes_and_cleans_original_unknown_setup(mounted, backend, monkeypatch):
+    from amplifier_web.collaboration import BINDING, PRINCIPAL
+
     h = mounted
     await save(h.app)
+    host_dispatch = h.app.dispatch
     backend.unknown = True
     results = []
+    reconciliation_calls = []
+    reconcile = setup.reconcile
+
+    async def traced_reconcile(app, args, actor, guard=None, *, authority=None, origin=None):
+        call = {'actor': deepcopy(actor), 'authority': deepcopy(authority),
+                'origin': origin, 'activeBefore': sorted(getattr(app, '_test_setup_tasks', {}))}
+        reconciliation_calls.append(call)
+        result = await reconcile(app, args, actor, guard, authority=authority, origin=origin)
+        call['result'] = deepcopy(result)
+        return result
+
+    monkeypatch.setattr(setup, 'reconcile', traced_reconcile)
 
     async def execute(self, prompt, context, providers, tools, hooks, coordinator):
         args = arguments(h.app, h.source)
@@ -151,6 +166,14 @@ async def test_later_full_child_observes_and_cleans_original_unknown_setup(mount
     assert retained['reconciliation']['actor']['principal'] == 'later-child'
     assert retained['cleanup']['actor']['principal'] == 'later-child'
     assert retained['cleanup']['authority']['generationId'] == 'generation-2'
+    child_actor = {'sessionId': h.source['id'], 'principal': 'later-child',
+                   'origin': 'agent', 'generationId': 'generation-2'}
+    assert retained['reconciliation']['actor'] == child_actor
+    assert retained['cleanup']['actor'] == child_actor
+    for captured in (retained['reconciliation']['authority'], retained['cleanup']['authority']):
+        assert captured['origin'] == 'agent' and captured['runtimeSessionId'] == 'later-child'
+        assert captured['inputIds'] == ['followup-input'] and captured['inputCoverage'] == 'complete'
+    assert reconciliation_calls[0]['actor'] == child_actor
     assert [command[-2:] for command in effects] == [['stop', 'owned-probe'], ['rm', 'owned-probe']]
     assert backend.calls == ['probe'] and len(set(observed)) == 1
     backend.installed.assert_awaited_once()
@@ -159,14 +182,32 @@ async def test_later_full_child_observes_and_cleans_original_unknown_setup(mount
     cleanup = deepcopy(retained['cleanup'])
     args = arguments(h.app, h.source)
     args.pop('backend')
+    # A direct trusted-system call is distinct from the child tool's captured
+    # bridge. Do not silently bless the preceding child's receipt as its result.
+    assert h.app.dispatch == host_dispatch
+    assert PRINCIPAL.get() is None and BINDING.get() is None
+    assert original['id'] not in getattr(h.app, '_test_setup_tasks', {})
     reconciled = await h.app.dispatch('workspace.environments.setup.reconcile', args,
         origin='system', caller_session_id=h.source['id'])
+    assert len(reconciliation_calls) == 2, reconciliation_calls
+    system_actor = {'sessionId': h.source['id'], 'principal': None,
+                    'origin': 'system', 'generationId': None}
+    system_call = reconciliation_calls[-1]
+    assert system_call['actor'] == system_actor, reconciliation_calls
+    assert not reconciled['result'].get('active'), reconciliation_calls
+    assert reconciled['result']['operation']['id'] == original['id']
     latest = record(h.app)
     assert latest['cleanup']['actor'] == cleanup['actor']
     assert latest['cleanup']['authority'] == cleanup['authority']
     assert latest['cleanup']['createdAt'] == cleanup['createdAt']
-    assert latest['reconciliation']['actor']['origin'] == 'system'
+    assert latest['reconciliation']['actor']['origin'] == 'system', reconciliation_calls
     assert latest['reconciliation']['actor']['principal'] is None
+    assert latest['reconciliation']['actor'] == system_actor
+    system_authority = latest['reconciliation']['authority']
+    assert system_authority == system_call['authority']
+    assert system_authority['origin'] == 'system' and system_authority['runtimeSessionId'] is None
+    assert system_authority['generationId'] is None and system_authority['inputIds'] == []
+    assert system_authority['inputCoverage'] == 'unavailable'
     assert latest['actor'] == original['actor'] and latest['authority'] == original['authority']
     public_cleanup = reconciled['result']['operation']['cleanup']
     assert 'actor' not in public_cleanup and 'authority' not in public_cleanup
