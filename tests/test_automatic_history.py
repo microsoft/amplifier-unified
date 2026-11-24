@@ -110,8 +110,9 @@ async def finish_actions(app):
 
 @pytest.mark.parametrize('force', [False, True])
 @pytest.mark.parametrize('action', ['list', 'read'])
+@pytest.mark.parametrize('notification', ['targeted', 'project'])
 async def test_history_tool_does_not_wait_for_unrelated_browser_history(
-        tmp_path, app_factory, monkeypatch, force, action):
+        tmp_path, app_factory, monkeypatch, record_property, force, action, notification):
     import threading
     from amplifier_web import automatic_history
 
@@ -119,7 +120,13 @@ async def test_history_tool_does_not_wait_for_unrelated_browser_history(
     native_session(workspace, 'browser-history')
     native_session(workspace, 'requested-history')
     app = app_factory(workspace=workspace)
-    await app.history.refresh()
+    for _ in range(16):
+        await app.history.refresh()
+        assert app.state['sharedHistory']['error'] is None
+        if app.state['sharedHistory']['reconciliation']['phase'] == 'complete':
+            break
+    else:
+        pytest.fail('The small native fixture did not finish bounded setup')
     selected = app._session('browser-history', hydrate=False)
     caller = app._session('requested-history', hydrate=False)
     app.state['selectedSessionId'] = selected['id']
@@ -147,12 +154,35 @@ async def test_history_tool_does_not_wait_for_unrelated_browser_history(
         # not a promise that every new session in that project was enumerated.
         native_session(workspace, 'new-history')
         assert app.directory.resolve('new-history') is None
+        dirty = ({(project_slug(workspace), 'new-history', 'metadata')}
+                 if notification == 'targeted' else {project_slug(workspace)})
         monkeypatch.setattr(app.history.index, '_invalidations',
-                            lambda: (True, {(project_slug(workspace), 'new-history', 'metadata')}))
+                            lambda: (True, dirty.copy()))
+        if notification == 'project':
+            app.history.index._recovery_budget = 1
+            monkeypatch.setattr(app.history.index, '_directories',
+                                lambda *a, **kw: pytest.fail('No eager project enumeration'))
         args = {'action': action}
         if action == 'read':
             args['session_id'] = caller['id']
-        query = asyncio.create_task(app.app_bridge('history', args, caller['id']))
+        coverage = []
+        async def discover():
+            # Preserve the broad-hint case without assuming its first bounded
+            # slice covers every entry. The SAME2s contention deadline covers
+            # all queries together; no preparatory refresh discovers the new row.
+            for _ in range(64 if notification == 'project' else 1):
+                result = await app.app_bridge('history', args, caller['id'])
+                assert not refreshing.done()
+                assert result['discovery']['error'] is None
+                phase = result['discovery']['reconciliation']['phase']
+                coverage.append({'phase': phase, 'complete': result['complete']})
+                if phase != 'complete':
+                    assert result['complete'] is False
+                if app.directory.resolve('new-history') is not None:
+                    return result
+                assert notification == 'project'
+            pytest.fail('The bounded tool queries never discovered the new session')
+        query = asyncio.create_task(discover())
         done, _ = await asyncio.wait({query}, timeout=2)
         assert query in done, 'History tool waited for an unrelated browser transcript'
         result = query.result()
@@ -167,6 +197,11 @@ async def test_history_tool_does_not_wait_for_unrelated_browser_history(
         assert reads.count(selected['id']) == 1
         assert app.state['selectedSessionId'] == selected['id']
         assert selected['draft'] == 'Keep this unsent draft'
+        if notification == 'project':
+            assert any(row['phase'] == 'running' and row['complete'] is False for row in coverage)
+        record_property('history-tool-discovery', json.dumps({
+            'notification': notification, 'action': action, 'force': force,
+            'coverage': coverage, 'browserReads': reads.count(selected['id'])}))
     finally:
         release.set()
         await asyncio.wait_for(asyncio.gather(refreshing, *([query] if query else [])), 5)
