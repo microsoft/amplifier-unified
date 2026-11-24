@@ -235,8 +235,11 @@ for line in sys.stdin:
 
 
 @pytest.mark.parametrize('shutdown', [False, True])
-async def test_cancelled_reader_records_terminal_branch_without_replaying_input(tmp_path, shutdown):
+@pytest.mark.parametrize('phase', ['read', 'dispatch'])
+async def test_cancelled_reader_records_terminal_branch_without_replaying_input(
+        tmp_path, monkeypatch, record_property, shutdown, phase):
     from amplifier_web.worker_diagnostics import validate_runtime_failure_witness
+    from amplifier_web.runtime_event_batches import BufferedLines
     worker, inputs = tmp_path / 'cancel_worker.py', tmp_path / 'inputs.txt'
     worker.write_text("""
 import json,sys
@@ -250,6 +253,26 @@ for line in sys.stdin:
     runtime = RuntimeManager(command=[sys.executable, str(worker), str(inputs)],
                              retention={'prewarm_on_select': False})
     service = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    ready_dispatch, release_ready, reading = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    emit = service.on_runtime_event
+    next_line = BufferedLines.next
+    reads = 0
+
+    async def observed_emit(kind, payload):
+        if kind == 'runtime.status' and payload.get('status') == 'ready':
+            ready_dispatch.set()
+            await release_ready.wait()
+        await emit(kind, payload)
+
+    async def observed_next(lines):
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            reading.set()
+        return await next_line(lines)
+
+    monkeypatch.setattr(service, 'on_runtime_event', observed_emit)
+    monkeypatch.setattr(BufferedLines, 'next', observed_next)
     task = None
     try:
         await service.dispatch('session.create', {})
@@ -258,9 +281,26 @@ for line in sys.stdin:
         async with asyncio.timeout(3):
             while not inputs.exists():
                 await asyncio.sleep(.005)
+            await ready_dispatch.wait()
         row = runtime.workers[service._session()['id']]
+        # The send has crossed the real pipe while readiness publication still
+        # waits. A worker input log alone never establishes the reader's phase.
+        assert inputs.read_text().splitlines() == ['cancel-input']
+        assert row['ready'].done() and not reading.is_set() and reads == 1
+        assert not task.done() and runtime.has_pending_operations()
+        if phase == 'read':
+            release_ready.set()
+            async with asyncio.timeout(3):
+                await reading.wait()
+            assert reads == 2
         if shutdown:
-            row['stop_reason'], row['closing'] = 'shutdown', True
+            # Use the same admission fence as AppService.close, not a partial
+            # worker-row mutation that leaves the service accepting input.
+            service.begin_shutdown()
+            assert service.closed and runtime._closed
+            assert row['stop_reason'] == 'shutdown' and row['closing']
+        else:
+            assert not service.closed and not row['closing']
         row['reader'].cancel()
         await asyncio.gather(row['reader'], return_exceptions=True)
         with pytest.raises(RuntimeError) as caught:
@@ -268,7 +308,7 @@ for line in sys.stdin:
         witness = validate_runtime_failure_witness(caught.value._runtime_failure_witness)
         assert witness['origin'] == 'reader_disconnect' and witness['factsStatus'] == 'valid'
         assert witness['errors'][0]['class'] == 'CancelledError'
-        assert witness['reader'] == {'reason': 'cancelled', 'phase': 'read', 'frame': 'ready',
+        assert witness['reader'] == {'reason': 'cancelled', 'phase': phase, 'frame': 'ready',
             'exitObserved': False, 'exitCode': None, 'closing': shutdown,
             'stopReason': 'shutdown' if shutdown else 'none', 'cleanup': 'not_requested'}
         assert row['process'].returncode is None  # Cancellation is not process death.
@@ -276,7 +316,17 @@ for line in sys.stdin:
         duplicate = await service.dispatch('conversation.send', {'text': 'one input'}, command_id='cancel-input')
         assert duplicate['duplicate'] and duplicate['delivery'] == 'unknown'
         assert inputs.read_text().splitlines() == ['cancel-input']
+        assert not runtime.has_pending_operations()
+        receipt = json.loads(service.db.execute(
+            'SELECT receipt FROM commands WHERE id=?', ('cancel-input',)).fetchone()[0])
+        assert receipt['delivery'] == 'unknown'
+        record_property('cancelled_reader_boundary', json.dumps({
+            'expectedPhase': phase, 'shutdown': shutdown, 'readCalls': reads,
+            'readyDispatchEntered': ready_dispatch.is_set(), 'readerEnteredRead': reading.is_set(),
+            'reader': witness['reader'], 'delivery': receipt['delivery'],
+            'inputs': inputs.read_text().splitlines()}))
     finally:
+        release_ready.set()
         if task is not None and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
