@@ -101,7 +101,11 @@ async def store(collaboration, source, request, response, prepared, command_id):
     response['artifactVerification'] = ('incomplete' if any(row['status'] != 'retained' for row in artifacts)
                                         else 'verified' if artifacts else 'not_requested')
     if not artifacts and response.get('references'):
-        response['artifactDetail'] = 'No file versions were saved. ' + REFERENCE_HELP
+        # This declaration is repeated in result receipts and revision history.
+        # Keep the fact and syntax here; discovery owns the full tutorial.
+        response['artifactDetail'] = (
+            'No file versions were saved. Retain local files with '
+            'path@sha256:<64 lowercase hex digits>; see coordination.reply references for details.')
     elif response['artifactVerification'] == 'incomplete':
         response['artifactDetail'] = ('Some file versions were not saved. Inspect artifacts[].status and detail '
                                       'before finishing the turn; terminal sealing does not repair retention.')

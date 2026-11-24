@@ -104,6 +104,12 @@ async def test_opaque_citations_remain_valid_but_explicitly_do_not_save_files(ap
     assert result['artifacts'] == [] and result['artifactVerification'] == 'not_requested'
     assert 'No file versions were saved.' in result['artifactDetail']
     assert 'path@sha256:' in result['artifactDetail']
+    assert 'coordination.reply references' in result['artifactDetail']
+    assert len(result['artifactDetail'].encode('utf-8')) < 180
+    assert result_artifacts.REFERENCE_HELP not in result['artifactDetail']
+    page = await app.app_bridge('list_actions', {'prefix': 'coordination.reply'}, peer['id'])
+    action, = page['items']
+    assert result_artifacts.REFERENCE_HELP in action['inputSchema']['properties']['references']['description']
     await finish(app, peer, args['requestId'])
     assert app.collaboration.receipt(args['requestId'])['response']['qualified']
     assert app.db.execute('SELECT count(*) FROM output_records').fetchone()[0] == 0
