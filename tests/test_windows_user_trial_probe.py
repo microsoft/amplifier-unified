@@ -3561,9 +3561,15 @@ def test_native_checkpoint_fixture_wait_preserves_budget_and_cancellation_oracle
     body = ast.unparse(case)
     assert "await _wait_for_native_identity_preparation(task, manager, captured)" in body
     assert body.index("_wait_for_native_identity_preparation(task, manager, captured)") < body.index("task.cancel()")
+    # Python versions may unparse the second `not` with parentheses. Require
+    # the complete assertion's expression, not a formatting-dependent substring.
+    absent_state = ast.parse("not manager.workers and not manager._preparations", mode="eval").body
+    assert ast.dump(absent_state) in {
+        ast.dump(node.test) for node in ast.walk(case) if isinstance(node, ast.Assert)
+    }
     for retained in ("pytest.raises(asyncio.CancelledError)", "asyncio.wait_for(task, 15)",
                      "captured[0].tree_empty and captured[0].io_finalized",
-                     "not manager.workers and not manager._preparations", "updates/worker-leases",
+                     "updates/worker-leases",
                      "runtime.status", "ready", "await manager.close()"):
         assert retained in body
     _, _, five = remaining_ci_code(FIVE_STEP)
@@ -3573,6 +3579,36 @@ def test_native_checkpoint_fixture_wait_preserves_budget_and_cancellation_oracle
     _, _, cold = cold_ci_runner()
     assert "shutil.copyfile(source / name, path)" in ast.unparse(cold)
     assert "testAuthoring" not in ast.unparse(cold)  # Cold still uses the unchanged product fixture.
+
+
+@pytest.mark.parametrize("statement, accepted", [
+    pytest.param("assert not manager.workers and (not manager._preparations)", True, id="parenthesized-right"),
+    pytest.param("assert (not manager.workers) and (not manager._preparations)", True, id="parenthesized-both"),
+    pytest.param("assert not manager._preparations", False, id="missing-workers"),
+    pytest.param("assert not manager.workers", False, id="missing-preparations"),
+    pytest.param("assert not manager.workers or not manager._preparations", False, id="or"),
+    pytest.param("assert manager.workers and not manager._preparations", False, id="positive-workers"),
+    pytest.param("assert not manager.workers and manager._preparations", False, id="positive-preparations"),
+    pytest.param("marker = 'not manager.workers and not manager._preparations'", False, id="string-decoy"),
+])
+def test_native_checkpoint_guard_compares_state_assertion_structure(monkeypatch, statement, accepted):
+    """Exercise the whole maintained guard against source variants, not native code."""
+    path = ROOT / "tests/test_runtime.py"
+    original = path.read_text()
+    retained = "        assert not manager.workers and not manager._preparations\n"
+    assert original.count(retained) == 1
+    changed = original.replace(retained, "        " + statement + "\n")
+    read_text = Path.read_text
+
+    def read(source, *args, **kwargs):
+        return changed if source == path else read_text(source, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    if accepted:
+        test_native_checkpoint_fixture_wait_preserves_budget_and_cancellation_oracles()
+    else:
+        with pytest.raises(AssertionError):
+            test_native_checkpoint_fixture_wait_preserves_budget_and_cancellation_oracles()
 
 
 @pytest.mark.parametrize("token_owner", ["TokenUser", "Administrators"])
