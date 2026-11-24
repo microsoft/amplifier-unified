@@ -10,10 +10,11 @@ import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {bounded,withActionRoute} from './chat-reference-harness.mjs';
+import {readAppearance} from './settings-fixture.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const out=process.env.AMPLIFIER_TEST_ARTIFACTS||join(root,'output/attachment-experience');
 const hash=b=>createHash('sha256').update(b).digest('hex');
-const report={source:'built client and real host actions',runtime:'synthetic',physicalGestures:false,screenReader:false,cases:[],errors:[],routes:[],downloads:[],geometry:[]};
+const report={source:'built client and real host actions',runtime:'synthetic',physicalGestures:false,screenReader:false,cases:[],errors:[],routes:[],downloads:[],geometry:[],appearanceSetups:[]};
 await mkdir(out,{recursive:true});
 const save=()=>writeFile(join(out,'report.json'),JSON.stringify(report,null,2));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||join(root,'.venv/bin/python'),['-u',join(process.env.AMPLIFIER_TEST_FIXTURE_ROOT||join(root,'tests/fixtures'),'attachment_consumption_ui_server.py')],{stdio:['ignore','pipe','pipe']});
@@ -46,24 +47,69 @@ async function close(page,opener){await page.keyboard.press('Escape');await expe
 async function snapshot(page){const s=await state(page),i=await inspect(page);return {selected:s.selectedSessionId,canvas:s.canvas,drafts:i.drafts,attachments:i.attachments,sendCount:i.sends.length,scroll:await page.locator('.a-messages').evaluate(n=>n.scrollTop)}}
 async function contextFor(viewport,scheme){
  const context=await browser.newContext({acceptDownloads:true,viewport,colorScheme:scheme,hasTouch:viewport.width<500,isMobile:viewport.width<500,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const setup={viewport,scheme,phase:'connecting'};report.appearanceSetups.push(setup);
+ let page;
  try{
   await context.route(url=>url.origin!==base,r=>r.abort('blockedbyclient'));
-  const page=await context.newPage();page.setDefaultTimeout(10000);page.setDefaultNavigationTimeout(15000);
+  page=await context.newPage();page.setDefaultTimeout(10000);page.setDefaultNavigationTimeout(15000);
   page.on('pageerror',e=>report.errors.push(e.message));
   assert.equal((await page.request.post(base+'/fixture/browser-session',{timeout:5000})).status(),200);
   await page.goto(base);
-  // Attaching a client precedes its independent browser preference report.
-  // Wait for that real acknowledgement before editing this browser's scheme.
+  // Attachment, initial storage report and first rendered composition settle
+  // separately. Capture the profile only after all three agree.
   await page.waitForFunction(()=>{
    const s=window.amplifier?.getState(),a=s?.appearance;
-   return !!s?.client?.id&&a?.availability==='connected'&&a.local?.reported===true&&!a.local.error;
+   return !!s?.client?.id&&a?.availability==='connected'&&a.local?.reported===true&&!a.local.error&&
+    !!a.composition?.id&&a.observedCompositionId===a.composition.id&&a.command?.status!=='pending';
   },null,{timeout:15000});
   await call(page,'session.create',{title:'Image study',bundle:'anchors'});
-  const changed=await call(page,'view.update',{patch:{scheme}});assert.equal(changed.accepted,true);
+  // A raw view.update acceptance is not browser storage/activation. Initialize
+  // the complete This browser profile at captured CAS, then edit that profile;
+  // the real client alone writes storage and reports ACK/rendered composition.
+  const before=await bounded(readAppearance(page),5000,'Read initial appearance');
+  assert.equal(before.activeScope,'shared');assert.equal(before.local.values,null,'Fresh context has no saved browser profile');
+  setup.clientId=before.clientId;setup.generation=before.generation;setup.steps=[];
+  let current=before;
+  for(const action of ['appearance.preferences.select','appearance.preferences.update']){
+   const args={clientId:current.clientId,generation:current.generation,
+    expectedRevision:current.local.revision,expectedStorageVersion:current.local.storageVersion,
+    ...(action.endsWith('.select')?{activeScope:'client',expectedSharedRevision:current.shared.revision}:{scope:'client',patch:{scheme}})};
+   setup.phase=action;
+   const changed=await call(page,action,args);assert.equal(changed.accepted,true);
+   assert.equal(changed.result.status,'awaiting-storage');
+   assert.equal(changed.result.stored,false);assert.equal(changed.result.activated,false);
+   const commandId=changed.result.commandId;assert.ok(commandId);
+   setup.steps.push({action,commandId,expectedRevision:args.expectedRevision,status:'awaiting-storage'});
+   await expect.poll(async()=>{
+    const a=(await state(page)).appearance;
+    return {clientId:a.clientId,generation:a.generation,scope:a.activeScope,revision:a.local.revision,
+     commandId:a.command?.id,status:a.command?.status,reported:a.local.reported,
+     error:a.local.error||null,rendered:!!a.composition?.id&&a.observedCompositionId===a.composition.id};
+   }).toEqual({clientId:before.clientId,generation:before.generation,scope:'client',revision:args.expectedRevision+1,
+    commandId,status:'stored',reported:true,error:null,rendered:true});
+   current=await bounded(readAppearance(page),5000,'Read confirmed appearance');
+   assert.equal(current.generation,before.generation);assert.equal(current.clientId,before.clientId);
+   assert.equal(current.activeScope,'client');
+   assert.deepEqual(current.shared,before.shared,'Attachment context setup never changes Global');
+   const stored=await page.evaluate(key=>JSON.parse(localStorage.getItem(key)),current.namespace);
+   assert.equal(stored.version,current.local.storageVersion);assert.notEqual(stored.version,args.expectedStorageVersion);
+   assert.equal(stored.activeScope,'client');assert.deepEqual(stored.values,current.local.values);
+   assert.deepEqual(current.local.values,action.endsWith('.select')?before.shared.values:{...before.shared.values,scheme});
+   setup.steps.at(-1).status='stored-and-rendered';
+  }
   await expect.poll(async()=>(await state(page)).appearance.effective.scheme).toBe(scheme);
+  await expect.poll(()=>page.locator('#amp-one').evaluate(root=>({scheme:root.style.colorScheme,mode:root.dataset.themeScheme})))
+   .toEqual({scheme,mode:scheme});
+  setup.phase='ready';setup.compositionId=current.composition.id;
   await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
   return {context,page};
  }catch(error){
+  setup.error=error.message;
+  if(page)try{const a=(await bounded(readAppearance(page),5000,'Read failed appearance setup'));
+   setup.failure={clientId:a.clientId,generation:a.generation,activeScope:a.activeScope,
+    scheme:a.effective?.scheme,localRevision:a.local?.revision,localError:a.local?.error,
+    command:a.command?{id:a.command.id,status:a.command.status,error:a.command.error}:null};
+  }catch(readError){setup.readError=readError.message}
   try{await bounded(context.close(),10000,'Close failed viewer setup')}
   catch(cleanup){throw new AggregateError([error,cleanup],'Viewer setup and cleanup failed',{cause:error})}
   throw error;
