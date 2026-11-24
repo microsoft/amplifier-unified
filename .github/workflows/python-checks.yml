@@ -18,6 +18,7 @@ on:
           - fresh-cleanup-native
           - prepared-runtime-native
           - prepared-default-native
+          - thin-docker-native
           - shared-work-continuity
           - manager-exception-boundary
           - remote-test-origins
@@ -34,7 +35,7 @@ on:
           - live-first-send
           - live-first-accepted-graph
       candidate_ref:
-        description: Optional full same-repository candidate SHA for either prepared native suite (tests remain at the selected workflow revision)
+        description: Optional full same-repository candidate SHA for prepared or thin-Docker native suites (tests remain at the selected workflow revision)
         type: string
         default: ''
       core_wheels:
@@ -53,7 +54,7 @@ permissions:
   contents: read
 jobs:
   python:
-    if: ${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' && inputs.suite != 'updater-omitted-ref' && inputs.suite != 'updater-public-selected-source' && inputs.suite != 'updater-synthetic-acquisition' && inputs.suite != 'updater-expanded-lock' && inputs.suite != 'fresh-cleanup-native' && inputs.suite != 'prepared-runtime-native' && inputs.suite != 'prepared-default-native' }}
+    if: ${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' && inputs.suite != 'updater-omitted-ref' && inputs.suite != 'updater-public-selected-source' && inputs.suite != 'updater-synthetic-acquisition' && inputs.suite != 'updater-expanded-lock' && inputs.suite != 'fresh-cleanup-native' && inputs.suite != 'prepared-runtime-native' && inputs.suite != 'prepared-default-native' && inputs.suite != 'thin-docker-native' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -1033,7 +1034,7 @@ jobs:
           retention-days: 14
 
   prepared-runtime-native:
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && (inputs.suite == 'prepared-runtime-native' || inputs.suite == 'prepared-default-native') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && (inputs.suite == 'prepared-runtime-native' || inputs.suite == 'prepared-default-native' || inputs.suite == 'thin-docker-native') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     permissions:
@@ -1089,7 +1090,7 @@ jobs:
           ref: ${{ steps.backend.outputs.revision }}
           path: .ci/dtu-core
           persist-credentials: false
-      - name: Run the two owned prepared runtime cases
+      - name: Run the selected fixed native journey
         env:
           CANDIDATE_REF: ${{ inputs.candidate_ref }}
           CLEANUP_NATIVE_ROOT: ${{ runner.temp }}/unified-prepared-native

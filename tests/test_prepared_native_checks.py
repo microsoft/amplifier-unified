@@ -23,10 +23,11 @@ def test_prepared_suite_is_one_ordinary_manual_job():
     events = value.get('on', value.get(True))
     assert 'prepared-runtime-native' in events['workflow_dispatch']['inputs']['suite']['options']
     assert 'prepared-default-native' in events['workflow_dispatch']['inputs']['suite']['options']
+    assert 'thin-docker-native' in events['workflow_dispatch']['inputs']['suite']['options']
     assert 'pull_request' not in events
     job = value['jobs']['prepared-runtime-native']
     assert 'workflow_dispatch' in job['if'] and job['permissions'] == {'contents': 'read'}
-    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && (inputs.suite == 'prepared-runtime-native' || inputs.suite == 'prepared-default-native') }}"
+    assert job['if'] == "${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && (inputs.suite == 'prepared-runtime-native' || inputs.suite == 'prepared-default-native' || inputs.suite == 'thin-docker-native') }}"
     assert job['env']['CHECK_SUITE'] == '${{ inputs.suite }}'
     assert all('secrets.' not in str(s) for s in job['steps'])
     checkouts = [s for s in job['steps'] if s.get('uses', '').startswith('actions/checkout@')]
@@ -34,6 +35,7 @@ def test_prepared_suite_is_one_ordinary_manual_job():
     assert any(s.get('if') == 'always()' and s.get('uses', '').startswith('actions/upload-artifact@') for s in job['steps'])
     assert "inputs.suite != 'prepared-runtime-native'" in value['jobs']['python']['if']
     assert "inputs.suite != 'prepared-default-native'" in value['jobs']['python']['if']
+    assert "inputs.suite != 'thin-docker-native'" in value['jobs']['python']['if']
     upload = next(s for s in job['steps'] if s.get('uses', '').startswith('actions/upload-artifact@'))
     assert upload['with']['path'] == 'output/${{ inputs.suite }}/'
     assert upload['with']['name'].startswith('${{ inputs.suite }}-')
@@ -136,7 +138,7 @@ def test_success_requires_zero_exit_and_two_named_native_cases():
         verify_cases(1, ET.tostring(suite), 'prepared-runtime-native')
 
 
-@pytest.mark.parametrize('scope', ['prepared-runtime-native', 'prepared-default-native', 'fresh-cleanup-native'])
+@pytest.mark.parametrize('scope', ['prepared-runtime-native', 'prepared-default-native', 'fresh-cleanup-native', 'thin-docker-native'])
 def test_actual_driver_records_both_sources_before_backend(tmp_path, monkeypatch, scope):
     import fresh_cleanup_native_checks as driver
     root = tmp_path / 'checkout'; root.mkdir()
@@ -242,6 +244,212 @@ def test_unknown_scope_never_starts_driver_effects(tmp_path, monkeypatch):
     with pytest.raises(KeyError):
         driver.main()
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize('bad', [None, 'missing', 'duplicate', 'other', 'nonzero', 'failure', 'error', 'skipped'])
+def test_thin_native_requires_exactly_one_case(bad):
+    from fresh_cleanup_native_checks import SUITES, verify_cases
+    filename, names = SUITES['thin-docker-native']
+    assert filename == 'test_thin_docker_smart_tool.py'
+    assert names == ['test_real_smart_tool_two_owners_dirty_worktree_wheel_and_preview']
+    selected = [] if bad == 'missing' else names * 2 if bad == 'duplicate' else ['other'] if bad == 'other' else names
+    xml = ET.Element('testsuites')
+    for name in selected:
+        case = ET.SubElement(xml, 'testcase', name=name)
+    if bad in {'failure', 'error', 'skipped'}:
+        ET.SubElement(case, bad)
+    if bad:
+        with pytest.raises(AssertionError):
+            verify_cases(1 if bad == 'nonzero' else 0, ET.tostring(xml), 'thin-docker-native')
+    else:
+        assert verify_cases(0, ET.tostring(xml), 'thin-docker-native') == 1
+
+
+@pytest.mark.parametrize('scope', ['thin-docker-native', 'fresh-cleanup-native', 'prepared-runtime-native', 'prepared-default-native'])
+def test_native_opt_in_is_exact_and_keeps_real_managed_layout(tmp_path, monkeypatch, scope):
+    from fresh_cleanup_native_checks import case_environment
+    for key in ('PYTHONPATH', 'VIRTUAL_ENV', 'GH_TOKEN', 'GITHUB_TOKEN', 'UNIFIED_DTU_PROOF_ROOT',
+                'UNIFIED_REALITY_CHECK_PYTHON'):
+        monkeypatch.setenv(key, 'must-not-select-a-different-root')
+    root, output = tmp_path / 'fresh', tmp_path / 'output'
+    core = root / 'app/smart-tools/installs/1a32835a8df35a3a3fe32570/venv'
+    env = case_environment(root, output, core, scope)
+    assert not {'PYTHONPATH', 'VIRTUAL_ENV', 'GH_TOKEN', 'GITHUB_TOKEN'} & env.keys()
+    assert env['UNIFIED_DTU_PYTHON'] == str(core / 'bin/python')
+    assert env['CLEANUP_NATIVE_ROOT'] == str(root)
+    if scope == 'thin-docker-native':
+        assert env['UNIFIED_DTU_PROOF_ROOT'] == str(root)
+        assert 'UNIFIED_REALITY_CHECK_PYTHON' not in env
+    else:
+        assert 'UNIFIED_DTU_PROOF_ROOT' not in env
+
+
+@pytest.fixture
+def thin_evidence(tmp_path):
+    """Synthetic report/files for the collector, never a native permit or guest."""
+    root, output = tmp_path / 'fresh', tmp_path / 'output'
+    root.mkdir(); output.mkdir()
+    report = {'result': 'passed', 'journeyPassed': True, 'sourceUnchanged': True,
+              'cleanupComplete': True, 'environments': []}
+    for letter in ('a', 'b'):
+        owner, rid = 'owner-' + letter, letter * 8 + '-' + letter * 4 + '-' + letter * 4 + '-' + letter * 4 + '-' + letter * 12
+        request_id = owner + '-remove'
+        folder = root / 'app/workspace-resources/owned' / hashlib.sha256(owner.encode()).hexdigest() / rid
+        folder.mkdir(parents=True)
+        retained = folder / ('retained-' + hashlib.sha256(request_id.encode()).hexdigest())
+        retained.mkdir()
+        (folder / 'source.tar').write_bytes(b'source-' + letter.encode())
+        (retained / 'artifacts.tar').write_bytes(b'artifacts-' + letter.encode())
+        for name in ('manifest.json', 'retention.json', 'removal-started.json',
+                     'destroy-dispatched.json', 'destroy-confirmed.json'):
+            (retained / name).write_text('{}')
+        binding = {'launchOperationId': 'launch-' + letter, 'backendIdentity': {'backend': 'docker', 'daemon': 'actual'}}
+        request = {'state': 'completed', 'action': 'workspace.environments.remove', 'sessionId': owner,
+            'resourceId': rid, 'requestId': request_id, 'guestRemovalBinding': binding,
+            'cleanupExecution': {'kind': 'qualification-test-checkout', 'status': 'permit-recorded'},
+            'result': {'ok': True, 'status': 'removed', 'retention': {'verified': True}, 'archives': [
+                {'source': '/artifacts', 'destination': str(retained / 'artifacts.tar'),
+                 'sha256': hashlib.sha256((retained / 'artifacts.tar').read_bytes()).hexdigest()}]}}
+        row = {'id': rid, 'universeId': 'universe-' + letter, 'status': 'removed', 'lastOperation': request,
+               'snapshot': {'archive_sha256': hashlib.sha256((folder / 'source.tar').read_bytes()).hexdigest()},
+               'retention': {'path': str(folder)}}
+        report['environments'].append({'owner': owner, 'state': 'removed', 'resource': row,
+            'absence': {'ok': True, 'status': 'absent', 'observation': {
+                'absenceConfirmed': True, 'ownership': 'absent', 'rootOwner': owner,
+                'operationId': binding['launchOperationId'], 'universeId': row['universeId'],
+                'backendIdentity': binding['backendIdentity']}}})
+    (root / 'native-result.json').write_text(json.dumps(report))
+    return root, output, report
+
+
+@pytest.mark.parametrize('bad', [None, 'journey', 'source', 'cleanup', 'one-owner', 'same-owner', 'same-resource',
+                                'same-universe', 'running', 'request', 'permit', 'retention', 'absence',
+                                'wrong-owner', 'wrong-backend', 'source-bytes', 'archive-bytes', 'manifest'])
+def test_thin_success_requires_bound_journey_exports_and_physical_absence(thin_evidence, bad):
+    from fresh_cleanup_native_checks import retain_thin, verify_thin
+    root, output, report = thin_evidence
+    first, second = report['environments']
+    row, request = first['resource'], first['resource']['lastOperation']
+    if bad in {'journey', 'source', 'cleanup'}:
+        report[{'journey': 'journeyPassed', 'source': 'sourceUnchanged', 'cleanup': 'cleanupComplete'}[bad]] = False
+    elif bad == 'one-owner': report['environments'].pop()
+    elif bad == 'same-owner': second['owner'] = first['owner']
+    elif bad == 'same-resource': second['resource']['id'] = row['id']
+    elif bad == 'same-universe': second['resource']['universeId'] = row['universeId']
+    elif bad == 'running': row['status'] = 'running'
+    elif bad == 'request': request['state'] = 'outcome_unknown'
+    elif bad == 'permit': request['cleanupExecution']['kind'] = 'invented'
+    elif bad == 'retention': request['result']['retention']['verified'] = False
+    elif bad == 'absence': first['absence']['observation']['absenceConfirmed'] = False
+    elif bad == 'wrong-owner': first['absence']['observation']['rootOwner'] = 'other'
+    elif bad == 'wrong-backend': first['absence']['observation']['backendIdentity'] = {'daemon': 'other'}
+    elif bad == 'source-bytes': (Path(row['retention']['path']) / 'source.tar').write_bytes(b'changed')
+    elif bad == 'archive-bytes': Path(request['result']['archives'][0]['destination']).write_bytes(b'changed')
+    elif bad == 'manifest': Path(request['result']['archives'][0]['destination']).with_name('destroy-confirmed.json').unlink()
+    (root / 'native-result.json').write_text(json.dumps(report))
+    captured = retain_thin(root, output)
+    if bad:
+        with pytest.raises((AssertionError, KeyError)):
+            verify_thin(root, output, captured)
+    else:
+        assert verify_thin(root, output, captured) == {'owners': 2, 'removed': 2, 'absenceConfirmed': 2}
+        for item in captured['files']:
+            path = output / 'thin-evidence' / item['path']
+            assert path.stat().st_mode & 0o077 == 0
+            assert hashlib.sha256(path.read_bytes()).hexdigest() == item['sha256']
+        assert (output / 'thin-evidence').stat().st_mode & 0o077 == 0
+
+
+@pytest.mark.parametrize('bad', ['file-link', 'directory-link', 'hardlink', 'fifo', 'file-size', 'total-size', 'file-count'])
+def test_thin_capture_refuses_unsafe_or_unbounded_inputs(thin_evidence, tmp_path, monkeypatch, bad):
+    import fresh_cleanup_native_checks as driver
+    root, output, report = thin_evidence
+    folder = Path(report['environments'][0]['resource']['retention']['path'])
+    target = folder / 'source.tar'
+    if bad == 'directory-link':
+        moved = folder.with_name('unselected')
+        folder.rename(moved); folder.symlink_to(moved, target_is_directory=True)
+    elif bad in {'file-link', 'hardlink', 'fifo'}:
+        target.unlink()
+        outside = tmp_path / 'private'; outside.write_bytes(b'not selected')
+        if bad == 'file-link': target.symlink_to(outside)
+        elif bad == 'hardlink': os.link(outside, target)
+        else: os.mkfifo(target)
+    elif bad == 'file-size': monkeypatch.setattr(driver, 'THIN_FILE_BYTES', 1)
+    elif bad == 'total-size': monkeypatch.setattr(driver, 'THIN_TOTAL_BYTES', 1)
+    else: monkeypatch.setattr(driver, 'THIN_FILES', 1)
+    captured = driver.retain_thin(root, output)
+    assert captured['complete'] is False and captured['errors']
+    assert not any(item['sha256'] == hashlib.sha256(b'not selected').hexdigest() for item in captured['files'])
+
+
+@pytest.mark.parametrize('failure', ['pytest', 'timeout', 'launch'])
+def test_thin_failed_invocation_keeps_evidence_without_retry(thin_evidence, monkeypatch, failure):
+    import fresh_cleanup_native_checks as driver
+    root, output, report = thin_evidence
+    report['result'] = 'incomplete'
+    (root / 'native-result.json').write_text(json.dumps(report))
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if failure == 'timeout': raise subprocess.TimeoutExpired(argv, 2100)
+        if failure == 'launch': raise OSError('not started')
+        (output / 'junit.xml').write_text('<testsuites/>')
+        return SimpleNamespace(returncode=1)
+    monkeypatch.setattr(driver.subprocess, 'run', run)
+    with pytest.raises((AssertionError, subprocess.TimeoutExpired, OSError)):
+        driver.execute_cases(Path('/unused/python'), root, ['exact-case'], {}, output, 'thin-docker-native', root)
+    assert len(calls) == 1
+    assert json.loads((output / 'thin-evidence/native-result.json').read_text()) == report
+    assert (output / 'thin-evidence/capture.json').is_file()
+    assert not (output / 'result.json').exists()
+
+
+@pytest.mark.parametrize('bad', [None, 'present', 'unmatched', 'wrong-owner', 'wrong-launch', 'wrong-backend'])
+def test_thin_absence_observer_only_inspects_exact_original_owner(tmp_path, monkeypatch, bad):
+    import test_thin_docker_smart_tool as thin
+    row = {'id': 'resource', 'sessionId': 'owner', 'launchOperationId': 'launch',
+           'universeId': 'universe', 'backendIdentity': {'backend': 'docker', 'daemon': 'original'}}
+    observed = {'ok': True, 'status': 'absent', 'observation': {'absenceConfirmed': True, 'ownership': 'absent',
+        'rootOwner': 'owner', 'operationId': 'launch', 'universeId': 'universe', 'backendIdentity': row['backendIdentity']}}
+    if bad == 'present': observed['status'] = 'running'
+    elif bad == 'unmatched': observed['observation']['absenceConfirmed'] = False
+    elif bad == 'wrong-owner': observed['observation']['rootOwner'] = 'other'
+    elif bad == 'wrong-launch': observed['observation']['operationId'] = 'other'
+    elif bad == 'wrong-backend': observed['observation']['backendIdentity'] = {'daemon': 'other'}
+    config, calls = object(), []
+    monkeypatch.setattr(thin.environments, 'get', lambda *a: row)
+    monkeypatch.setattr(thin.environments, 'resolve_configuration', lambda app, current, active: config)
+    def invoke(selected, home, current, action, args):
+        assert selected is config and current is row and action == 'reconcile' and args == {}
+        calls.append(action)
+        return observed
+    monkeypatch.setattr(thin.environments, 'invoke', invoke)
+    entry = {'owner': 'owner', 'resource': {'id': 'resource'}}
+    if bad:
+        with pytest.raises(AssertionError): thin.thin_observe_absence(SimpleNamespace(data_dir=tmp_path), entry)
+    else:
+        thin.thin_observe_absence(SimpleNamespace(data_dir=tmp_path), entry)
+    assert calls == ['reconcile'] and entry['absence'] is observed
+
+
+async def test_thin_absence_failure_cannot_pass_or_repeat_cleanup(tmp_path, monkeypatch):
+    import test_thin_docker_smart_tool as thin
+    monkeypatch.setenv('CHECK_SUITE', 'thin-docker-native')
+    calls = []
+    async def finalized(*args): calls.append('finalized-once')
+    def observe(app, entry):
+        calls.append(entry['owner'])
+        raise ValueError('Absence not established')
+    async def close(): calls.append('closed')
+    monkeypatch.setattr(thin, 'thin_finalize', finalized)
+    monkeypatch.setattr(thin, 'thin_observe_absence', observe)
+    report = {'result': 'incomplete', 'journeyPassed': True, 'cleanupComplete': True,
+              'environments': [{'owner': letter, 'state': 'removed'} for letter in ('a', 'b')]}
+    with pytest.raises(ExceptionGroup):
+        await thin.thin_finish(SimpleNamespace(close=close), tmp_path / 'report.json', report)
+    assert calls == ['finalized-once', 'a', 'b', 'closed']
+    assert report['result'] == 'incomplete'
 
 
 @pytest.fixture

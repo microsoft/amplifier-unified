@@ -243,6 +243,20 @@ def thin_require_running(result, row):
                 'universeId': row['universeId'], 'backendIdentity': row['backendIdentity']}
 
 
+def thin_observe_absence(app, entry):
+    """Retain a fresh exact-owner observation, never repeat a removal."""
+    row = environments.get(app.data_dir, entry['owner'], entry['resource']['id'])
+    config = environments.resolve_configuration(app, row, None)
+    result = environments.invoke(config, app.data_dir, row, 'reconcile', {})
+    entry['absence'] = result
+    assert result['ok'] is True and result['status'] == 'absent', result
+    observed = result['observation']
+    assert observed['absenceConfirmed'] is True and observed['ownership'] == 'absent'
+    assert {key: observed[key] for key in ('rootOwner', 'operationId', 'universeId', 'backendIdentity')} == {
+        'rootOwner': row['sessionId'], 'operationId': row['launchOperationId'],
+        'universeId': row['universeId'], 'backendIdentity': row['backendIdentity']}
+
+
 async def thin_call(app, report_path, report, entry, action, **args):
     """Keep this fixture's original request and custody, including lost replies."""
     if action == 'remove':
@@ -300,6 +314,20 @@ async def thin_finalize(app, report_path, report):
 async def thin_finish(app, report_path, report):
     try:
         await thin_finalize(app, report_path, report)
+        # The hosted lane needs physical absence evidence in addition to the
+        # original removal receipts. Observation failure never retries cleanup.
+        if os.environ.get('CHECK_SUITE') == 'thin-docker-native':
+            errors = []
+            for entry in report['environments']:
+                if entry.get('state') == 'removed':
+                    try:
+                        await asyncio.to_thread(thin_observe_absence, app, entry)
+                    except Exception as exc:
+                        errors.append(exc)
+                    finally:
+                        thin_report(report_path, report)
+            if errors:
+                raise ExceptionGroup('Thin Docker absence remains unverified', errors)
         if report.get('journeyPassed') and report['cleanupComplete']:
             report['result'] = 'passed'
     finally:
