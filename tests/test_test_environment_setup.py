@@ -54,6 +54,7 @@ async def deferred_setup_callbacks(monkeypatch):
 
     class DeferredCallbackTask(asyncio.Task):
         retirement = None
+        retired = False
 
         def add_done_callback(self, callback, *, context=None):
             # Setup registers its retirement callback immediately after creation,
@@ -65,8 +66,10 @@ async def deferred_setup_callbacks(monkeypatch):
 
         def retire(self):
             assert self.done()
-            callback, context = self.retirement
-            context.run(callback, self)
+            if not self.retired:
+                self.retired = True
+                callback, context = self.retirement
+                context.run(callback, self)
 
     def create(coro, **kwargs):
         if getattr(coro, 'cr_code', None) not in {setup._run.__code__, setup._cleanup.__code__}:
