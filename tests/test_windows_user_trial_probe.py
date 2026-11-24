@@ -3629,6 +3629,98 @@ def test_native_checkpoint_guard_compares_state_assertion_structure(monkeypatch,
             test_native_checkpoint_fixture_wait_preserves_budget_and_cancellation_oracles()
 
 
+@pytest.mark.parametrize("fault", [None, "ancestor-refused", "custody-write-refused"])
+def test_native_runtime_home_uses_profile_private_creator_and_retains_custody(tmp_path, monkeypatch, fault):
+    """Portable placement model; never create a Windows profile allocation."""
+    from contextlib import contextmanager
+    import uuid
+    from amplifier_web import windows_files
+
+    tree = ast.parse((ROOT / "tests/test_runtime.py").read_text())
+    fixture = inline_definitions(tree, ["native_runtime_home"],
+                                 {"pytest": pytest, "Path": Path, "json": json})["native_runtime_home"].__wrapped__
+    profile = tmp_path / "PRIVATE-profile"
+    ignored = tmp_path / "PRIVATE-runner-temp"
+    record = tmp_path / "native-runtime-home.json"
+    token = "a" * 32
+    root = profile / (".unified-runtime-test-" + token)
+    calls = []
+    failure = PermissionError("PRIVATE-refusal")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: profile))
+    monkeypatch.setattr(uuid, "uuid4", lambda: types.SimpleNamespace(hex=token))
+    for name in ("RUNNER_TEMP", "TEMP", "TMP", "TMPDIR"):
+        monkeypatch.setenv(name, str(ignored))
+
+    def address(value):
+        calls.append(("address", value))
+        return value
+
+    @contextmanager
+    def directory(value, *, owned_root, create):
+        # Exact custody is saved before the real creator would touch the tree.
+        assert json.loads(record.read_text()) == {
+            "root": str(root), "custody": "retained-for-test-environment-owner"}
+        calls.append(("directory", value, owned_root, create))
+        if fault == "ancestor-refused":
+            raise failure
+        yield object()
+        calls.append(("unpin",))
+
+    monkeypatch.setattr(windows_files, "address", address)
+    monkeypatch.setattr(windows_files, "directory", directory)
+    if fault == "custody-write-refused":
+        original = Path.write_text
+
+        def refuse(path, *args, **kwargs):
+            if path == record:
+                raise failure
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", refuse)
+    if fault:
+        with pytest.raises(PermissionError) as caught:
+            fixture(tmp_path)
+        assert caught.value is failure
+    else:
+        assert fixture(tmp_path) == root
+    assert calls == ([("address", root)] if fault == "custody-write-refused" else
+                     [("address", root), ("directory", root, root, True)]
+                     + ([] if fault else [("unpin",)]))
+    assert record.exists() is (fault != "custody-write-refused")
+    assert not profile.exists() and not ignored.exists()  # Stub only; no native operations.
+
+
+def test_native_profile_placement_preserves_closed_observer_and_oracles():
+    tree = ast.parse((ROOT / "tests/test_runtime.py").read_text())
+    fixture = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "native_runtime_home")
+    body = ast.unparse(fixture)
+    assert "Path.home()" in body and "uuid.uuid4().hex" in body
+    assert "directory(root, owned_root=root, create=True)" in body
+    assert body.index("'native-runtime-home.json'") < body.index("with directory(")
+    assert "'retained-for-test-environment-owner'" in body
+    assert all(value not in body for value in (
+        "mkdir(", "chmod(", "rmtree(", "rmdir(", "unlink(", "token_user_default_owner",
+        "except ", "pytest.skip", "getenv(", "environ", "resolve("))
+    names = (
+        "test_native_windows_runtime_worker_identity_pipes_and_job_cleanup",
+        "test_native_windows_runtime_cancel_before_identity_reaps_job")
+    for name in names:
+        case = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == name)
+        assert {"native_runtime_home", "native_lease_witness"} <= {arg.arg for arg in case.args.args}
+        assert "tmp_path" not in {arg.arg for arg in case.args.args}
+        code = ast.unparse(case)
+        assert "manager.home = native_runtime_home" in code
+        assert "monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(manager.home))" in code
+        assert "startup_timeout=15" in code and "finally:\n        await manager.close()" in code
+    # Existing whole guard still checks cancel/Job/I/O/workers/leases/ready/close
+    # and reviewed-authoring versus unchanged cold-product fixture selection.
+    test_native_checkpoint_fixture_wait_preserves_budget_and_cancellation_oracles()
+    _, _, five = remaining_ci_code(FIVE_STEP)
+    public = ast.unparse(five)
+    assert "native-runtime-home.json" not in public  # Exact path stays in unuploaded pytest custody.
+    assert "safe_lease_witness" in public and "leaseWitnesses" in public
+
+
 @pytest.mark.parametrize("scenario", [
     "pass", "other-owner", "os-owner-private", "os-owner-ancestor", "dacl-absent",
     "dacl-null", "security-error", "control-error", "owner-error", "acl-error",

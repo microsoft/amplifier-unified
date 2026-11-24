@@ -1825,9 +1825,31 @@ def native_lease_witness(request, monkeypatch):
             report['restored'] = generation_leases.acquire is original
 
 
+@pytest.fixture
+def native_runtime_home(tmp_path):
+    """Keep synthetic app storage off the runner-temp ancestor chain."""
+    import uuid
+    from amplifier_web.windows_files import address, directory
+
+    # Match the profile-child placement in test_browser_code/test_host_config.
+    # The real boundary still validates every ancestor; no ACL repair or fallback.
+    root = address(Path.home() / ('.unified-runtime-test-' + uuid.uuid4().hex))
+    # Record exact custody before creation, inside the existing unuploaded pytest
+    # evidence. This is not an authority/cleanup receipt or public path output.
+    (tmp_path / 'native-runtime-home.json').write_text(json.dumps({
+        'root': str(root), 'custody': 'retained-for-test-environment-owner',
+    }), encoding='utf-8')
+    with directory(root, owned_root=root, create=True):
+        pass
+    # Retain on both success and failure: removing storage here could discard
+    # failed-Job/lease evidence. Hosted VM owner handles eventual teardown.
+    # Manual native runs likewise retain this exact child; no automatic disposal.
+    return root
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='native Windows runtime Job integration')
 @pytest.mark.parametrize('forced', [False, True])
-async def test_native_windows_runtime_worker_identity_pipes_and_job_cleanup(tmp_path, monkeypatch, forced, native_lease_witness):
+async def test_native_windows_runtime_worker_identity_pipes_and_job_cleanup(native_runtime_home, monkeypatch, forced, native_lease_witness):
     from amplifier_web import runtime
     # Exercise the actual Worker.run identity/ThreadedPipeReader/shutdown path,
     # with only the provider/bundle-dependent command body replaced.
@@ -1856,7 +1878,7 @@ asyncio.run(Fixture().run())
     manager = RuntimeManager(command=[sys.executable, '-I', '-c', code,
         str(Path(__file__).resolve().parents[1]), 'forced' if forced else 'normal'],
         startup_timeout=15, retention={'prewarm_on_select': False})
-    manager.home = tmp_path / 'native-app'
+    manager.home = native_runtime_home
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(manager.home))
     events = []
     async def emit(kind, data): events.append((kind, data))
@@ -1981,12 +2003,12 @@ async def test_native_checkpoint_wait_cancellation_does_not_cancel_startup():
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='native Windows runtime startup cancellation')
-async def test_native_windows_runtime_cancel_before_identity_reaps_job(tmp_path, monkeypatch, native_lease_witness):
+async def test_native_windows_runtime_cancel_before_identity_reaps_job(native_runtime_home, monkeypatch, native_lease_witness):
     from amplifier_web import windows_jobs
     manager = RuntimeManager(command=[sys.executable, '-I', '-S', '-c',
         'import time;time.sleep(30)'], startup_timeout=15,
         retention={'prewarm_on_select': False})
-    manager.home = tmp_path / 'cancel-app'
+    manager.home = native_runtime_home
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(manager.home))
     captured, events = [], []
     original = windows_jobs.WindowsOwnedProcess.start
