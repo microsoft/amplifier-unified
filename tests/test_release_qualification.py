@@ -1888,8 +1888,9 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert contract['if'] == '${{ inputs.app004_qualification }}'
     assert contract['run'].splitlines() == [
         'set -o pipefail',
-        'uv run --no-sync pytest -v --tb=short tests/test_browser_check_runner.py '
-        'tests/test_release_qualification.py --junitxml=output/browser-checks/app004-contracts.xml '
+        'contracts=(tests/test_browser_check_runner.py tests/test_release_qualification.py)',
+        'if [[ -f tests/web/chat_reference_qualification.py ]]; then contracts+=(tests/test_chat_reference_qualification.py); fi',
+        'uv run --no-sync pytest -v --tb=short "${contracts[@]}" --junitxml=output/browser-checks/app004-contracts.xml '
         '2>&1 | tee output/browser-checks/app004-contracts.log',
     ]
     before = steps[:steps.index(contract)]
