@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import io
+import os
 from pathlib import Path
 import socket
 import subprocess
