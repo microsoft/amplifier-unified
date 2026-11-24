@@ -140,7 +140,7 @@ dev = [
     "amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@main",
     # Accepted ordinary-turn continuation source; provider stays on the existing locked
     # source shared with the optional decisions extra.
-    "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@1a544103e56d56e1aa4791e8cc572e5c1b9a05a7#subdirectory=modules/context-managed",
+    "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@a6bdf64b2239045c4da4b1eb812284e15a14fa6a#subdirectory=modules/context-managed",
     "amplifier-module-provider-openai[native] @ git+https://github.com/microsoft/amplifier-module-provider-openai@main",
     # Subscription handoff requires a confirmed response from this adapter.
     "amplifier-module-provider-openai-chatgpt @ git+https://github.com/microsoft/amplifier-module-provider-openai-chatgpt@5bdd616cf937b9f51dca6b442023d4ea44c4316e",
@@ -162,7 +162,7 @@ dev = [
 work-media = [
     # Opt-in, offline ordinary-Work composition tests mount every declared
     # module. Keep these out of the host's production dependency set.
-    "amplifier-module-tool-transcript @ git+https://github.com/microsoft/amplifier-bundle-context-managed@1a544103e56d56e1aa4791e8cc572e5c1b9a05a7#subdirectory=modules/tool-transcript",
+    "amplifier-module-tool-transcript @ git+https://github.com/microsoft/amplifier-bundle-context-managed@a6bdf64b2239045c4da4b1eb812284e15a14fa6a#subdirectory=modules/tool-transcript",
     "amplifier-module-tool-bash @ git+https://github.com/microsoft/amplifier-module-tool-bash@d5bb46d24dcae8e260211bf8fb5c22de3a67f406",
     "amplifier-module-tool-web @ git+https://github.com/microsoft/amplifier-module-tool-web@2a58cf71f6f941f5b5ef28d59564f5d47af5f294",
     "amplifier-module-tool-search @ git+https://github.com/microsoft/amplifier-module-tool-search@ccd11795f6bb47853cfd1761b126f3b40d95a517",
