@@ -1205,9 +1205,10 @@ pins for future update checks. The Core source-build prohibition remains enabled
 Checking, staging and validating an application update do not pause conversations,
 block new messages or freeze delegation. A qualified update waits for the normal
 idle readiness check. Active tools, children, calls and unresolved operations
-postpone the update, not unrelated work. Continuously busy hosts can leave an
-update pending; the existing explicit **Restart now** control is the separate
-operator choice to interrupt work for a qualified restart.
+can keep an update waiting. On a busy host, choose
+[Update safely and resume](#update-safely-and-resume) to queue incoming work
+while current turns settle. **Interrupt work and restart** is the separate
+explicit choice to interrupt running work.
 
 An agent with an active saved objective can instead use `task.waitForUpdate` with
 its own `sessionId`, exact task `expectedRevision`, and `target` copied from
@@ -1272,8 +1273,8 @@ new explicit wait can then use the current task and staged target, even while
 other owners are waiting. Missing or uncertain cancellation does not free the
 slot; a late observation cannot replace a newer wait or rewrite the old receipt.
 
-After final candidate validation, activation rechecks readiness under the same
-host lock that commits replacement. Work arriving during validation takes priority
+Under the ordinary idle-update policy, activation rechecks readiness after final
+candidate validation under the same host lock that commits replacement. Work arriving during validation takes priority
 and postpones that replacement. Only the actual replacement/restart window holds
 ordinary new human messages. They are saved under their original input IDs,
 acknowledged as saved, and sent in order after the exact restarted installation
@@ -1290,11 +1291,13 @@ merely because an update is staged.
 
 ### Update safely and resume
 
-For a staged application update, a person can choose **Update safely and resume**.
+For a staged application update, a person can choose **Update safely and resume**
+in Settings → Updates. The client sends the staged host, revision, generation and
+attempt identities to `updates.safeResume`.
 The host saves the admission hold before acknowledging the request. New ordinary
 messages keep their input IDs. Queued coordination and due schedules remain with
-their existing owners. Active native tasks receive one save-and-yield instruction on their next model
-request in the current turn. They yield through their guarded checkpoint
+their existing owners. Active native tasks receive one save-and-yield instruction
+on their next model request in the current turn. They yield through their guarded checkpoint
 at a supported continuation boundary. Other turns, calls, and tools may finish.
 Stop and changes of task, input, placement, or access retain their usual precedence.
 
