@@ -1,6 +1,7 @@
 """Private full backups and reversible app-owned reset operations."""
 import asyncio
 import copy
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -8,6 +9,7 @@ from pathlib import Path
 import sqlite3
 import stat
 import tarfile
+import tempfile
 import time
 import uuid
 
@@ -173,6 +175,23 @@ def bulk_sessions(service, *, include_native=False):
     return list(rows.values())
 
 
+@contextmanager
+def _private_backup_archive(path):
+    """Expose the completed archive name only after the compressed stream closes."""
+    staging = tempfile.NamedTemporaryFile(dir=path.parent, prefix=".private-state-", delete=False)
+    try:
+        with staging, tarfile.open(path, "w:gz", fileobj=staging) as output:
+            yield output
+        os.chmod(staging.name, 0o600)
+        os.replace(staging.name, path)
+    except BaseException as error:
+        try:
+            Path(staging.name).unlink(missing_ok=True)
+        except OSError:
+            error.add_note("Could not remove the unpublished private backup temporary.")
+        raise
+
+
 def _backup_files(data_dir, session_paths, publishing=None, publishing_captures=(), operation_id=None):
     folder=data_dir/'backups'/(operation_id or uuid.uuid4().hex)
     if operation_id is None:
@@ -191,7 +210,7 @@ def _backup_files(data_dir, session_paths, publishing=None, publishing_captures=
     for identity, capture in publishing_captures:
         capture.snapshot(folder/'publishing-captures'/identity)
     archive=folder/'private-state.tar.gz'
-    with tarfile.open(archive,'w:gz') as output:
+    with _private_backup_archive(archive) as output:
         output.add(database,arcname='app.sqlite3')
         if publishing is not None:
             output.add(folder/'publishing',arcname='publishing',recursive=True)
@@ -238,7 +257,6 @@ def _backup_files(data_dir, session_paths, publishing=None, publishing_captures=
                 output.add(snapshot,arcname='diagnostics/'+name)
         config=data_dir/'diagnostics/config.json'
         if config.exists():output.add(config,arcname='diagnostics/config.json')
-    archive.chmod(0o600)
     return {'backup':str(archive),'phase':'ready','detail':'Private backup includes app-owned shared session files, attachments, artifacts, configuration and saved credentials. Keep it private; it is not encrypted.'}
 
 
