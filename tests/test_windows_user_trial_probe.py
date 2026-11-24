@@ -3698,9 +3698,17 @@ def test_native_profile_placement_preserves_closed_observer_and_oracles():
     assert "directory(root, owned_root=root, create=True)" in body
     assert body.index("'native-runtime-home.json'") < body.index("with directory(")
     assert "'retained-for-test-environment-owner'" in body
-    assert all(value not in body for value in (
-        "mkdir(", "chmod(", "rmtree(", "rmdir(", "unlink(", "token_user_default_owner",
-        "except ", "pytest.skip", "getenv(", "environ", "resolve("))
+    forbidden = {"mkdir", "chmod", "rmtree", "rmdir", "unlink", "token_user_default_owner",
+                 "skip", "getenv", "environ", "resolve"}
+    # Inspect operations, not the custody text's legitimate word "environment".
+    for node in ast.walk(fixture):
+        assert not isinstance(node, ast.ExceptHandler)
+        if isinstance(node, ast.Name):
+            assert node.id not in forbidden
+        elif isinstance(node, ast.Attribute):
+            assert node.attr not in forbidden
+        elif isinstance(node, ast.alias):
+            assert node.name.split(".")[-1] not in forbidden
     names = (
         "test_native_windows_runtime_worker_identity_pipes_and_job_cleanup",
         "test_native_windows_runtime_cancel_before_identity_reaps_job")
@@ -3719,6 +3727,36 @@ def test_native_profile_placement_preserves_closed_observer_and_oracles():
     public = ast.unparse(five)
     assert "native-runtime-home.json" not in public  # Exact path stays in unuploaded pytest custody.
     assert "safe_lease_witness" in public and "leaseWitnesses" in public
+
+
+@pytest.mark.parametrize("statement, accepted", [
+    pytest.param("note = 'environ getenv mkdir except pytest.skip'", True, id="literal-only"),
+    pytest.param("value = os.environ['RUNNER_TEMP']", False, id="environment-attribute"),
+    pytest.param("value = environ['RUNNER_TEMP']", False, id="environment-name"),
+    pytest.param("value = os.getenv('RUNNER_TEMP')", False, id="getenv-attribute"),
+    pytest.param("value = getenv('RUNNER_TEMP')", False, id="getenv-name"),
+    pytest.param("from os import environ as settings", False, id="environment-import-alias"),
+    pytest.param("root.mkdir()", False, id="forbidden-call"),
+    pytest.param("try:\n    pass\nexcept PermissionError:\n    pass", False, id="except-handler"),
+])
+def test_native_profile_guard_distinguishes_operations_from_literals(monkeypatch, statement, accepted):
+    """Invoke the whole maintained guard on parsed variants; execute none of them."""
+    path = ROOT / "tests/test_runtime.py"
+    tree = ast.parse(path.read_text())
+    fixture = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "native_runtime_home")
+    fixture.body[1:1] = ast.parse(statement).body
+    changed = ast.unparse(tree)
+    read_text = Path.read_text
+
+    def read(source, *args, **kwargs):
+        return changed if source == path else read_text(source, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    if accepted:
+        test_native_profile_placement_preserves_closed_observer_and_oracles()
+    else:
+        with pytest.raises(AssertionError):
+            test_native_profile_placement_preserves_closed_observer_and_oracles()
 
 
 @pytest.mark.parametrize("scenario", [
