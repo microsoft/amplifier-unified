@@ -216,6 +216,16 @@ def _backup_files(data_dir, session_paths, publishing=None, publishing_captures=
         for name in ('config','routing','bundles','sessions','artifacts','smart-tools/work'):
             path=data_dir/name
             if path.exists():output.add(path,arcname=name,recursive=True)
+        attachments = data_dir / 'attachments'
+        if attachments.is_dir(follow_symlinks=False):
+            def attachment_member(member):
+                # Keep regular uploads. A link or junction cannot supply a new file tree.
+                if member.isdir() and not (data_dir / member.name).is_junction():
+                    return member
+                if member.isfile() or member.islnk():  # tar may represent a regular file as a hard link
+                    return member
+                return None
+            output.add(attachments, arcname='attachments', filter=attachment_member)
         for path, name in session_paths:
             if path.exists():output.add(path,arcname=name,recursive=True)
         for name in ('events.sqlite3','index.sqlite3'):
@@ -229,7 +239,7 @@ def _backup_files(data_dir, session_paths, publishing=None, publishing_captures=
         config=data_dir/'diagnostics/config.json'
         if config.exists():output.add(config,arcname='diagnostics/config.json')
     archive.chmod(0o600)
-    return {'backup':str(archive),'phase':'ready','detail':'Private backup includes app-owned shared session files, artifacts, configuration and saved credentials. Keep it private; it is not encrypted.'}
+    return {'backup':str(archive),'phase':'ready','detail':'Private backup includes app-owned shared session files, attachments, artifacts, configuration and saved credentials. Keep it private; it is not encrypted.'}
 
 
 async def backup(service, *, publishing_locked=False, operation_id=None):

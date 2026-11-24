@@ -311,9 +311,12 @@ transcripts, externalizes artifacts and shrinks the database. Existing shared
 transcripts win. Old app-owned session files are left intact. Large installations
 can take several minutes for this one-time offline migration.
 
-Normal backups run file copying and compression in a background thread. They
-include app configuration (including credentials), artifacts, operation/index
-state, and shared root/worker sessions used by this app, including explicitly
+Normal backups run file copying and compression in a background thread. Restore
+the archived `attachments/` directory alongside `app.sqlite3` in the private
+app home to keep original files downloadable from their saved URLs, including
+uploads in unsent drafts. Backups also include app configuration (including
+credentials), artifacts, operation/index state, and shared root/worker sessions
+used by this app, including explicitly
 relocated CI captures. Automatically discovered CLI entries are a rebuildable
 index: listing them does not expand backups, read transcript/event bodies, or run
 legacy canvas migration. Opening a chat loads its transcript and lazily scans
