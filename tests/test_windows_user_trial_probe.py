@@ -3507,6 +3507,74 @@ def test_remaining_cold_keeps_original_journey_and_separate_graph_evidence():
     assert "tests/test_remote_test_origins.py" in ast.unparse(five)
 
 
+@pytest.mark.parametrize("missing_authoring", [False, True])
+def test_remaining_five_copies_runtime_fixture_from_authoring_not_product(tmp_path, missing_authoring):
+    """Run only the maintained copy/binding block, with deliberately different inputs."""
+    import shutil
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    blocks = [n.body for n in ast.walk(tree) if isinstance(n, ast.With)]
+    block = next(body for body in blocks if any(isinstance(n, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "target" for t in n.targets) for n in body))
+    first = next(i for i, n in enumerate(block) if isinstance(n, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "target" for t in n.targets))
+    last = next(i for i in range(first, len(block)) if isinstance(block[i], ast.Import))
+    source, workflow, base = (tmp_path / name for name in ("product", "authoring", "output"))
+    files = ("tests/conftest.py", "tests/test_runtime.py", "tests/test_remote_test_origins.py")
+    for root, label in ((source, "product"), (workflow, "reviewed")):
+        for name in files:
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not (missing_authoring and root == workflow and name == "tests/test_runtime.py"):
+                path.write_text(label + ":" + name)
+    candidate = {"head": "a" * 40, "tree": "b" * 40}
+    authoring = {"head": "c" * 40, "tree": "d" * 40}
+    namespace = {"source": source, "workflow": workflow, "base": base, "candidate": candidate,
+                 "result": {"workflow": authoring}, "paths": {}, "shutil": shutil,
+                 "hashlib": hashlib, "os": os}
+    code = compile(ast.Module(body=block[first:last], type_ignores=[]), "<maintained-fixture-copy>", "exec")
+    if missing_authoring:
+        with pytest.raises(FileNotFoundError):
+            exec(code, namespace)
+        return  # Never substitute the stale product fixture.
+    exec(code, namespace)
+    result, target = namespace["result"], base / "five-tests"
+    for name in files:
+        origin = workflow if name == "tests/test_runtime.py" else source
+        assert (target / name).read_bytes() == (origin / name).read_bytes()
+        assert result["testFiles"][name] == hashlib.sha256((origin / name).read_bytes()).hexdigest()
+        assert result["testAuthoring"][name] == (authoring if origin == workflow else candidate)
+        assert namespace["paths"][os.path.normcase(os.path.abspath(target / name))] == (name, 1)
+    assert (target / "tests/test_runtime.py").read_bytes() != (source / "tests/test_runtime.py").read_bytes()
+
+
+def test_native_checkpoint_fixture_wait_preserves_budget_and_cancellation_oracles():
+    tree = ast.parse((ROOT / "tests/test_runtime.py").read_text())
+    helper = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef)
+                  and n.name == "_wait_for_native_identity_preparation")
+    code = ast.unparse(helper)
+    assert "asyncio.timeout(15)" in code and "asyncio.sleep(0.01)" in code
+    assert code.index("if task.done()") < code.index("if captured")
+    assert "await task" in code and "pytest.fail(" in code
+    assert "except" not in code and ".cancel(" not in code
+    case = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef)
+                and n.name == "test_native_windows_runtime_cancel_before_identity_reaps_job")
+    body = ast.unparse(case)
+    assert "await _wait_for_native_identity_preparation(task, manager, captured)" in body
+    assert body.index("_wait_for_native_identity_preparation(task, manager, captured)") < body.index("task.cancel()")
+    for retained in ("pytest.raises(asyncio.CancelledError)", "asyncio.wait_for(task, 15)",
+                     "captured[0].tree_empty and captured[0].io_finalized",
+                     "not manager.workers and not manager._preparations", "updates/worker-leases",
+                     "runtime.status", "ready", "await manager.close()"):
+        assert retained in body
+    _, _, five = remaining_ci_code(FIVE_STEP)
+    code = ast.unparse(five)
+    assert "audit.candidate(workflow) == result['workflow']" in code
+    assert "result['testAuthoring'][name]" in code
+    _, _, cold = cold_ci_runner()
+    assert "shutil.copyfile(source / name, path)" in ast.unparse(cold)
+    assert "testAuthoring" not in ast.unparse(cold)  # Cold still uses the unchanged product fixture.
+
+
 @pytest.mark.parametrize("token_owner", ["TokenUser", "Administrators"])
 def test_remaining_lock_observer_does_not_require_uv_file_tokenuser(tmp_path, monkeypatch, token_owner):
     """Model ownership only: actual bounded no-follow source read, not native ACL proof."""

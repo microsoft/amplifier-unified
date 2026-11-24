@@ -1685,6 +1685,107 @@ asyncio.run(Fixture().run())
         await manager.close()
 
 
+async def _wait_for_native_identity_preparation(task, manager, captured):
+    """Observe the original startup outcome before waiting for its checkpoint."""
+    async with asyncio.timeout(15):
+        while True:
+            if task.done():
+                await task  # Preserve the original startup exception and cause.
+                pytest.fail('Startup completed before the cancellation checkpoint')
+            if captured and manager._preparations.get('cancel-native', {}).get('task'):
+                return
+            await asyncio.sleep(.01)
+
+
+@pytest.mark.parametrize('checkpoint_visible', [False, True])
+async def test_native_checkpoint_wait_surfaces_original_startup_failure(checkpoint_visible):
+    entered = asyncio.Event()
+    cause = PermissionError('synthetic private-directory refusal')
+    failure = RuntimeError('synthetic startup failure')
+
+    async def startup():
+        entered.set()
+        raise failure from cause
+
+    task = asyncio.create_task(startup())
+    await entered.wait()
+    manager = SimpleNamespace(_preparations={'cancel-native': {'task': object()}} if checkpoint_visible else {})
+    captured = [object()] if checkpoint_visible else []
+    with pytest.raises(RuntimeError) as raised:
+        await asyncio.wait_for(_wait_for_native_identity_preparation(task, manager, captured), 1)
+    assert raised.value is failure and raised.value.__cause__ is cause
+    assert task.done() and not task.cancelled()
+
+
+async def test_native_checkpoint_wait_rejects_completed_startup_without_cancelling():
+    task = asyncio.create_task(asyncio.sleep(0))
+    await task
+    with pytest.raises(pytest.fail.Exception, match='Startup completed before the cancellation checkpoint'):
+        await _wait_for_native_identity_preparation(
+            task, SimpleNamespace(_preparations={'cancel-native': {'task': object()}}), [object()])
+    assert task.done() and not task.cancelled()
+
+
+async def test_native_checkpoint_wait_keeps_pending_start_for_explicit_cancellation():
+    release, started, waiting = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    manager = SimpleNamespace(_preparations={'cancel-native': {}})
+    captured = []
+
+    async def startup():
+        started.set()
+        await release.wait()
+
+    class Preparations(dict):
+        def get(self, key, default=None):
+            waiting.set()
+            return super().get(key, default)
+
+    manager._preparations = Preparations(manager._preparations)
+    task = asyncio.create_task(startup())
+    await started.wait()
+    captured.append(object())
+    observer = asyncio.create_task(_wait_for_native_identity_preparation(task, manager, captured))
+    try:
+        await asyncio.wait_for(waiting.wait(), 1)
+        # The preparation can disappear while the same startup is pending.
+        manager._preparations.clear()
+        waiting.clear()
+        await asyncio.wait_for(waiting.wait(), 1)
+        assert not observer.done() and not task.done()
+        manager._preparations['cancel-native'] = {'task': object()}
+        await asyncio.wait_for(observer, 1)
+        assert not task.done()  # The observer never substitutes cancellation.
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        observer.cancel()
+        task.cancel()
+        await asyncio.gather(observer, task, return_exceptions=True)
+
+
+async def test_native_checkpoint_wait_cancellation_does_not_cancel_startup():
+    ready = asyncio.Event()
+
+    async def startup():
+        ready.set()
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(startup())
+    await ready.wait()
+    observer = asyncio.create_task(_wait_for_native_identity_preparation(
+        task, SimpleNamespace(_preparations={}), []))
+    try:
+        await asyncio.sleep(0)
+        observer.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await observer
+        assert not task.done()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='native Windows runtime startup cancellation')
 async def test_native_windows_runtime_cancel_before_identity_reaps_job(tmp_path, monkeypatch):
     from amplifier_web import windows_jobs
@@ -1703,9 +1804,7 @@ async def test_native_windows_runtime_cancel_before_identity_reaps_job(tmp_path,
     async def emit(kind, data): events.append((kind, data))
     task = asyncio.create_task(manager.start({'id': 'cancel-native'}, emit))
     try:
-        async with asyncio.timeout(15):
-            while not captured or not manager._preparations['cancel-native'].get('task'):
-                await asyncio.sleep(.01)
+        await _wait_for_native_identity_preparation(task, manager, captured)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, 15)

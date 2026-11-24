@@ -910,11 +910,17 @@ jobs:
                       target = base / 'five-tests'
                       files = ('tests/conftest.py', 'tests/test_runtime.py', 'tests/test_remote_test_origins.py')
                       result['testFiles'] = {}
+                      result['testAuthoring'] = {}
                       for name in files:
+                          # Only the reviewed native runtime fixture is authored with
+                          # this workflow. Product, locks and other fixtures stay at
+                          # candidate_ref; never label changed tests as product bytes.
+                          origin = workflow if name == 'tests/test_runtime.py' else source
                           path = target / name; path.parent.mkdir(parents=True, exist_ok=True)
-                          shutil.copyfile(source / name, path)
-                          assert path.read_bytes() == (source / name).read_bytes()
+                          shutil.copyfile(origin / name, path)
+                          assert path.read_bytes() == (origin / name).read_bytes()
                           result['testFiles'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
+                          result['testAuthoring'][name] = (result['workflow'] if origin == workflow else candidate)
                           paths[os.path.normcase(os.path.abspath(path))] = (name, len(path.read_bytes().splitlines()))
                       assert {p.name for p in target.iterdir()} == {'tests'}
                       import pytest
@@ -930,6 +936,10 @@ jobs:
                       result['postTestAudit'] = 'started'
                       assert audit.installed(wheel, result) == before and host_graph() == graph
                       assert (source / 'uv.lock').read_bytes() == lock_bytes and audit.candidate(source) == candidate
+                      assert audit.candidate(workflow) == result['workflow']
+                      for name in files:
+                          origin = workflow if name == 'tests/test_runtime.py' else source
+                          assert (target / name).read_bytes() == (origin / name).read_bytes()
                       result['postTestAudit'] = 'passed'
                       result['stage'] = 'complete'
                       result['status'] = 'PASS'
