@@ -3039,6 +3039,8 @@ def test_storage_controls_require_sixteen_exact_calls_no_skips_or_collection_err
     if fault:
         with pytest.raises(AssertionError):
             probe.validate_storage_public(report)
+        report["status"] = "FAIL"
+    assert probe.validate_storage_public(report) is report
 
 
 def remaining_ci_code(step_name):
@@ -3267,8 +3269,6 @@ def test_remaining_cold_keeps_original_journey_and_separate_graph_evidence():
     assert "tests/fixtures/windows_default_runtime_probe.py" in body
     _, _, five = remaining_ci_code(FIVE_STEP)
     assert "tests/test_remote_test_origins.py" in ast.unparse(five)
-        report["status"] = "FAIL"
-    assert probe.validate_storage_public(report) is report
 
 
 def test_storage_staging_and_selection_leave_default_native_api_unchanged(tmp_path, monkeypatch):
