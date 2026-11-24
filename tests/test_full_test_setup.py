@@ -15,6 +15,7 @@ from test_access_mode import save
 from test_configuration_authority import app, grant
 from test_coordination_generation import agent
 from test_full_child_configuration import mounted, dispatch
+from test_test_environment_setup import deferred_setup_callbacks
 
 
 def arguments(app, source, **extra):
@@ -99,7 +100,7 @@ async def test_mounted_full_child_setup_survives_completed_turn_without_browser(
 
 
 async def test_later_full_child_observes_and_cleans_original_unknown_setup(
-        mounted, backend, monkeypatch, record_property):
+        mounted, backend, monkeypatch, record_property, deferred_setup_callbacks):
     from amplifier_web.collaboration import BINDING, PRINCIPAL
 
     h = mounted
@@ -145,6 +146,7 @@ async def test_later_full_child_observes_and_cleans_original_unknown_setup(
     await h.registry.spawn('worker', 'setup', h.parent, sub_session_id='first-child')
     original = await settle(h.app)
     assert original['state'] == 'outcome_unknown'
+    deferred_setup_callbacks[0].retire()
     observed = []
     effects = []
 
@@ -188,7 +190,10 @@ async def test_later_full_child_observes_and_cleans_original_unknown_setup(
     # bridge. Do not silently bless the preceding child's receipt as its result.
     assert h.app.dispatch == host_dispatch
     assert PRINCIPAL.get() is None and BINDING.get() is None
-    assert original['id'] not in getattr(h.app, '_test_setup_tasks', {})
+    # Task completion precedes retirement callbacks. Exercise that ordering
+    # deterministically, without sleeping or erasing the registered owner.
+    finished = h.app._test_setup_tasks[original['id']]
+    assert finished is deferred_setup_callbacks[-1] and finished.done()
     reconciled = await h.app.dispatch('workspace.environments.setup.reconcile', args,
         origin='system', caller_session_id=h.source['id'])
     # Persist the finite synthetic trace on success as well as assertion failure;

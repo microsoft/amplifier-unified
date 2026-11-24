@@ -1,5 +1,6 @@
 """Host-owned setup receipts; all backend effects are controlled here."""
 import asyncio
+import contextvars
 import json
 import os
 from types import SimpleNamespace
@@ -45,6 +46,47 @@ async def settle(app):
     return setup.read_json(setup.root(app) / (latest['id'] + '.json'))
 
 
+@pytest.fixture
+async def deferred_setup_callbacks(monkeypatch):
+    """Run real setup tasks but control when their retirement callback runs."""
+    create_task = asyncio.create_task
+    tasks = []
+
+    class DeferredCallbackTask(asyncio.Task):
+        retirement = None
+
+        def add_done_callback(self, callback, *, context=None):
+            # Setup registers its retirement callback immediately after creation,
+            # before any waiter. Gather/await callbacks retain normal scheduling.
+            if self.retirement is None:
+                self.retirement = (callback, context if context is not None else contextvars.copy_context())
+            else:
+                super().add_done_callback(callback, context=context)
+
+        def retire(self):
+            assert self.done()
+            callback, context = self.retirement
+            context.run(callback, self)
+
+    def create(coro, **kwargs):
+        if getattr(coro, 'cr_code', None) not in {setup._run.__code__, setup._cleanup.__code__}:
+            return create_task(coro, **kwargs)
+        task = DeferredCallbackTask(coro, **kwargs)
+        tasks.append(task)
+        return task
+
+    monkeypatch.setattr(asyncio, 'create_task', create)
+    try:
+        yield tasks
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        for task in tasks:
+            task.retire()
+
+
 async def test_passive_read_does_not_create_setup_or_install(app):
     result = await setup.read(app)
     assert result['status'] == 'disabled' and result['operation'] is None
@@ -52,6 +94,163 @@ async def test_passive_read_does_not_create_setup_or_install(app):
     app.smart_tools.install.assert_not_called()
     assert 'executable' not in result['backends'][0]
     assert 'dockerHost' not in result['backends'][0]
+
+
+@pytest.mark.parametrize('state', ['pending', 'returned', 'cancelled', 'raised'])
+async def test_registered_task_state_not_callback_timing_controls_passive_read(app, state):
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def work():
+        entered.set()
+        await release.wait()
+        if state == 'raised':
+            raise ValueError('controlled worker failure')
+
+    task = asyncio.create_task(work())
+    await entered.wait()
+    try:
+        if state == 'cancelled':
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        elif state != 'pending':
+            release.set()
+            if state == 'raised':
+                with pytest.raises(ValueError, match='controlled worker failure'):
+                    await task
+            else:
+                await task
+        identity = 'a' * 32
+        row = {'id': identity, 'intent': args(), 'actor': {}, 'backend': 'docker', 'state': 'running'}
+        folder = setup.root(app)
+        path = folder / (identity + '.json')
+        setup.write_json(path, row)
+        setup.write_json(folder / 'latest.json', {'id': identity})
+        app._test_setup_tasks = {identity: task}
+        before = path.read_bytes()
+        observed = await setup.read(app)
+        assert observed['operation']['state'] == ('running' if state == 'pending' else 'outcome_unknown')
+        assert path.read_bytes() == before  # Observation never rewrites the retained outcome.
+        assert app._test_setup_tasks[identity] is task
+        app.smart_tools.install.assert_not_awaited()
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize('pending', [False, True])
+async def test_retained_candidate_waits_for_task_completion_not_retirement(app, monkeypatch, pending):
+    import hashlib
+    identity = hashlib.sha256(json.dumps(['session', 'setup'], separators=(',', ':')).encode()).hexdigest()[:32]
+    candidate = {'enabled': True, 'backend': 'docker'}
+    row = {'id': identity, 'intent': args(), 'actor': {}, 'backend': 'docker', 'state': 'outcome_unknown',
+           'priorConfiguration': None, 'candidateConfiguration': candidate,
+           'proof': {'probeRemoved': True, 'daemon': 'original'}}
+    setup.write_json(setup.root(app) / (identity + '.json'), row)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def work():
+        entered.set()
+        await release.wait()
+
+    task = asyncio.create_task(work())
+    await entered.wait()
+    app._test_setup_tasks = {identity: task}
+    calls = []
+    monkeypatch.setattr(owner, 'invoke', lambda *a: calls.append(a) or {
+        'ok': True, 'capacity': {'scope': {'daemon': 'original'}, 'blockers': []}})
+    guard = AsyncMock()
+    try:
+        if not pending:
+            release.set()
+            await task
+        result = await setup.request(app, args(), {}, guard)
+        assert result['duplicate']
+        assert result['operation']['state'] == ('outcome_unknown' if pending else 'completed')
+        assert (app.data_dir / 'test-environments.json').exists() is (not pending)
+        assert len(calls) == (0 if pending else 1)
+        if not pending:
+            assert setup.read_json(app.data_dir / 'test-environments.json') == candidate
+            assert guard.await_count >= 2  # Qualification/publication guards still run.
+        assert app._test_setup_tasks[identity] is task
+        app.smart_tools.install.assert_not_awaited()
+    finally:
+        release.set()
+        await task
+
+
+@pytest.mark.parametrize('lost_cleanup', [False, True])
+async def test_delayed_setup_callback_cannot_discard_current_cleanup(
+        app, monkeypatch, deferred_setup_callbacks, lost_cleanup):
+    async def unknown(base, selected, owned, row, step):
+        await step('checking_profile', 'Controlled unknown setup')
+        raise TimeoutError('probe acknowledgement lost')
+
+    monkeypatch.setattr(setup, 'setup_docker', unknown)
+    monkeypatch.setattr(setup, 'readiness', AsyncMock(return_value={'status': 'disabled'}))
+    first = await setup.request(app, args(), {})
+    identity = first['operation']['id']
+    setup_task = app._test_setup_tasks[identity]
+    await setup_task
+    path = setup.root(app) / (identity + '.json')
+    original = setup.read_json(path)
+    assert original['state'] == 'outcome_unknown' and setup_task.done()
+    effects = []
+    monkeypatch.setattr(setup, 'observe_partial', lambda *a: {
+        'backend': 'docker', 'absent': len(effects) == 2 and not lost_cleanup,
+        'prefix': ['controlled-docker'], 'probe': {'name': 'owned-probe'}})
+
+    def command(argv, **kwargs):
+        effects.append(argv)
+        if lost_cleanup:
+            raise TimeoutError('cleanup acknowledgement lost')
+        return ''
+
+    monkeypatch.setattr(setup, 'command', command)
+    entered, release = asyncio.Event(), asyncio.Event()
+    guards = 0
+
+    async def guard():
+        nonlocal guards
+        guards += 1
+        if guards == 2:
+            entered.set()
+            await release.wait()
+
+    await setup.cleanup(app, args(), {}, guard)
+    cleanup_task = app._test_setup_tasks[identity]
+    assert cleanup_task is not setup_task
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        setup_task.retire()  # Old callback runs after a new owner has registered.
+        assert app._test_setup_tasks[identity] is cleanup_task
+        assert not cleanup_task.done()
+        before = path.read_bytes()
+        active = await setup.reconcile(app, args(), {})
+        assert active['active'] and path.read_bytes() == before and effects == []
+        with pytest.raises(ValueError, match='already in progress'):
+            await setup.request(app, args(requestId='different'), {})
+    finally:
+        release.set()
+        await cleanup_task
+    finished = setup.read_json(path)
+    assert cleanup_task.done() and app._test_setup_tasks[identity] is cleanup_task
+    duplicate = await setup.cleanup(app, args(), {})
+    assert duplicate['duplicate']
+    observed = await setup.reconcile(app, args(), {})
+    assert not observed.get('active')
+    assert observed['operation']['state'] == ('outcome_unknown' if lost_cleanup else 'recovered')
+    assert observed['operation']['cleanup']['state'] == ('outcome_unknown' if lost_cleanup else 'completed')
+    if lost_cleanup:
+        assert setup.read_json(path)['cleanup'] == finished['cleanup']
+        assert len(effects) == 1
+        with pytest.raises(ValueError, match='uncertain result'):
+            await setup.request(app, args(requestId='different'), {})
+    else:
+        assert [call[-2:] for call in effects] == [['stop', 'owned-probe'], ['rm', 'owned-probe']]
+    cleanup_task.retire()
+    assert identity not in app._test_setup_tasks
+    app.smart_tools.install.assert_awaited_once()
 
 
 async def test_setup_returns_before_work_and_reuses_exact_managed_core(app, monkeypatch):
