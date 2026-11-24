@@ -39,6 +39,13 @@ def metadata(home, identity):
         raise ValueError('The attachment is unavailable')
     try:
         row = json.loads(path.read_text())
+    except (ValueError, TypeError):
+        raise ValueError('The attachment metadata is invalid') from None
+    return public_metadata(row, identity)
+
+
+def public_metadata(row, identity):
+    try:
         valid = (isinstance(row, dict) and row.get('id') == identity
                  and isinstance(row.get('name'), str) and len(row['name']) <= 200
                  and row.get('mime') in _MIMES

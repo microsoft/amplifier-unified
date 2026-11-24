@@ -529,13 +529,12 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         return await serve(request, service, streams)
 
     async def attachment(request):
-        from .attachments import file_path
+        from .attachment_download import download
         try:
-            path, row = file_path(service.data_dir, request.match_info["identity"])
-        except (ValueError, FileNotFoundError):
-            raise AppError("Attachment not found", 404)
+            response, row = await asyncio.to_thread(download, service.data_dir, request.match_info["identity"])
+        except (ValueError, OSError):
+            raise AppError("Attachment not found", 404) from None
         from urllib.parse import quote
-        response = web.FileResponse(path)
         response.headers["Content-Type"] = row["mime"]
         response.headers["Content-Disposition"] = ("inline" if row["mime"].startswith("image/") else "attachment") + "; filename*=UTF-8''" + quote(row["name"])
         return response
