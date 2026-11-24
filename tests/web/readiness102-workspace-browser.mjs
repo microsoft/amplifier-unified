@@ -261,7 +261,25 @@ try{
   if(request?.action!=='storage.inspect'||!request.args?.rootId)return false;
   try{return (await response.json()).result?.scanning===false}catch{return false}
  });
+ // Observe the single destructive command separately: a rejected deletion never
+ // starts the scan, and must not be misreported as a slow storage inspection.
+ const deleted=page.waitForResponse(response=>{
+  if(response.request().method()!=='POST'||new URL(response.url()).pathname!=='/api/actions')return false;
+  const request=response.request().postDataJSON();
+  return request?.action==='workspace.deleteFiles'&&request.args?.id===info.workspaceId;
+ });
+ remeasured.catch(()=>{});deleted.catch(()=>{}); // Cleanup closes any unfulfilled response wait.
  await remove.click();
+ const deletionResponse=await deleted;
+ const deletion=await bounded(deletionResponse.json(),5000,'Workspace deletion receipt body timed out');
+ queryEvidence.workspaceDeletion={requestId:deletionResponse.request().postDataJSON()?.id,
+  workspaceId:info.workspaceId,httpStatus:deletionResponse.status(),accepted:deletion.accepted,
+  result:fields(deletion.result,['id','status','deletedBytes']),error:short(deletion.error)};
+ await writeFile(output+'/workspace-deletion.json',JSON.stringify(queryEvidence.workspaceDeletion,null,2)+'\n');
+ assert.equal(deletionResponse.status(),200,'Workspace deletion rejected: '+JSON.stringify(queryEvidence.workspaceDeletion));
+ assert.equal(deletion.accepted,true);
+ assert.equal(deletion.result?.id,info.workspaceId);
+ assert.equal(deletion.result?.status,'completed');
  await remeasured;
  await expect(page.getByRole('status').filter({hasText:'Workspace files deleted'})).toBeVisible();
  assert.equal(await page.evaluate(async()=> (await(await fetch('/api/fixture/readiness')).json()).filesExist),false);
