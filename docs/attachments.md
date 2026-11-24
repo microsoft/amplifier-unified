@@ -15,3 +15,17 @@ Uploads use base64 JSON, so the HTTP and agent worker transports allow its
 expansion beyond the original file size. Attachment bytes stay out of shared UI
 state and are loaded only when needed. Feedback submissions retain their
 separate limits of eight files, 8 MiB per file, and 24 MiB total.
+
+The authenticated attachment URL uses the upload UUID and keeps its original
+filename, including when two uploads have the same pixels. Its existing local
+`content` file takes precedence. A POSIX host with Foundation's checkpointed
+source reader can also serve an image from private UUID metadata containing
+`sessionMedia: {project, ref}`. The project is a single directory name in the
+current shared home. The full native reference must identify this same admitted
+upload and a nonexpiring, committed original in that conversation. Revoking
+the binding prevents further downloads. The reader verifies each snapshot
+without starting the worker, taking a writer lock, or authorizing model replay.
+
+The current composer still saves inline images and original attachment files.
+Enabling a reference writer also requires the other local-file consumers and
+each supported history reader to preserve their existing behavior.
