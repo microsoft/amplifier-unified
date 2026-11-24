@@ -93,6 +93,7 @@ class _SelectedRequest:
     refitted: bool = False
     execution: object = None
     release_options: object = None
+    foreground: object = None
 
 
 class SelectedProvider:
@@ -107,6 +108,10 @@ class SelectedProvider:
         self._overflow_feedback = OverflowFeedback()
     def _execution_provider(self):
         return self.execution_adapter(self.original) if callable(self.execution_adapter) else self.original
+
+    def prepared_foreground(self, request, *, request_options=None):
+        from ..foreground_preparation import prepare
+        return prepare(self._execution_provider(), request, request_options, selection=self)
 
     def owns_budget_route(self, provider):
         """Recognize the loop's exact pre-transport wrapper around this selection."""
@@ -317,7 +322,7 @@ class SelectedProvider:
             return False
         entry = next((row for row in self._selected_requests
                       if row.original is request and row.selected is selected), None)
-        if entry is None or entry.refitted:
+        if entry is None or entry.refitted or entry.foreground is not None:
             return False
         self._refused_requests = ([row for row in self._refused_requests if row[0] is not request]
                                   + [(request, error, execution, selected)])[-4:]
@@ -352,6 +357,12 @@ class SelectedProvider:
         options = dict(kwargs)
         self._overflow_feedback.forget(request)
         execution = self._execution_provider()
+        from ..foreground_preparation import active
+        candidate = active()
+        if candidate is not None and candidate.selection is self and candidate.original is request:
+            candidate.check_selection(execution, kwargs)
+        elif any(row.original is request and row.foreground is not None for row in self._selected_requests):
+            raise ValueError("Ordinary request belongs to another preparation task")
         self._check_media_fit(request, execution)
         selected, kwargs = self._selected_request(request, kwargs)
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
