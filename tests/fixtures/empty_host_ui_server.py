@@ -524,12 +524,30 @@ async def serve(home, *, pre_import=None):
             data = await request.json()
             service = app['service']
             session = service._session(data['sessionId'])
+            result = {'ok': True}
+            if 'plan' in data:
+                # Exercise the current successful-report ingress, not the
+                # retired execution.plan seed or a historical event scan.
+                from amplifier_web.execution_events import ExecutionEvents
+                from amplifier_web.runtime import normalize_event
+                emitted = []
+                sid = session['id']
+                call = 'canvas-plan-' + str(time.time_ns())
+                observer = ExecutionEvents(sid, emitted.append)
+                observer.hook(sid, 'tool:pre', {'session_id': sid, 'tool_name': 'todo',
+                    'tool_call_id': call,
+                    'tool_input': {'action': 'update', 'todos': data['plan']['items']}})
+                observer.hook(sid, 'tool:post', {'session_id': sid, 'tool_name': 'todo',
+                    'tool_call_id': call,
+                    'result': {'success': True, 'output': {'status': 'updated'}}})
+                for event in emitted:
+                    await service.on_runtime_event(*normalize_event(event, sid, 'canvas-plan-fixture'))
+                session = service._session(sid)
+                result['reportedPlan'] = session.get('_reportedPlan')
             session['status'] = data.get('status', 'working')
             session['workers'] = data.get('workers', [])
-            if 'plan' in data:
-                session.setdefault('execution', {})['plan'] = data['plan']
             service._publish()
-            return web.json_response({'ok': True})
+            return web.json_response(result)
 
         async def damage(request):
             from amplifier_web.resource_files import root

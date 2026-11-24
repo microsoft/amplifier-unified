@@ -264,6 +264,8 @@ try{
   return sample;
  };
  const titles=Array.from({length:30},(_,i)=>`Document ${String(i+1).padStart(2,'0')} — retained research and review notes`),ids=[];
+ const reportedItems=[{content:'Review retained sources',status:'completed'},{content:'Inspect the Canvas result',status:'pending'}];
+ const currentPlan=async()=>(await state()).sessions.find(row=>row.id===sessionId).execution?.plan;
  await check('30 saved outputs and 12 genuinely open documents',async()=>{
   // A real attachment/send creates Sources without fabricating app state or DOM.
   await action('attachment.add',{sessionId,name:'Canvas reference.txt',base64:Buffer.from('Synthetic Canvas reference').toString('base64')});
@@ -272,9 +274,13 @@ try{
   await expect.poll(async()=>(await state()).sessions.find(row=>row.id===sessionId).status).toBe('idle');
   await action('view.update',{patch:{draft:'Retain the Canvas test draft'}});
   const response=await page.request.post(url+'/fixture/activity',{data:{sessionId,status:'idle',
-   plan:{items:[{content:'Review retained sources',status:'completed'},{content:'Inspect the Canvas result',status:'pending'}]},
+   plan:{items:reportedItems},
    workers:Array.from({length:35},(_,i)=>({id:'worker-'+i,name:'Completed worker '+i,status:'completed'}))}});
-  assert.equal(response.ok(),true);assert.equal((await response.json()).ok,true);
+  assert.equal(response.ok(),true);
+  const activity=await response.json();assert.equal(activity.ok,true);
+  assert.deepEqual(activity.reportedPlan,{items:reportedItems});
+  await expect.poll(currentPlan).toEqual(activity.reportedPlan);
+  report.reportedPlan={source:'Synthetic successful todo through production event ingress',receipt:activity.reportedPlan};
   for(const [index,title] of titles.entries()){
    await action('canvas.show',{kind:'markdown',title,content:`# Document ${index+1}\n\nRetained source ${index+1}.`});
    if(index===0)await navigation('tabs');
@@ -288,6 +294,9 @@ try{
   await expect(summary('outputs')).toContainText('30 saved');
   await expect(summary('agents')).toContainText('35 finished');
   await expect(section('sources')).toContainText('Canvas reference.txt');
+  await expect(summary('plan')).toContainText('1 of 2 done');
+  await expect(section('plan').locator('li > span')).toHaveText(reportedItems.map(item=>item.content));
+  await expect(section('plan')).toContainText('Last checklist reported by the agent.');
   return {saved:30,open:12,ids};
  });
  await check('scroll containment and negative control use the same assertion',async()=>{
@@ -365,6 +374,8 @@ try{
   assert.notEqual(reloaded.client.id,reopened.expected.clientId,'Reload resumes a new private client copy');
   assert.equal(reloaded.canvas.selectedVersion,reopened.snapshot.canvas.selectedVersion);
   assert.equal(reloaded.view.canvasDraft.library,true);assert.equal(reloaded.view.draft,'Retain the Canvas test draft');
+  assert.deepEqual(reloaded.sessions.find(row=>row.id===sessionId).execution.plan,{items:reportedItems});
+  await expect.poll(currentPlan).toEqual({items:reportedItems});
   report.visibilityReload={acceptedCommand:reopened.expected.commandId,beforeClient:reopened.expected.clientId,afterClient:reloaded.client.id,canvasId:reloaded.canvas.id,open:reloaded.canvas.open,revision:reloaded.revision};
   for(const id of sectionIds)await expect(section(id)).not.toHaveAttribute('open','');
   for(const id of sectionIds){await revealByWheel(summary(id));await summary(id).click();await expect(section(id)).toHaveAttribute('open','')}
