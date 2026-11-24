@@ -44,6 +44,7 @@ only: this says nothing about Windows.
 """
 
 import asyncio
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -52,6 +53,7 @@ import shlex
 import shutil
 import sys
 import tomllib
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -61,6 +63,8 @@ from amplifier_web.host.config import PRECONFIGURED_BUNDLES
 from amplifier_web.runtime import RuntimeManager
 from amplifier_web.selected_runtime_dependencies import git_source
 from amplifier_web.service import AppService
+from amplifier_web.update_command_details import retain
+from amplifier_web.update_diagnostics import CommandFailure
 
 from test_effective_behavior_update_native import (
     fixture_core,
@@ -238,7 +242,21 @@ async def test_a_component_update_completes_with_an_openai_api_connection(tmp_pa
 
     # Setup's own step for a new installation: it prepares the environment and
     # writes its record (updates/baseline-runtime) before any AI connection.
-    prepared = await installation_runtime.prepare(home)
+    _json(work / "baseline-inputs.json", {
+        "case": case, "providerStart": start, "providerLater": moved,
+        "manifestSha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+    })
+    try:
+        prepared = await installation_runtime.prepare(home)
+    except CommandFailure as error:
+        # Use the product's bounded, twice-redacted LOCAL ONLY detail writer.
+        # Never put installer text in stdout, JUnit or the shared test report.
+        # The original exception and install-failure phase remain authoritative.
+        diagnostics = SimpleNamespace(
+            manager=SimpleNamespace(home=home, directory=home / "updates"),
+            state={"attemptId": "baseline-runtime"})
+        retain(diagnostics, error, "pinned-provider-baseline", "initial-runtime-preparation")
+        raise
     assert prepared.get("ok") and prepared.get("prepared") and prepared.get("generation") is None, prepared
     seed = runtime_environment.project_path(home)
     site = next((seed / ".venv/lib").glob("python*/site-packages"))
