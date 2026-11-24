@@ -18,7 +18,7 @@ from urllib.parse import quote
 
 import aiohttp
 from aiohttp import web
-from .updates import work_paused
+from .updates import new_work_paused, work_paused
 from .voice_diagnostics import VoiceDiagnostics, VoiceTrace
 
 API = "https://api.openai.com/v1"
@@ -1376,8 +1376,8 @@ class VoiceService:
             # under the same lock used by update activation before any provider
             # request can start; activation then sees the connecting status.
             async with self.service.lock:
-                if work_paused(self.service.state):
-                    raise VoiceError("An update is activating. Please retry in a moment.", 409, "update_activating")
+                if new_work_paused(self.service.state):
+                    raise VoiceError("An update is in progress. Start the call after the update.", 409, "update_activating")
                 session = next((s for s in self.service.state['sessions'] if s['id'] == session_id), None)
                 if session is None:
                     raise VoiceError('The conversation is no longer available.', 409, 'no_session')

@@ -19,7 +19,7 @@ from jsonschema import validate, ValidationError
 from .errors import AppError
 from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background, interrupt_unfinished, restore_voice_usage
 from .execution_working_set import current as current_execution, exact as execution_record, turns_for_inputs
-from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, work_paused
+from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, new_work_paused, work_paused
 from .managed_chats import LOCATION
 from .attachments import MAX_ENCODED_BYTES
 from .performance_diagnostics import PerformanceDiagnostics, measure, measured, TimedLock
@@ -3483,8 +3483,8 @@ class AppService:
                     raise AppError('Wait for configuration changes to finish.',409)
                 if not self.runtime:
                     raise AppError('The Amplifier runtime is unavailable.')
-                if work_paused(self.state):
-                    raise AppError('An update is activating. Please retry in a moment.',409)
+                if new_work_paused(self.state):
+                    raise AppError('An update is in progress. Edit this message after the update.',409)
                 if args.get('mode', 'fork') == 'current':
                     if source['status'] in {'working','running','starting','stopping','busy'} or any(
                             row.get('status') in {'working','running','starting','stopping','queued','pending'} or row.get('persistent') and row.get('status')=='idle'
