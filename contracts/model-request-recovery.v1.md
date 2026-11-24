@@ -73,6 +73,16 @@ observed at the adapter's local pretransport boundary may identify the request a
 unsent; a provider exception with the same type cannot make that claim.
 The recovery event is metadata only and does not prove provider admission.
 
+## A follow-up while an earlier summary is running
+
+Streaming may ask the host for a single-use view of the ordinary text request
+with its selected model, output allowance, tools and current host observations.
+When Context Managed can use that view while an earlier summary is running,
+dispatch rechecks the same request, selection and required Work. An unused view
+releases its provisional state and preserves other prepared requests. Images,
+an unavailable view or insufficient room use the existing fit and recovery path.
+The original summary retains ownership of its checkpoint.
+
 ## Current context and reasoning continuity
 
 Unified prepares current host observations before measurement, without saving a

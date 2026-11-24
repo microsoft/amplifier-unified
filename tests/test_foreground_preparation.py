@@ -134,3 +134,86 @@ async def test_change_in_selection_during_final_work_check_refuses_before_send()
         with pytest.raises(ValueError, match='Selected provider or options changed'):
             await selected.complete(original)
     assert not sent and not work.requests and not surface.prepared
+
+
+@pytest.mark.parametrize('collision', ['last_slot', 'same_raw_request'])
+async def test_losing_preparation_cannot_replace_another_tasks_published_projection(collision):
+    _, surface, work, sent, _ = hosted_selection()
+    if collision == 'last_slot':
+        # Three earlier budget fits leave just one slot for the two new candidates.
+        surface.original.request_budget = lambda value: {'tokens': 10}
+        for i in range(3):
+            await surface.request_budget(request(Message(role='user', content=f'earlier {i}')))
+        del surface.original.request_budget
+
+    original = request()
+    winner = original if collision == 'same_raw_request' else request(Message(role='user', content='winner'))
+    entered, release = asyncio.Event(), asyncio.Event()
+    normal_prepare = work.prepare
+
+    async def hold_first(value, provider):
+        projected = await normal_prepare(value, provider)
+        if not entered.is_set():
+            entered.set()
+            await release.wait()
+        return projected
+
+    work.prepare = hold_first
+
+    async def delayed_candidate():
+        async with surface.prepared_foreground(original) as projected:
+            return projected
+
+    delayed = asyncio.create_task(delayed_candidate())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        async with surface.prepared_foreground(winner) as published:
+            assert published is not None
+            assert len(surface.prepared) == (4 if collision == 'last_slot' else 1)
+            peer_rows = tuple(surface.prepared)
+            peer_work = tuple(work.requests.items())
+            release.set()
+            assert await asyncio.wait_for(delayed, timeout=2) is None
+            assert len(surface.prepared) == len(peer_rows)
+            assert all(current is previous for current, previous in zip(surface.prepared, peer_rows))
+            assert tuple(work.requests.items()) == peer_work
+            assert not sent
+            assert await surface.complete(winner) == 'done'
+            assert sent == [published]
+    finally:
+        release.set()
+        await delayed
+
+
+async def test_provisional_finalization_refusal_preserves_full_counted_refusal_history():
+    from amplifier_web.request_refit import RequestFitChanged
+
+    selected, surface, work, sent, _ = hosted_selection()
+    surface.original.request_budget = lambda value: {'tokens': 10}
+
+    async def refused(actual):
+        raise RequestFitChanged('authority_changed')
+
+    work.revalidate = refused
+    for i in range(16):
+        peer = request(Message(role='user', content=f'counted peer {i}'))
+        await surface.request_budget(peer)
+        with pytest.raises(RequestFitChanged) as error:
+            await surface.complete(peer)
+        assert surface.refused[-1][0] is peer and surface.refused[-1][1] is error.value
+    del surface.original.request_budget
+
+    previous = tuple(surface.refused)
+    peer_work = tuple(work.requests.items())
+    assert len(previous) == 16 and not surface.refusal_overflow
+    original = request()
+    async with selected.prepared_foreground(original) as projected:
+        assert projected is not None
+        with pytest.raises(RequestFitChanged) as failed:
+            await selected.complete(original)
+        assert failed.value.reason == 'authority_changed' and failed.value.local_refusal
+    assert len(surface.refused) == 16
+    assert all(actual is saved for actual, saved in zip(surface.refused, previous))
+    assert not surface.refusal_overflow
+    assert tuple(work.requests.items()) == peer_work
+    assert not selected._selected_requests and not surface.prepared and not sent

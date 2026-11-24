@@ -27,6 +27,12 @@ class _Candidate:
         self.work = None
         self.consumed = False
 
+    def available(self):
+        return (len(self.surface.prepared) < 4
+                and not any(row[0] is self.request for row in self.surface.prepared)
+                and not any(row[0] is self.request for row in self.surface.refused)
+                and not self.surface.refusal_overflow)
+
     def check_selection(self, execution, kwargs):
         if self.task is not asyncio.current_task():
             raise ValueError("Ordinary request belongs to another preparation task")
@@ -72,13 +78,10 @@ async def prepare(surface, original, options, *, selection=None):
     token = _ACTIVE.set(candidate)
     try:
         # Leave existing budget/refit candidates entirely in their owners' hands.
-        if (len(surface.prepared) >= 4 or any(row[0] is request for row in surface.prepared)
-                or any(row[0] is request for row in surface.refused)):
+        if not candidate.available():
             yield None
             return
         view = await surface._prepare(request, request_options=options)
-        candidate.entry = next(row for row in surface.prepared if row[0] is request)
-        candidate.encoded = candidate.entry[2] or view.model_dump_json()
         yield view
     finally:
         _ACTIVE.reset(token)
@@ -88,6 +91,4 @@ async def prepare(surface, original, options, *, selection=None):
             surface.prepared = [row for row in surface.prepared if row is not candidate.entry]
         if selection is not None and any(row.selected is request for row in selection._selected_requests):
             selection._forget_request(original)
-        if not candidate.consumed and candidate.entry is not None:
-            surface.refused = [row for row in surface.refused if row[0] is not request]
         candidate.work = None

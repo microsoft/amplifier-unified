@@ -91,9 +91,9 @@ class _SelectedRequest:
     choices: dict
     selected: object
     refitted: bool = False
-    foreground: object = None
     execution: object = None
     release_options: object = None
+    foreground: object = None
 
 
 class SelectedProvider:
@@ -322,7 +322,7 @@ class SelectedProvider:
             return False
         entry = next((row for row in self._selected_requests
                       if row.original is request and row.selected is selected), None)
-        if entry is None or entry.refitted:
+        if entry is None or entry.refitted or entry.foreground is not None:
             return False
         self._refused_requests = ([row for row in self._refused_requests if row[0] is not request]
                                   + [(request, error, execution, selected)])[-4:]
