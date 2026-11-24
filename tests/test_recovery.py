@@ -62,6 +62,27 @@ def test_backup_staging_race_keeps_last_complete_archive(tmp_path, monkeypatch, 
         assert "native/session/media/staging/bytes" not in archive.getnames()
 
 
+def test_backup_cleanup_failure_propagates_original_interruption(tmp_path, monkeypatch):
+    from asyncio import CancelledError
+    from pathlib import Path
+    from amplifier_web.recovery import _private_backup_archive
+
+    destination = tmp_path / "private-state.tar.gz"
+    destination.write_bytes(b"previous archive")
+    interrupted = CancelledError()
+    def cleanup_refused(path, *, missing_ok):
+        raise PermissionError("unpublished file busy")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "unlink", cleanup_refused)
+        with pytest.raises(CancelledError) as failure:
+            with _private_backup_archive(destination):
+                raise interrupted
+    assert failure.value is interrupted
+    assert "unpublished" in interrupted.__notes__[0]
+    assert destination.read_bytes() == b"previous archive"
+
+
 async def test_full_backup_and_selected_reset_are_private_and_reversible(tmp_path):
     service=AppService(tmp_path/'app',Runtime(),workspace=tmp_path)
     manager=Management(service);service.management=manager;service.update_manager=UpdateManager(service)

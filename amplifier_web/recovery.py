@@ -184,8 +184,11 @@ def _private_backup_archive(path):
             yield output
         os.chmod(staging.name, 0o600)
         os.replace(staging.name, path)
-    except BaseException:
-        Path(staging.name).unlink(missing_ok=True)
+    except BaseException as error:
+        try:
+            Path(staging.name).unlink(missing_ok=True)
+        except OSError:
+            error.add_note("Could not remove the unpublished private backup temporary.")
         raise
 
 
