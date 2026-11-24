@@ -262,6 +262,19 @@ async def readiness(app, *, force=False):
         return {'status': 'unavailable', 'reason': 'The saved runner could not be verified. Check that its local daemon is running and the approved installation is still available.'}
 
 
+def active_task(app, identity):
+    # Task completion and execution of its retirement callback are separate
+    # event-loop events. A retained terminal task is not ongoing backend work.
+    task = getattr(app, '_test_setup_tasks', {}).get(identity)
+    return task is not None and not task.done()
+
+
+def retire_task(tasks, identity, task):
+    # A delayed callback for setup must not erase a later cleanup under its ID.
+    if tasks.get(identity) is task:
+        tasks.pop(identity)
+
+
 async def read(app):
     from .task_environments import configuration
     config, state, reason = await settled_thread(configuration, app)
@@ -288,7 +301,7 @@ async def read(app):
             pass
         else:
             try:
-                if record['id'] not in getattr(app, '_test_setup_tasks', {}):
+                if not active_task(app, record['id']):
                     record.update(state='outcome_unknown', detail='Setup was interrupted. Its retained resources were not replayed. Inspect the saved setup result before starting again.', updatedAt=time.time())
                     # Passive observation reports uncertainty without rewriting the original receipt.
             finally:
@@ -319,7 +332,7 @@ async def request(app, args, actor, guard=None, *, authority=None, origin=None):
     if existing:
         if existing['intent'] != intent or not same_owner(existing, args, actor, authority, origin):
             raise ValueError('This setup request identity already belongs to another intent.')
-        if existing['state'] in {'outcome_unknown', 'failed'} and not existing.get('cleanup') and existing.get('candidateConfiguration') and prepared(existing) and identity not in getattr(app, '_test_setup_tasks', {}):
+        if existing['state'] in {'outcome_unknown', 'failed'} and not existing.get('cleanup') and existing.get('candidateConfiguration') and prepared(existing) and not active_task(app, identity):
             existing = await complete_retained(app, path, existing, guard, actor=actor, authority=authority, origin=origin)
         observed = await readiness(app, force=True)
         if authority is not None and guard:
@@ -355,7 +368,7 @@ async def request(app, args, actor, guard=None, *, authority=None, origin=None):
             tasks = app._test_setup_tasks = {}
         task = asyncio.create_task(_run(app, record, lock, guard), name='test-runner-setup-' + identity)
         tasks[identity] = task
-        task.add_done_callback(lambda _: tasks.pop(identity, None))
+        task.add_done_callback(lambda finished: retire_task(tasks, identity, finished))
         return {'operation': public(record), 'duplicate': False}
     except BaseException:
         lock.release()
@@ -782,8 +795,7 @@ async def reconcile(app, args, actor, guard=None, *, authority=None, origin=None
     path, record = original(app, args, actor, authority=authority, origin=origin)
     if guard:
         await guard()
-    tasks = getattr(app, '_test_setup_tasks', {})
-    if record['id'] in tasks:
+    if active_task(app, record['id']):
         return {'operation': public(record), 'active': True}
     observed = await readiness(app, force=True)
     if record.get('candidateConfiguration') and prepared(record) and read_json(Path(app.data_dir) / 'test-environments.json') == record['candidateConfiguration'] and observed['status'] == 'ready':
@@ -828,7 +840,7 @@ async def cleanup(app, args, actor, guard=None, *, authority=None, origin=None):
             tasks = app._test_setup_tasks = {}
         task = asyncio.create_task(_cleanup(app, record, path, lock, guard))
         tasks[record['id']] = task
-        task.add_done_callback(lambda _: tasks.pop(record['id'], None))
+        task.add_done_callback(lambda finished: retire_task(tasks, record['id'], finished))
         return {'operation': public(record)}
     except BaseException:
         lock.release()
