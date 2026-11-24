@@ -33,6 +33,11 @@ def public_config(value, *, module=None, metadata=False):
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
     if isinstance(value, dict):
+        if module == "hook-context-intelligence" and isinstance(value.get("destinations"), dict):
+            others = {key: item for key, item in value.items() if key != "destinations"}
+            return {**public_config(others, module=module, metadata=metadata),
+                    "destinations": {name: public_config(dest, metadata=metadata)
+                                     for name, dest in value["destinations"].items()}}
         return {str(key): REDACTED if credential_field(key, module=module)
                 else public_config(item, module=value.get("module") if key == "config" else None,
                                    metadata=metadata)
@@ -109,6 +114,13 @@ def restore_redactions(value, old, *, _config=False):
                 or value.get("module") != old.get("module")
                 or value.get("source") != old.get("source")):
             old = _MISSING_SETTING
+        if value.get("module") == "hook-context-intelligence" and isinstance(old, dict):
+            from .host.hook_config import destinations_in
+            original = dict(destinations_in(old.get("config")))
+            for name, dest in destinations_in(value.get("config")):
+                if (dest.get("api_key") == REDACTED
+                        and original.get(name, {}).get("url") != dest.get("url")):
+                    raise ValueError("Enter the credential reference for the changed Context Intelligence destination.")
         return {key:restore_redactions(item, old.get(key, _MISSING_SETTING)
                                       if isinstance(old, dict) else _MISSING_SETTING,
                                       _config=_config or key == "config" and isinstance(value.get("module"), str))
