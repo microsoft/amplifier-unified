@@ -1030,8 +1030,8 @@ jobs:
           & "$base/env/Scripts/python.exe" -I -B -c $check $env:DEFAULT_CANDIDATE_SOURCE $base
           if ($LASTEXITCODE -ne 0) { throw 'Native default-command check failed; inspect bounded publicresult.json.' }
       - name: Require installed foreground CLI TLS, public open and graceful cleanup
-        if: ${{ !inputs.remaining_runtime_only }}
-        # Default success() sequencing: never run this cell after cold failure.
+        if: ${{ success() && !inputs.remaining_runtime_only }}
+        # Preserve success sequencing explicitly: never run after cold failure.
         timeout-minutes: 4
         shell: pwsh
         run: |

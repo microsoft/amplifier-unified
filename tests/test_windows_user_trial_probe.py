@@ -2297,8 +2297,10 @@ def test_default_command_job_is_separate_finite_and_requires_real_native_node():
     assert job["timeout-minutes"] == 34
     # Setup/metadata/CLI and locked setup/five are mutually exclusive paths.
     for focused in (False, True):
-        selected_steps = [step for step in job["steps"] if step.get("if") != (
-            "${{ !inputs.remaining_runtime_only }}" if focused else "${{ inputs.remaining_runtime_only }}")]
+        excluded = ({"${{ !inputs.remaining_runtime_only }}",
+                     "${{ success() && !inputs.remaining_runtime_only }}"} if focused else
+                    {"${{ inputs.remaining_runtime_only }}"})
+        selected_steps = [step for step in job["steps"] if step.get("if") not in excluded]
         assert sum(step.get("timeout-minutes", 0) for step in selected_steps) < job["timeout-minutes"]
     offline = workflow["jobs"]["windows-user-trial"]
     preserved_offline = copy.deepcopy(offline)
@@ -2756,12 +2758,19 @@ def test_foreground_cli_source_and_workflow_preserve_entry_cleanup_budget_and_co
     cold = next(i for i, s in enumerate(steps) if s.get("name", "").startswith("Require one native cold"))
     foreground = next(i for i, s in enumerate(steps) if s.get("name", "").startswith("Require installed foreground"))
     step = steps[foreground]
-    assert foreground == cold + 1 and step.get("if", "success()") == "success()"
+    assert foreground == cold + 1
+    # Adding a scoped lane must not let the normal CLI cell run after cold
+    # failure/cancellation, or run at all in remaining-runtime-only work.
+    assert step["if"] == "${{ success() && !inputs.remaining_runtime_only }}"
     assert step["timeout-minutes"] == 4 and "--cli-run" in step["run"]
     assert '"$base/env/Scripts/python.exe" -I -B $probe' in step["run"]
     assert "--candidate-receipt" in step["run"] and "uv " not in step["run"]
-    upload = steps[-1]
-    assert upload["if"] == "always()" and upload["with"]["name"] == "windows-foreground-cli"
+    upload, = [s for s in steps if s.get("name") == "Upload only bounded foreground CLI facts"]
+    assert upload["uses"] == "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+    # Failure evidence still uploads for the normal/foreground-only lane, not
+    # for the separate five-case lane. Its position is not its identity.
+    assert upload["if"] == "${{ always() && !inputs.remaining_runtime_only }}"
+    assert upload["with"]["name"] == "windows-foreground-cli"
     assert upload["with"]["path"] == "${{ runner.temp }}/dr-ci/evidence/foreground.json"
     source = Path(SPEC.origin).read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -2786,6 +2795,58 @@ def test_foreground_cli_source_and_workflow_preserve_entry_cleanup_budget_and_co
     compile(tree, SPEC.origin, "exec")
 
 
+@pytest.mark.parametrize("fault", [
+    "missing-success", "always-run", "run-on-failure", "missing-scope", "detached-cold",
+    "missing-upload", "duplicate-upload", "success-only-upload", "wrong-upload-scope",
+    "wrong-upload-action", "wrong-upload-path",
+])
+def test_foreground_boundary_guard_rejects_unsafe_conditions_and_wrong_upload(monkeypatch, fault):
+    """Exercise the actual maintained guard, without invoking any CLI/native job."""
+    workflow, original, tree = cold_ci_runner()
+    job = copy.deepcopy(original)
+    steps = job["steps"]
+    foreground = next(s for s in steps if s.get("name", "").startswith("Require installed foreground"))
+    upload = next(s for s in steps if s.get("name") == "Upload only bounded foreground CLI facts")
+    if fault == "missing-success": foreground["if"] = "${{ !inputs.remaining_runtime_only }}"
+    elif fault == "always-run": foreground["if"] = "${{ always() && !inputs.remaining_runtime_only }}"
+    elif fault == "run-on-failure": foreground["if"] = "${{ failure() && !inputs.remaining_runtime_only }}"
+    elif fault == "missing-scope": foreground["if"] = "${{ success() }}"
+    elif fault == "detached-cold": steps.insert(steps.index(foreground), {"name": "unrelated"})
+    elif fault == "missing-upload": steps.remove(upload)
+    elif fault == "duplicate-upload": steps.append(copy.deepcopy(upload))
+    elif fault == "success-only-upload": upload["if"] = "${{ success() && !inputs.remaining_runtime_only }}"
+    elif fault == "wrong-upload-scope": upload["if"] = "always()"
+    elif fault == "wrong-upload-action": upload["uses"] = "unrelated/action@main"
+    elif fault == "wrong-upload-path": upload["with"]["path"] = "${{ runner.temp }}/dr-ci/**"
+    monkeypatch.setitem(globals(), "cold_ci_runner", lambda: (workflow, job, tree))
+    with pytest.raises((AssertionError, KeyError, ValueError)):
+        test_foreground_cli_source_and_workflow_preserve_entry_cleanup_budget_and_cold_boundary()
+
+
+@pytest.mark.parametrize("mode", ["default", "foreground-only", "remaining-runtime"])
+@pytest.mark.parametrize("prior", ["success", "failure", "cancelled"])
+def test_foreground_run_and_evidence_conditions_cover_scope_and_prior_outcome(mode, prior):
+    """Finite expression model, not evidence that a hosted step executed."""
+    _, job, _ = cold_ci_runner()
+    focused = mode == "remaining-runtime"
+    cold = next(s for s in job["steps"] if s.get("name", "").startswith("Require one native cold"))
+    assert cold["if"] == "${{ !inputs.foreground_only }}"
+    # foreground-only intentionally skips cold; that is not a failed job.
+    # 'prior' is the accumulated job status, not an individual skipped step.
+    foreground = next(s for s in job["steps"] if s.get("name", "").startswith("Require installed foreground"))
+    upload = next(s for s in job["steps"] if s.get("name") == "Upload only bounded foreground CLI facts")
+    for step, function, permitted in (
+        (foreground, "success()", prior == "success" and not focused),
+        (upload, "always()", not focused),
+    ):
+        # Assert the complete expression before translating only these fixed
+        # boolean tokens. A missing status/scope guard cannot enter this model.
+        assert step["if"] == "${{ " + function + " && !inputs.remaining_runtime_only }}"
+        expression = step["if"][4:-3].replace(function, str(function == "always()" or prior == "success"))
+        expression = expression.replace("!inputs.remaining_runtime_only", str(not focused)).replace("&&", "and")
+        assert eval(expression, {"__builtins__": {}}, {}) is permitted
+
+
 def test_foreground_cli_only_dispatch_preserves_accepted_cells_and_normal_admission():
     workflow, job, _ = cold_ci_runner()
     event = workflow.get("on", workflow.get(True))  # YAML 1.1 treats 'on' as True.
@@ -2800,7 +2861,7 @@ def test_foreground_cli_only_dispatch_preserves_accepted_cells_and_normal_admiss
     cold = next(s for s in job["steps"] if s.get("name", "").startswith("Require one native cold"))
     assert cold["if"] == "${{ !inputs.foreground_only }}" and cold["timeout-minutes"] == 21
     cli = next(s for s in job["steps"] if s.get("name", "").startswith("Require installed foreground"))
-    assert cli["if"] == "${{ !inputs.remaining_runtime_only }}" and cli["timeout-minutes"] == 4
+    assert cli["if"] == "${{ success() && !inputs.remaining_runtime_only }}" and cli["timeout-minutes"] == 4
     # Ordinary PR/manual-default behavior is unchanged; isolated diagnosis never
     # treats skipped accepted cells as newly passing checks.
     for requested, public_result, cancelled, expected in (
@@ -3119,9 +3180,10 @@ def test_remaining_route_uses_one_existing_job_and_no_unrelated_cells():
     assert setups["Read the exact remaining-runtime application candidate"]["with"] == {
         "ref": "${{ inputs.candidate_ref }}", "path": ".ci/remaining-candidate", "persist-credentials": False}
     for name in ("Build and install candidate host for cold default-command setup",
-                 "Check closed metadata observation and original-outcome preservation",
-                 "Require installed foreground CLI TLS, public open and graceful cleanup"):
+                 "Check closed metadata observation and original-outcome preservation"):
         assert setups[name]["if"] == "${{ !inputs.remaining_runtime_only }}"
+    assert setups["Require installed foreground CLI TLS, public open and graceful cleanup"]["if"] == (
+        "${{ success() && !inputs.remaining_runtime_only }}")
     locked = setups["Build and install the locked host for the remaining native cases"]
     assert locked["if"] == setups[FIVE_STEP]["if"] == "${{ inputs.remaining_runtime_only }}"
     assert 'uv sync --project $source --locked --group dev --no-install-project --python' in locked["run"]
