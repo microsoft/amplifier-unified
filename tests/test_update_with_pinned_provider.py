@@ -255,7 +255,19 @@ async def test_a_component_update_completes_with_an_openai_api_connection(tmp_pa
 
     save_baseline_inputs()
     try:
-        prepared = await installation_runtime.prepare(home)
+        if os.environ.get("AMPLIFIER_PINNED_PROVIDER_COMMAND_WITNESS") == "1":
+            # Separate, one-preparation diagnostic. Never continue into an update
+            # scenario merely because that preparation unexpectedly succeeds.
+            from fixtures.pinned_provider_command_witness import installed_witness, OnePreparation
+            from amplifier_web import update_command_details
+            if case != "new-installation":
+                raise ValueError("Command witness is only for the new-installation diagnostic")
+            sources = {url: "provider", CORE_URL: "core", FOUNDATION_URL: "foundation",
+                       PROVIDER_URL: "fixture-provider"}
+            with installed_witness(work, binpath / "git", sources, update_command_details) as folder:
+                await OnePreparation(installation_runtime.prepare, folder)(home)
+        else:
+            prepared = await installation_runtime.prepare(home)
     except CommandFailure as error:
         # Use the product's bounded, twice-redacted LOCAL ONLY detail writer.
         # Never put installer text in stdout, JUnit or the shared test report.
