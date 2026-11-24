@@ -9,6 +9,8 @@ UNIFIED_CATALOG_MODE=success|empty|http-error|malformed|timeout
 UNIFIED_CATALOG_STATUS=401 (used only by http-error)
 UNIFIED_CATALOG_LOG=/absolute/path/to/requests.jsonl (safe, append-only evidence)
 UNIFIED_CATALOG_PROVIDER=openai (optional; limits class-evidence imports)
+UNIFIED_CATALOG_GRAPH=filelock4-litellm-1.108.3 selects the named successor
+graph, not the historical candidate or UNIFIED_CATALOG_ACCEPTED graph.
 
 Copilot replaces SDK construction/RPC, not its real provider/wrapper. Its CLI,
 wire decoder and service are deliberately outside this qualification. HTTP
@@ -49,9 +51,26 @@ MODEL_IDS = {
                        "auto", "future-unrecognized-family"],
 }
 OPENAI_DEFAULT_IDS = ["gpt-6", "gpt-6-mini"]
-CANDIDATES = json.loads(Path(__file__).with_name(
-    "model_catalog_accepted.json" if os.environ.get("UNIFIED_CATALOG_ACCEPTED") == "1"
-    else "canonical_model_catalog_candidate.json").read_text())
+
+
+def _candidate_manifest():
+    graph = os.environ.get("UNIFIED_CATALOG_GRAPH")
+    if graph is not None:
+        if graph != "filelock4-litellm-1.108.3":
+            raise ValueError("Unknown catalog graph")
+        if os.environ.get("UNIFIED_CATALOG_ACCEPTED") == "1":
+            raise ValueError("Catalog graph selection cannot be combined with UNIFIED_CATALOG_ACCEPTED")
+        name = "canonical_model_catalog_filelock4.json"
+    else:
+        name = ("model_catalog_accepted.json" if os.environ.get("UNIFIED_CATALOG_ACCEPTED") == "1"
+                else "canonical_model_catalog_candidate.json")
+    return Path(__file__).with_name(name)
+
+
+CANDIDATE_MANIFEST = _candidate_manifest()
+_manifest_bytes = CANDIDATE_MANIFEST.read_bytes()
+CANDIDATE_MANIFEST_SHA256 = hashlib.sha256(_manifest_bytes).hexdigest()
+CANDIDATES = json.loads(_manifest_bytes)
 CANONICAL_PROVIDERS = tuple(CANDIDATES["providers"])
 LOCAL_PROVIDERS = tuple(CANDIDATES.get("localProviders", {}))
 DEFAULT_IDS = {"openai": OPENAI_DEFAULT_IDS,
@@ -267,6 +286,12 @@ def _forbid_network(event, args):
         raise RuntimeError("Real network is forbidden in candidate qualification")
 
 
+def _check_sdk_version(candidate):
+    sdk = candidate.get("sdk")
+    if sdk and sdk.get("qualificationVersion") and importlib.metadata.version(sdk["distribution"]) != sdk["qualificationVersion"]:
+        raise AssertionError("Candidate SDK differs from the qualification manifest")
+
+
 def class_evidence(provider):
     """Verify installed Python sources against the parent's reviewed manifest."""
     from amplifier_web.provider_environment import provider_class
@@ -276,9 +301,7 @@ def class_evidence(provider):
     package = "amplifier_module_provider_" + provider.replace("-", "_")
     package_root = Path(importlib.import_module(package).__file__).resolve().parent
     candidate = {**CANDIDATES["providers"], **CANDIDATES.get("localProviders", {})}[provider]
-    sdk = candidate.get("sdk")
-    if sdk and sdk.get("qualificationVersion") and importlib.metadata.version(sdk["distribution"]) != sdk["qualificationVersion"]:
-        raise AssertionError("Candidate SDK differs from the qualification manifest")
+    _check_sdk_version(candidate)
     if candidate["module"] != package or not path.is_relative_to(package_root):
         raise AssertionError("Candidate class is not defined in its installed package")
     for relative, expected in candidate["files"].items():
@@ -292,6 +315,9 @@ def class_evidence(provider):
         version = None
     return {"provider": provider, "class": cls.__qualname__, "module": cls.__module__,
             "package": package, "file": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "qualificationGraph": CANDIDATES["status"],
+            "qualificationManifest": CANDIDATE_MANIFEST.name,
+            "qualificationManifestSha256": CANDIDATE_MANIFEST_SHA256,
             "candidateCommit": candidate["commit"], "verifiedSourceFiles": len(candidate["files"]),
             "distributionVersion": version,
             "listingDefinedBy": cls.list_models.__module__}
