@@ -529,7 +529,7 @@ async def test_same_generation_human_steering_supersedes_update_wait(tmp_path, m
             if self.calls == 1:
                 return self.dispatch(WAIT, "task.waitForUpdate", self.wait_args)
             if self.calls == 2:
-                assert "A safe app update is waiting." in str(request.messages)
+                assert "A safe app update is waiting." not in str(request.messages)
                 assert tool_output(request, WAIT)["accepted"]
                 enrolled.set()
                 await apply_steering.wait()
