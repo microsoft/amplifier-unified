@@ -63,7 +63,7 @@ try{
  assert.equal(evidenceRequests.length,0,'Opening Storage does not read saved-test pages');
  await evidence.getByRole('button',{name:'Review saved test sizes',exact:true}).click();
  await expect(evidence.getByRole('listitem')).toHaveCount(32);
- await expect(evidence).toContainText('191.0 KB recorded across 31 tests on this page.');
+ await expect(evidence).toContainText('185.0 KB recorded across 30 tests on this page.');
  await expect(evidence).toContainText('1 other test has incomplete size records.');
  await expect(evidence).toContainText('not a current disk measurement');
  await expect(evidence).toContainText('not an all-workspace total');
@@ -73,6 +73,11 @@ try{
  await expect(complete).toContainText('Final workspace: 3.0 KB. Test results: 2.0 KB.');
  const full=saved('saved-test-32');await full.locator('summary').click();
  await expect(full).toContainText('Final workspace and results are included in a full environment archive: 10.0 KB. Their separate sizes were not recorded.');
+ const partial=saved('saved-test-30');await partial.locator('summary').click();
+ await expect(evidence).toContainText('2.0 KB in verified result archives from 1 test.');
+ await expect(partial.locator('summary')).toContainText('2.0 KB in results');
+ await expect(partial).toContainText('Original source: Unavailable.');
+ await expect(partial).toContainText('Final workspace: Not exported. Test results: 2.0 KB.');
  const remote=saved('saved-test-31');await remote.locator('summary').click();
  await expect(remote).toContainText('Remote results downloaded; additional copies may remain on the test machine.');
  const unknown=saved('saved-test-34');await unknown.locator('summary').click();
