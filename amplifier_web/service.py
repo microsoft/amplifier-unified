@@ -265,11 +265,17 @@ ACTION_DEFINITIONS = {
 }
 
 
+def _register_actions(definitions):
+    """Register schemas once and retain their exact names for routing."""
+    ACTION_DEFINITIONS.update(definitions)
+    return frozenset(definitions)
+
+
 from .voice_settings import definitions as voice_settings_definitions
 ACTION_DEFINITIONS.update(voice_settings_definitions(schema, string))
 
 from .storage_cleanup import definitions as storage_cleanup_definitions
-ACTION_DEFINITIONS.update(storage_cleanup_definitions(schema, string))
+STORAGE_CLEANUP_ACTIONS = _register_actions(storage_cleanup_definitions(schema, string))
 
 from .storage_usage import definitions as storage_definitions
 ACTION_DEFINITIONS.update(storage_definitions(schema, string))
@@ -332,7 +338,7 @@ ACTION_DEFINITIONS.update(context_inspection_definitions(schema, string))
 from .coordination import definitions as coordination_definitions
 ACTION_DEFINITIONS.update(coordination_definitions())
 from .integration_evidence import definitions as integration_definitions
-ACTION_DEFINITIONS.update(integration_definitions(schema, string))
+INTEGRATION_EVIDENCE_ACTIONS = _register_actions(integration_definitions(schema, string))
 from .collaboration import definitions as collaboration_definitions
 ACTION_DEFINITIONS.update(collaboration_definitions(schema, string))
 from .assignments import definitions as assignment_definitions
@@ -359,12 +365,6 @@ from .computer_visual import ComputerVisuals, definitions as computer_visual_def
 ACTION_DEFINITIONS.update(computer_visual_definitions(schema, string))
 from .worktrees import definitions as worktree_definitions
 ACTION_DEFINITIONS.update(worktree_definitions(schema, string))
-
-
-def _register_actions(definitions):
-    """Register schemas once and retain their exact names for routing."""
-    ACTION_DEFINITIONS.update(definitions)
-    return frozenset(definitions)
 
 
 from .workspace_resources import definitions as workspace_resource_definitions
@@ -461,7 +461,7 @@ for _access, _actions in {
         *patch_placement_definitions(schema, string),
         "worktree.create", "worktree.attach", "worktree.handoff",
         "coordination.review",
-        *integration_definitions(schema, string),
+        *INTEGRATION_EVIDENCE_ACTIONS,
         "workspace.deleteFiles", "desktop.readiness", "configuration.inspect", "session.recover", "approval.respond",
         "canvas.show", "canvas.openFile", "canvas.openAttachment", "canvas.openGif", "canvas.select", "canvas.reference",
         *MESSAGE_INTERACTIONS,
@@ -2437,7 +2437,7 @@ class AppService:
                 except (ValueError, OSError) as error:
                     raise AppError(str(error), 409) from None
             return {'accepted':True,'result':result,'effects':[]}
-        if action in storage_cleanup_definitions(schema, string):
+        if action in STORAGE_CLEANUP_ACTIONS:
             from .storage_cleanup import dispatch as cleanup_dispatch
             return await cleanup_dispatch(self, action, args, origin, command_id, caller_session_id)
         if action in {'storage.historyDeletePreview', 'storage.historyDelete'}:
@@ -2462,7 +2462,7 @@ class AppService:
         if action == 'desktop.readiness':
             from .desktop_readiness import dispatch as desktop_readiness
             return await desktop_readiness(self, args, origin, expected_revision, caller_session_id)
-        if action in integration_definitions(schema, string):
+        if action in INTEGRATION_EVIDENCE_ACTIONS:
             from .integration_evidence import dispatch as integration_dispatch
             return await integration_dispatch(self, action, args, origin, command_id, caller_session_id)
         if action == 'runtime.dependencies':
