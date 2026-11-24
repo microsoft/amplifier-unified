@@ -858,11 +858,12 @@ class SetupManager:
             from .decision_settings import configure
             return configure(self, args, workspace, scope)
         if action=='providers.suggestionModels':
-            from .suggestion_settings import describe
+            from .suggestion_settings import describe, recommendation
             with self.read_snapshot(workspace):
                 rows = self.provider_rows(workspace, ordinary_only=True)
                 for row in rows:
                     row['sharedCatalogKey'] = self.catalog_key({'id': row['id']}, workspace)
+                    row['suggestionRecommendation'] = recommendation(self, row)
                 return {'suggestionModels': describe(self, workspace), 'providers': rows}
         if action=='providers.configureSuggestions':
             from .suggestion_settings import configure

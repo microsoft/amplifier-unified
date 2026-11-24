@@ -461,23 +461,33 @@ class ProviderCatalog:
             if fingerprint(key) not in retained:
                 self._forget(key)
 
-    def peek(self, key):
+    def _retained_record(self, key):
+        """Borrow only inside a synchronous catalog projection, never to callers."""
         at = self.loaded_at.get(key, self.failed_at.get(key))
         if at is not None and not self._retained(at):
             self._forget(key)
             self.saved.pop(fingerprint(key), None)
+        if key in self.entries:
+            value, error = self.entries[key]
+            return value, error, self.loaded_at.get(key), self.failed_at.get(key)
+        row = self.saved.get(fingerprint(key))
+        if row and self._retained(row['at']):
+            return row['result'], row.get('error'), row.get('loadedAt'), row.get('failedAt')
+        if row:
+            self.saved.pop(fingerprint(key), None)
+        return None, None, None, None
+
+    def peek(self, key):
+        value, error, loaded, failed = self._retained_record(key)
         if key not in self.entries:
             row = self.saved.get(fingerprint(key))
-            if row and self._retained(row['at']):
-                self.entries[key] = (copy.deepcopy(row['result']), row.get('error'))
-                if row.get('loadedAt') is not None:
-                    self.loaded_at[key] = row['loadedAt']
-                if row.get('failedAt') is not None:
-                    self.failed_at[key] = row['failedAt']
+            if row:
+                self.entries[key] = (copy.deepcopy(value), error)
+                if loaded is not None:
+                    self.loaded_at[key] = loaded
+                if failed is not None:
+                    self.failed_at[key] = failed
                 self.sizes[key] = len(json.dumps(row).encode()) + len(fingerprint(key)) + 8
-            elif row:
-                self.saved.pop(fingerprint(key), None)
-        value, _ = self.entries.get(key, (None, None))
         return copy.deepcopy(value)
 
     def fresh(self, key):
@@ -486,7 +496,50 @@ class ProviderCatalog:
 
     def _fresh(self, key):
         """Inspect freshness without copying the inventory a second time."""
-        return key not in self.failed_at and key in self.loaded_at and (self.ttl is None or 0 <= self.clock() - self.loaded_at[key] < self.ttl)
+        return self._fresh_record(self.loaded_at.get(key), self.failed_at.get(key))
+
+    def _fresh_record(self, loaded, failed):
+        return failed is None and loaded is not None and (self.ttl is None or 0 <= self.clock() - loaded < self.ttl)
+
+    def purpose_recommendation(self, key, module, purpose):
+        """Return one detached scalar hint, not a copy of the model inventory.
+
+        Roster reads grow with configured connections, not model body bytes.
+        Inspect optional metadata before walking IDs. Retained disk results can
+        be projected without hydrating/copying/encoding the full catalog again.
+        """
+        value, error, loaded, failed = self._retained_record(key)
+        if (error or not self._fresh_record(loaded, failed) or not isinstance(value, dict)
+                or not value.get('modelsSupported')
+                or value.get('modelsProvenance') not in {'provider-api', 'configured', 'static'}):
+            return None
+        metadata = value.get('providerMetadata') or {}
+        if not isinstance(metadata, dict) or metadata.get('module') != module:
+            return None
+        info = metadata.get('modelListInfo') or {}
+        provenance = value['modelsProvenance']
+        if (not isinstance(info, dict) or type(info.get('version')) is not int or info['version'] != 1
+                or info.get('source') != provenance):
+            return None
+        purposes = info.get('purpose_recommendations')
+        ranked = purposes.get(purpose) if isinstance(purposes, dict) else None
+        if (not isinstance(ranked, list) or not 1 <= len(ranked) <= 32
+                or any(not isinstance(model, str) or not model.strip() or len(model) > 200
+                       for model in ranked) or len(set(ranked)) != len(ranked)):
+            return None
+        models = value.get('models') or []
+        if not isinstance(models, list):
+            return None
+        # Count only the bounded ranked IDs. Never copy model bodies or infer
+        # aliases, family, suitability or ranking from other catalog fields.
+        counts = dict.fromkeys(ranked, 0)
+        for model in models:
+            identity = model.get('id') if isinstance(model, dict) else None
+            if isinstance(identity, str) and identity in counts:
+                counts[identity] += 1
+        model = next((model for model in ranked if counts[model] == 1), None)
+        return ({'model': model, 'provenance': provenance, 'basis': 'provider-purpose'}
+                if model is not None else None)
 
     def discard(self, key):
         self._forget(key)

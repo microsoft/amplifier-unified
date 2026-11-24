@@ -240,6 +240,37 @@ async def test_failed_refresh_inside_ttl_is_stale_and_retains_success_timestamp(
     assert cache.entry(key)['models']==[]
 
 
+async def test_purpose_projection_rejects_failed_lazy_catalog_until_explicit_success(tmp_path):
+    now = [1000.]
+    key = ('providers.models', 'exact-account')
+    cache = ProviderCatalog(tmp_path / 'catalog.json', clock=lambda: now[0])
+    result = {'models': [{'id': 'Current/Exact', 'opaque': {'body': 'x' * 10000}}],
+              'modelsSupported': True, 'modelsProvenance': 'provider-api',
+              'providerMetadata': {'module': 'provider-company', 'modelListInfo': {
+                  'version': 1, 'source': 'provider-api',
+                  'purpose_recommendations': {'prompt-suggestions': ['Current/Exact']}}}}
+    def hint(owner):
+        return owner.purpose_recommendation(key, 'provider-company', 'prompt-suggestions')
+    cache.put(key, result)
+    assert hint(cache)['model'] == 'Current/Exact'
+    now[0] += 1
+    async def fail():
+        raise TimeoutError('synthetic')
+    with pytest.raises(TimeoutError):
+        await cache.get(key, fail, refresh=True)
+    # Retained last-success bodies are still inspectable, but are not fresh
+    # recommendation evidence after a failed refresh, including after restart.
+    assert cache.peek(key) == result
+    assert hint(cache) is None
+    restored = ProviderCatalog(cache.path, clock=lambda: now[0])
+    assert hint(restored) is None and not restored.entries
+    restored.put(key, result)
+    assert hint(restored)['model'] == 'Current/Exact'
+    assert cache.peek(key) == result
+    await cache.close()
+    await restored.close()
+
+
 async def test_provider_priority_does_not_invalidate_models(tmp_path,monkeypatch):
     settings(tmp_path)
     manager=SetupManager(tmp_path,catalog=ProviderCatalog())

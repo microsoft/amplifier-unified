@@ -54,7 +54,15 @@ from every conversation participant and execution runtime.
   Client interest/visibility owns those triggers; the host proves cookie-backed
   selected-chat authority, not the document's physical visibility. Reconnect and
   status reads never start inference. Request/source deduplication still forbids
-  replay of a prior attempt merely because a chat is revisited. Ordinary composing remains
+  replay of a prior attempt merely because a chat is revisited. Confirmed enable
+  followed by closing Settings reconciles the current eligible chat immediately;
+  an assistant source predating enable is not itself ineligible. The same
+  reconciliation runs when selected old history becomes ready, on focus and on
+  reconnect. Only the current interested chat creates demand, not a history-wide
+  backfill. Saved On remains separate from request status: pending has a quiet
+  composer loading indication, EMPTY means no suggestion this time, and failed,
+  unsupported or unavailable prior attempts have content-free feedback rather
+  than misleading silence. Ordinary composing remains
   available when the utility is disabled, busy, unsupported or unsuccessful.
   The existing update owner also fences utility admission while draining,
   replacing or releasing saved input, including final transport grants and
@@ -190,8 +198,36 @@ Clients may hydrate cached choices only by this exact key, never by connection
 ID alone or a workspace override/mounted fork. Reading this roster does not
 discover models, prepare a runtime or change settings.
 
+Each row also carries `suggestionRecommendation:null|{model,provenance,
+basis:"provider-purpose"}`. The host projects the first ranked exact ID present
+unambiguously in that connection's current cached inventory from the **new
+optional** `get_model_list_info()` version-1 extension
+`purpose_recommendations:{"prompt-suggestions":[ordered exact model IDs]}`.
+There are at most 32 distinct nonblank IDs, each at most 200 characters.
+Existing model-list discovery already carries this metadata; no additional probe
+or SDK is required. This is an extension point, not a claim existing modules
+advertise it. The module owns ranking, current families and aliases. The host
+does not infer a family from names or copy a vendor's model policy. In particular
+Luna/Haiku preferences cannot fabricate IDs or eligibility when a module does not
+establish them. A module without this metadata, unknown version, stale/failed,
+unsupported, simulated or absent catalog, disabled connection or required sign-in
+has no recommendation. Unknown/custom modules can use the same extension.
+`provenance` stays `provider-api`, `configured` or `static`; the latter two are
+not live account inventories. Recommendation is neither strict suggestion-output
+support nor a cost, latency or availability guarantee. Refreshing a catalog uses
+its existing explicit owner; focus/save never probes merely for recommendations.
+Clients reread this projection after relevant catalog hydration/refresh and
+discard it when its exact catalog identity or freshness changes. No saved model,
+prompt, sharing choice or connection is migrated or silently replaced; manual
+exact IDs remain unverified choices, never inferred recommendations. Another
+account, including one using the same module, cannot donate a recommendation.
+The catalog owner projects this bounded scalar hint synchronously, without
+copying or encoding model bodies or hydrating a second inventory. Absent purpose
+metadata needs no model-row walk; an advertised ranking inspects only exact IDs
+in the existing bounded catalog. Normal cache retention/freshness still applies.
+
 `providers.configureSuggestions {enabled?,provider?,model?,effort?,prompt?,transcriptMode?,
-humanTurns?,scope:"global",configurationTarget:{kind:"global"}}` saves the same
+humanTurns?,expectedSuggestionModelsRevision?,scope:"global",configurationTarget:{kind:"global"}}` saves the same
 selection and returns `suggestionModels`, `configurationChanged:true`,
 `takesEffect:"next_request"` and the updated `configurationRevision`.
 Existing configuration authority applies. No setting changes a chat's model.
@@ -203,6 +239,21 @@ settings). Independent prompt-only/reset or model-only forms therefore do not
 disable the utility, clear its account/model or reset its transcript window.
 The complete merged value is validated before one atomic settings write;
 invalid partial edits change neither settings nor the configuration revision.
+Bundled setup/model/Advanced saves submit `expectedSuggestionModelsRevision`,
+the exact 64-character lowercase hex `suggestionModels.revision` associated with
+the sharing disclosure the person reviewed. The raw action's optional comparison
+does not authorize a bundled form to omit it or fall back after conflict.
+Comparison, omitted-field merge and validation occur inside the existing global
+settings file's writer lock immediately before the write, using fresh current
+global settings and selected connection binding, never an earlier inventory
+snapshot. A mismatch returns 409 (`suggestion_configuration_changed`) without
+changing settings, configuration/preference revisions, success cache or paid
+claims. The client retains staged account/model edits, rereads current settings
+and shows the new sharing disclosure for review before an explicit save. It does
+not silently replay, overwrite sharing with the private draft, or treat an
+earlier render check as commit-time consent. A refreshed successful model-only
+save still preserves omitted sharing/prompt settings. Each actual save retains
+the existing new intent witness, so A→B→A is not the original confirmation.
 `defaultPrompt` is read-only metadata; Reset sends its exact value as `prompt`.
 Effort/prompt edits change the settings/configuration witness and invalidate pending
 or ready candidates like other app configuration edits; no existing paid claim is
@@ -228,12 +279,32 @@ Null without this explicit READY retention mode is not a validity grant.
 Pending work still has its independent 15-second overall deadline; clients do
 not renew finite expiry when receiving responses. Fresh source/authority checks
 remain mandatory for READY status and acceptance.
+Clients retain bounded private dispositions for the exact request/source/config
+identity, not only READY text. Revisit/refocus can read that exact pending or
+terminal receipt, never reset a spent attempt because it was empty, failed,
+cancelled, expired or the transport outcome was unknown. Lost/expired pending
+recovery does not authorize another inference. Terminal status/reason describes
+the original attempt, not current setup readiness or proof of zero billing;
+clients suppress its presentation after source/config/principal/Stop changes.
 
 Statuses: `pending`, `ready`, `empty`, `disabled`, `missing_selection`,
 `unsupported`, `stale`, `failed`, `timeout`, `cancelled`, `expired`,
 `duplicate_source`, `busy`. Only ready carries candidate text. Usage contains
 reported finite token counters only; missing usage and unknown cost stay null.
 Cancellation requests process cleanup but never claim to undo provider effects.
+Only a still-PENDING owned request transitions to `cancelled`; repeated
+cancellation does not interrupt its already-running cleanup. Late provider
+failure/success cannot overwrite that cancellation. A best-effort cancellation
+of a terminal record preserves its original status, sanitized reason and other
+receipt facts within existing retention; it is not model abstention, retry
+permission, dismissal or completion acknowledgement. A still-current READY
+remains READY with its existing source retention/cache. The client owns local
+suppression/dismissal while composing or viewing Settings. Before returning a
+READY body, cancellation also performs the existing currentness checks despite
+allowing withdrawal after navigation: changed selection, source, Stop, account,
+configuration or authentication makes that candidate stale with no body, not
+freshly cancelled or newly authorized. Cache rebinding and invalidation retain
+their existing fresh authority/source checks; no saved claim is cleared.
 The occupied slot remains held until the physical request/cleanup settles.
 That occupancy covers the same principal/session across clients, not just the
 tab which originally requested the utility.
