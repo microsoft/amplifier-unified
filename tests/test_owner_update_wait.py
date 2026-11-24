@@ -529,7 +529,9 @@ async def test_owner_wait_yields_restores_and_continues_exactly_once_without_res
     assert saved_task['objective'] == OBJECTIVE
 
 
-async def test_original_admitted_child_return_waits_for_adoption_and_is_the_only_owner_input(waiting):
+@pytest.mark.parametrize('host_requested', [False, True])
+async def test_original_admitted_child_return_waits_for_adoption_and_is_the_only_owner_input(waiting, monkeypatch, host_requested):
+    from amplifier_web import app_updates, safe_update
     h = waiting
     created = await h.commission_child()
     source_task = copy.deepcopy(h.controller.tasks.record())
@@ -538,7 +540,11 @@ async def test_original_admitted_child_return_waits_for_adoption_and_is_the_only
     creation = h.app.collaboration.receipt(created['requestId'])
     assert h.app.collaboration.creation_guard(creation) is None
 
-    await h.wait()
+    if host_requested:
+        await h.app.dispatch('updates.safeResume', h.wait_args['target'], include_state=False)
+        await safe_update.enroll(h.manager)
+    else:
+        await h.wait()
     for key in ('id', 'revision', 'continuationEpoch'):
         assert h.controller.tasks.record()[key] == source_task[key]
     assert h.app.collaboration.creation_guard(creation) is None
@@ -546,7 +552,7 @@ async def test_original_admitted_child_return_waits_for_adoption_and_is_the_only
     request = await h.report_child(created)
     assert request['subscription']['lastClaimedRevision'] == 1
     assert h.app.collaboration.receipt(returned)['delivery'] == 'queued'
-    assert drain.owner_waiting(h.app, h.sid) and not drain.held(h.app)
+    assert drain.owner_waiting(h.app, h.sid) and bool(drain.held(h.app)) == host_requested
     assert h.app.collaboration.pending_continuation(h.sid) is None
     await h.app.collaboration.drain(h.sid)
     await h.settle()
@@ -562,6 +568,10 @@ async def test_original_admitted_child_return_waits_for_adoption_and_is_the_only
     assert h.app.collaboration.receipt(returned)['delivery'] == 'queued'
     assert not h.runtime.peer_admitted and not h.runtime.admitted
     await h.confirm()
+    if host_requested:
+        monkeypatch.setattr(app_updates.components, 'updates', AsyncMock(return_value=[]))
+        assert await safe_update.check_host(h.manager)
+        safe_update.included_result(h.manager, [])
     assert h.app.collaboration.creation_guard(
         h.app.collaboration.receipt(created['requestId'])) is None
     await h.finish()
@@ -1639,3 +1649,132 @@ async def test_update_yield_distinguishes_fresh_admission_from_child_result(wait
     assert (h.controller.coordinator.session_state['goal'] is before) is fresh
     assert ('yieldedGoal' in native._handoff_boundary) is not fresh
     assert runtime.accepted.visits <= 5  # Constant old-history work plus the one new input.
+
+
+async def test_safe_update_holds_two_active_tasks_and_new_input_through_component_retry(waiting, monkeypatch):
+    from amplifier_web.safe_update import enroll
+    from amplifier_web.update_health import browser_view
+    from amplifier_web import updates
+    from test_update_sequence import source
+
+    h = waiting
+    first = h.sid
+    second = await h.new_task('Second active rollout task')
+    await h.app.dispatch('session.create', {'title': 'Queued during rollout'})
+    queued = h.app._session()['id']
+    args = h.wait_args['target']
+    with pytest.raises(AppError):
+        await h.app.dispatch('updates.safeResume', {**args, 'attemptId': 'stale'}, include_state=False)
+    result = await h.app.dispatch('updates.safeResume', args, origin='ui', command_id='safe-click', include_state=False)
+    assert result['accepted'] and drain.held(h.app)
+    assert (await h.app.dispatch('updates.safeResume', args, command_id='safe-click', include_state=False))['duplicate']
+    await h.app.dispatch('conversation.send', {'text': 'Run after update', 'sessionId': queued},
+                         command_id='queued-human', include_state=False)
+    assert h.app._session(queued)['messages'][-1]['delivery']['status'] == 'queued_for_update'
+    assert not h.runtime.sent
+    await enroll(h.manager)
+    await enroll(h.manager)
+    assert len(h.runtime.boundary_calls) == 2
+    for sid in [first, second]:
+        h.sid = sid
+        await h.yield_turn()
+    assert await drain.prepare(h.manager, h.release)
+    assert all(r['ready'] and r['yieldedGoal'] for r in h.app.state['updates']['drain']['workers'].values())
+    h.replace()
+    await h.reconnect(successor=True)
+    await h.confirm()
+    state = h.app.state['updates']
+    assert browser_view(state)['safeUpdateStatus']['appReady']
+    await h.finish()
+    assert drain.held(h.app) and not h.runtime.admitted and not h.runtime.sent
+
+    # Spark-2 needed a second same-app restart for two host packages. Exercise
+    # stage and readiness decisions, simulating only the installer and listener.
+    from amplifier_web import app_updates, safe_update
+    changes = [{'name': name, 'latest': '2.0.0'} for name in ('amplifier-a', 'amplifier-b')]
+    monkeypatch.setattr(app_updates.components, 'updates', AsyncMock(return_value=changes))
+    after = {**h.release, 'attemptId': 'e' * 32, 'generation': 'f' * 32,
+             'safeUpdateAttempt': h.release['attemptId']}
+    async def stage(manager):
+        manager.diagnostics.begin('application', after['revision'], after['attemptId'])
+        await manager.publish(pendingApp=after, phase='app-staged')
+    monkeypatch.setattr(app_updates, 'stage', stage)
+    await h.manager.check(tier='included', fresh=True)
+    assert state['pendingApp'] == after
+    await h.finish()
+    assert drain.held(h.app) and not h.runtime.admitted and not h.runtime.sent
+    with pytest.raises(ValueError):
+        safe_update.require_host_graph(state['drain'], [])
+    h.release = after
+    assert await drain.prepare(h.manager, after)
+    h.replace()
+    await h.reconnect(successor=True)
+    await h.confirm()
+    state = h.app.state['updates']
+    monkeypatch.setattr(app_updates.components, 'installed_graph',
+                        lambda: [{'name': row['name'], 'version': row['latest']} for row in changes])
+    await h.finish()
+    assert not h.runtime.admitted and not h.runtime.sent
+
+    revision = 'b' * 40
+    current = 'a' * 40
+    failing = True
+    async def inventory(**kwargs):
+        return [source(h.manager, 'included', current), source(h.manager, 'other')]
+    async def remote(*args, **kwargs):
+        if failing:
+            raise TimeoutError('Included component unavailable')
+        return revision + ' refs/heads/main'
+    monkeypatch.setattr(h.manager, 'inventory_sources', inventory)
+    monkeypatch.setattr(updates, 'process', remote)
+    await h.manager.check(tier='included', fresh=True)
+    await h.finish()
+    assert not state['drain']['componentsReady'] and not h.runtime.admitted and not h.runtime.sent
+    failing = False
+    await h.manager.check(tier='included', fresh=True)
+    assert state['drain']['requiredSources']['included'] == revision
+    await h.finish()
+    assert not h.runtime.admitted
+    # Recheck the verified installed revision, leaving an optional update available.
+    current = revision
+    await h.manager.check(tier='included', fresh=True)
+    assert state['drain']['componentsReady'] and state['sequence']['nextStage'] == 'other'
+    assert state['available'] == 0  # Optional discovery is deferred until work can resume.
+    await h.finish()
+    await h.app.collaboration.drain(first)
+    await h.settle()
+    assert sorted(x['sessionId'] for x in h.runtime.admitted) == sorted([first, second])
+    assert h.runtime.sent == [(queued, 'Run after update', 'queued-human')]
+    await h.finish()
+    assert state['drain']['phase'] == 'released' and len(h.runtime.admitted) == 2 and len(h.runtime.sent) == 1
+
+
+@pytest.mark.parametrize('refused', [False, True])
+async def test_safe_update_withdrawal_restores_queued_work_on_original_host(waiting, monkeypatch, refused):
+    from amplifier_web.safe_update import enroll
+    h = waiting
+    await h.app.dispatch('updates.safeResume', h.wait_args['target'], include_state=False)
+    await enroll(h.manager)
+    await h.yield_turn()
+    await h.app.dispatch('session.create', {'title': 'Unrelated input'})
+    sid = h.app._session()['id']
+    await h.app.dispatch('conversation.send', {'sessionId': sid, 'text': 'Retained input'},
+                         command_id='retained-input', include_state=False)
+    if refused:
+        from amplifier_web import app_updates, windows_service
+        with monkeypatch.context() as patch:
+            patch.setattr(app_updates, 'sys', SimpleNamespace(platform='win32'))
+            patch.setattr(windows_service, 'update_owner', lambda home: None)
+            await app_updates._activate(h.manager)
+        assert h.app.state['updates']['pendingApp'] == h.release
+    else:
+        h.app.state['updates']['pendingApp'] = None
+    await drain.observe_waiters(h.manager)
+    await h.settle()
+    state = h.app.state['updates']['drain']
+    assert state['result'] == 'withdrawn' and state['phase'] == 'released'
+    assert h.runtime.sent == [(sid, 'Retained input', 'retained-input')]
+    assert len(h.runtime.admitted) == 1
+    await drain.observe_waiters(h.manager)
+    await h.settle()
+    assert len(h.runtime.admitted) == len(h.runtime.sent) == 1

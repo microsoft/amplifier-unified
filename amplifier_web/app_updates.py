@@ -423,6 +423,16 @@ async def _stage(manager, *, selected=None, extras):
         manager.diagnostics.sync('host-components-record',write_private,folder/'host-components.txt',components.requirements(host_graph,extras=dependency_extras))
         resolution_args=['--refresh','--overrides',str(folder/'host-components.txt'),
                          '--with-requirements',str(folder/'host-components.txt')]
+    from .safe_update import component_restart, require_host_graph
+    drain = manager.service.state['updates'].get('drain') or {}
+    required_retry = component_restart(drain, release)
+    if required_retry:
+        # Resolve the versions selected by this update even if a branch or index
+        # advances while the staged app is waiting. Preserve source subdirectories.
+        requested = [{'name': name, **spec} for name, spec in sorted(drain['requiredHost'].items())]
+        overrides = folder / 'required-host.txt'
+        manager.diagnostics.sync('host-components-record', write_private, overrides, components.requirements(requested))
+        resolution_args.extend(['--overrides', str(overrides)])
     await manager.publish(phase='staging',detail='Installing the app release in an isolated environment…',error=None)
     # Ordinary updates consume published bytes. Same-app additions preserve an
     # existing Git source or the exact qualified wheel, never a newer release.
@@ -443,6 +453,8 @@ async def _stage(manager, *, selected=None, extras):
         raise ValueError('Candidate component graph does not match the selected application')
     if artifact is not None and app.get('delivery') != {key: artifact[key] for key in ('url', 'sha256')}:
         raise ValueError('Candidate component graph does not match the verified release artifact')
+    if required_retry:
+        require_host_graph(drain, graph)
     if selected:
         from .app_features import require_preserved_components
         require_preserved_components(graph, host_graph)
@@ -488,7 +500,9 @@ async def _activate_serialized(manager, *, force=None):
     async with manager.lock:
         state = manager.service.state['updates']
         pending = state.get('pendingApp') or {}
-        if force is None and supersedes_staged(state.get('application', {}), pending):
+        from .safe_update import waiting, component_restart
+        pinned = waiting(state) or component_restart(state.get('drain') or {}, pending)
+        if force is None and not pinned and supersedes_staged(state.get('application', {}), pending):
             # A check may finish while activation waits for the runtime owner.
             # Let the existing install intent qualify that newer target first.
             # Explicit force confirmation remains bound to its exact candidate.
@@ -648,6 +662,13 @@ async def _activate(manager, *, force=None, holds=None):
                                       application_extras=release.get('extras'))
             manager.diagnostics.record('restart-capability','failed',
                                        errorType='RuntimeError')
+            drain = manager.service.state['updates'].get('drain') or {}
+            if drain.get('safeUpdate') and drain.get('phase') == 'waiting' and all(
+                    release.get(key) == value for key, value in drain['target'].items()):
+                # Keep the candidate for the manual installer. No replacement
+                # began, so its queued work can safely return to this host.
+                drain['restartRefused'] = True
+                manager.wakeup.set()
             await manager.publish(phase='error',error=message,
                 detail='No application pointer, installed package, worker or process was replaced. '
                        'The staged receipt is retained; automatic activation will not retry it.')
@@ -706,6 +727,10 @@ async def _activate(manager, *, force=None, holds=None):
             raise ValueError('The installed host components changed after validation; prepare a new candidate')
         if (folder/'components.txt').read_text()!=components.requirements(graph):
             raise ValueError('The component resolution changed after validation')
+        from .safe_update import component_restart, require_host_graph
+        drain = manager.service.state['updates'].get('drain') or {}
+        if component_restart(drain, release):
+            require_host_graph(drain, graph)
         if selected:
             from .app_features import require_preserved_components
             require_preserved_components(graph, host_graph)

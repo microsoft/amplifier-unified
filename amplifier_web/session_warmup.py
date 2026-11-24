@@ -37,8 +37,8 @@ class SessionWarmup:
         task.add_done_callback(lambda done: self.pending.pop(identity, None))
 
     def allowed(self, session):
-        from .updates import work_paused
-        return (not self.service.closed and not work_paused(self.service.state)
+        from .updates import new_work_paused
+        return (not self.service.closed and not new_work_paused(self.service.state)
                 and not session.get("configurationBusy")
                 and not session.get("configurationPending")
                 and session.get("workspaceAvailable") is not False

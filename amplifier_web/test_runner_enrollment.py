@@ -45,9 +45,9 @@ class AdmissionDeferred(Exception):
 
 
 def suspended(app, queue=None):
-    from .updates import work_paused
+    from .updates import new_work_paused
     return (getattr(app, 'closed', False) or getattr(queue or app.test_queue, 'closing', False)
-            or work_paused(getattr(app, 'state', {})))
+            or new_work_paused(getattr(app, 'state', {})))
 
 
 async def admission(app, identity, task):

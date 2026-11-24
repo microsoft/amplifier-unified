@@ -30,6 +30,9 @@ def require(manager, args):
         # dispatch calls this before it records the request, and activation
         # calls it before its Windows check. The update state then stays as it is.
         raise RestartRejected(WINDOWS_REFUSAL)
+    drain = manager.service.state['updates'].get('drain') or {}
+    if drain.get('safeUpdate') and drain.get('phase') != 'released':
+        raise RestartRejected('A safe update is already in progress.')
     expected = target(manager)
     if (not expected or args.get('confirm') is not True
             or any(args.get(key) != value for key, value in expected.items())):

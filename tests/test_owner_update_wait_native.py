@@ -234,6 +234,8 @@ class Owner(ScriptedProvider):
         self.host, self.sid, self.wait_args = host, sid, wait_args
         self.wait_receipt = self.continuation_id = self.resumed = None
         self.continuing, self.release = asyncio.Event(), asyncio.Event()
+        self.safe = False
+        self.running, self.enrolled = asyncio.Event(), asyncio.Event()
 
     async def complete(self, request, **kwargs):
         try:
@@ -248,8 +250,16 @@ class Owner(ScriptedProvider):
         if self.calls == 1:
             assert worker.runtime.generation["input_ids"] == [HUMAN]
             assert worker.controls.tasks.record()["status"] == "active"
+            if self.safe:
+                self.running.set()
+                await self.enrolled.wait()
+                return self.dispatch(WAIT, "task.get", {"sessionId": self.sid})
             return self.dispatch(WAIT, "task.waitForUpdate", self.wait_args)
         if self.calls == 2:
+            if self.safe:
+                assert "A safe app update is waiting." in str(request.messages)
+                assert tool_output(request, WAIT)["accepted"]
+                return self.final("The report is saved.")
             self.wait_receipt = tool_output(request, WAIT)
             assert self.wait_receipt["accepted"], self.wait_receipt
             result = self.wait_receipt["result"]
@@ -278,7 +288,8 @@ class Owner(ScriptedProvider):
         return self.final("Continued the retained report without repeating the upload.")
 
 
-async def test_owner_update_wait_yields_then_continues_once_on_exact_healthy_adoption(tmp_path, monkeypatch):
+@pytest.mark.parametrize("safe", [False, True], ids=["owner-request", "safe-update"])
+async def test_owner_update_wait_yields_then_continues_once_on_exact_healthy_adoption(tmp_path, monkeypatch, safe):
     host = OwnerUpdateHost()
     monkeypatch.setattr(runtime_worker, "publish", host.publish)
     monkeypatch.setenv("AMPLIFIER_HOME", str(tmp_path / "native"))
@@ -302,6 +313,7 @@ async def test_owner_update_wait_yields_then_continues_once_on_exact_healthy_ado
     assert wait_target is not None
     app._publish()
     provider = Owner(host, sid, {"sessionId": sid, "expectedRevision": 1, "target": wait_target})
+    provider.safe = safe
     paths = {name: Path(importlib.util.find_spec(
         "amplifier_module_" + name.replace("-", "_")).origin).parent
         for name in ("loop-live", "context-simple")}
@@ -337,6 +349,12 @@ async def test_owner_update_wait_yields_then_continues_once_on_exact_healthy_ado
             }, origin="ui", command_id=HUMAN, include_state=False)
             assert sent["accepted"], sent
             await host.wait_stage(worker, host.delivered(sid, HUMAN), "initial native input delivery")
+            if safe:
+                from amplifier_web import safe_update
+                await host.wait_stage(worker, provider.running.wait(), "active model call")
+                await app.dispatch("updates.safeResume", wait_target, origin="ui", include_state=False)
+                await safe_update.enroll(manager)
+                provider.enrolled.set()
             first = await host.wait_stage(
                 worker, host.outcome(worker, HUMAN), "initial generation finished and idle")
             await host.settle()
@@ -350,12 +368,17 @@ async def test_owner_update_wait_yields_then_continues_once_on_exact_healthy_ado
             assert yielded_goal["extra_progress"] == task_before["goalState"]["extra_progress"]
             marker = worker._handoff_boundary
             assert marker["yieldedGoal"] == yielded_goal  # Produced by the actual native hook.
-            boundary_id = provider.wait_receipt["result"]["boundaryId"]
-            assert marker["id"] == boundary_id
-            enrolled = app.collaboration.receipt(WAIT)
-            assert enrolled["sourceInputIds"] == [HUMAN]
-            assert enrolled["sourceGenerationId"] == first["generation_id"]
-            assert enrolled["sourceInterruptionRevision"] == app._session(sid).get("interruptionRevision", 0)
+            if safe:
+                row = app.state['updates']['drain']['workers'][sid]
+                assert row['boundaryId'] == marker['id']
+                assert row['generationId'] == first['generation_id']
+            else:
+                boundary_id = provider.wait_receipt["result"]["boundaryId"]
+                assert marker["id"] == boundary_id
+                enrolled = app.collaboration.receipt(WAIT)
+                assert enrolled["sourceInputIds"] == [HUMAN]
+                assert enrolled["sourceGenerationId"] == first["generation_id"]
+                assert enrolled["sourceInterruptionRevision"] == app._session(sid).get("interruptionRevision", 0)
             assert worker.controls.tasks.record()["status"] == "active"
 
             # Native idle alone must not retire a worker with held resources.
@@ -366,7 +389,7 @@ async def test_owner_update_wait_yields_then_continues_once_on_exact_healthy_ado
             old_handle = worker.shared_handle
             assert not await update_drain.prepare(manager, RELEASE)
             row = app.state["updates"]["drain"]["workers"][sid]
-            assert not row["ready"] and "checkpoint" in row["waitingFor"]
+            assert not row["ready"] and "kernels" in row["waitingFor"]
             assert old_handle.active
             worker.controls.kernels = old_kernels
             assert await update_drain.prepare(manager, RELEASE)
@@ -400,6 +423,14 @@ async def test_owner_update_wait_yields_then_continues_once_on_exact_healthy_ado
                            for key in ("pendingApp", "pendingRestart", "pendingReplacement"))
             assert provider.calls == 2  # Health acknowledgement alone submits nothing.
             await update_drain.finish(manager, "installed")
+            if safe:
+                assert not provider.continuing.is_set() and update_drain.held(app)
+                from amplifier_web import app_updates
+                from unittest.mock import AsyncMock
+                monkeypatch.setattr(app_updates.components, "updates", AsyncMock(return_value=[]))
+                assert await safe_update.check_host(manager)
+                safe_update.included_result(manager, [])
+                await update_drain.finish(manager, "installed")
             await host.wait_stage(worker, provider.continuing.wait(), "post-update provider continuation")
             assert provider.resumed["generationId"] != first["generation_id"]
             assert provider.resumed["goal"] == yielded_goal
@@ -434,7 +465,7 @@ async def test_owner_update_wait_yields_then_continues_once_on_exact_healthy_ado
                        for a in admissions) == 1
             assert provider.calls == 3 and provider.tool_calls == [WAIT]
             dispatched = [b for b in host.bridges if b["operation"] == "dispatch"
-                          and b["args"].get("action") == "task.waitForUpdate"]
+                          and b["args"].get("action") == ("task.get" if safe else "task.waitForUpdate")]
             assert len(dispatched) == 1 and dispatched[0]["args"]["id"] == WAIT
             binding = dispatched[0]["args"]
             assert binding["_runtimeOwnerId"] == host.workers[sid]["runtimeOwnerId"]
@@ -455,6 +486,7 @@ async def test_owner_update_wait_yields_then_continues_once_on_exact_healthy_ado
             assert inputs.count(HUMAN) == inputs.count(provider.continuation_id) == 1
             assert not host.errors and not host.approvals
     finally:
+        provider.enrolled.set()
         provider.release.set()
         failure = sys.exception()
         try:
@@ -497,6 +529,7 @@ async def test_same_generation_human_steering_supersedes_update_wait(tmp_path, m
             if self.calls == 1:
                 return self.dispatch(WAIT, "task.waitForUpdate", self.wait_args)
             if self.calls == 2:
+                assert "A safe app update is waiting." in str(request.messages)
                 assert tool_output(request, WAIT)["accepted"]
                 enrolled.set()
                 await apply_steering.wait()

@@ -113,6 +113,17 @@ def browser_view(updates):
     claim = updates.get('activation')
     live = bool(claim == 'installing' and _replacing(updates)
                 or claim == 'starting' and _starting(updates))
+    drain = updates.get('drain') or {}
+    if drain.get('safeUpdate') and drain.get('phase') != 'released':
+        from .safe_update import adoption_target
+        expected = adoption_target(drain)
+        result = updates.get('applicationResult') or {}
+        updates = {**updates, 'forceRestartTarget': None, 'safeUpdateStatus': {
+            'phase': drain['phase'], 'queued': len(drain['messages']),
+            'waiting': len({r['sessionId'] for r in updates.get('blockers', []) if r.get('sessionId')}),
+            'appReady': result.get('phase') == 'restart-ack' and all(result.get(k) == expected.get(k) for k in ('attemptId', 'revision'))}}
+    elif not live and updates.get('phase') == 'app-staged' and updates.get('forceRestartTarget') and not (updates.get('pendingApp') or {}).get('featureSelection'):
+        updates = {**updates, 'safeResumeTarget': updates['forceRestartTarget']}
     if not live and (updates.get('forceRestartTarget') is None or sys.platform != 'win32'):
         return updates
     view = {**updates, 'forceRestartTarget': None}

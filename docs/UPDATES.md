@@ -1287,3 +1287,22 @@ allowance. An unconfirmed boundary cancellation remains unresolved; it is not
 assumed successful. Replacement uncertainty remains fenced and is never treated
 as a pre-replacement withdrawal. No new automatic worker-yield boundary is created
 merely because an update is staged.
+
+### Update safely and resume
+
+For a staged application update, a person can choose **Update safely and resume**.
+The host saves the admission hold before acknowledging the request. New ordinary
+messages keep their input IDs. Queued coordination and due schedules remain with
+their existing owners. Active native tasks receive one save-and-yield instruction on their next model
+request in the current turn. They yield through their guarded checkpoint
+at a supported continuation boundary. Other turns, calls, and tools may finish.
+Stop and changes of task, input, placement, or access retain their usual precedence.
+
+After the first healthy restart the host checks its installed app dependencies.
+If any need updating, the same release is qualified again and restarted while
+the original work stays queued. Its selected package revisions must match both
+the candidate and the running host. The included worker components are checked next.
+A failed or unverified required component keeps the work waiting through retry.
+Once included revisions are verified current or promoted for new workers, the
+host admits saved messages and eligible continuations through their original
+receipts. Optional sources may continue updating independently.
