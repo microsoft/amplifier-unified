@@ -223,7 +223,7 @@ class ContextContinuity:
         if not callable(self.coordinator.get_capability("context.checkpoint.restore")):
             return
         try:
-            record = json.loads(self.path.read_text())
+            record = json.loads(self.path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return
         except (OSError, ValueError) as exc:
@@ -251,7 +251,7 @@ class ContextContinuity:
             present = bool(restore and self.path.exists())
             if present:
                 try:
-                    record = json.loads(self.path.read_text())
+                    record = json.loads(self.path.read_text(encoding="utf-8"))
                     self._accepted_record = copy.deepcopy(record) if isinstance(record, dict) else None
                 except (ValueError, OSError, TypeError) as exc:
                     read_failed = True
@@ -369,7 +369,7 @@ class ContextContinuity:
         # or repeatedly parse private native windows. This is the sole journal.
         if self._journal is None:
             try:
-                journal = json.loads(self.recovery_path.read_text())
+                journal = json.loads(self.recovery_path.read_text(encoding="utf-8"))
                 if (journal.get("version") != 1 or not isinstance(journal.get("attempts"), dict)
                         or journal.get("current") not in journal["attempts"]):
                     raise ValueError()
@@ -436,7 +436,7 @@ class ContextContinuity:
         self._check_writer()
         text = json.dumps(self._journal, ensure_ascii=False, allow_nan=False)
         write_private(self.recovery_path, text)
-        if self.recovery_path.read_text() != text:
+        if self.recovery_path.read_text(encoding="utf-8") != text:
             raise ContextRecoveryError("recovery_save_unconfirmed")
 
     def recovery_status(self):
@@ -671,7 +671,7 @@ class ContextContinuity:
         current = _sync(selection)
         checkpoint_digest = digest(self._accepted_record)
         try:
-            stored = json.loads(self.path.read_text()) if self.path.exists() else None
+            stored = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else None
         except (ValueError, OSError, TypeError):
             return False
         if digest(stored) != checkpoint_digest:
@@ -721,7 +721,7 @@ class ContextContinuity:
     def _check_transition_file(self, record):
         """The sole source checkpoint cannot change unnoticed before install."""
         try:
-            current = json.loads(self.path.read_text()) if self.path.exists() else None
+            current = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else None
         except (ValueError, OSError, TypeError):
             raise ContextRecoveryError("recovery_checkpoint_rejected") from None
         expected = record["sourceCheckpointDigest"]
@@ -801,7 +801,7 @@ class ContextContinuity:
                 or transition_allowance.unconfirmed_calls(record)):
             raise ContextRecoveryError("recovery_unreconciled")
         try:
-            candidate = json.loads(self.path.read_text())
+            candidate = json.loads(self.path.read_text(encoding="utf-8"))
         except (ValueError, TypeError, OSError):
             raise ContextRecoveryError("recovery_unreconciled") from None
         if (candidate.get("sha256") != record.get("candidateSha256")
@@ -929,7 +929,7 @@ class ContextContinuity:
             return False
         accepted = self._accepted_record
         try:
-            current = json.loads(self.path.read_text()) if self.path.exists() else None
+            current = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else None
         except (ValueError, OSError, TypeError):
             return False
         if digest(current) != digest(accepted):
@@ -1115,7 +1115,7 @@ class ContextContinuity:
                 self._write_recovery()  # A crash from here needs reconciliation.
                 guard()
                 write_private(self.path, json.dumps(candidate, ensure_ascii=False, allow_nan=False))
-                if json.loads(self.path.read_text()) != candidate:
+                if json.loads(self.path.read_text(encoding="utf-8")) != candidate:
                     raise ContextRecoveryError("recovery_install_unconfirmed")
                 guard()
                 record["installedCandidate"] = sha
@@ -1170,7 +1170,7 @@ class ContextContinuity:
                     or verification.get("sha256") != record["installedCandidate"]):
                 raise ContextRecoveryError("recovery_install_unconfirmed")
             else:
-                self._accepted_record = json.loads(self.path.read_text())
+                self._accepted_record = json.loads(self.path.read_text(encoding="utf-8"))
                 self._prepared_identity = None
                 self.status = {"supported": True, "status": "saved", "originalsAvailable": True}
                 record["outcome"] = "checkpoint-installed"
