@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -701,147 +702,19 @@ def initial_report(plan, provenance):
                           for row in validate_plan(plan)]}
 
 
-APP004_UNIT_NAMES = (
-    'chat reference metadata is a fixed bounded data shape',
-    *(f'chat reference rejects {name}' for name in (
-        'action', 'URL', 'foreign source', 'foreign message', 'missing target',
-        'wrong version', 'invalid revision', 'unbounded label', 'control character',
-        'missing availability')),
-    'chat reference rejects duplicate, oversized and expanded envelopes',
-    'copy uses an available message without another request',
-    'copy reads an explicitly addressed off-page chat without changing selection',
-    'missing scoped message reports failure instead of copying unrelated content',
-    'copy retains prose and appends only the host-supplied inert reference fallback',
-    'held route stays blocked through exercise and drains once before unregistration',
-    'drain includes concurrent callbacks and waiting unroute joins a final protocol arrival',
-    'callback errors become an awaited failure, not ignored or retried',
-    'primary assertion survives successful release and cleanup',
-    'primary error is retained with callback and teardown errors as secondary',
-    'early-started action rejection stays observable until it is awaited',
-    'cleanup failure alone fails and cannot replace a prior primary failure',
-)
-APP004_BOUNDARY = 'app004-same-document'
-
-
-def initial_app004(provenance):
-    # Fixed commands, not a second user-programmable plan or scenario selector.
-    report = {'schemaVersion': 1, 'source': provenance or {}, 'complete': False, 'passed': False,
-            'checks': [
-                {'id': 'units', 'status': 'unrun', 'reason': 'not_started', 'timeoutSeconds': 60,
-                 'command': ['node', '--test', '--test-reporter=tap',
-                             'tests/chat-reference.test.mjs', 'tests/message-copy.test.mjs',
-                             '../../tests/web/chat-reference-harness.test.mjs'], 'cwd': '.build/web-client'},
-                {'id': 'reload-negative', 'status': 'unrun', 'reason': 'not_started',
-                 'timeoutSeconds': 300, 'command': ['node', 'tests/web/chat-reference-browser.mjs']},
-            ]}
-    if (provenance or {}).get('browserLayout') == 'legacy-frontend':
-        report['checks'][0].update(cwd='frontend', command=[
-            'node', '--test', '--test-reporter=tap', 'tests/chat-reference.test.mjs',
-            'tests/message-copy.test.mjs', 'tests/chat-reference-harness.test.mjs'])
-        report['checks'][1].update(cwd='frontend', command=['node', 'tests/chat-reference-browser.mjs'])
-    return report
+def chat_reference_checks():
+    """The standalone supervisor needs the feature checks only for the APP004 opt-in."""
+    path = Path(__file__).resolve().parents[1] / 'tests/web/chat_reference_qualification.py'
+    spec = importlib.util.spec_from_file_location('chat_reference_qualification', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def save_app004(output, report):
     folder = output / 'app004-qualification'
     ensure_evidence_directory(folder)
     save(folder, report)
-
-
-def app004_units(log):
-    """Require the exact 23 flat Node test identities, not just process exit zero."""
-    text = log.read_text()
-    names = re.findall(r'^ok \d+ - (.+)$', text, re.M)
-    counts = {key: re.findall(rf'^# {key} (\d+)$', text, re.M)
-              for key in ('tests', 'pass', 'fail', 'cancelled', 'skipped', 'todo')}
-    expected = {key: [str(23 if key in ('tests', 'pass') else 0)] for key in counts}
-    if (counts != expected or len(names) != 23 or set(names) != set(APP004_UNIT_NAMES)
-            or re.search(r'^not ok\b|^Bail out!', text, re.M)):
-        raise ValueError('unit_identity_or_count_mismatch')
-
-
-def app004_negative(folder, token):
-    """Only the deliberately broken genuine click at the exact assertion qualifies."""
-    def read(name):
-        path = folder / name
-        if path.stat().st_size > 1024 * 1024:
-            raise ValueError('oversized_negative_evidence')
-        return json.loads(path.read_text())
-    outcome, routes = read('outcome.json'), read('route-lifecycle.json')
-    proof, primary = outcome.get('identityBoundary', {}), outcome.get('primary', {})
-    exit_state = outcome.get('fixtureExit', {})
-    if (not token or outcome.get('qualificationToken') != token
-            or outcome.get('negativeReload') is not True
-            or proof.get('id') != APP004_BOUNDARY
-            or not all(proof.get(key) is True for key in
-                       ('attachmentAccepted', 'cardVisible', 'draftHeld', 'clickCompleted', 'attempted'))
-            or proof.get('verdict') != 'failed'
-            or not isinstance(proof.get('targetSessionId'), str) or not proof['targetSessionId']
-            or proof.get('selectedSessionId') != proof['targetSessionId']
-            or primary.get('name') != 'AssertionError' or primary.get('code') != 'ERR_ASSERTION'
-            or primary.get('boundary') != APP004_BOUNDARY
-            or outcome.get('browserErrors') != []
-            or outcome.get('secondary') != [] or exit_state != {'code': 0, 'signal': None}
-            or type(exit_state.get('code')) is not int):
-        raise ValueError('wrong_negative_boundary_or_cleanup')
-    before, after = proof.get('before', {}), proof.get('after', {})
-    for marker in (before, after):
-        if (set(marker) != {'document', 'timeOrigin', 'client'}
-                or any(not isinstance(marker.get(key), str) or not marker[key]
-                       for key in ('document', 'client'))
-                or type(marker.get('timeOrigin')) not in (int, float)
-                or not math.isfinite(marker['timeOrigin']) or marker['timeOrigin'] <= 0):
-            raise ValueError('missing_identity_markers')
-    if before['document'] == after['document'] or before['timeOrigin'] == after['timeOrigin']:
-        raise ValueError('reload_not_observed')
-    # The negative stops at the FIRST boundary, so only held-draft routing exists.
-    if not isinstance(routes, list) or not routes or len(routes) > 10000:
-        raise ValueError('missing_route_lifecycle')
-    phases, started, completed = [], [], []
-    for row in routes:
-        if (not isinstance(row, dict) or row.get('route') != 'held-draft' or 'error' in row
-                or row.get('phase') not in
-                ('registered', 'started', 'completed', 'gate-released', 'drained', 'unregistered')):
-            raise ValueError('failed_or_unexpected_route')
-        phase = row['phase']
-        if phase in ('started', 'completed'):
-            if type(row.get('id')) is not int or row['id'] < 1:
-                raise ValueError('invalid_route_identity')
-            if phase == 'completed' and row['id'] not in started:
-                raise ValueError('route_completed_without_start')
-            (started if phase == 'started' else completed).append(row['id'])
-        else:
-            if row.get('id') is not None:
-                raise ValueError('invalid_route_phase')
-            phases.append(phase)
-    if (phases != ['registered', 'gate-released', 'drained', 'unregistered']
-            or routes[0]['phase'] != 'registered' or routes[-1]['phase'] != 'unregistered'
-            or not started or len(set(started)) != len(started)
-            or sorted(started) != sorted(completed)):
-        raise ValueError('unfinished_route_lifecycle')
-
-
-def app004_verdict(row, folder):
-    """Preserve raw exits and failure diagnostics alongside the separate verdict."""
-    try:
-        if (row['reason'] or row['cleanup'] != {'remaining': [], 'terminated': 0}
-                or type(row.get('exitCode')) is not int):
-            raise ValueError('process_or_cleanup_failure')
-        if row['id'] == 'units':
-            if row.get('exitCode') != 0:
-                raise ValueError('unit_process_failed')
-            app004_units(folder / row['log'])
-            files = [row['log']]
-        else:
-            if row.get('exitCode') != 1:
-                raise ValueError('negative_exit_not_one')
-            app004_negative(folder / 'negative', row['executionToken'])
-            files = [row['log'], 'negative/outcome.json', 'negative/route-lifecycle.json']
-        row['evidenceSha256'] = {name: digest(folder / name) for name in files}
-        row['status'], row['verdict'] = 'passed', 'exact_units' if row['id'] == 'units' else 'expected_identity_failure'
-    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-        row['status'], row['verdict'] = 'failed', 'rejected'
-        row['verdictReason'] = str(exc)
 
 
 def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenance=None,
@@ -851,7 +724,8 @@ def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenan
     report = initial_report(plan, provenance)
     report.update(report_fields or {})
     save(output, report)  # Even a killed job leaves its complete intended coverage.
-    qualification = initial_app004(provenance) if app004_qualification else None
+    checks = chat_reference_checks() if app004_qualification else None
+    qualification = checks.initial_report(provenance) if checks else None
     if qualification:
         save_app004(output, qualification)
     deadline = time.monotonic() + budget if deadline is None else deadline
@@ -900,9 +774,8 @@ def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenan
                 # Read lineage from this runner, not row overrides: a scenario
                 # cannot drop the outer owner through its configured environment.
                 env.update(child_ownership(os.environ, token))
-                if extra and row['id'] == 'reload-negative':
-                    env.update(CHAT_REFERENCE_NEGATIVE_RELOAD='1', APP004_QUALIFICATION_TOKEN=token,
-                               CHAT_REFERENCE_EVIDENCE_DIR=str(folder / 'negative'))
+                if extra:
+                    env.update(checks.environment(row, folder, token))
                 preexisting = process_identities()
                 command = row['command']
                 inherited = {}
@@ -1031,7 +904,7 @@ def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenan
                 row['status'] = ('passed' if row.get('exitCode') == 0 and not row['reason']
                                  and cleanup['terminated'] == 0 and not cleanup['remaining'] else 'failed')
                 if extra:
-                    app004_verdict(row, folder)
+                    checks.apply_verdict(row, folder)
                 if cleanup['remaining']:
                     stopped = 'unsafe_cleanup'
                 (save_app004(output, qualification) if extra else save(output, report))
@@ -1448,7 +1321,7 @@ def main():
         ensure_evidence_directory(args.output)
         save(args.output, initial_report(plan, provenance))
         if args.app004_qualification:
-            save_app004(args.output, initial_app004(provenance))
+            save_app004(args.output, chat_reference_checks().initial_report(provenance))
         return 0
     return run_scenarios(root, plan, args.output.absolute(),
                          budget=args.budget_seconds, provenance=provenance,
