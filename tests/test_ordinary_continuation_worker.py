@@ -34,6 +34,7 @@ class Provider:
         self.tool_issued = False
         self.calls = []
         self.foreground_sizes = []
+        self.counted_tokens, self.foreground_tokens = [], []
         self.timeout_after_tool = False
         self.post_tool_timeout_seen = False
         self.summary_mode = "timeout"
@@ -56,6 +57,7 @@ class Provider:
     async def request_budget(self, request, *, require_measurement=False, **kwargs):
         self.counted.append(request.model_copy(deep=True))
         count = len(request.model_dump_json().encode()) // 4
+        self.counted_tokens.append(count)
         if (request.metadata or {}).get("purpose") == "context-compaction":
             self.summary_budgets.append({"input": count, "limit": 20000,
                                          "output": request.max_output_tokens})
@@ -101,6 +103,7 @@ class Provider:
         assert request == self.counted[-1], "Dispatch changed after counting"
         assert len(request.model_dump_json().encode()) // 4 <= 20000
         self.sent.append(request.model_copy(deep=True))
+        self.foreground_tokens.append(self.counted_tokens[-1])
         self.calls.append("foreground")
         text = request.model_dump_json()
         if "RUN-ONE-SETTLED-TOOL" in text and not any(
@@ -126,7 +129,7 @@ async def until(predicate):
             await asyncio.sleep(.01)
 
 
-def offline_bundle(root, monkeypatch, shape):
+def offline_bundle(root, monkeypatch, shape, *, summarize_trigger=.2):
     """The same local worker setup for omission and automatic-maintenance cases."""
     from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
     workspace = root / 'workspace'
@@ -151,7 +154,7 @@ def offline_bundle(root, monkeypatch, shape):
             # foreground_continuation is intentionally absent: test the host
             # default, not an opt-in which hides a missing assembly setting.
             'context': {'module': 'context-managed', 'config': {
-                'max_tokens': 20000, 'summarize_trigger': .2,
+                'max_tokens': 20000, 'summarize_trigger': summarize_trigger,
                 'archive_recovery': False, 'compaction_notice_enabled': False}}},
         'providers': [{'module': 'provider-' + provider_name, 'source': str(provider.parent)}],
         'hooks': [{'module': 'hook-context-intelligence',
@@ -519,8 +522,8 @@ async def wait_for_maintenance_admission(case, task):
 
 
 def reducible_history(filler_size=24000):
-    # Above the measured 4k maintenance trigger, but small enough for the FULL
-    # summary request plus its unchanged 8192-token output reservation.
+    # With ordinary host instructions this exceeds the automatic fixture's
+    # fixed trigger, while the FULL summary plus its 8192 output allowance fits.
     return [
         {'role': 'user', 'content': 'SOURCE-OBJECTIVE: preserve originals and never replay.'},
         {'role': 'assistant', 'content': 'Settled research ' + 'e' * filler_size},
@@ -541,9 +544,14 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
     from amplifier_web.service import AppService
     from amplifier_web import context_continuity
 
-    workspace, bundle = offline_bundle(tmp_path, monkeypatch, 'automatic' + outcome.replace('-', ''))
+    # The measured compacted request was 4316 tokens: a 4000 trigger legitimately
+    # recompacts on a new turn. Choose a fixed band between that request and the
+    # 10387-token original, then prove both sides below. Never tune it at runtime.
+    trigger = 20000 * .4
+    workspace, bundle = offline_bundle(
+        tmp_path, monkeypatch, 'automatic' + outcome.replace('-', ''), summarize_trigger=.4)
     app = AppService(tmp_path / 'service', workspace=workspace)
-    record = {'outcome': outcome}
+    record = {'outcome': outcome, 'triggerTokens': trigger}
     case = None
     try:
         await app.dispatch('session.create', {})
@@ -556,6 +564,7 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
         source = reducible_history(50000 if outcome == 'oversized-summary' else 24000)
         async with automatic_worker(app, config, monkeypatch) as case:
             worker, context, raw = case['worker'], case['context'], case['raw']
+            assert context.config['max_tokens'] * context.config['summarize_trigger'] == trigger
             record['origins'] = case['origins']
             await context.set_messages(copy.deepcopy(source))
             raw.count_unavailable = outcome == 'count-unavailable'
@@ -572,6 +581,7 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
             assert [e['text'] for e in case['events'] if e.get('type') == 'assistant.message'] == ['Ordinary answer completed.']
             assert not any(e.get('type') == 'generation.failed' for e in case['events'])
             assert raw.calls == ['foreground'] and len(raw.sent) == 1
+            assert raw.foreground_tokens[0] > trigger
             assert len(case['schedules']) == 1 and case['schedules'][0]['result'] is True
             scheduled = case['schedules'][0]
             task = scheduled['task']
@@ -588,7 +598,7 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
 
             if outcome not in {'count-unavailable', 'oversized-summary'}:
                 await wait_for_maintenance_admission(case, task)
-                assert raw.maintenance_counts[0] > 20000 * .2
+                assert raw.maintenance_counts[0] > trigger
                 assert len(raw.summary_budgets) == 1
                 budget = raw.summary_budgets[0]
                 assert budget['output'] == 8192
@@ -609,12 +619,13 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
                 raw.summary_release.set()
             settled = await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 30)
             await asyncio.wait_for(case['queue'].join(), 10)
-            assert raw.maintenance_counts and max(raw.maintenance_counts) > 20000 * .2
+            assert raw.maintenance_counts and raw.maintenance_counts[0] > trigger
             assert await context.get_messages() == canonical
             assert raw.compactions == (1 if outcome in {'success', 'late-stop', 'persist-failure'} else 0)
             assert raw.calls.count('summary') == raw.compactions
             if outcome in {'success', 'persist-failure'}:
                 assert settled == [None]
+                assert raw.maintenance_counts[-1] < trigger
                 saved = json.loads(continuity.path.read_text())
                 assert saved['summary']['text'] and 'SOURCE-OBJECTIVE' in saved['summary']['text']
                 assert saved['identity']['model'] == 'fixture'
@@ -706,6 +717,8 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
                 await until(worker.idle)
                 await asyncio.wait_for(case['queue'].join(), 10)
                 assert raw.calls == ['foreground', 'summary', 'foreground']
+                assert raw.foreground_tokens[-1] > trigger
+                assert raw.maintenance_counts[-2] > trigger  # Full request before summary-input count.
                 second_canonical = copy.deepcopy(await context.get_messages())
                 assert len(case['schedules']) == 2 and case['schedules'][1]['result'] is True
                 second_task = case['schedules'][1]['task']
@@ -742,7 +755,6 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
             async with automatic_worker(app, config, monkeypatch) as restored:
                 restored['release_admission'].set()
                 next_context, next_raw = restored['context'], restored['raw']
-                assert (await next_context.get_messages())[:len(canonical)] == canonical
                 coordinator = restored['worker'].session.coordinator
                 restore = coordinator.get_capability('context.checkpoint.restore')
                 restores = []
@@ -752,34 +764,52 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
                     restores.append(copy.deepcopy(result))
                     return result
                 coordinator.register_capability('context.checkpoint.restore', observed_restore)
-                await restored['worker'].command({'op': 'send', 'id': 'next-command',
-                    'input_id': 'next-input', 'text': 'Continue using the saved summary without repeating it.'})
-                await asyncio.wait_for(restored['finished'].wait(), 30)
-                await until(restored['worker'].idle)
-                await asyncio.wait_for(restored['queue'].join(), 10)
-                for scheduled in restored['schedules']:
-                    if scheduled['task'] is not None:
-                        await asyncio.wait_for(asyncio.shield(scheduled['task']), 30)
-                adapter = restored['worker'].session.coordinator.get_capability('web.continuity.recovery')
-                assert len(restores) == 1 and restores[0]['status'] == 'restored'
-                assert next_context.summary == (saved['summary']['throughMessage'], saved['summary']['text'])
-                assert next_raw.compactions == 0 and len(next_raw.sent) == 1
-                assert any(e.get('type') == 'generation.finished' and e.get('input_ids') == ['next-input']
-                           for e in restored['events'])
-                assert not any(e.get('type') in {'generation.failed', 'runtime.error'} or
-                               e.get('op') == 'reply' and e.get('error') for e in restored['events'])
-                assert saved['summary']['text'] in next_raw.sent[0].model_dump_json()
-                assert json.loads(adapter.path.read_text())['summary'] == saved['summary']
-                assert (await next_context.get_messages())[:len(canonical)] == canonical
-                record['restored'] = {'origins': restored['origins'], 'status': adapter.public(),
-                                      'restoreTransitions': restores,
-                                      'calls': next_raw.calls, 'counted': len(next_raw.counted)}
+                adapter = coordinator.get_capability('web.continuity.recovery')
+                try:
+                    assert next_context.config == context.config
+                    assert (await next_context.get_messages())[:len(canonical)] == canonical
+                    await restored['worker'].command({'op': 'send', 'id': 'next-command',
+                        'input_id': 'next-input', 'text': 'Continue using the saved summary without repeating it.'})
+                    await asyncio.wait_for(restored['finished'].wait(), 30)
+                    await until(restored['worker'].idle)
+                    await asyncio.wait_for(restored['queue'].join(), 10)
+                    for scheduled in restored['schedules']:
+                        if scheduled['task'] is not None:
+                            await asyncio.wait_for(asyncio.shield(scheduled['task']), 30)
+                    assert len(next_raw.foreground_tokens) == 1 and next_raw.foreground_tokens[0] < trigger
+                    assert not any(row['result'] for row in restored['schedules'])
+                    assert len(restores) == 1 and restores[0]['status'] == 'restored'
+                    assert next_context.summary == (saved['summary']['throughMessage'], saved['summary']['text'])
+                    assert next_raw.compactions == 0 and len(next_raw.sent) == 1
+                    assert any(e.get('type') == 'generation.finished' and e.get('input_ids') == ['next-input']
+                               for e in restored['events'])
+                    assert not any(e.get('type') in {'generation.failed', 'runtime.error'} or
+                                   e.get('op') == 'reply' and e.get('error') for e in restored['events'])
+                    assert saved['summary']['text'] in next_raw.sent[0].model_dump_json()
+                    assert json.loads(adapter.path.read_text())['summary'] == saved['summary']
+                    assert (await next_context.get_messages())[:len(canonical)] == canonical
+                finally:
+                    # Capture the second owner even when a tail assertion fails,
+                    # before its cleanup can cancel or clear pending maintenance.
+                    record['restored'] = {
+                        'origins': restored['origins'], 'status': adapter.public(),
+                        'restoreTransitions': restores, 'summary': next_context.summary,
+                        'calls': list(next_raw.calls), 'counted': len(next_raw.counted),
+                        'foregroundTokens': list(next_raw.foreground_tokens),
+                        'maintenanceCounts': list(next_raw.maintenance_counts),
+                        'summaryBudgets': copy.deepcopy(next_raw.summary_budgets),
+                        'admissions': copy.deepcopy(restored['admissions']),
+                        'events': copy.deepcopy(restored['events']),
+                        'scheduler': [{k: v for k, v in row.items() if k != 'task'}
+                                      for row in restored['schedules']],
+                    }
     finally:
         if case is not None:
             record.update(
                 scheduler=[{k: v for k, v in row.items() if k != 'task'} for row in case['schedules']],
                 admissions=case['admissions'], events=case['events'],
                 maintenanceCounts=case['raw'].maintenance_counts, calls=case['raw'].calls,
+                foregroundTokens=case['raw'].foreground_tokens,
                 summaryBudgets=case['raw'].summary_budgets, admissionWait=case.get('admissionWait'))
         print('AUTOMATIC-WORKER-COMPACTION', json.dumps(record, default=str))
         await app.close()
