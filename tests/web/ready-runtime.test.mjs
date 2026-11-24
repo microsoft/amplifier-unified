@@ -53,3 +53,24 @@ test('explicit missing contract cannot use background fallback',async()=>{
 test('explicit empty contract cannot use default or background fallback',async()=>{
  await assert.rejects(load({AMPLIFIER_TEST_CONTRACT:'',AMPLIFIER_BROWSER_CHECK_OWNER:owner},missing),/must not be empty/);
 });
+
+for(const mode of ['',undefined,'background','managed','scoped-source\n']){
+ test('unknown explicit execution mode refuses before contract reads: '+String(mode),async()=>{
+  await assert.rejects(load({AMPLIFIER_TEST_EXECUTION_MODE:mode},
+   async()=>assert.fail('Must not read a contract')),/Unknown explicit test execution mode/);
+ });
+}
+for(const path of ['',undefined,'/fixture/missing.json','/fixture/valid.json']){
+ test('scoped mode rejects any explicit contract before reads: '+String(path),async()=>{
+  await assert.rejects(readyExecution({
+   env:{...base,AMPLIFIER_TEST_EXECUTION_MODE:'scoped-source',AMPLIFIER_TEST_CONTRACT:path},
+   read:()=>assert.fail('No managed read'),scopedRead:()=>assert.fail('No scoped read'),
+   realpath:()=>assert.fail('No path lookup'),
+  }),/conflicts with scoped-source/);
+ });
+}
+test('runner report path alone cannot change strict default classification',async()=>{
+ const wrong={...contract,python:'/wrong/python'};
+ await assert.rejects(load({AMPLIFIER_TEST_RUNNER_REPORT:'/fixture/report.json',
+  AMPLIFIER_BROWSER_CHECK_OWNER:owner},async()=>JSON.stringify(wrong)));
+});

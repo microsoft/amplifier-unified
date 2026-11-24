@@ -7,9 +7,10 @@ import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {readAppearance,settledAppearance} from './settings-fixture.mjs';
 import {createSelectionEvidence,observeOptional,OPTIONAL_OBSERVATION_MS} from './selection-failure-evidence.mjs';
 const reservation=createServer();await new Promise(r=>reservation.listen(0,'127.0.0.1',r));const port=reservation.address().port;await new Promise(r=>reservation.close(r));
-const url=`http://127.0.0.1:${port}`,proof=process.env.AMPLIFIER_PROOF_DIR;
+const url=`http://127.0.0.1:${port}`,proof=process.env.AMPLIFIER_TEST_ARTIFACTS||process.env.AMPLIFIER_PROOF_DIR;
 if(proof)mkdirSync(proof,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[process.env.AMPLIFIER_QUOTE_FIXTURE||fileURLToPath(new URL('../../tests/fixtures/message_interactions_ui_server.py',import.meta.url)),String(port)],{stdio:'inherit',cwd:process.env.AMPLIFIER_FIXTURE_CWD||process.cwd()});
 const browser=await chromium.launch({headless:true}),context=await browser.newContext({viewport:{width:1280,height:900},hasTouch:true,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),page=await context.newPage(),errors=[];
@@ -430,15 +431,45 @@ try{
   await page.setViewportSize({width,height:844});
   for(const colorScheme of ['light','dark']){
    await page.emulateMedia({colorScheme});
-   const revision=await page.evaluate(async scheme=>{
+   const appearanceBefore=await settledAppearance(page);
+   const change=await page.evaluate(async scheme=>{
     const shell=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
     const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:shell.revision,
      composition:{...shell.effectiveComposition,presentation:{...shell.effectiveComposition.presentation,scheme}}});
     if(!prepared.accepted)throw Error(prepared.error||'Fixture appearance refused');
     const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:shell.revision,changeId:prepared.result.id});
-    if(!applied.accepted)throw Error(applied.error||'Fixture appearance refused');return applied.result.revision;
+    if(!applied.accepted)throw Error(applied.error||'Fixture appearance refused');
+    return {queued:applied.result,shellRevision:shell.revision};
    },colorScheme);
-   await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState()?.revision)).toBe(revision);
+   assert.equal(change.queued.status,'awaiting-storage');
+   assert.equal(change.queued.stored,false);assert.equal(change.queued.activated,false);
+   await expect.poll(async()=>{
+    const a=await readAppearance(page);return {id:a.command?.id,status:a.command?.status};
+   }).toEqual({id:change.queued.commandId,status:'stored'});
+   const appearanceAfter=await settledAppearance(page);
+   assert.equal(appearanceAfter.clientId,appearanceBefore.clientId);
+   assert.equal(appearanceAfter.generation,appearanceBefore.generation);
+   assert.equal(appearanceAfter.namespace,appearanceBefore.namespace);
+   assert.equal(appearanceAfter.activeScope,'client');
+   assert.equal(appearanceAfter.local.reported,true);assert.ok(!appearanceAfter.local.error);
+   assert.equal(appearanceAfter.command.generation,appearanceBefore.generation);
+   assert.equal(appearanceAfter.command.expectedRevision,appearanceBefore.local.revision);
+   assert.equal(appearanceAfter.command.expectedStorageVersion,appearanceBefore.local.storageVersion);
+   assert.equal(appearanceAfter.local.revision,appearanceBefore.local.revision+1);
+   assert.notEqual(appearanceAfter.local.storageVersion,appearanceBefore.local.storageVersion);
+   assert.notEqual(appearanceAfter.local.storageVersion,'missing');
+   assert.deepEqual(appearanceAfter.shared,appearanceBefore.shared,'Browser-local presentation never writes Global');
+   assert.deepEqual(appearanceAfter.effective,{...appearanceBefore.effective,scheme:colorScheme});
+   assert.deepEqual(appearanceAfter.local.values,appearanceAfter.effective);
+   assert.deepEqual(await page.evaluate(key=>JSON.parse(localStorage.getItem(key)),appearanceAfter.namespace),
+    {version:appearanceAfter.local.storageVersion,activeScope:'client',values:appearanceAfter.local.values});
+   assert.ok(appearanceAfter.composition.id);
+   assert.equal(appearanceAfter.observedCompositionId,appearanceAfter.composition.id);
+   await expect(page.locator('#amp-one')).toHaveAttribute('data-appearance-composition',appearanceAfter.composition.id);
+   await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState()?.revision)).toBe(change.shellRevision+1);
+   checkpoints.push({stage:`${width}px ${colorScheme} appearance stored and rendered`,change,
+    clientId:appearanceAfter.clientId,generation:appearanceAfter.generation,namespace:appearanceAfter.namespace,
+    storageVersion:appearanceAfter.local.storageVersion,compositionId:appearanceAfter.composition.id});
    await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',colorScheme);
    await expectCompact(`${width}px ${colorScheme}`);
    await visibleCardControls(`${width}px ${colorScheme}`,quotes.first());
@@ -454,29 +485,38 @@ try{
  };
  await showLatest();await expectCompact('320px Latest in flow before enlargement');
  const layoutOnlyDraft=await documentValue();
+ // At 320x844 the viewport-only cap already wins, so restoring it changes
+ // nothing. This declared short-viewport case exercises the 80px reservation.
+ const ordinaryViewport=page.viewportSize();
+ await page.setViewportSize({width:320,height:768});
  const enlargedStyle=await page.addStyleTag({content:'#amp-one{--a-text-lg:24px;--a-text-sm:20px} #amp-one .a-composer-quote small{font-size:1rem}'});
  // Layout stress only: this is the real longest peer caption, not a forged
  // canonical attribution. Restore the DOM label after measuring both cards.
  const sourceLabels=await quotes.evaluateAll(cards=>cards.map(card=>card.querySelector('.a-composer-quote-head>button').textContent));
  await quotes.evaluateAll(cards=>cards.forEach(card=>card.querySelector('.a-composer-quote-head>button').textContent='Sent by Amplifier from another chat'));
  await settleComposerLayout();
- await visibleCardControls('320px enlarged text long caption short quote',quotes.first());
- await visibleCardControls('320px enlarged text',quotes.nth(1));
- const enlargedGeometry=await expectCompact('320px enlarged text');
+ await visibleCardControls('320x768 enlarged text long caption short quote',quotes.first());
+ await visibleCardControls('320x768 enlarged text',quotes.nth(1));
+ const enlargedGeometry=await expectCompact('320x768 enlarged text');
+ assert.ok(Number.parseFloat(enlargedGeometry.editorMaxHeight)<Math.min(400,enlargedGeometry.viewportHeight*.35),
+  'Declared short-viewport stress activates the conversation-space budget');
  if(proof)await page.locator('.a-composer').screenshot({path:join(proof,'quotes-320-enlarged.png')});
  // Negative control restores the exact superseded bound, not fake quote nodes.
  const oldCap=await page.addStyleTag({content:'#amp-one .a-markdown-composer{max-height:min(400px,35dvh)!important}'});
  try{
   await settleComposerLayout();const negative=await measureCompact();
-  compactGeometry.push({stage:'negative: restored viewport-only quote cap',negativeControl:true,...negative});
+  compactGeometry.push({stage:'320x768 negative: restored viewport-only quote cap',negativeControl:true,...negative});
   if(proof)writeFileSync(join(proof,'compact-quote-geometry.json'),JSON.stringify(compactGeometry,null,2));
+  assert.ok(negative.editor.height>enlargedGeometry.editor.height,'The old cap must actually enlarge the editor');
   assert.ok(negative.messages.height<80,'Restoring the old quote cap must fail the unchanged conversation-space oracle');
  }finally{await oldCap.evaluate(node=>node.remove())}
- await expectCompact('320px enlarged text after negative control removed');
+ await expectCompact('320x768 enlarged text after negative control removed');
  await enlargedStyle.evaluate(node=>node.remove());
  await quotes.evaluateAll((cards,labels)=>cards.forEach((card,index)=>card.querySelector('.a-composer-quote-head>button').textContent=labels[index]),sourceLabels);
- const recovered=await expectCompact('320px font recovery without draft edit');
+ const recovered=await expectCompact('320x768 font recovery without draft edit');
  assert.ok(Number.parseFloat(recovered.editorMaxHeight)>Number.parseFloat(enlargedGeometry.editorMaxHeight),'Removing enlarged chrome returns editor reading space');
+ await page.setViewportSize(ordinaryViewport);
+ await expectCompact('320x844 restored after declared short-viewport stress');
  await latest.click();await expect(latest).toHaveCount(0);
  await expectCompact('320px Latest removed without draft edit');
  await showLatest();await expectCompact('320px Latest restored without draft edit');

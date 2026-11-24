@@ -150,9 +150,9 @@ async def test_legacy_creation_keeps_return_when_exact_revision_is_unchanged(app
 
 
 @pytest.mark.parametrize('change', [
-    'objective', 'pause_resume', 'stop', 'placement', 'legacy', 'blocked', 'completed',
+    'objective', 'pause_resume', 'stop', 'legacy_wait', 'blocked', 'completed', 'permissions',
 ])
-async def test_commissioned_return_keeps_authority_and_legacy_boundaries(app, change):
+async def test_commissioned_report_is_retained_but_changed_wait_cannot_continue(app, change):
     source, target, created = await commissioned_later_generation(app)
     source['task']['revision'] = 3
     if change == 'objective':
@@ -161,19 +161,89 @@ async def test_commissioned_return_keeps_authority_and_legacy_boundaries(app, ch
         source['task']['continuationEpoch'] = 3
     elif change == 'stop':
         source['interruptionRevision'] = 1
-    elif change == 'placement':
-        source['workingDirectory'] = source['workspace'] + '/different'
+    elif change == 'permissions':
+        source['fileAccessPending'] = True
     elif change in {'blocked', 'completed'}:
         source['task']['status'] = change
+    else:
+        request = app.collaboration.receipt(created['initialInputId'])
+        request['subscription'].pop('taskContinuationEpoch', None)
+        app.collaboration.save(created['initialInputId'], request)
+    before = copy.deepcopy(source['task'])
+    returned = await later_report(app, target, created)
+    assert returned['accepted'] and returned['result']['responseRevision'] == 1
+    assert returned['result']['status'] == 'staged' and not returned['result']['qualified']
+    await finish(app, target, created['initialInputId'], input_ids=['current-followup'])
+    source['status'] = 'idle'
+    await app.collaboration.drain(source['id'])
+    request = app.collaboration.receipt(created['initialInputId'])
+    assert request['response']['status'] == 'sealed' and request['response']['qualified']
+    continuation = created['subscription']['continuationId']
+    if change == 'stop':
+        assert request['subscription']['status'] == 'suppressed'
+        assert not app.db.execute('SELECT 1 FROM commands WHERE id=?', (continuation,)).fetchone()
+    elif change == 'permissions':
+        # The durable return may wait behind pending policy, but cannot execute.
+        notice = app.collaboration.receipt(continuation)
+        assert notice['delivery'] == 'queued'
+        assert 'pending file-access' in app.collaboration.guard(notice)
+    else:
+        assert app.collaboration.receipt(continuation)['delivery'] == 'suppressed'
+    retained = await app.dispatch('coordination.result', {'requestId': created['requestId']})
+    assert retained['result']['qualified']
+    assert source['task'] == before and len(app.runtime.inputs) == 1
+
+
+@pytest.mark.parametrize('change', ['execution_folder', 'legacy_creation'])
+async def test_current_saved_wait_is_not_the_old_creation_admission(app, change):
+    source, target, created = await commissioned_later_generation(app)
+    source['task']['revision'] = 3
+    if change == 'execution_folder':
+        source['workingDirectory'] = source['workspace'] + '/different'
     else:
         operation = app.collaboration.receipt(created['requestId'])
         operation.pop('sourceTaskContinuationEpoch', None)
         app.collaboration.save(created['requestId'], operation)
-    before = copy.deepcopy(source['task'])
+    before_task = copy.deepcopy(source['task'])
+    before_folder = source.get('workingDirectory')
+    assert (await later_report(app, target, created))['accepted']
+    await finish(app, target, created['initialInputId'], input_ids=['current-followup'])
+    source['status'] = 'idle'
+    await app.collaboration.drain(source['id'])
+    continuation = created['subscription']['continuationId']
+    await settled(app, continuation, 'accepted')
+    assert [row[1] for row in app.runtime.inputs] == [created['initialInputId'], continuation]
+    assert source['task'] == before_task and source.get('workingDirectory') == before_folder
+
+
+@pytest.mark.parametrize('change', [
+    'recipient_stop', 'recipient_status', 'terminal', 'foreign_inputs',
+    'unknown_admission', 'submitting_admission', 'participant_location',
+])
+async def test_later_report_still_requires_current_recipient_and_confirmed_request(app, change):
+    source, target, created = await commissioned_later_generation(app)
+    if change == 'recipient_stop':
+        target['interruptionRevision'] = 1
+    elif change == 'recipient_status':
+        target['status'] = 'stopped'
+    elif change == 'terminal':
+        target['collaborationGeneration']['terminal'] = True
+    elif change == 'participant_location':
+        source['workspace'] += '/different'
+    elif change in {'unknown_admission', 'submitting_admission'}:
+        request = app.collaboration.receipt(created['initialInputId'])
+        request['delivery'] = change.removesuffix('_admission')
+        app.collaboration.save(created['initialInputId'], request)
     with pytest.raises(AppError):
-        await later_report(app, target, created)
+        if change == 'foreign_inputs':
+            await agent_action(app, target, 'coordination.reply', {
+                'requestId': created['initialInputId'], 'kind': 'result', 'outcome': 'success',
+                'text': 'Not current input'}, 'later-report', inputs=['foreign-input'])
+        else:
+            await later_report(app, target, created)
     assert not app.db.execute("SELECT 1 FROM commands WHERE id='later-report'").fetchone()
-    assert source['task'] == before and len(app.runtime.inputs) == 1
+    assert not app.collaboration.receipt(created['initialInputId']).get('response')
+    assert len(app.runtime.inputs) == 1
 
 
 async def test_retained_report_remains_readable_after_authority_changes(app):

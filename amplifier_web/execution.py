@@ -319,6 +319,16 @@ def ingest(session,event):
         node.update(safe)
     else:
         node=safe;tree['nodes'].append(node)
+    # Existing owner/channel admission and node revision ordering have already
+    # accepted this observation. Plan is a display value, never a Done gate.
+    if (event.get('kind') == 'tool' and event.get('label') == 'todo'
+            and event.get('phase') == 'completed'
+            and event.get('sessionId') == event.get('rootSessionId') == session['id']
+            and 'reportedPlan' in event):
+        from .chat_plan import accepted_report
+        reported = accepted_report({'todos': event['reportedPlan']})
+        if reported is not None:
+            session['_reportedPlan'] = {'items': reported}
     from .input_status import execution as observe_input_execution
     observe_input_execution(session, event)
     from .client_presentation import observe_execution as observe_presentation

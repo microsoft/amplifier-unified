@@ -354,13 +354,39 @@ async def test_runtime_transport_preserves_quote_on_send_and_retry(app):
     result = await quote(app)
     session = copy.deepcopy(app._session())
     session['messages'].append({'id':'reply','role':'user','inputId':'input','text':'Follow up','replyTo':result['quote']})
-    manager = object.__new__(RuntimeManager)
-    manager._start_for_input = AsyncMock()
-    manager._request = AsyncMock(return_value={'accepted': True})
+    manager = RuntimeManager()
+    manager.start = AsyncMock()
+    async def request(sid, operation, *, guard=None, **args):
+        if guard:
+            guard()
+        return {'accepted': True}
+    manager._request = AsyncMock(side_effect=request)
     for method in (manager.send, manager.retry):
         await method(session, 'Follow up', 'input', None)
         assert manager._request.await_args.kwargs['text'] == 'Follow up'
         assert manager._request.await_args.kwargs['reply_context'] == result['quote']
+
+
+@pytest.mark.parametrize('change', ['fenced', 'revision'])
+async def test_runtime_quote_send_rejects_changed_execution_before_transport(app, change):
+    from amplifier_web.runtime import RuntimeManager
+    result = await quote(app)
+    session = copy.deepcopy(app._session())
+    session['messages'].append({'id': 'reply', 'role': 'user', 'inputId': 'input',
+                               'text': 'Follow up', 'replyTo': result['quote']})
+    manager = RuntimeManager()
+    manager.start = AsyncMock()
+    manager._request = AsyncMock()
+    current = {'fenced': change == 'fenced',
+               'revision': session.get('executionRevision', 0) + int(change == 'revision'),
+               'directory': session.get('workingDirectory') or session['workspace']}
+    manager.bind_execution_state(lambda sid: current)
+    before = copy.deepcopy(session)
+    with pytest.raises(ValueError, match='handoff is pending|folder changed'):
+        await manager.send(session, 'Follow up', 'input', None)
+    manager.start.assert_not_awaited()
+    manager._request.assert_not_awaited()
+    assert session == before
 
 
 async def test_source_removed_after_preparation_keeps_exact_quote(app):

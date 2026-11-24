@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import copy
 from contextlib import AsyncExitStack, asynccontextmanager, nullcontext
+from contextvars import ContextVar
 import hashlib
 import json
 import logging
@@ -24,6 +25,9 @@ from .managed_chats import LOCATION
 from .attachments import MAX_ENCODED_BYTES
 from .performance_diagnostics import PerformanceDiagnostics, measure, measured, TimedLock
 from .action_schema import schema, string
+
+
+_STOP_OBSERVATION = ContextVar('unified_stop_observation', default=None)
 
 
 def settle_stream(session):
@@ -1785,7 +1789,11 @@ class AppService:
     def _message(self, session, role, text, via="chat", *, human_post=False, **extra):
         message = {"id": str(uuid.uuid4()), "role": role, "text": text, "via": via, "createdAt": time.time(), **extra}
         session["messages"].append(message)
-        self.prompt_suggestions.observe_message(session, message)
+        # Recovery can restore an unconfirmed user edit before the optional
+        # suggestion owner is initialized. Only new assistant completions can
+        # supply its proof; keep its constructor/commit after recovery.
+        if role == 'assistant':
+            self.prompt_suggestions.observe_message(session, message)
         if getattr(self, 'workspace_work', None):
             from .workspace_work_coverage import observe
             observe(self.workspace_work, session, message)
@@ -3784,7 +3792,8 @@ class AppService:
                     session["status"] = "stopping"
                 from .input_status import interrupt as interrupt_input_status
                 interrupt_input_status(session)
-                pending.append((self._stop, (session["id"], boundary)))
+                pending.append((self._stop, (session["id"], boundary,
+                                             self._capture_stop_guard(session, boundary))))
             elif action == "worker.spawn":
                 session = self._session(args.get("sessionId"), hydrate=False)
                 text = args["instruction"].strip()
@@ -4533,9 +4542,9 @@ class AppService:
             sid = args[0].get("id") if args and isinstance(args[0], dict) else args[0] if args else None
             if fn == self._stop:
                 from .worker_diagnostics import diagnostic_reference
-                await self.on_runtime_event('runtime.error', {'sessionId': sid, 'event': 'stop.failed',
+                await self._observe_stop('runtime.error', {'sessionId': sid, 'event': 'stop.failed',
                     'stopBoundary': args[1], 'errorType': type(exc).__name__, 'error': str(exc),
-                    **diagnostic_reference(exc)})
+                    **diagnostic_reference(exc)}, args[2] if len(args) > 2 else None)
                 return
             if isinstance(exc, AppError) and exc.code == 'session_busy':
                 return  # The rejected admission already published its ownership state.
@@ -4835,25 +4844,130 @@ class AppService:
             from .conversation_steering import send
             return await send(self, session, text, input_id, preserve_draft)
         previous_error_at = session.get('errorAt')
-        from .runtime import RuntimeOperationPending, RuntimeStartupError, SessionInUseError, RuntimeHostClosingError
+        from .runtime import RuntimeManager, RuntimeOperationPending, RuntimeStartupError, SessionInUseError, RuntimeHostClosingError
+        from .message_delivery import execution_boundary
+        # Dispatch passes a snapshot; retain the existing resident delivery
+        # object as this attempt's token. A retry replaces it, even when its
+        # input ID and public status remain identical.
+        sid, runtime = session['id'], self.runtime
+        resident = self._session(sid, hydrate=False)
+        pending_message = find_message(resident, input_id)
+        delivery_attempt = pending_message.get('delivery') if pending_message else None
+        boundary = execution_boundary(session)
+        source_keys = ('workspace', 'workingDirectory', 'executionRevision', 'runtimeSessionId', 'nativeIdentity')
+        source = tuple(session.get(key) for key in source_keys)
+        prior_generation = (session.get('collaborationGeneration') or {}).get('id')
+        captured_current = (execution_boundary(resident) == boundary
+                            and (resident.get('collaborationGeneration') or {}).get('id') == prior_generation
+                            and (pending_message or {}).get('delivery') == original.get('delivery'))
+        prior_turn = execution_record(resident, 'turns', {'id': input_id})
+        retry_marker = (prior_turn or {}).get('retriedAt')
+        owner = preparation = None
+        owner_id = preparation_id = None
+        replaced_owner = False
+
+        def observe_send_owner():
+            nonlocal owner, preparation, owner_id, preparation_id, replaced_owner
+            row = getattr(runtime, 'workers', {}).get(sid)
+            preparing = getattr(runtime, '_preparations', {}).get(sid)
+            if row is not None:
+                if owner is None:
+                    owner, owner_id = row, row.get('runtimeOwnerId')
+                elif row is not owner or row.get('runtimeOwnerId') != owner_id:
+                    retirement = owner.get('retirement_task')
+                    # This invocation can retire an idle process before creating
+                    # its worker. Only the confirmed retirement and the new
+                    # registration-before-readiness boundary allow that move.
+                    if (row is not owner and retirement is not None and retirement.done()
+                            and not retirement.cancelled() and retirement.exception() is None
+                            and retirement.result() is True and owner.get('executionEnded')
+                            and owner.get('process') is not None
+                            and owner['process'].returncode is not None
+                            and row.get('ready') is not None and not row['ready'].done()):
+                        owner, owner_id = row, row.get('runtimeOwnerId')
+                    else:
+                        replaced_owner = True
+            if preparing is not None:
+                if preparation is None:
+                    preparation, preparation_id = preparing, preparing.get('runtimeOwnerId')
+                elif preparing is not preparation or preparing.get('runtimeOwnerId') != preparation_id:
+                    replaced_owner = True
+
+        observe_send_owner()
+
+        async def reconcile_shutdown():
+            async with self.lock:
+                current = self._session(sid, hydrate=False)
+                message = find_message(current, input_id)
+                row = getattr(runtime, 'workers', {}).get(sid)
+                preparing = getattr(runtime, '_preparations', {}).get(sid)
+                turn = execution_record(current, 'turns', {'id': input_id})
+                generation = (current.get('collaborationGeneration') or {}).get('id')
+                if (not self.closed or not captured_current or self.runtime is not runtime or replaced_owner
+                        or pending_message is None or message is not pending_message
+                        or not isinstance(delivery_attempt, dict)
+                        or delivery_attempt.get('status') != 'sending'
+                        or message.get('delivery') is not delivery_attempt
+                        or message.get('id') != original.get('id')
+                        or execution_boundary(current) != boundary
+                        or tuple(current.get(key) for key in source_keys) != source
+                        or (turn or {}).get('retriedAt') != retry_marker
+                        or row is not None and (row is not owner or row.get('runtimeOwnerId') != owner_id)
+                        or preparing is not None and (preparing is not preparation
+                                                     or preparing.get('runtimeOwnerId') != preparation_id)):
+                    return
+                # A generation may begin during this send. It belongs here only
+                # with exact input/owner attribution. Its execution and partial
+                # response still settle through the native owner's exit event.
+                if generation != prior_generation and not (
+                        turn and turn.get('generationId') == generation
+                        and owner_id and turn.get('runtimeOwnerId') == owner_id):
+                    return
+                self._delivery(current, input_id, 'unknown')
+                # Retry admission reopens an app turn before native execution.
+                # Settle only that exact unbound turn, not a native generation
+                # or any other work. Reload must not be its first reconciliation.
+                if (retry and turn is prior_turn and turn is not None
+                        and current_execution(current).get('currentTurnId') == input_id
+                        and not turn.get('generationId') and not turn.get('runtimeOwnerId')
+                        and turn.get('phase') == 'running'):
+                    turn.update(phase='interrupted', endedAt=time.time())
+                if (not (turn or {}).get('generationId') and not current.get('error')
+                        and not current.get('failure')
+                        and current['status'] in {'working', 'starting', 'ready'}):
+                    current['status'] = 'interrupted'
+                    self._activity(current, 'interrupted',
+                                   'The app closed before message delivery could be confirmed. Nothing was sent again.')
+                self._publish_changes(sessions={sid}, globals={'view'})
+
         try:
             session.setdefault('surfaceInputs', {}).setdefault(input_id, self.surface_context.bind_input(session['id']))
             sender = self.runtime.retry if retry else self.runtime.send
-            admission = ({'admission_check': lambda: self.handoffs.input_guard(session['id'], input_id)}
-                         if original.get('handoffOrigin') else {})
+            # The native manager invokes this existing host-only callback after
+            # registering a newly created owner as well as before submission.
+            def admission_check():
+                observe_send_owner()
+                if original.get('handoffOrigin'):
+                    self.handoffs.input_guard(sid, input_id)
+            admission = ({'admission_check': admission_check}
+                         if isinstance(runtime, RuntimeManager) or original.get('handoffOrigin') else {})
             send_result = await sender(session, text, input_id, self.on_runtime_event, **admission)
         except UpdateDeferred:
             if retry:
                 raise
             return await defer_send(self, session['id'], input_id, preserve_draft)
         except RuntimeHostClosingError:
-            async with self.lock:
-                current = self._session(session['id'], hydrate=False)
-                self._delivery(current, input_id, 'unknown')
-                interrupt_unfinished(current)
-                if current['status'] in {'working', 'starting', 'ready', 'stopping'}:
-                    current['status'] = 'interrupted'
-                self._publish_changes(sessions={session['id']}, globals={'view'})
+            await reconcile_shutdown()
+            raise
+        except asyncio.CancelledError as cancellation:
+            if self.closed:
+                try:
+                    await reconcile_shutdown()
+                except (Exception, asyncio.CancelledError) as reconciliation_error:
+                    cancellation.add_note('Shutdown input reconciliation was not confirmed; inspect the retained error.')
+                    logging.getLogger(__name__).warning(
+                        'Shutdown input reconciliation failed; preserving caller cancellation.', exc_info=True)
+                    raise cancellation from reconciliation_error
             raise
         except RuntimeOperationPending:
             async with self.lock:
@@ -5017,16 +5131,117 @@ class AppService:
             if getattr(self.voice_service, 'call', None) is call:
                 await self.set_voice_status({"status": "error", "id": call.id, "error": str(exc)})
 
-    async def _stop(self, sid, boundary=None):
+    def _capture_stop_guard(self, session, boundary):
+        """This admitted Stop may outlive saved, but never admitted, peer input."""
+        from .collaboration import PROTOCOL
+        runtime, sid = self.runtime, session['id']
+        interruption = copy.deepcopy(session['lastInterruption'])
+        generation = session.get('collaborationGeneration') or {}
+        generation_key = (generation.get('id'), generation.get('interruptionRevision'))
+        generation_inputs = tuple(generation.get('inputIds', ()))
+        worker = getattr(runtime, 'workers', {}).get(sid)
+        worker_key = ((worker or {}).get('runtimeOwnerId'), (worker or {}).get('inputId'))
+        preparation = getattr(runtime, '_preparations', {}).get(sid)
+        preparation_owner = (preparation or {}).get('runtimeOwnerId')
+        # Reader delivery can lag submission. Input already saved when this
+        # Stop was admitted still belongs to its original owner; observing that
+        # delivery later must not cancel the interruption of that same work.
+        saved_inputs = frozenset(message['inputId'] for message in session.get('messages', ())
+                                 if message.get('role') == 'user'
+                                 and isinstance(message.get('inputId'), str))
+        delivery_inputs = saved_inputs if worker_key[0] or preparation_owner else frozenset()
+        last_input = next((row for row in reversed(session.get('messages', ()))
+                           if row.get('role') == 'user'), None)
+        last_message_id = (last_input or {}).get('id')
+        last_input_id = (last_input or {}).get('inputId')
+
+        def saved_delivery(identity):
+            return isinstance(identity, str) and identity in delivery_inputs
+
+        def current():
+            target = self._session(sid, hydrate=False)
+            active = target.get('collaborationGeneration') or {}
+            active_inputs = tuple(active.get('inputIds', ()))
+            row = getattr(runtime, 'workers', {}).get(sid)
+            preparing = getattr(runtime, '_preparations', {}).get(sid)
+            if (self.runtime is not runtime
+                    or target.get('interruptionRevision', 0) != boundary['interruptionRevision']
+                    or any((target.get('lastInterruption') or {}).get(key) != interruption.get(key)
+                           for key in ('commandId', 'at'))
+                    or (active.get('id'), active.get('interruptionRevision')) != generation_key
+                    or active_inputs[:len(generation_inputs)] != generation_inputs
+                    or any(not saved_delivery(identity) for identity in active_inputs[len(generation_inputs):])
+                    or preparing is not None and preparing is not preparation
+                    or preparing is not None and preparing.get('runtimeOwnerId') != preparation_owner
+                    or row is worker and row is not None
+                    and (row.get('runtimeOwnerId') != worker_key[0]
+                         or row.get('inputId') != worker_key[1] and not saved_delivery(row.get('inputId')))
+                    or row is not None and row is not worker
+                    and not (worker is None and preparation_owner
+                             and row.get('runtimeOwnerId') == preparation_owner
+                             and (row.get('inputId') is None or saved_delivery(row.get('inputId'))))):
+                return False
+            # Inspect every intervening user input. A newer human input followed
+            # by a queued peer must not conceal the human's execution boundary.
+            for message in reversed(target.get('messages', ())):
+                if message.get('role') != 'user':
+                    continue
+                if last_input is not None and (
+                        message.get('id') == last_message_id if last_message_id
+                        else message is last_input):
+                    return message.get('inputId') == last_input_id
+                identity = message.get('inputId')
+                if message.get('inputOrigin') != 'peer' or not identity:
+                    return False
+                try:
+                    receipt = self.collaboration.receipt(identity)
+                except (AppError, ValueError, KeyError, AttributeError):
+                    return False
+                if (not isinstance(receipt, dict)
+                        or receipt.get('commandAction') != 'coordination.send'
+                        or receipt.get('protocol') != PROTOCOL
+                        or receipt.get('inputId') != identity or receipt.get('requestId') != identity
+                        or receipt.get('messageId') != message.get('id')
+                        or not isinstance(receipt.get('target'), dict)
+                        or receipt.get('target', {}).get('sessionId') != sid
+                        or receipt.get('interruptionRevision') != boundary['interruptionRevision']
+                        or receipt.get('mode') != 'queue'
+                        or not isinstance(receipt.get('delivery'), str)
+                        or receipt.get('delivery') not in {'queued', 'suppressed', 'expired'}
+                        or any(key in receipt for key in
+                               ('admittedAt', 'admissionOrder', 'admission', 'steering',
+                                'targetGenerationId', 'humanResume', 'resumeHandoff'))):
+                    return False
+            return last_input is None
+        return current
+
+    async def _observe_stop(self, kind, payload, current):
+        # Preserve the two-argument event sink and execution-observer chain.
+        # This task-local binding is not serializable worker/event authority.
+        token = _STOP_OBSERVATION.set((self, asyncio.current_task(), kind, payload, current))
+        try:
+            await self.on_runtime_event(kind, payload)
+        finally:
+            _STOP_OBSERVATION.reset(token)
+
+    async def _stop(self, sid, boundary=None, current=None):
+        if current is not None and not current():
+            return
         if self._session(sid, hydrate=False).get('externalAgent'):
             return await self.external_conversations.stop(sid)
         # The Stop revision is already durable. Release invalidated inbox slots
         # even while the actual worker interruption is slow or unavailable.
         await self.collaboration.drain(sid)
+        if current is not None and not current():
+            return
         if self.runtime:
             await self.runtime.stop(sid)
-        await self.on_runtime_event("runtime.status", {"sessionId": sid, "status": "stopped",
-            **({'stopBoundary': boundary} if boundary is not None else {})})
+        await self._observe_stop("runtime.status", {"sessionId": sid, "status": "stopped",
+            **({'stopBoundary': boundary} if boundary is not None else {})}, current)
+        # Once the exact Stop has settled, ordinary queued input can be examined
+        # by the existing stopped-recipient guard, never admitted to unstick it.
+        if (current is None or current()) and self._session(sid, hydrate=False)['status'] == 'stopped':
+            await self.collaboration.drain(sid)
 
     async def record_voice_usage(self,session_id,call_id,response_id,model,usage,phase='completed', *, transfer_id=None):
         from .voice_usage import normalize_voice_usage
@@ -5111,6 +5326,12 @@ class AppService:
                 self._publish_changes(sessions={session['id']})
 
     def _ingest_runtime_execution(self, session, payload):
+        if 'reportedPlan' in payload:
+            worker = getattr(self.runtime, 'workers', {}).get(session['id'])
+            if worker is not None and worker.get('runtimeOwnerId') != payload.get('runtimeOwnerId'):
+                # Late evidence still belongs in execution history, but a
+                # superseded runtime cannot replace the current chat report.
+                payload = {key: value for key, value in payload.items() if key != 'reportedPlan'}
         with self.performance_diagnostics.measure('execution.ingest', synchronous=True, session_id=session['id']):
             ingest_execution(session,payload)
             from .turn_model_settings import record as record_model_settings
@@ -5234,6 +5455,14 @@ class AppService:
             await attach_completed(self, payload)
             return
         async with self.lock:
+            # A host closure from the admitted Stop, never a worker payload.
+            # Recheck after all runtime awaits and while publication is locked.
+            observation = _STOP_OBSERVATION.get()
+            stop_guard = (observation[4] if observation is not None
+                          and observation[0] is self and observation[1] is asyncio.current_task()
+                          and observation[2] == kind and observation[3] is payload else None)
+            if stop_guard is not None and not stop_guard():
+                return
             try:
                 session = self._session(payload.get("rootSessionId") or payload.get("sessionId"), hydrate=False)
             except AppError:
@@ -5323,7 +5552,7 @@ class AppService:
             elif kind == "runtime.status":
                 if 'stopBoundary' in payload:
                     from .message_delivery import execution_boundary
-                    if payload['stopBoundary'] != execution_boundary(session):
+                    if stop_guard is None and payload['stopBoundary'] != execution_boundary(session):
                         return
                 if payload.get('event') == 'input.delivered' and payload.get('inputId'):
                     self._delivery(session, payload['inputId'], 'accepted')
@@ -5419,7 +5648,8 @@ class AppService:
                     event['scope'] = 'runtime'
                     from .message_delivery import execution_boundary
                     if (session.get('status') == 'stopping' and session.get('lastInterruption')
-                            and payload.get('stopBoundary') == execution_boundary(session)):
+                            and (stop_guard is not None
+                                 or payload.get('stopBoundary') == execution_boundary(session))):
                         session['lastInterruption']['outcome'] = 'unconfirmed'
                         session['status'] = 'error'
                         session['error'] = 'Stop could not be confirmed. Inspect the runtime details before continuing.'

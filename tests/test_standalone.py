@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import tomllib
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 FORBIDDEN = {'amplifier_app_cli', 'amplifier_loop_live_cli', 'amplifier_workspace'}
 
@@ -37,24 +39,52 @@ def test_generation_completion_keeps_delivered_and_accepted_distinct():
     assert 'provider_payload' not in payload
 
 
-def test_shipped_ecosystem_sources_do_not_freeze_upstream_revisions():
+def assert_unfrozen_sources(path, text):
     import re
+    if path == ROOT / 'pyproject.toml':
+        # These two offline qualification groups are not installed runtime
+        # defaults. Keep every other metadata section in the scan.
+        metadata = tomllib.loads(text)
+        for group in ('dev', 'work-media'):
+            metadata.get('dependency-groups', {}).pop(group, None)
+        text = json.dumps(metadata)
+    fixed = re.compile(r'git\+https://github.com/(?:microsoft|bkrabach)/amplifier[^\s"\'#@]*@(?:[a-f0-9]{7,40}|v?\d+\.[^\s"\']+)')
+    assert not fixed.search(text), str(path)
+
+
+def test_shipped_ecosystem_sources_do_not_freeze_upstream_revisions():
     # CI workflows qualify exact inputs; they are not shipped runtime sources.
     roots = [ROOT / 'amplifier_web', ROOT / 'behaviors', ROOT / 'scripts/work_profile']
     paths = [ROOT / 'pyproject.toml'] + [p for root in roots for p in root.rglob('*')
         if p.suffix in {'.py', '.toml', '.yaml', '.yml', '.txt'} and not any(
             part in {'.venv', 'vendor', 'tests', 'static', '__pycache__'} for part in p.parts)]
-    fixed = re.compile(r'git\+https://github.com/(?:microsoft|bkrabach)/amplifier[^\s"\'#@]*@(?:[a-f0-9]{7,40}|v?\d+\.[^\s"\']+)')
     for path in paths:
-        text = path.read_text()
-        if path == ROOT / 'pyproject.toml':
-            # Offline native-test pins are qualification inputs, not installed
-            # runtime defaults. Keep every other metadata section in the scan.
-            metadata = tomllib.loads(text)
-            metadata.get('dependency-groups', {}).pop('dev', None)
-            text = json.dumps(metadata)
-        assert not fixed.search(text), str(path)
+        assert_unfrozen_sources(path, path.read_text())
     manifest = tomllib.loads((ROOT / 'amplifier_web/runtime_deps/pyproject.toml').read_text())
     for name, source in manifest['tool']['uv']['sources'].items():
         if 'git' in source:
             assert (source.get('branch') or source.get('rev')) == 'main' and 'tag' not in source, name
+
+
+@pytest.mark.parametrize('group', ['dev', 'work-media'])
+def test_offline_pin_exemption_is_root_fixture_group_only(group):
+    requirement = 'fixture @ git+https://github.com/microsoft/amplifier-bundle-context-managed@' + 'a' * 40 + '#subdirectory=modules/tool-transcript'
+    text = f'[dependency-groups]\n{group} = [{json.dumps(requirement)}]\n'
+    assert_unfrozen_sources(ROOT / 'pyproject.toml', text)
+    with pytest.raises(AssertionError):
+        assert_unfrozen_sources(ROOT / 'amplifier_web/runtime_deps/pyproject.toml', text)
+
+
+@pytest.mark.parametrize('section,key', [
+    ('project', 'dependencies'),
+    ('project.optional-dependencies', 'work-media'),
+    ('dependency-groups', 'other'),
+    ('tool.uv', 'override-dependencies'),
+])
+@pytest.mark.parametrize('revision', ['abcdef0', 'a' * 40, 'v1.2.3'])
+def test_fixture_pin_exemption_keeps_shipped_requirements_guarded(section, key, revision):
+    requirement = 'fixture @ git+https://github.com/microsoft/amplifier-bundle-context-managed@' + revision + '#subdirectory=modules/tool-transcript'
+    text = f'[{section}]\n{key} = [{json.dumps(requirement)}]\n'
+    for path in (ROOT / 'pyproject.toml', ROOT / 'amplifier_web/runtime_deps/pyproject.toml'):
+        with pytest.raises(AssertionError):
+            assert_unfrozen_sources(path, text)

@@ -1,5 +1,6 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {prepareCanvasReaderInput} from './canvas-reader-input.mjs';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 // Production HTML sandbox and genuine decoder/playback, without a model call.
 // Tiny VP8 fixture: ffmpeg -f lavfi -i testsrc=size=64x48:rate=10 -t 1
 // -c:v libvpx -pix_fmt yuv420p -an tiny.webm. Audio is one second of silent PCM.
@@ -12,7 +13,8 @@ const root=fileURLToPath(new URL('../../',import.meta.url));
 const outputDir=process.env.AMPLIFIER_TEST_ARTIFACTS||root+'output/canvas-media-proof';
 await mkdir(outputDir,{recursive:true});
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
-let browser,page;
+const stopFixture=ownFixture(fixture,{label:'Canvas media fixture'});
+let browser,page,failure;
 try{
  const url=await new Promise((resolve,reject)=>{
   const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),15000);let output='';
@@ -50,7 +52,14 @@ try{
    body.args.args?.part==='preview'&&body.args.args.status==='ready'&&
    response.request().headers()['x-amplifier-client']!==previousClient;
  });
- let ready=readyReport();
+ const documentResponse=()=>{
+  const pending=page.waitForResponse(response=>
+   new URL(response.url()).origin===new URL(url).origin&&
+   /^\/api\/canvas\/[^/]+\/document$/.test(new URL(response.url()).pathname)&&response.request().resourceType()==='document');
+  pending.catch(()=>{});return pending; // Awaited below; an earlier failure retains its primary error.
+ };
+ let ready=readyReport(),documentReady=documentResponse();
+ const isolation=[];
  await action('canvas.show',{kind:'html',title:'Embedded media review',content});
  async function checkPlayback(ready){
   // Decoder readiness can precede the host's render acknowledgement. With
@@ -65,7 +74,23 @@ try{
   },{revision:receipt.revision,clientId:response.request().headers()['x-amplifier-client']});
   const details=page.getByRole('region',{name:'Canvas details',exact:true});
   if(!await details.isVisible())await page.getByRole('button',{name:'Canvas details',exact:true}).click();
-  await expect(page.getByText('Isolated HTML preview',{exact:true})).toBeVisible();
+  // Isolation is an enforced frame/response boundary, not a retired caption.
+  const iframe=page.locator('.a-canvas-workspace iframe.a-canvas-html');
+  await expect(iframe).toHaveCount(1);
+  await expect(iframe).toHaveAttribute('sandbox','allow-scripts');
+  await expect(iframe).toHaveAttribute('referrerpolicy','no-referrer');
+  const document=await documentReady,headers=document.headers();
+  assert.equal(document.status(),200);
+  assert.match(headers['content-type'],/^text\/html\b/);
+  const directives=Object.fromEntries(headers['content-security-policy'].split(';').map(value=>value.trim().split(/\s+/)).filter(row=>row[0]).map(([name,...values])=>[name,values]));
+  for(const [name,values] of Object.entries({sandbox:['allow-scripts'],'default-src':["'none'"],
+   'media-src':['data:','blob:'],'connect-src':["'none'"],'frame-src':["'none'"],
+   'object-src':["'none'"],'form-action':["'none'"],'base-uri':["'none'"],'frame-ancestors':["'self'"]}))
+   assert.deepEqual(directives[name],values,'HTML isolation policy: '+name);
+  const canvasId=await page.evaluate(()=>window.amplifier.getState().canvas.id);
+  assert.equal(new URL(document.url()).pathname,`/api/canvas/${canvasId}/document`);
+  assert.equal(new URL(await iframe.getAttribute('src'),url).href,document.url());
+  isolation.push({canvasId,url:document.url(),sandbox:await iframe.getAttribute('sandbox'),csp:headers['content-security-policy']});
   const frame=page.frames().find(frame=>frame.url().includes('/document'));
   assert.ok(frame,'HTML document must be mounted');
   await expect.poll(()=>frame.evaluate(()=>[...document.querySelectorAll('video,audio')].filter(m=>m.readyState>=2&&!m.error&&m.duration>0).length)).toBe(4);
@@ -91,15 +116,17 @@ try{
  await expect.poll(()=>frame.evaluate(()=>window.blocked.includes('media-src')&&window.blocked.includes('connect-src'))).toBe(true);
  assert.equal(remoteRequests,0,'No remote media or fetch request may leave the sandbox');
  const previousClient=await page.evaluate(()=>window.amplifier.getState().client.id);
- ready=readyReport(previousClient);
+ ready=readyReport(previousClient);documentReady=documentResponse();
  await page.reload();await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await expect.poll(()=>page.frames().some(frame=>frame.url().includes('/document'))).toBe(true);
  await checkPlayback(ready);
  await page.screenshot({path:outputDir+'/embedded-media.png'});
  const inspect=await page.request.get(url+'/fixture');
  assert.deepEqual((await inspect.json()).sent,[]);
+ await writeFile(outputDir+'/isolation.json',JSON.stringify({isolation,remoteRequests,parentAccessDenied:true,playbackCheckedTwice:true},null,2)+'\n');
  console.log('Canvas media passed: data/blob video and audio decode, play, pause, seek and reopen; remote media/network and parent access remain blocked; no model calls.');
 }catch(error){
+ failure=error;
  if(page){
   const frames=await Promise.all(page.frames().filter(frame=>frame.url().includes('/document')).map(frame=>frame.evaluate(()=>({
    status:document.querySelector('#status')?.textContent,
@@ -109,4 +136,7 @@ try{
   await page.screenshot({path:outputDir+'/failure.png'}).catch(()=>{});
  }
  throw error;
-}finally{try{await browser?.close()}finally{fixture.kill()}}
+}finally{
+ await finishFixture({label:'Canvas media fixture',close:[['Canvas media browser',()=>browser?.close()]],
+  stop:stopFixture,originalError:failure});
+}

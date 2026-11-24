@@ -1,19 +1,36 @@
 // Real host/storage and production assets; delayed receipts, no model calls.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {mkdir,writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+import {settledAppearance} from './settings-fixture.mjs';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
-let browser,release;
+const stopFixture=ownFixture(fixture,{label:'Appearance save feedback fixture'});
+let browser,release,failure;
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exit '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
- await page.goto(url);await openSettingsPage(page,'custom-appearance');
- await page.getByText('Advanced customization',{exact:true}).click();
+ const editor=async()=>{
+  await openSettingsPage(page,'appearance',{activate:(_label,control,options)=>control.click(options)});
+  for(const selector of ['.a-appearance-more','.a-appearance-advanced']){
+   const disclosure=page.locator(selector);
+   if(!await disclosure.evaluate(node=>node.open))await disclosure.locator(':scope > summary').click();
+  }
+ };
+ const profile=()=>page.evaluate(()=>{
+  const a=window.amplifier.getState().appearance;
+  return {namespace:a.namespace,generation:a.generation,scope:a.activeScope,shared:a.shared,
+   local:{values:a.local.values,revision:a.local.revision,storageVersion:a.local.storageVersion},
+   effective:a.effective,theme:a.theme,storage:localStorage.getItem(a.namespace)};
+ });
+ await page.goto(url);await editor();await settledAppearance(page);const beforeProfile=await profile();
  await page.locator('#theme-name').fill('Retained appearance draft');
  const originalCss=await page.locator('#theme-css').inputValue();
  let held=null,requestCount=0,outcome='success';
@@ -30,6 +47,7 @@ try{
  await save.focus();await page.keyboard.press('Enter');
  await expect.poll(()=>held?.action).toBe('theme.save');
  await expect(page.locator('#theme-name')).toBeDisabled();
+ await expect(page.locator('#theme-description')).toBeDisabled();
  await expect(page.locator('#theme-css')).toBeDisabled();
  await expect(page.getByRole('button',{name:'Saving…',exact:true})).toBeDisabled();
  await expect(page.getByRole('status').filter({hasText:'Saving appearance…'})).toBeVisible();
@@ -49,7 +67,8 @@ try{
  await expect(page.locator('#theme-css')).toHaveValue(originalCss);
  release();release=null;
  await expect(page.locator('#theme-name')).toBeEnabled();
- await expect(page.getByText('Saved to your appearance library. Apply separately to use it.',{exact:true})).toBeVisible();
+ await expect(page.getByText('Saved to your appearance library. Select it to use the saved version.',{exact:true})).toBeVisible();
+ assert.deepEqual(await profile(),beforeProfile,'Saving a library copy never selects it or changes either profile');
  // A failed write re-enables the same retained draft and offers another try.
  held=null;outcome='error';await save.click();await expect.poll(()=>held?.action).toBe('theme.save');release();release=null;
  await expect(page.getByRole('alert').filter({hasText:'Fixture save was rejected'})).toBeVisible();
@@ -61,20 +80,19 @@ try{
  await openSettingsPage(page,'notifications');
  const finished=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='theme.save');
  release();release=null;await finished;
- await openSettingsPage(page,'custom-appearance');
- if(!await page.locator('#theme-name').isVisible())await page.getByText('Advanced customization',{exact:true}).click();
+ await editor();
  await expect(page.locator('#theme-name')).toBeEnabled();await expect(page.locator('#theme-name')).toHaveValue('Retained appearance draft');
  held=null;outcome='error';await save.click();await expect.poll(()=>held?.action).toBe('theme.save');
  await openSettingsPage(page,'notifications');
  const rejected=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='theme.save');
  release();release=null;await rejected;
- await openSettingsPage(page,'custom-appearance');
+ await editor();
  await expect(page.getByRole('alert').filter({hasText:'Fixture save was rejected'})).toBeVisible();
  await expect(page.locator('#theme-name')).toBeEnabled();
  // Reverse the ordering: return before rejection without starting a successor.
  // Releasing the abandoned local lock must not discard this request's error.
  held=null;outcome='error';await save.click();await expect.poll(()=>held?.action).toBe('theme.save');
- await openSettingsPage(page,'notifications');await openSettingsPage(page,'custom-appearance');
+ await openSettingsPage(page,'notifications');await editor();
  await expect(page.locator('#theme-name')).toBeEnabled();
  const returnedRejection=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='theme.save');
  release();release=null;await returnedRejection;
@@ -84,7 +102,25 @@ try{
  await expect(page.locator('#theme-name')).toBeEnabled();
  await page.setViewportSize({width:390,height:844});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
- const inspection=await(await page.request.get(url+'/fixture')).json();assert.deepEqual(inspection.sent,[]);
- assert.deepEqual(errors,[]);
+ assert.deepEqual(await profile(),beforeProfile,'Library success and failure never activate a preference');
+ // The editor promises tab-private drafts, including ordinary automatic view
+ // reporting. Observe a new unsaved sentinel; do not redact or alter the DOM.
+ const privateName='UNSAVED-APPEARANCE-PRIVATE-MARKER';
+ await page.locator('#theme-name').fill(privateName);
+ const privacy=await page.evaluate(marker=>{
+  const state=window.amplifier.getState(),key='amplifier.appearance-editor.v3:'+state.appearance.namespace;
+  const draft=JSON.parse(sessionStorage.getItem(key)||'null')?.draft;
+  return {privateDraftStored:draft?.name===marker,
+   renderedObservationContainsDraft:JSON.stringify(state.renderedView).includes(marker),
+   preferenceProjectionContainsDraft:JSON.stringify(state.appearance).includes(marker)};
+ },privateName);
+ const output=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/appearance-save-feedback';
+ const inspection=await(await page.request.get(url+'/fixture')).json();
+ await mkdir(output,{recursive:true});await writeFile(join(output,'private-editor-observation.json'),JSON.stringify({
+  ...privacy,noRuntimeSends:inspection.sent.length===0,pageErrors:errors},null,2));
+ assert.deepEqual(inspection.sent,[]);assert.deepEqual(errors,[]);
+ assert.equal(privacy.privateDraftStored,true);assert.equal(privacy.preferenceProjectionContainsDraft,false);
+ assert.equal(privacy.renderedObservationContainsDraft,false,'Unsubmitted appearance draft is absent from ordinary agent view observations');
  console.log('Appearance save feedback passed: immediate keyboard activation guard, precise draft locking, working label/status, retained text, failure/retry, inactive completion and return-before-rejection, contrast/motion and mobile.');
-}finally{release?.();await browser?.close();fixture.kill('SIGTERM')}
+}catch(error){failure=error;throw error}
+finally{release?.();await finishFixture({label:'Appearance save feedback fixture',close:[['browser',()=>browser?.close()]],stop:stopFixture,originalError:failure})}

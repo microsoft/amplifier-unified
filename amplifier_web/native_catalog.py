@@ -246,12 +246,14 @@ class NativeCatalog:
 
     def count_identities(self, project, identities):
         """Count exact native/public aliases through scalar indexes, once each."""
+        # The alias arm must seek public IDs, not scan every row in the project
+        # through native_rows_parent before testing a small retained ID set.
         with self.connect() as db:
             return dict(db.execute('''WITH ids AS (SELECT value FROM json_each(?)), matched AS (
                 SELECT rowid,kind FROM native_rows WHERE namespace=? AND project=?
                     AND identity IN (SELECT value FROM ids)
                 UNION
-                SELECT rowid,kind FROM native_rows WHERE namespace=? AND project=?
+                SELECT rowid,kind FROM native_rows INDEXED BY native_rows_public WHERE namespace=? AND project=?
                     AND public_id IN (SELECT value FROM ids))
                 SELECT kind,count(*) FROM matched GROUP BY kind''',
                 (json.dumps(sorted(identities)), self.namespace, project, self.namespace, project)))

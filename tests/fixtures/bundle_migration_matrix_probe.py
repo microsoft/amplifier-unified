@@ -20,6 +20,63 @@ sys.path.insert(0, str(SOURCE))
 from next_message_native_probe import PROVIDER, until
 
 
+async def completed_native_input(target, runtime, home, workspace, identity, wait):
+    """Observe completion and saved native history while the idle writer lives."""
+    from amplifier_foundation.session import SharedSessionStore, SessionBusyError
+    from amplifier_operations.coordination import fingerprint
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web.native_message_projection import display_message
+
+    sid = target["id"]
+    await wait(lambda: identity in target.get("collaborationGeneration", {}).get("inputIds", [])
+               and target["collaborationGeneration"].get("terminal"))
+    turn = next(row for row in target["execution"]["turns"] if row["id"] == identity)
+    assert turn["phase"] == "completed", {"turn": turn, "error": target.get("error")}
+    # Initial readiness is also idle; require this particular delivered input.
+    await wait(lambda: runtime.workers.get(sid, {}).get("inputId") == identity
+               and runtime.workers[sid].get("idle"))
+    worker = runtime.workers[sid]
+    assert worker["process"].returncode is None
+    assert not any(worker.get(key) for key in ("closing", "yielding", "yielded"))
+    native_id = worker["runtime_id"]
+    store = SessionStore.for_app(home, workspace)
+    assert store.has_transcript(native_id)
+    history, metadata = store.load(native_id)
+    assert metadata["session_id"] == native_id
+    positions = [index for index, message in enumerate(history)
+                 if (message.get("metadata") or {}).get("amplifier_input", {}).get("id") == identity]
+    assert len(positions) == 1, positions
+    assert positions[0] < len(history) - 1
+    assert history[-1]["role"] == "assistant" and not history[-1].get("tool_calls")
+    # Session metadata remains in_progress while loop-live awaits more input.
+    # The generation's terminal anchor is emitted only after the native save;
+    # join it to the exact persisted response rather than inventing a status.
+    terminal, = [event for event in target["generations"]
+                 if event.get("event") == "generation.finished"
+                 and identity in event.get("input_ids", [])]
+    native = display_message(history[-1], len(history) - 1, {"id": native_id})
+    assert terminal["nativeTerminal"] == {
+        "messageId": native["id"], "nativeIndex": native["nativeIndex"],
+        "rootSessionId": native_id, "generationId": terminal["generation_id"],
+        "nativeText": native["text"], "textDigest": fingerprint(terminal["text"]),
+    }
+    # Check the actual Foundation lock, not just a historical runtime.ready row.
+    writer = worker["native_writer"]
+    assert writer["pid"] == worker["native_worker_pid"]
+    ownership = SharedSessionStore(workspace, native_id)
+    try:
+        acquired = ownership.acquire(app="native-fixture-owner-check")
+    except SessionBusyError as busy:
+        assert all(busy.owner.get(key) == writer.get(key)
+                   for key in ("hostname", "app", "pid", "acquisition_id")), {
+                       "expected": writer, "actual": busy.owner}
+    else:
+        acquired.release()
+        raise AssertionError("Completed idle worker released native ownership")
+    assert runtime.workers.get(sid) is worker and worker["process"].returncode is None
+    return copy.deepcopy(turn), history
+
+
 async def run(root, scenario):
     root.mkdir(parents=True, exist_ok=False)
     home, shared, workspace = (root / name for name in ("app", "shared", "workspace"))
@@ -141,10 +198,8 @@ async def run(root, scenario):
                 "expectedConfigurationRevision": target.get("nextMessageRevision", 0),
             }, command_id=identity, include_state=False)
             assert receipt["accepted"], receipt
-            await until(lambda: target.get("collaborationGeneration", {}).get("terminal"))
-            await until(lambda: runtime.workers.get(sid, {}).get("parked"))
-            turn = next(row for row in target["execution"]["turns"] if row["id"] == identity)
-            return copy.deepcopy(turn)
+            turn, _ = await completed_native_input(target, runtime, home, workspace, identity, until)
+            return turn
         warm = scenario.startswith("warm") or scenario == "model-only"
         if warm:
             assert (await send("baseline"))["phase"] == "completed"

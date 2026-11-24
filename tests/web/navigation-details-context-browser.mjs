@@ -59,7 +59,9 @@ try{
  await expect.poll(async()=>(await shell()).selectedSessionId).toBe(next);
  await expect(row).toBeVisible();
  await expect(details,'old chat actions close when the selected chat changes').toHaveCount(0);
- await expect(nextButton).toBeFocused();
+ const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
+ await expect(composer).toBeEditable();
+ await expect(composer).toBeFocused();
  // A fresh explicit peek is still allowed without selecting its target.
  await more.focus();await page.keyboard.press('Enter');await expect(details).toBeVisible();
  await expect(details.locator('h3')).toHaveText(title);assert.equal((await shell()).selectedSessionId,next);

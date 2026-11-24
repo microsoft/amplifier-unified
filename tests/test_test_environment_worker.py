@@ -608,19 +608,37 @@ def test_diagnostic_serialization_failure_keeps_removal_unknown_without_secret(l
 
 
 def test_removal_helper_binds_resource_revision_and_original_request(tmp_path, monkeypatch):
+    from amplifier_web import environment_cleanup_execution as execution
+    from native_cleanup_fixture import CheckoutGate
     home, row = allocated(tmp_path)
     row.update(universeId='owned', backendIdentity={'backend':'docker', 'daemon':'original-daemon'})
     admission_revision = row['revision']
     row = {**row, 'revision':admission_revision + 1}  # effect() saved pending state.
-    monkeypatch.setattr(owner, '__file__', str(tmp_path / 'owner.py'))
+    for name in ('environment_cleanup_launcher.py', 'environment_retention.py'):
+        (tmp_path / name).write_bytes(Path(execution.__file__).with_name(name).read_bytes())
     (tmp_path / 'test_environment_worker.py').write_text(
-        "import json,sys\np=json.load(sys.stdin)\n"
-        "keys=('rootOwner','resourceId','resourceRevision','admissionRevision',"
+        "def execute_call(p):\n"
+        "    assert p['action'] == 'remove'\n"
+        "    keys=('rootOwner','resourceId','resourceRevision','admissionRevision',"
         "'operationId','universeId','expectedBackendIdentity','backendKey','requestId')\n"
-        "print(json.dumps({'ok':True,'binding':{k:p.get(k) for k in keys}}))\n")
-    # This child echoes the real host payload only; it creates no phase proof.
+        "    return {'ok':True,'binding':{k:p.get(k) for k in keys}}\n")
+    monkeypatch.setattr(execution, '__file__', str(tmp_path / 'environment_cleanup_execution.py'))
+    gate = CheckoutGate(None)
+    permits, committed = [], []
+    def permit(evidence, lifecycle):
+        ready = evidence['ready']
+        assert evidence['readySha256'] == execution.digest(ready)
+        assert ready['nonce'] == gate.nonce and ready['members'] == gate.members
+        assert lifecycle == (str(ready['pid']), ready['start'])
+        permits.append(evidence)
+        return lambda: committed.append(True)
+    # Test-only checkout admission exercises the real loaded-input transport.
+    # The echo proves payload binding, not serving-wheel eligibility or removal.
     result = owner.invoke({'python':sys.executable, 'dockerHost':'unix:///socket'},
-        home, row, 'remove', {'requestId':'original-remove', 'expectedRevision':admission_revision})
+        home, row, 'remove', {'requestId':'original-remove', 'expectedRevision':admission_revision},
+        _cleanup_gate=gate, _cleanup_permit=permit)
+    assert result['ok'] is True, result
+    assert len(permits) == 1 and committed == [True]
     assert result['binding'] == {
         'rootOwner':row['sessionId'], 'resourceId':row['id'], 'resourceRevision':row['revision'],
         'admissionRevision':admission_revision, 'operationId':row['launchOperationId'],

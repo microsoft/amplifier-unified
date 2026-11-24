@@ -11,6 +11,7 @@ import json
 import re
 import tomllib
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from packaging.requirements import Requirement
 
@@ -20,6 +21,13 @@ RECEIPT = 'partial-sources.json'
 def key(row):
     from .updates import source_key
     return source_key(row['url'], row['ref'])
+
+
+def _local_runtime(row):
+    """Local Git provenance stays in inventory, outside remote acquisition groups."""
+    url = row.get('url')
+    return (row.get('kind') == 'runtime dependency'
+            and isinstance(url, str) and urlsplit(url).scheme == 'file')
 
 
 def settled_fetch(error):
@@ -43,7 +51,8 @@ class Preparation:
         self.inventory = inventory
         self.groups = {}
         for row in inventory:
-            if row.get('url') and row.get('ref') and row.get('kind') != 'smart tool':
+            if (row.get('url') and row.get('ref') and row.get('kind') != 'smart tool'
+                    and not _local_runtime(row)):
                 self.groups.setdefault(key(row), []).append(row)
         self.retained = {}
         self.results = {}
@@ -95,7 +104,8 @@ class Preparation:
         rows = await self.manager.inventory_sources(indexed=True)
         for identity, previous in missing.items():
             copies = [dict(row, latest=previous.get('desired')) for row in rows
-                      if row.get('url') and row.get('ref') and key(row) == identity]
+                      if row.get('url') and row.get('ref') and not _local_runtime(row)
+                      and key(row) == identity]
             if not copies or any(row.get('current') != previous['revision'] for row in copies):
                 raise ValueError('An unchecked retained source no longer matches its qualified identity.')
             self.groups[identity] = copies
@@ -244,7 +254,8 @@ class Preparation:
         await self.hold_dependents()
         from .deployment import write_private
         for row in self.inventory:
-            if row.get('status') == 'update' and row.get('kind') != 'smart tool' and row['id'] not in self.results:
+            if (row.get('status') == 'update' and row.get('kind') != 'smart tool'
+                    and not _local_runtime(row) and row['id'] not in self.results):
                 kind = 'git' if row.get('url') and not row.get('registryManaged') else 'registry' if row.get('registryManaged') else 'runtime'
                 self.results[row['id']] = {'status': 'awaiting-adoption', 'revision': row['latest'], 'revisionKind': kind}
         write_private(self.stage / RECEIPT, json.dumps({'version': 1,
@@ -367,6 +378,11 @@ def pin_manifest(content, retained):
 
 async def stage_sources(manager, stage, candidates):
     """Prepare groups independently; only known settled fetch exits can retain."""
+    # Unselected local provenance is not a remote acquisition, but selecting it
+    # must still fail before any fetch or inherited-retention mutation.
+    for row in candidates:
+        if row.get('url') and row.get('ref') and row.get('kind') != 'smart tool':
+            key(row)
     plan = Preparation(manager, stage, manager.inventory)
     await plan.inherit_unchecked()
     for identity, rows in plan.groups.items():
@@ -467,7 +483,7 @@ def retained_after_check(manager, rows, *, retry_retained):
                 if value['status'] in {'failed', 'dependency-held'}}
     retry_available = False
     for row in rows:
-        prior = retained.get(key(row)) if row.get('url') and row.get('ref') else None
+        prior = retained.get(key(row)) if row.get('url') and row.get('ref') and not _local_runtime(row) else None
         if (not prior or prior['status'] not in {'failed', 'dependency-held'}
                 or not row.get('url') or key(row) != key(prior['source'])
                 or row.get('current') != prior['revision']):

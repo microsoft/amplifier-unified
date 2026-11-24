@@ -1022,6 +1022,46 @@ class ResolvedRoot:
         return root
 
 
+def _inherited_provider_authorization(loaded, edited, config):
+    """Normalize mounted root sources only; children retain exact source matching."""
+    from ..runtime_controls import identity
+    from ..provider_environment import HOST_CREDENTIAL
+    from ..decision_accounts import logical_plan
+    from .components import portable_module_sources
+    authorized = logical_plan(loaded.to_mount_plan())
+    snapshot = is_snapshot(loaded)
+    components = getattr(loaded, '_host_components', None) or required_components()
+
+    def bound(value):
+        if isinstance(value, dict):
+            return value == HOST_CREDENTIAL or any(bound(item) for item in value.values())
+        return isinstance(value, list) and any(bound(item) for item in value)
+
+    def visit(node, host):
+        for row in node.get('providers', []):
+            if not row.get('enabled', True) or not bound(row.get('config', {})):
+                continue
+            matches = [old for old in host.get('providers', [])
+                       if old.get('module') == row['module'] and identity(old) == identity(row)]
+            if len(matches) > 1:
+                raise ValueError('Ambiguous authorized provider instance/source.')
+            if not matches or not matches[0].get('enabled', True):
+                continue  # The unchanged exact credential matcher owns refusal.
+            old = matches[0]
+            pair = portable_module_sources({'providers': [row, old]}, config.home)['providers']
+            if pair[0].get('source') == pair[1].get('source'):
+                continue  # Saved explicit C/C wins, even with an ambient B.
+            selected = module_source(config, snapshot, old['module'], old.get('source'), components,
+                                     portable=True)
+            if isinstance(selected, str) and selected == pair[0].get('source'):
+                old['source'] = selected
+    # Root mount capture never rewrites agent declarations. Do not authorize
+    # their mismatched sources from ambient policy during credential rebinding.
+    # The existing exact credential matcher still visits those scopes itself.
+    visit(edited, authorized)
+    return authorized
+
+
 def apply_runtime_plan(loaded, edited, config, execution_workspace):
     from ..runtime_controls import validate_plan
     from ..decision_accounts import logical_plan
@@ -1032,7 +1072,8 @@ def apply_runtime_plan(loaded, edited, config, execution_workspace):
         # plan has no authority to restore the automatic-origin exception.
         loaded._host_automatic_routing = False
     from ..provider_environment import rebind_provider_credentials
-    edited, bound = rebind_provider_credentials(edited, loaded.to_mount_plan(), home=config.home)
+    authorized = _inherited_provider_authorization(loaded, edited, config)
+    edited, bound = rebind_provider_credentials(edited, authorized, home=config.home)
     loaded._host_provider_credentials_bound = bound
     for key in ("providers", "tools", "hooks"):
         if key in edited:

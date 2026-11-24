@@ -50,6 +50,50 @@ def identity(row):
     return row.get("instance_id") or row.get("id") or row.get("module")
 
 
+def mounted_provider_sources(coordinator, prepared):
+    """Capture changed root choices from this mount, not later settings reads."""
+    from collections import Counter
+    from .provider_isolation import identity as mounted_identity, UnavailableProvider
+    from amplifier_core.module_sources import ModuleNotFoundError as UnpreparedSource
+    from .host.components import portable_module_sources
+    resolver = getattr(prepared, 'resolver', None)
+    catalog = coordinator.get_capability('web.provider_catalog') or {}
+    sources = catalog.get('sources', {})
+    providers = coordinator.get('providers') or {}
+    rows = coordinator.config.get('providers', [])
+    counts = Counter(mounted_identity(row) for row in rows)
+    snapshot = getattr(resolver, 'prepared_sources', None)
+    if not callable(snapshot) or not sources:
+        return {}
+    # Module-only paths cannot distinguish two instances of one provider.
+    qualified = {(module, hint): path for module, hint, path in snapshot() if hint is not None}
+    captured = {}
+    for row in rows:
+        module, instance, hint = row['module'], mounted_identity(row), row.get('source')
+        selected, provider = sources.get(instance), providers.get(instance)
+        if (not row.get('enabled', True) or counts[instance] != 1 or provider is None
+                or isinstance(provider, UnavailableProvider)
+                or not isinstance(hint, str) or not isinstance(selected, str) or selected == hint
+                or module in getattr(getattr(resolver, 'components', None), 'installed', {})):
+            continue
+        original_path, selected_path = qualified.get((module, hint)), qualified.get((module, selected))
+        if original_path is None or selected_path is None or original_path != selected_path:
+            continue
+        # Synchronous prepared resolution cannot fetch or activate a new source.
+        try:
+            original_resolved = resolver.resolve(module, source_hint=hint).resolve()
+            selected_resolved = resolver.resolve(module, source_hint=selected).resolve()
+        except (UnpreparedSource, OSError, ValueError):
+            continue  # Missing/failed preparation is not a source-selection witness.
+        if original_resolved != original_path or selected_resolved != selected_path:
+            continue
+        pair = portable_module_sources({'providers': [
+            {'module': module, 'source': hint}, {'module': module, 'source': selected}]}, app_home())['providers']
+        if pair[0]['source'] != pair[1]['source']:
+            captured[(module, identity(row), hint)] = (pair[1]['source'], instance, provider)
+    return captured
+
+
 _MISSING_SETTING = object()
 
 
@@ -132,6 +176,8 @@ class RuntimeControls:
         self.coordinator = session.coordinator
         self.configurator = self.coordinator.get_capability("web.configurator")
         self.prepared = self.coordinator.get_capability("web.prepared")
+        self._mounted_provider_sources = ({} if preserve_configuration else
+                                          mounted_provider_sources(self.coordinator, self.prepared))
         self.agent_definitions = copy.deepcopy({
             **(self.coordinator.get_capability("web.agent_definitions") or {}),
             **self.coordinator.config.get("agents", {})})
@@ -284,6 +330,17 @@ class RuntimeControls:
                 plan["agents"][name] = self.agent_definitions[name]
         from .decision_accounts import logical_plan
         plan = logical_plan(plan)
+        # Only this root mount's unchanged declarations may inherit its captured
+        # choices. Never resolve sources or inspect Git on the checkpoint path.
+        from collections import Counter
+        providers = self.coordinator.get('providers') or {}
+        identities = Counter(identity(row) for row in plan.get('providers', []))
+        for row in plan.get('providers', []):
+            captured = self._mounted_provider_sources.get((row['module'], identity(row), row.get('source')))
+            if captured and row.get('enabled', True) and identities[identity(row)] == 1:
+                source, instance, provider = captured
+                if providers.get(instance) is provider:
+                    row['source'] = source
         if self.coordinator.get_capability("web.provider_credentials_bound"):
             from .provider_environment import credential_bindings
             plan = credential_bindings(plan)

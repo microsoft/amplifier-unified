@@ -60,10 +60,19 @@ def test_new_reachable_dynamic_place_needs_a_decision(source_copy):
     assert place not in inventory.DYNAMIC, COMMAND
 
 
-def test_real_entry_imports_are_in_files():
+def test_real_entry_imports_are_in_files(tmp_path, monkeypatch):
+    # The prepared interpreter may contain an older installed Unified. Select
+    # this source explicitly: -I ignores both cwd and inherited PYTHONPATH.
+    shadow = tmp_path / "amplifier_web"
+    shadow.mkdir()
+    (shadow / "__init__.py").write_text('raise AssertionError("Unselected shadow package imported")\n')
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
     script = """
 import json, sys
 from pathlib import Path
+assert sys.flags.isolated and sys.flags.ignore_environment
+assert 'amplifier_web' not in sys.modules
+sys.path.insert(0, sys.argv[1])
 import amplifier_web.windows_service
 import amplifier_web.windows_consumer
 import amplifier_web.cli
@@ -74,11 +83,13 @@ files = sorted({Path(module.__file__).resolve().relative_to(root).as_posix()
     if (name == "amplifier_web" or name.startswith("amplifier_web.")) and getattr(module, "__file__", None)})
 print(json.dumps({"root": str(root), "files": files}))
 """
-    result = subprocess.run([sys.executable, "-I", "-c", script],
-                            capture_output=True, text=True, timeout=60)
+    result = subprocess.run([sys.executable, "-I", "-B", "-c", script, str(ROOT)],
+                            cwd=tmp_path, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
     loaded = json.loads(result.stdout)
     assert Path(loaded["root"]) == ROOT, "The isolated import must check this working tree."
+    assert {"amplifier_web/windows_service.py", "amplifier_web/windows_consumer.py",
+            "amplifier_web/cli.py"} <= set(loaded["files"])
     assert set(loaded["files"]) <= set(inventory.FILES), (loaded["files"], COMMAND)
 
 

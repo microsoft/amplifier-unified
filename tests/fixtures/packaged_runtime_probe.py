@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import stat
 import subprocess
@@ -137,11 +138,20 @@ def pinned_manifest(content):
         source["rev"] = FOUNDATION
     sources["amplifier-module-loop-live"] = {"git": LOOP_URL, "rev": LOOP}
     overrides = uv["override-dependencies"]
-    require(sum(row.startswith("amplifier-foundation @ ") for row in overrides) == 1,
+    foundation = [row for row in overrides if re.match(
+        r"(?i)^\s*amplifier[-_.]+foundation(?=$|[\s@<>=!~;\[])", row)]
+    require(len(foundation) == 1,
             "Expected exactly one shipped Foundation override")
-    uv["override-dependencies"] = [
-        f"amplifier-foundation @ git+{FOUNDATION_URL}@{FOUNDATION}"
-        if row.startswith("amplifier-foundation @ ") else row for row in overrides]
+    selected = foundation[0]
+    if selected != "amplifier-foundation":
+        # The original 0.55 acceptance used a direct override. Current manifests
+        # use a name-only override that already follows the source-table pin.
+        require(re.fullmatch(re.escape(f"amplifier-foundation @ git+{FOUNDATION_URL}@")
+                             + r"[^;\s]+", selected) is not None,
+                "Unexpected Foundation override")
+        uv["override-dependencies"] = [
+            f"amplifier-foundation @ git+{FOUNDATION_URL}@{FOUNDATION}"
+            if row == selected else row for row in overrides]
     return data
 
 

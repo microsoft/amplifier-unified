@@ -55,9 +55,7 @@ def coverage_plan():
     activity_ids = retained_activity_browser_addition(plan['scenarios'])
     context_ids = context_degradation_browser_addition(plan['scenarios'])
     later_ids = (update_configuration_hold_browser_addition(plan['scenarios'])
-                      | model_change_history_browser_addition(plan['scenarios'])
-                      | grouped_work_browser_addition(plan['scenarios'])
-                      | transcript_suggestion_browser_addition(plan['scenarios']))
+                      | browser_additions_after_update_configuration_hold(plan['scenarios']))
     rows = []
     for row in plan['scenarios']:
         if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | preview_ids | approval_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids | changelog_ids | activity_ids | context_ids | later_ids:
@@ -1131,6 +1129,20 @@ def context_degradation_browser_addition(rows, readiness_scripts=()):
     return {expected['id']}
 
 
+def browser_additions_after_update_configuration_hold(rows, readiness_scripts=()):
+    # Validate newer owners before subtracting them from the frozen inventories.
+    name = 'last-reported-plan'
+    script = 'tests/web/last-reported-plan-browser.mjs'
+    owners = [row for row in rows if row['id'] == name
+              or any(Path(part).name == Path(script).name for part in row['command'])]
+    assert owners == [{'id': name, 'command': ['node', script],
+                       'env': {'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python'}}]
+    assert coverage_paths(script) not in readiness_scripts
+    return ({name} | model_change_history_browser_addition(rows, readiness_scripts)
+            | grouped_work_browser_addition(rows, readiness_scripts)
+            | transcript_suggestion_browser_addition(rows, readiness_scripts))
+
+
 def grouped_work_browser_addition(rows, readiness_scripts=()):
     name = 'grouped-work-inspector'
     script = 'tests/web/grouped-work-inspector-browser.mjs'
@@ -1196,9 +1208,7 @@ def test_update_configuration_hold_has_one_host_owner_and_preserves_prior_order(
     assert host['scenarioOrder'][index - 1:index + 2] == [
         'update-restart', 'update-configuration-hold', 'update-effects']
     # Exact order from 474dc80, before this sole new host scenario was added.
-    later = (model_change_history_browser_addition(plan['scenarios'])
-             | grouped_work_browser_addition(plan['scenarios'])
-             | transcript_suggestion_browser_addition(plan['scenarios']))
+    later = browser_additions_after_update_configuration_hold(plan['scenarios'])
     previous = [name for name in host['scenarioOrder'] if name not in identities | later]
     assert len(previous) == len(set(previous)) == 173
     assert hashlib.sha256(json.dumps(previous).encode()).hexdigest() == (
@@ -1253,9 +1263,7 @@ def test_context_degradation_has_one_client_owner_and_preserves_prior_order():
     assert host['scenarioOrder'][index - 1:index + 2] == [
         'shared-notices-motion', 'context-degradation', 'input-status']
     later_ids = (update_configuration_hold_browser_addition(plan['scenarios'])
-                      | model_change_history_browser_addition(plan['scenarios'])
-                      | grouped_work_browser_addition(plan['scenarios'])
-                      | transcript_suggestion_browser_addition(plan['scenarios']))
+                      | browser_additions_after_update_configuration_hold(plan['scenarios']))
     previous = [name for name in host['scenarioOrder']
                 if name not in {'context-degradation'} | later_ids]
     assert len(previous) == len(set(previous)) == 172
@@ -1318,9 +1326,7 @@ def test_retained_activity_is_composed_once_and_preserves_all_prior_scenario_ord
     # drop any of the 171 existing IDs, including the original changelog placement.
     assert context_degradation_browser_addition(plan['scenarios']) == {'context-degradation'}
     later_ids = (update_configuration_hold_browser_addition(plan['scenarios'])
-                      | model_change_history_browser_addition(plan['scenarios'])
-                      | grouped_work_browser_addition(plan['scenarios'])
-                      | transcript_suggestion_browser_addition(plan['scenarios']))
+                      | browser_additions_after_update_configuration_hold(plan['scenarios']))
     preceding_order = [name for name in host['scenarioOrder']
                        if name not in {'retained-activity', 'context-degradation'} | later_ids]
     assert len(preceding_order) == len(set(preceding_order)) == 171
@@ -1886,9 +1892,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     retained_activity_browser_addition(current_plan()['scenarios'], readiness_scripts)
     context_degradation_browser_addition(current_plan()['scenarios'], readiness_scripts)
     update_configuration_hold_browser_addition(current_plan()['scenarios'], readiness_scripts)
-    model_change_history_browser_addition(current_plan()['scenarios'], readiness_scripts)
-    grouped_work_browser_addition(current_plan()['scenarios'], readiness_scripts)
-    transcript_suggestion_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    browser_additions_after_update_configuration_hold(current_plan()['scenarios'], readiness_scripts)
     plan = coverage_plan()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], readiness_scripts)
     sidebar_ids = sidebar_controls_browser_addition(plan['scenarios'], readiness_scripts)
@@ -2873,6 +2877,182 @@ def test_python_log_ring_retains_running_head_and_cursor_then_orders_tail(tmp_pa
     finally:
         log.close()
     assert path.read_bytes() == b'01234789AB'
+
+
+@pytest.mark.parametrize('ending', [
+    'delayed-eof', 'never-eof', 'overall-deadline', 'case-deadline',
+    'cancelled', 'read-error', 'cleanup-unknown', 'late-eof',
+])
+def test_capture_finalization_observes_pipe_after_leader_exit(tmp_path, monkeypatch, ending):
+    """A completed leader/empty census cannot substitute for read-side EOF."""
+    from types import SimpleNamespace
+    read_fd, write_fd = os.pipe()
+    pipe = os.fdopen(read_fd, 'rb', buffering=0)
+    clock = SimpleNamespace(now=100.0, sleeps=[], writer_open=True, cleanup=False)
+    reads = []
+    real_read = os.read
+    os.write(write_fd, b'leader done\n')
+
+    def read(fd, size):
+        if fd != read_fd:
+            return real_read(fd, size)
+        assert size <= 65536
+        assert len(reads) < 210, 'A busy drain must not avoid clock/deadline checks'
+        if ending == 'late-eof' and len(reads) >= 2 and clock.writer_open:
+            clock.now = 100.6  # Scheduling/I/O delay within the final drain quantum.
+            os.close(write_fd)
+            clock.writer_open = False
+        if ending == 'read-error' and clock.now >= 100.02:
+            raise OSError('synthetic pipe failure')
+        try:
+            value = real_read(fd, size)
+        except BlockingIOError:
+            reads.append(('would-block', clock.now))
+            raise
+        reads.append(('bytes' if value else 'eof', clock.now))
+        return value
+
+    def sleep(seconds):
+        assert 0 < seconds <= .01
+        clock.sleeps.append(seconds)
+        clock.now += seconds
+        assert clock.now <= 100.51, 'Never-EOF must not consume the whole scenario budget'
+        if ending == 'cancelled':
+            runner.signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+        if ending == 'delayed-eof' and clock.now >= 100.03 and clock.writer_open:
+            os.write(write_fd, b'late final bytes\n')
+            os.close(write_fd)
+            clock.writer_open = False
+
+    class CompletedLeader:
+        pid = 12345
+        returncode = 0
+        stdout = pipe
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout):
+            assert clock.cleanup
+            assert ending != 'cleanup-unknown', 'Unknown ownership must not wait on the leader'
+            return 0
+
+    def cleanup(*args, drain):
+        clock.cleanup = True
+        drain()  # The real pipe drains available bytes, then reports EAGAIN.
+        assert reads[-1][0] == 'would-block' and clock.writer_open
+        return {'remaining': ['unknown'] if ending == 'cleanup-unknown' else [], 'terminated': 0}
+
+    monkeypatch.setattr(runner, 'time', SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep))
+    monkeypatch.setattr(runner.os, 'read', read)
+    monkeypatch.setattr(runner, 'process_identities', lambda: {})
+    monkeypatch.setattr(runner.subprocess, 'Popen', lambda *args, **kwargs: CompletedLeader())
+    monkeypatch.setattr(runner, 'retire_group', cleanup)
+    budget = .02 if ending == 'overall-deadline' else 100
+    case_timeout = .02 if ending == 'case-deadline' else 100
+    try:
+        code, report, output = execute(tmp_path, [scenario('capture', 'not actually spawned')],
+                                       budget=budget, case_timeout=case_timeout, log_limit=1024)
+        row, = report['scenarios']
+        assert row['exitCode'] == 0
+        assert reads[0][0] == 'bytes' and any(kind == 'would-block' for kind, _ in reads)
+        if ending == 'delayed-eof':
+            assert row['logCapture']['eof'] and reads[-1][0] == 'eof'
+            assert (output / 'capture.log').read_bytes() == b'leader done\nlate final bytes\n'
+            assert code == 0
+            assert row['reason'] is None
+        elif ending == 'late-eof':
+            assert code == 1 and row['logCapture']['eof']
+            assert row['reason'] == 'log_capture_timeout'
+            assert row['logCapture']['settlement']['status'] == 'deadline'
+            assert not clock.sleeps
+        else:
+            assert code == 1 and not row['logCapture']['eof']
+            assert row['reason'] == {
+                'cancelled': 'cancelled', 'read-error': 'log_capture_failed',
+            }.get(ending, 'log_incomplete')
+        if ending in {'overall-deadline', 'case-deadline'}:
+            assert clock.now <= 100.02
+        if ending == 'cancelled':
+            assert len(clock.sleeps) == 1
+        if ending == 'read-error':
+            assert row['logCapture']['captureError'] == 'OSError'
+            assert len(clock.sleeps) == 2
+        if ending == 'never-eof':
+            assert .49 <= clock.now - 100 <= .5
+        if ending == 'cleanup-unknown':
+            assert not clock.sleeps and row['cleanup']['remaining'] == ['unknown']
+        assert pipe.closed
+    finally:
+        if clock.writer_open:
+            os.close(write_fd)
+        pipe.close()
+
+
+@pytest.mark.parametrize('ending', ['eof', 'flood', 'cancelled', 'expired', 'write-error'])
+def test_capture_settlement_keeps_read_quanta_and_absolute_deadline(tmp_path, monkeypatch, ending):
+    from types import SimpleNamespace
+    read_fd, write_fd = os.pipe()
+    pipe = os.fdopen(read_fd, 'rb', buffering=0)
+    capture = runner.BoundedLog(tmp_path / 'capture.log', 128)
+    capture.attach(pipe)
+    clock = SimpleNamespace(now=100.0, sleeps=0, cancelled=False)
+    calls = []
+    real_read = os.read
+
+    def read(fd, size):
+        if fd != read_fd:
+            return real_read(fd, size)
+        calls.append(clock.sleeps)
+        assert size == 65536 and len(calls) <= 12
+        # Every quantum is at most four reads, even with continuous output.
+        assert calls.count(clock.sleeps) <= 4
+        if ending == 'eof' and len(calls) == 7:
+            return b''
+        return b'x' * size
+
+    def sleep(seconds):
+        assert 0 < seconds <= .01
+        clock.now += seconds
+        clock.sleeps += 1
+        if ending == 'cancelled':
+            clock.cancelled = True
+
+    def fail_write(data):
+        raise OSError('synthetic disk failure')
+
+    monkeypatch.setattr(runner, 'time', SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep))
+    monkeypatch.setattr(runner.os, 'read', read)
+    if ending == 'write-error':
+        monkeypatch.setattr(capture.head, 'write', fail_write)
+    try:
+        capture.settle(100.0 if ending == 'expired' else 100.02, lambda: clock.cancelled)
+        count = len(calls)
+        capture.close(drain=False)
+        assert len(calls) == count  # No extra read after cancellation/deadline.
+        assert clock.now <= 100.02 and clock.sleeps <= 2
+        receipt = capture.receipt()
+        assert receipt['settlement']['status'] == {
+            'eof': 'eof', 'flood': 'deadline', 'cancelled': 'cancelled',
+            'expired': 'deadline', 'write-error': 'capture_error',
+        }[ending]
+        if ending == 'eof':
+            assert receipt['eof'] and len(calls) == 7
+            assert (tmp_path / 'capture.log').read_bytes() == b'x' * 128
+        elif ending == 'expired':
+            assert calls == [] and not receipt['eof']
+        elif ending == 'cancelled':
+            assert len(calls) == 4 and clock.sleeps == 1 and not receipt['eof']
+        elif ending == 'write-error':
+            assert len(calls) == 4 and clock.sleeps == 0
+            assert receipt['captureError'] == 'OSError' and receipt['bytesRetained'] is None
+        else:
+            assert not receipt['eof'] and receipt['truncated']
+    finally:
+        if not capture.head.stream.closed:
+            capture.close(drain=False)
+        os.close(write_fd)
+        pipe.close()
 
 
 def expire_after_progress(monkeypatch, marker):
@@ -4377,9 +4557,7 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     activity_ids = retained_activity_browser_addition(plan['scenarios'])
     context_ids = context_degradation_browser_addition(plan['scenarios'])
     later_ids = (update_configuration_hold_browser_addition(plan['scenarios'])
-                      | model_change_history_browser_addition(plan['scenarios'])
-                      | grouped_work_browser_addition(plan['scenarios'])
-                      | transcript_suggestion_browser_addition(plan['scenarios']))
+                      | browser_additions_after_update_configuration_hold(plan['scenarios']))
     lifecycle_additions = [
         {'id': 'session-health-request-failure',
          'command': ['node', 'tests/web/session-health-browser.mjs', '--request-failure']},
@@ -4610,9 +4788,7 @@ def test_layout_pass2_assembly_retains_prior_order_and_binds_all_four_selected_o
     activity_ids = retained_activity_browser_addition(plan['scenarios'])
     context_ids = context_degradation_browser_addition(plan['scenarios'])
     later_ids = (update_configuration_hold_browser_addition(plan['scenarios'])
-                      | model_change_history_browser_addition(plan['scenarios'])
-                      | grouped_work_browser_addition(plan['scenarios'])
-                      | transcript_suggestion_browser_addition(plan['scenarios']))
+                      | browser_additions_after_update_configuration_hold(plan['scenarios']))
     assert identities == {
         'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'}
     client_path = source_test('tests/worktree-move-browser.mjs').with_name('browser-checks.json')

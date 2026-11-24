@@ -1259,9 +1259,6 @@ class EventLogView:
         tree = {'nodes': nodes, 'turns': list(turns.values()), 'currentTurnId': live.get('currentTurnId'), 'source': 'events.jsonl',
                 'retiredUsageNodes': accounting}
         refresh_turn_lifecycle(tree, session, host_turns=host_turns)
-        stage('events.plan')
-        from .chat_plan import latest_plan
-        tree['plan'] = latest_plan(nodes, aliases, read_field)
         stage('events.usage')
         refresh_usage(tree)
         stage('events.retain')

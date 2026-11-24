@@ -4,11 +4,11 @@ import {readComposerDraft} from './composer-test-helpers.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const fixture=spawn(fixturePython(process.env.UNIFIED_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url))),[fileURLToPath(new URL('../../tests/fixtures/demand_ui_server.py',import.meta.url))],{stdio:'inherit'});
 const stopFixture=ownFixture(fixture,{label:'Demand fixture'});
-let browser,primary;
+let browser,primary,releaseFollowup=()=>{};
 try{
  for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8958/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS?['--single-process','--no-zygote']:[]});
@@ -35,8 +35,12 @@ try{
  await third.getByRole('button',{name:'Load earlier steps'}).click();await third.locator('[data-node-id="bulk-0"]').waitFor();
  assert.equal(await third.locator('.a-execution-node').count(),126);
  await third.locator('[data-node-id="bulk-0"] button.a-execution-action-line').click();
- await page.waitForFunction(()=>document.querySelector('[data-node-id="bulk-0"]')?.textContent.includes('large result '.repeat(30)));
+ const inspector=page.locator('#work-step-inspector');
+ await expect(inspector).toBeVisible();
+ await expect(inspector).toContainText('large result '.repeat(30).trim());
  assert.ok(reads.some(url=>new URL(url).searchParams.get('field')==='output'));
+ await inspector.getByRole('button',{name:'Close step details',exact:true}).click();
+ await expect(inspector).toHaveCount(0);
  await toggle.click();assert.equal(await third.locator('.a-execution-node').count(),0);
  // A late response after closing must neither render nor retain hidden steps.
  await page.unroute('**/api/conversation/detail?**');let release,started;
@@ -84,24 +88,49 @@ try{
  assert.equal(await page.getByText('Second chat content',{exact:true}).count(),0,'previous chat is not displayed');
  releaseNavigation();await page.evaluate(()=>window.pendingNavigation);
  await page.locator('[data-message-id="voice-user"]').waitFor();await page.unroute('**/api/actions');
- // An ordinary failure offers an explicit new continuation, preserving draft.
+ // An ordinary failure remains inspectable. A fresh instruction is an explicit
+ // composer send, not the retired error-banner continuation shortcut.
+ const continuations=[],retries=[];
+ let followupEntered=false;const followupGate=new Promise(resolve=>{releaseFollowup=resolve});
+ await page.route('**/api/actions',async route=>{
+  const body=route.request().postDataJSON();
+  if(body?.action==='conversation.retry')retries.push(body);
+  if(body?.action==='conversation.send'){
+   continuations.push(body);followupEntered=true;await followupGate;
+   await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Temporary fixture failure'})});
+  }else await route.continue();
+ });
  await page.evaluate(async()=>fetch('/api/fixture/work',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'fail'})}));
- const continueButton=page.getByRole('button',{name:'Continue conversation',exact:true});await continueButton.waitFor();
- await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep my unsent draft');
- let continuation;const continuations=[];
- await page.route('**/api/actions',async route=>{const body=route.request().postDataJSON();if(body?.action==='conversation.send'){continuation=body;continuations.push(body);await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Temporary fixture failure'})})}else await route.continue()});
- await continueButton.click();await page.getByText('Temporary fixture failure',{exact:true}).first().waitFor();
+ const trouble=page.locator('[data-part="conversation-trouble"]'),composer=page.getByRole('textbox',{name:'Message Amplifier'});
+ await expect(trouble).toContainText('Your saved messages are kept. Review the details below.');
+ await expect(page.getByRole('button',{name:'Continue conversation',exact:true})).toHaveCount(0);
+ const failed=await page.evaluate(()=>{const s=window.amplifier.getState();return {selected:s.selectedSessionId,error:s.sessions.find(row=>row.id===s.selectedSessionId).error}});
+ assert.deepEqual(failed,{selected:identities.first,error:'ValueError'});
+ assert.deepEqual(continuations,[]);assert.deepEqual(retries,[]);
+ const followup='Check what has already completed and continue only the unfinished work.';
+ await composer.fill(followup);
+ await page.getByRole('button',{name:'Send message',exact:true}).click();
+ await expect.poll(()=>followupEntered,{timeout:5000,message:'One explicit send must reach its held request'}).toBe(true);
+ await expect.poll(()=>readComposerDraft(composer)).toBe('');
+ await composer.fill('Keep my unsent draft');
+ releaseFollowup();await page.getByText('Temporary fixture failure',{exact:true}).first().waitFor();
+ const continuation=continuations[0];assert.ok(continuation.id);
  assert.equal(continuation.args.preserveDraft,true);assert.equal(continuation.args.sessionId,identities.first);
- assert.match(continuation.args.text,/Check what has already completed/);
- assert.equal(await readComposerDraft(page.getByRole('textbox',{name:'Message Amplifier'})),'Keep my unsent draft');
- assert.equal(await continueButton.isEnabled(),true);
+ assert.equal(continuation.args.text,followup);
+ assert.equal(await readComposerDraft(composer),'Keep my unsent draft');
+ await expect(page.getByRole('button',{name:'Check delivery',exact:true})).toBeVisible();
+ assert.deepEqual(retries,[]);
  await page.waitForTimeout(1500);
- assert.equal(continuations.length,1,'No automatic continuation retry during the observed failure interval');
- await page.reload();await continueButton.waitFor();
- assert.equal(await readComposerDraft(page.getByRole('textbox',{name:'Message Amplifier'})),'Keep my unsent draft');
- assert.equal(continuations.length,1,'Reload must not replay the rejected continuation');
+ assert.equal(continuations.length,1,'No automatic follow-up replay during the observed uncertain interval');
+ await page.reload();await expect(composer).toBeVisible();
+ const pendingFollowup=page.locator(`[data-input-id="${continuation.id}"]`);
+ await expect(pendingFollowup).toHaveCount(1);await expect(pendingFollowup).toContainText(followup);
+ await expect(pendingFollowup.getByRole('button',{name:'Check delivery',exact:true})).toBeVisible();
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),identities.first);
+ assert.equal(await readComposerDraft(composer),'Keep my unsent draft');
+ assert.equal(continuations.length,1,'Reload must not replay the unconfirmed follow-up');assert.deepEqual(retries,[]);
  await page.unroute('**/api/actions');
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,collapsedStepReads:0,initialNodes:execution.nodes.length,summaryBytes:JSON.stringify(execution).length,checks:['lazy steps','bounded paging','lazy bodies','error retry','collapse race','bounded reopen','delta-only live refresh','no blanking under overlapping revisions','expanded DOM retained','fresh navigation','explicit continuation and retry']}));
+ console.log(JSON.stringify({passed:true,collapsedStepReads:0,initialNodes:execution.nodes.length,summaryBytes:JSON.stringify(execution).length,checks:['lazy steps','bounded paging','lazy bodies','error retry','collapse race','bounded reopen','delta-only live refresh','no blanking under overlapping revisions','expanded DOM retained','fresh navigation','explicit composer follow-up and uncertain no-replay']}));
 }catch(error){primary=error;throw error}
-finally{await finishFixture({label:'Demand fixture',close:[['browser',()=>browser?.close()]],stop:stopFixture,originalError:primary})}
+finally{releaseFollowup();await finishFixture({label:'Demand fixture',close:[['browser',()=>browser?.close()]],stop:stopFixture,originalError:primary})}

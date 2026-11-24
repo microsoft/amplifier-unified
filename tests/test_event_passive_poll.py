@@ -31,7 +31,8 @@ def observed(tmp_path, monkeypatch):
     owner = Owner(id='app', runtimeSessionId='native', workspace=str(tmp_path / 'project'),
                   messages=[{'id': 'user', 'role': 'user', 'createdAt': 1}], workers=[])
     current = [owner]
-    service = SimpleNamespace(_session=lambda _: current[0], lock=asyncio.Lock(), closed=False)
+    service = SimpleNamespace(_session=lambda _, *, hydrate=True: current[0],
+                              lock=asyncio.Lock(), closed=False)
     view = EventLogView(service)
     service.event_log_view = view
     service._publish = lambda **kw: view.invalidate(kw.get('session_ids'))
@@ -134,17 +135,23 @@ async def test_scoped_and_unknown_publications_invalidate_only_their_receipts(ob
     assert not view._clean_inputs
 
 
-async def test_ignored_worker_activity_preserves_passive_receipt_and_session(observed):
+async def test_ignored_worker_activity_preserves_passive_receipt_and_session(observed, monkeypatch):
     service, view, current, _ = observed
     await view.refresh('app')
     receipt = view._clean_inputs['app']
     before = copy.deepcopy(current[0])
+    calls = []
+    def session(identity, *, hydrate=True):
+        calls.append((identity, hydrate))
+        return current[0]
+    monkeypatch.setattr(service, '_session', session)
     # Orphan activity has no lifecycle authority: reject it before mutation or
     # invalidation. The full stale/settled-run matrix lives in worker_lifecycle.
     await AppService.on_runtime_event(service, 'worker.updated',
         {'rootSessionId': 'app', 'id': 'missing', 'activityOnly': True})
     assert view._clean_inputs['app'] is receipt
     assert current[0] == before
+    assert calls == [('app', False)]
 
 
 async def test_current_worker_activity_invalidates_only_owner_before_deferred_publish(app_factory):

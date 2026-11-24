@@ -175,14 +175,15 @@ async def test_a_root_chat_gets_the_step_and_its_plan_holds_no_path(credential_h
     from amplifier_web.host import session as host
     from amplifier_web.session_files import amplifier_home
     h = credential_host
-    loader = Loader()
-    h.session.coordinator.loader = loader
     monkeypatch.setenv('ANTHROPIC_API_KEY', 'synthetic-unrelated-ambient')
     h.load(binding_plan())
     await host.prepare_manager(h.config.workspace, runtime=h.runtime, qualification_readonly=True)
-    assert h.session.coordinator.loader is loader
-    await loader.load(ANTHROPIC, {'api_key': 'k'})
-    assert loader.calls == [(ANTHROPIC, {'api_key': 'k', **paths(amplifier_home())}, {})]
+    # Observe the real initialization's provider loads after the host's state
+    # defaults and media loader wrapper, not a synthetic second load afterward.
+    loaded = [config for module, config in h.loader_calls if module == ANTHROPIC]
+    assert loaded == [{**row['config'], **paths(amplifier_home())}
+                      for row in h.prepared.mount_plan['providers']]
+    assert len(loaded) == 2
     assert 'state_path' not in json.dumps(h.prepared.mount_plan) + json.dumps(h.session.coordinator.config)
 
 

@@ -1,7 +1,9 @@
 import asyncio
 import copy
 
-from amplifier_web.service import AppService
+import pytest
+
+from amplifier_web.service import AppError, AppService
 
 
 async def test_reviewed_diagnostic_losses_ignore_healthy_index_changes_but_not_new_losses(tmp_path):
@@ -52,7 +54,10 @@ async def test_completions_are_durable_scoped_and_fingerprint_acknowledged(tmp_p
         assert attention['workspaces'][workspace]==attention['sections']['chats']==1
         assert attention['settingsUnread']==0
         # Selection is not a receipt that the user saw the response.
-        await app.dispatch('session.select',{'id':sid},origin='agent')
+        with pytest.raises(AppError, match='registered calling conversation'):
+            await app.dispatch('session.select', {'id': sid}, origin='agent')
+        assert app.state['selectedSessionId'] != sid
+        await app.dispatch('session.select', {'id': sid}, origin='ui')
         assert app.get_state()['attention']['unread']==1
         await app.app_bridge('dispatch',{'action':'attention.read','args':{'ids':[item['id']],'fingerprints':{item['id']:item['fingerprint']}}},sid)
         await app.on_runtime_event('runtime.generation',event)  # duplicate event

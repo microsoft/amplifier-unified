@@ -2,13 +2,16 @@ import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.m
 import {settingsToolObservations} from './settings-tool-observations.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {mkdir,writeFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/settings_collections_server.py',import.meta.url))]);
-let browser,page,stderr='';fixture.stderr.on('data',data=>stderr+=data);
+const output=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/settings-collections-evidence';
+let browser,page,stderr='';const errors=[];fixture.stderr.on('data',data=>stderr+=data);
 try{
+ await mkdir(output,{recursive:true});
  const base=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Fixture timed out: '+stderr)),60000);fixture.stdout.on('data',data=>{const match=String(data).match(/http:\/\/127\.0\.0\.1:\d+/);if(match){clearTimeout(timer);resolve(match[0]);}});fixture.on('exit',code=>reject(new Error('Fixture exited '+code+': '+stderr)));});
- browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1440,height:1050},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});const errors=[];page.on('pageerror',error=>errors.push(error.message));
+ browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1440,height:1050},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});page.on('pageerror',error=>errors.push(error.message));
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  await page.goto(base);await page.waitForSelector('#amp-one');
  await openSettingsPage(page,'routing');await page.locator('#routing-name').waitFor();
@@ -29,10 +32,37 @@ try{
  // Exact insertion feedback, draft-only drop, keyboard and explicit position.
  await openSettingsPage(page,'providers');
  const provider=page.locator('[data-part=provider-settings]');
+ await expect(provider.getByRole('button',{name:'Refresh providers',exact:true})).toBeEnabled();
  await provider.getByRole('button',{name:'Preference order',exact:true}).click();
  const order=provider.locator('.a-order-editor'),ids=()=>order.locator('[data-order-id]').evaluateAll(rows=>rows.map(row=>row.dataset.orderId));
  const original=await ids();assert.deepEqual(original,['one','two','three']);
- const drag=async()=>{const handle=order.getByRole('button',{name:'Reorder one',exact:true});await handle.hover();const from=await handle.boundingBox(),to=await order.locator('[data-order-id=three]').boundingBox();await page.mouse.move(from.x+from.width/2,from.y+from.height/2);await page.mouse.down();await page.mouse.move(from.x+from.width/2,to.y+to.height/2,{steps:8});};
+ await page.evaluate(()=>{
+  window.orderPointerWitness=[];
+  for(const type of ['pointerdown','pointermove','pointercancel','lostpointercapture'])
+   document.addEventListener(type,event=>{
+    const list=document.querySelector('[data-part=provider-settings] .a-reorder-list');
+    if(!list||!list.contains(event.target)||window.orderPointerWitness.length>=48)return;
+    window.orderPointerWitness.push({type,pointerId:event.pointerId,button:event.button,x:event.clientX,y:event.clientY,
+     grip:event.target.closest('button')?.getAttribute('aria-label'),captured:list.hasPointerCapture(event.pointerId),
+     connected:list.isConnected,reordering:list.dataset.reordering||null});
+   });
+ });
+ const drag=async()=>{
+  await expect(provider.getByRole('button',{name:'Refresh providers',exact:true})).toBeEnabled();
+  const handle=order.getByRole('button',{name:'Reorder one',exact:true}),list=order.locator('.a-reorder-list');
+  await expect(handle).not.toHaveAttribute('aria-disabled','true');
+  await page.evaluate(()=>{window.orderPointerWitness=[]});
+  // Hover supplies an actionable hit-tested grip position; do not replace it
+  // with coordinates captured before Settings' loading/scroll can settle.
+  await handle.hover();await page.mouse.down();
+  const down=await page.evaluate(()=>window.orderPointerWitness.find(row=>row.type==='pointerdown'));
+  assert.ok(down&&down.grip==='Reorder one'&&down.button===0,JSON.stringify(down));
+  assert.equal(await list.evaluate((node,id)=>node.hasPointerCapture(id),down.pointerId),true);
+  await page.mouse.move(down.x,down.y+6);
+  await expect(list).toHaveAttribute('data-reordering','true');
+  const to=await order.locator('[data-order-id=three]').boundingBox();
+  await page.mouse.move(down.x,to.y+to.height/2,{steps:8});
+ };
  await drag();await expect(page.locator('.a-order-floating')).toBeVisible();await expect(order.getByRole('button',{name:'Save order',exact:true})).toBeDisabled();assert.deepEqual(await ids(),['two','three','one']);
  const geometry=await order.locator('.a-order-insertion').evaluate(line=>{const a=line.getBoundingClientRect(),b=line.parentElement.getBoundingClientRect();return {line:a.top,row:b.top,height:a.height};});assert.ok(geometry.line<geometry.row&&geometry.height===3);
  await page.screenshot({path:'/tmp/settings-collections-drag.png'});
@@ -63,5 +93,6 @@ try{
  // Browser back from details and full-row hits remain usable on narrow screens.
  for(const width of [320,390,736,1024]){await page.setViewportSize({width,height:900});await page.locator('#filter-smart-tool-catalog').fill('Research');if(width<960){await tools.locator('[data-collection-id=tool-1]>button').click();await expect(page.getByRole('button',{name:'Back to Catalog',exact:true})).toBeVisible();await page.getByRole('button',{name:'Back to Catalog',exact:true}).click();}assert.equal(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true,`overflow at ${width}`);}
  assert.deepEqual(errors,[]);console.log('Settings collections: routing, reorder preview/cancel/save, private drafts, composition, catalog pagination, batch retry, mobile checks passed.');
-}catch(error){if(page)await page.screenshot({path:'/tmp/settings-collections-failure.png'});throw error;}
+}catch(error){if(page){await writeFile(output+'/failure.json',JSON.stringify({error:error.message,pageErrors:errors,
+ pointer:await page.evaluate(()=>window.orderPointerWitness||[])},null,2)+'\n');await page.screenshot({path:'/tmp/settings-collections-failure.png'});}throw error;}
 finally{await browser?.close();fixture.kill('SIGTERM');}

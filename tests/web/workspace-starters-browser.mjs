@@ -134,9 +134,16 @@ try{
  await initialEditor.getByRole('button',{name:'Delete this starter',exact:true}).click();
  await starters.getByRole('button',{name:'Delete starter',exact:true}).click();
  await expect(starters.getByText('Edited built-in starter',{exact:true})).toHaveCount(0);
- await starters.locator('[data-collection-id=\"development\"] button').click();
+ // Row removal can precede the catalog refresh that unlocks selection.
+ // Prove Development loaded rather than editing the temporary Blank fallback.
+ await expect(starters.getByRole('button',{name:'New starter',exact:true})).toBeEnabled();
+ const developmentChoice=starters.locator('[data-collection-id=\"development\"] button');
+ await developmentChoice.click();
+ await expect(developmentChoice).toHaveAttribute('aria-current','true');
  const editor=settings.getByRole('form',{name:'Starter editor'});
+ await expect(editor.getByLabel('Starter name',{exact:true})).toHaveValue('Development');
  await expect(editor.getByLabel('Starter name',{exact:true})).toBeEnabled();
+ assert.equal((await state()).workspaceStarters.items.find(row=>row.id==='development').scratch,true);
  await editor.locator('summary').filter({hasText:'Local workspace Git'}).click();
  await expect(editor.getByLabel('Initialize local workspace Git',{exact:true})).not.toBeChecked();
  await editor.getByLabel('Initialize local workspace Git',{exact:true}).check();
@@ -145,14 +152,16 @@ try{
  assert.deepEqual(await editor.getByLabel('Workspace bundle default',{exact:true}).locator('option').evaluateAll(rows=>rows.map(row=>row.value)),['','anchors','anchors-amp-dev','work','work-amp-dev']);
  await editor.getByLabel('Workspace bundle default',{exact:true}).selectOption('work-amp-dev');
  await editor.locator('summary').filter({hasText:'Guidance & working memory'}).click();
+ await expect(editor.getByLabel('Create SCRATCH.md working memory',{exact:true})).toBeChecked();
  await editor.getByLabel('Agent instructions',{exact:true}).fill('Use the team conventions. Preserve source files.');
- let releaseSave,saveStarted=false,saveCalls=0;
+ let releaseSave,saveStarted=false,saveCalls=0,savedTeamDefinition;
  const saveGate=new Promise(resolve=>releaseSave=resolve);
- const holdSave=async route=>{const raw=route.request().postDataJSON(),body=raw.action==='shell.command'?raw.args:raw;if(body.action==='workspace.starters.save'){saveCalls++;saveStarted=true;await saveGate}await route.continue()};
+ const holdSave=async route=>{const raw=route.request().postDataJSON(),body=raw.action==='shell.command'?raw.args:raw;if(body.action==='workspace.starters.save'){savedTeamDefinition=body.args.starter;saveCalls++;saveStarted=true;await saveGate}await route.continue()};
  await page.route('**/api/actions',holdSave);
  const saveAsNew=settings.getByRole('button',{name:'Save as new starter',exact:true});
  await saveAsNew.focus();await page.keyboard.press('Enter');
  await expect.poll(()=>saveStarted).toBe(true);
+ assert.equal(savedTeamDefinition.scratch,true,'The selected starter keeps its working-memory choice in the real save request');
  await expect(editor.getByLabel('Starter name',{exact:true})).toBeDisabled();
  await expect(settings.getByRole('button',{name:'Check the same save',exact:true})).toBeDisabled();
  releaseSave();
@@ -161,6 +170,7 @@ try{
  await page.unroute('**/api/actions',holdSave);assert.equal(saveCalls,1);
  assert.equal((await state()).workspaceStarters.items.find(row=>row.name==='My team starter').bundle,'work-amp-dev');
  const customBefore=(await state()).workspaceStarters.items.find(row=>row.name==='My team starter');
+ assert.equal(customBefore.scratch,true,'The saved starter retains its working-memory choice');
  await editor.getByLabel('Description',{exact:true}).fill('Saved custom revision');
  await settings.getByRole('button',{name:'Save changes',exact:true}).click();
  await expect.poll(async()=>(await state()).workspaceStarters.items.find(row=>row.id===customBefore.id)?.revision).toBe(customBefore.revision+1);
@@ -174,7 +184,11 @@ try{
  await expect(editor.getByLabel('Starter name',{exact:true})).toHaveValue('Second team starter');
  await editor.getByRole('button',{name:'Delete this starter',exact:true}).click();
  await starters.getByRole('button',{name:'Delete starter',exact:true}).click();
- await starters.locator(`[data-collection-id="${customBefore.id}"] button`).click();
+ await expect(starters.getByRole('button',{name:'New starter',exact:true})).toBeEnabled();
+ const customChoice=starters.locator(`[data-collection-id="${customBefore.id}"] button`);
+ await customChoice.click();
+ await expect(customChoice).toHaveAttribute('aria-current','true');
+ await expect(editor.getByLabel('Starter name',{exact:true})).toHaveValue('My team starter');
  await editor.getByLabel('Description',{exact:true}).fill('Unsaved private change');
  await starters.locator('[data-collection-id="development"] button').click();
  await expect(starters.getByRole('alert')).toContainText('Save or cancel');
@@ -230,6 +244,9 @@ try{
  await expect(form).toHaveCount(0);await expect(composer).toHaveDraft('Retain this draft through starter setup');
  let current=await state();assert.equal(current.draftAttachments.length,1);assert.equal(current.sessions.length,0);
  const folder=current.view.newSessionDraft.workspace;
+ const createdSnapshot=current.workspaces.find(row=>row.path===folder);
+ assert.equal(createdSnapshot.setup.starter.id,customBefore.id);
+ assert.equal(createdSnapshot.setup.starter.scratch,true,'Provisioning uses the captured saved starter, not a fallback');
  await expect.poll(async()=>readFile(folder+'/AGENTS.md','utf8').catch(()=>'')).toBe('Use the team conventions. Preserve source files.\n');
  assert.equal(await readFile(folder+'/.amplifier/AGENTS.md','utf8'),'@../AGENTS.md\n@../SCRATCH.md\n');
  await expect.poll(async()=>(await readdir(folder)).sort()).toEqual(['.amplifier','.git','.gitignore','AGENTS.md','SCRATCH.md']);
