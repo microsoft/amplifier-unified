@@ -927,6 +927,19 @@ jobs:
                   rows.append(row)
               assert len(rows) <= 1000 and len({row['name'] for row in rows}) == len(rows)
               return sorted(rows, key=lambda row: row['name'])
+          def read_worker_lock(root, manifest_sha256, lock_sha256):
+              assert re.fullmatch('dr-[a-f0-9]{12}', root.name)
+              assert re.fullmatch('[a-f0-9]{64}', manifest_sha256)
+              assert re.fullmatch('[a-f0-9]{64}', lock_sha256)
+              # uv creates an ordinary file, which can have TokenOwner rather
+              # than TokenUser on an elevated runner. Observe bytes, NOT private
+              # receipt authority: the maintained source reader pins parents,
+              # refuses reparse traversal and bounds a stable regular-file read.
+              from amplifier_web.test_origin_files import source_file
+              mode, raw = source_file(root, 'app/runtime/' + manifest_sha256[:16] + '/uv.lock',
+                                      '', 1024 * 1024)
+              assert mode == '100644' and hashlib.sha256(raw).hexdigest() == lock_sha256
+              return raw
           def load(name, path):
               spec = importlib.util.spec_from_file_location(name, path)
               module = importlib.util.module_from_spec(spec)
@@ -1005,11 +1018,7 @@ jobs:
                           # settled. Never delete scratch or inspect another run.
                           roots = list((base / 'cold-temp').glob('dr-*'))
                           assert len(roots) == 1 and re.fullmatch('dr-[a-f0-9]{12}', roots[0].name)
-                          from amplifier_web.windows_files import directory
-                          project = roots[0] / 'app/runtime' / report['manifestSha256'][:16]
-                          with directory(project, owned_root=roots[0]) as pinned:
-                              raw = pinned.read_private('uv.lock', limit=1024 * 1024)
-                          assert hashlib.sha256(raw).hexdigest() == report['lockSha256']
+                          raw = read_worker_lock(roots[0], report['manifestSha256'], report['lockSha256'])
                           result['workerLockPackages'] = worker_lock_graph(raw)
                           result['workerImportsScope'] = 'probe-observed-imports-only-not-every-locked-package'
                       result["status"] = "PASS"

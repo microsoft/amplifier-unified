@@ -3257,7 +3257,9 @@ def test_remaining_cold_keeps_original_journey_and_separate_graph_evidence():
     assert "five['status'] == 'PASS'" in body and "five['installed'] == before" in body
     assert "report['lockSha256']" in body and "worker_lock_graph(raw)" in body
     assert body.index("selected.passed(code)") < body.index("roots = list(")
-    assert "limit=1024 * 1024" in body and "owned_root=roots[0]" in body
+    assert "read_worker_lock(roots[0], report['manifestSha256'], report['lockSha256'])" in body
+    assert "source_file(root," in body and "'', 1024 * 1024)" in body
+    assert "read_private(" not in body
     assert all(word not in body for word in ("rmtree(", "prepare_project(", "runtime.command =", "UV_CONSTRAINT"))
     step = next(s for s in job["steps"] if s.get("name", "").startswith("Require one native cold"))
     assert step["timeout-minutes"] == 21 and '$env:TEMP = "$base/cold-temp"' in step["run"]
@@ -3269,6 +3271,58 @@ def test_remaining_cold_keeps_original_journey_and_separate_graph_evidence():
     assert "tests/fixtures/windows_default_runtime_probe.py" in body
     _, _, five = remaining_ci_code(FIVE_STEP)
     assert "tests/test_remote_test_origins.py" in ast.unparse(five)
+
+
+@pytest.mark.parametrize("token_owner", ["TokenUser", "Administrators"])
+def test_remaining_lock_observer_does_not_require_uv_file_tokenuser(tmp_path, monkeypatch, token_owner):
+    """Model ownership only: actual bounded no-follow source read, not native ACL proof."""
+    import re
+    from amplifier_web import test_origin_files
+    _, _, tree = cold_ci_runner()
+    read = inline_definitions(tree, ["read_worker_lock"], {"re": re, "hashlib": hashlib})["read_worker_lock"]
+    root = tmp_path / "dr-0123456789ab"
+    manifest = "a" * 64
+    path = root / "app/runtime" / manifest[:16] / "uv.lock"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"ordinary generated lock")
+    before = path.read_bytes()
+    called = []
+    original = test_origin_files.source_file
+    def observe(source, name, mode, maximum):
+        # The generated lock is not a product private receipt, regardless of
+        # which valid default owner created it. No ACL repair/owner rewrite.
+        called.append((source, name, mode, maximum, token_owner))
+        return original(source, name, mode, maximum)
+    monkeypatch.setattr(test_origin_files, "source_file", observe)
+    monkeypatch.setattr(test_origin_files, "_windows_private",
+                        lambda *a: pytest.fail("Observer demanded private receipt authority"))
+    assert read(root, manifest, hashlib.sha256(before).hexdigest()) == before
+    assert called == [(root, "app/runtime/" + manifest[:16] + "/uv.lock", "", 1024 * 1024, token_owner)]
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("fault", ["root", "manifest", "digest", "changed-bytes", "link-mode", "oversize", "reader-refusal"])
+def test_remaining_lock_observer_refuses_wrong_or_unbounded_input(tmp_path, monkeypatch, fault):
+    import re
+    from amplifier_web import test_origin_files
+    _, _, tree = cold_ci_runner()
+    read = inline_definitions(tree, ["read_worker_lock"], {"re": re, "hashlib": hashlib})["read_worker_lock"]
+    root, manifest, raw = tmp_path / "dr-0123456789ab", "a" * 64, b"lock"
+    digest = hashlib.sha256(raw).hexdigest()
+    called = []
+    def observe(source, name, mode, maximum):
+        called.append((source, name, maximum))
+        if fault in {"oversize", "reader-refusal"}:
+            raise ValueError("Bounded no-follow source reader refused")
+        return ("120000" if fault == "link-mode" else "100644",
+                b"changed" if fault == "changed-bytes" else raw)
+    monkeypatch.setattr(test_origin_files, "source_file", observe)
+    if fault == "root": root = tmp_path / "another-run"
+    elif fault == "manifest": manifest = "../private"
+    elif fault == "digest": digest = "not-a-hash"
+    with pytest.raises((AssertionError, ValueError)):
+        read(root, manifest, digest)
+    assert bool(called) is (fault not in {"root", "manifest", "digest"})
 
 
 def test_storage_staging_and_selection_leave_default_native_api_unchanged(tmp_path, monkeypatch):
