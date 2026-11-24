@@ -362,22 +362,14 @@ def loaded_modules(worker):
         path = Path(module.__file__).resolve()
         result[key] = {'module': name, 'path': str(path),
                        'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
-    # The specifically commissioned source graph. A different installed module
-    # must be reported, not silently treated as this proof.
-    expected = {
-        'context': 'f696350b2e1bcf5b767f8ec60efa0ef720aa291dea6bf4f17e03186b0563dd66',  # 22ee
-        'maintenance': 'cc5d824c8b4b824793392737cd2f92a19670d6c1b4e6296b74e74e72b88e9ac7',
-        'loop': '6cbc05a44484d522055d1eece8d78e8f0192acca4c34a0bb64acf8aa7774ba65',  # ddc
-        'streaming': '2fb687ce75ae371aff0aa7c2f8038e2d39448e9f49d2893779913b48cd969d2b',  # 1419
-    }
-    assert {key: result[key]['sha256'] for key in expected} == expected, result
+    # Qualification joins these actual imports to its immutable selected graph.
+    # Do not freeze the reusable behavioral check to a past component release.
     for key, distribution in [('context', 'amplifier-module-context-managed'),
                               ('loop', 'amplifier-module-loop-live'),
                               ('streaming', 'amplifier-module-loop-streaming')]:
         result[key]['directUrl'] = json.loads(
             importlib.metadata.distribution(distribution).read_text('direct_url.json') or 'null')
     result['core']['version'] = importlib.metadata.version('amplifier-core')
-    assert result['core']['version'] == '2.0.2'
     return result
 
 
@@ -605,8 +597,11 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
                                if row['args'].get('call', {}).get('purpose') == 'context_compaction']
                 if outcome in {'host-stop', 'configuration', 'generation'}:
                     assert isinstance(settled[0], asyncio.CancelledError), settled
-                    assert len(maintenance) == 1 and maintenance[0]['error'] == 'CancelledError'
-                    assert maintenance[0]['reason']
+                    assert len(maintenance) == 1
+                    assert maintenance[0]['result']['allowed'] is False
+                    assert maintenance[0]['result']['state'] == 'cancelled'
+                    assert maintenance[0]['result']['reasons'] == [
+                        'The conversation changed since compaction was scheduled. No provider request was sent.']
                     assert maintenance[0]['args']['_settledCompaction'] is True
                     assert maintenance[0]['args']['_generationId'] == generation['generation_id']
                 elif outcome == 'worker-stop':
@@ -624,7 +619,7 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
                            e.get('op') == 'reply' and e.get('error') for e in case['events'])
             if outcome not in {'host-stop', 'worker-stop', 'late-stop', 'generation'}:
                 assert session['status'] == 'idle' and session['collaborationGeneration']['completed']
-                assert (session.get('activity') or {}).get('phase') not in {'capacity', 'compaction'}
+                assert (session.get('activity') or {}).get('phase') not in {'capacity', 'compacting'}
             record.update(scheduler=[{k: v for k, v in row.items() if k != 'task'} for row in case['schedules']],
                           admissions=case['admissions'], events=case['events'],
                           maintenanceCounts=raw.maintenance_counts, calls=raw.calls,
@@ -665,11 +660,16 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
                 failure = await asyncio.wait_for(asyncio.gather(second_task, return_exceptions=True), 30)
                 await asyncio.wait_for(case['queue'].join(), 10)
                 assert isinstance(failure[0], OSError), failure
-                assert writes and raw.compactions == 2
+                assert str(failure[0]) == 'Synthetic checkpoint storage failure'
+                assert len(writes) == 1 and raw.compactions == 2
                 assert continuity.path.read_bytes() == previous_bytes
                 assert context.summary == previous_summary
                 assert await context.get_messages() == second_canonical
                 assert not any(e.get('type') in {'generation.failed', 'runtime.error'} for e in case['events'])
+                assert session['status'] == 'idle' and session['collaborationGeneration']['completed']
+                assert session['collaborationGeneration']['inputIds'] == ['replacement-input']
+                assert [e['text'] for e in case['events'] if e.get('type') == 'assistant.message'] == [
+                    'Ordinary answer completed.', 'Ordinary answer completed.']
                 record['replacementFailure'] = {
                     'error': type(failure[0]).__name__, 'attemptedWrites': len(writes),
                     'previousCheckpointSha256': hashlib.sha256(previous_bytes).hexdigest(),
@@ -681,15 +681,25 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
                 restored['release_admission'].set()
                 next_context, next_raw = restored['context'], restored['raw']
                 assert (await next_context.get_messages())[:len(canonical)] == canonical
+                coordinator = restored['worker'].session.coordinator
+                restore = coordinator.get_capability('context.checkpoint.restore')
+                restores = []
+                @wraps(restore)
+                def observed_restore(*args, **kwargs):
+                    result = restore(*args, **kwargs)
+                    restores.append(copy.deepcopy(result))
+                    return result
+                coordinator.register_capability('context.checkpoint.restore', observed_restore)
                 await restored['worker'].command({'op': 'send', 'id': 'next-command',
                     'input_id': 'next-input', 'text': 'Continue using the saved summary without repeating it.'})
                 await asyncio.wait_for(restored['finished'].wait(), 30)
                 await until(restored['worker'].idle)
                 await asyncio.wait_for(restored['queue'].join(), 10)
-                if next_context._maintenance_task:
-                    await asyncio.wait_for(asyncio.shield(next_context._maintenance_task), 30)
+                for scheduled in restored['schedules']:
+                    if scheduled['task'] is not None:
+                        await asyncio.wait_for(asyncio.shield(scheduled['task']), 30)
                 adapter = restored['worker'].session.coordinator.get_capability('web.continuity.recovery')
-                assert adapter.public()['status'] == 'restored'
+                assert len(restores) == 1 and restores[0]['status'] == 'restored'
                 assert next_context.summary == (saved['summary']['throughMessage'], saved['summary']['text'])
                 assert next_raw.compactions == 0 and len(next_raw.sent) == 1
                 assert any(e.get('type') == 'generation.finished' and e.get('input_ids') == ['next-input']
@@ -700,6 +710,7 @@ async def test_worker_automatically_compacts_only_its_settled_turn(tmp_path, mon
                 assert json.loads(adapter.path.read_text())['summary'] == saved['summary']
                 assert (await next_context.get_messages())[:len(canonical)] == canonical
                 record['restored'] = {'origins': restored['origins'], 'status': adapter.public(),
+                                      'restoreTransitions': restores,
                                       'calls': next_raw.calls, 'counted': len(next_raw.counted)}
     finally:
         print('AUTOMATIC-WORKER-COMPACTION', json.dumps(record, default=str))
