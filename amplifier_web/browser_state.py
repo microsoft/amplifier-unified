@@ -81,7 +81,6 @@ class SessionIndex:
             if row.get('sessionKind') != 'internal':
                 from .cold_display import notifications
                 self.notifications.extend(notifications(row))
-        self.notifications.extend(state.get('scheduleNotifications', []))
         self.notifications.sort(key=lambda row: row.get('createdAt', 0))
         self.notifications = self.notifications[-100:]
 
@@ -131,7 +130,7 @@ class SessionIndex:
             self.roots.sort(key=lambda row: self.positions[row['id']])
         self.first_root = self.roots[0] if self.roots else None
         # Notifications are bounded presentation facts; only changed rows can
-        # contribute new assistant messages. Preserve independent schedule rows.
+        # contribute new assistant messages. Schedule notices have a separate owner.
         self.notifications = [row for row in self.notifications if row.get('sessionId') not in identities]
         for identity in identities:
             row = self.by_id[identity]
@@ -288,9 +287,11 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
                                  if row.get('sessionId') == selected or row.get('id') == state.get('canvas', {}).get('id')]
     result['devices'] = {key: {field: row[field] for field in ('clientId', 'updatedAt', 'online', 'viewport', 'capabilities') if field in row}
                          for key, row in state.get('devices', {}).items()}
+    notices = [*index.notifications, *state.get('scheduleNotifications', [])]
+    notices.sort(key=lambda row: row.get('createdAt', 0))
     result['notificationMessages'] = [{key: value for key, value in row.items()
                                       if key != 'text' or state.get('notificationSettings', {}).get('preview', True)}
-                                     for row in index.notifications]
+                                     for row in notices[-100:]]
     result['library'] = {'workspaceCount': len(state.get('workspaces', [])),
                          'bounded': True, 'detailPath': '/api/state/detail'}
     if 'browserResources' not in derived:
