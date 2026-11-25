@@ -78,6 +78,17 @@ directory. Immutable canvas/result bodies live in `artifacts/<sha256>.json`, wit
 small SQLite references. Live MCP context is separate from static HTML, preventing
 every polling update from duplicating an entire application. Reachability collection
 keeps saved artifacts and retained results, including transitive references.
+This artifact collector runs online; it does not wait for every conversation to
+be idle. `storage.cleanup.read` reports its latest bounded observation under
+`artifacts`, separately from the unused-code policy's `lastCleanup` receipt.
+A deferred policy cleanup does not mean artifact collection is stopped.
+Completed-pass byte counts describe successful file unlinks, not a filesystem
+free-space increase or a measurement of all remaining reclaimable content.
+Missing, deferred or interrupted observations are not a successful empty sweep.
+Do not remove hash-named files manually or infer disposability from their age:
+live state, committed state, private clients, outputs and nested resource
+references must all remain protected.
+
 Smart Tool result and argument bodies expire after 30 days, 200 retained results
 or 32,000,000 logical bytes. This budget belongs to `smart_tool_operations`,
 not every operation, command or saved test. It runs during storage upgrade, completed Smart Tool writes, and the existing
