@@ -141,9 +141,14 @@ state must still match at that point. A later worker can then reopen the new
 model's checkpoint without regenerating the covered history.
 
 A failed or interrupted request leaves the original checkpoint available.
-Partial notes, opaque provider state and older records lacking proof of their
-origin follow their existing recovery paths. A reused account alias alone
-cannot establish that two models share the same connection.
+For an older complete text checkpoint without connection provenance, the target
+can rebuild from canonical originals on a fresh Send with an explicitly selected
+connection and model. It starts with no derived state and never uses the old
+note. Only the new note generated on that connection, covering at least the
+old prefix and carried in a confirmed target response's request, may replace
+the old checkpoint. A later worker can then restore the target's note.
+Partial notes, opaque provider state and invalid proofs retain their existing
+recovery paths. A reused account alias alone cannot establish shared provenance.
 
 When native reuse is unavailable, Managed Context uses original messages that
 fit, or a validated readable checkpoint and its recent suffix that fit. If

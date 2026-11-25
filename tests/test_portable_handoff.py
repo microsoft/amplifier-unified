@@ -1,4 +1,5 @@
 """A same-connection model switch preserves portable history on an ordinary reply."""
+import asyncio
 import copy
 import json
 from types import SimpleNamespace
@@ -104,11 +105,11 @@ async def test_only_a_confirmed_actual_target_request_can_replace_saved_note(sav
     assert await target.coord.context.get_messages() == ROWS
 
 
-@pytest.mark.parametrize("reason", ["legacy", "changed_account", "unbound_input", "corrupt", "opaque"])
+@pytest.mark.parametrize("reason", ["changed_account", "unbound_input", "corrupt", "opaque", "damaged_proof"])
 async def test_old_or_unbound_sources_keep_existing_recovery(saved, reason):
     rec = json.loads(saved.read_bytes())
-    if reason == "legacy":
-        del rec["unifiedPortableOrigin"]
+    if reason == "damaged_proof":
+        rec["unifiedPortableOrigin"] = None
     if reason == "opaque":
         rec["summary"] = {"kind": "native", "throughMessage": rec["summary"]["throughMessage"],
                           "message": {"role": "user", "content": "opaque control"}}
@@ -123,10 +124,95 @@ async def test_old_or_unbound_sources_keep_existing_recovery(saved, reason):
     assert not target.route.portable_handoff and target.raw.complete.await_count > 0
     await target.save()
     assert saved.read_bytes() == original
-    if reason == "legacy":
-        cold = await session(saved.parent, "b")
-        await cold.prepare()
-        assert cold.raw.complete.await_count > 0 and saved.read_bytes() == original
+
+
+@pytest.mark.parametrize("outcome", ["success", "stop", "failed", "incomplete", "wrong_model",
+                                    "rotated", "changed_prefix", "changed_file", "changed_writer", "removed_note",
+                                    "unbound", "no_generation", "changed_mounted_writer", "different_generator",
+                                    "callback_removed_before_reply", "canceled_transport", "uncertain_terminal"])
+async def test_only_a_fresh_rebuild_and_its_confirmed_reply_replace_legacy_note(saved, outcome, monkeypatch):
+    old = json.loads(saved.read_bytes())
+    del old["unifiedPortableOrigin"]
+    old["summary"]["text"] = "Old unverified text: never send or stamp this."
+    old["sha256"] = digest({k: v for k, v in old.items() if k != "sha256"})
+    saved.write_text(json.dumps(old), encoding="utf-8")
+    original = saved.read_bytes()
+    target = await session(saved.parent, "b", authorize=outcome != "unbound")
+    if outcome == "no_generation":
+        target.coord.register_capability("context.portable_handoff.generated", lambda *_: None)
+    if outcome == "different_generator":
+        generated = target.coord.get_capability("context.portable_handoff.generated")
+        keys = target.coord.get_capability("web.provider_catalog")["connectionKeys"]
+        def other_account(provider, record):
+            keys["fixture"] = "another"
+            try:
+                generated(provider, record)
+            finally:
+                keys["fixture"] = "physical-a"
+        target.coord.register_capability("context.portable_handoff.generated", other_account)
+    rows = await target.prepare()
+    assert target.raw.complete.await_count > 0
+    assert old["summary"]["text"] not in str(target.raw.complete.await_args_list)
+    assert old["summary"]["text"] not in str(rows)
+    await target.save()
+    assert saved.read_bytes() == original
+
+    async def answer(request, **kwargs):
+        assert (NOTE in str(request.messages)) == (outcome != "removed_note")
+        if outcome == "failed":
+            raise RuntimeError("target failed")
+        if outcome == "canceled_transport":
+            raise asyncio.CancelledError()
+        if outcome == "stop":
+            target.coord.get_capability("live.runtime").stop_requested = True
+        if outcome == "rotated":
+            target.coord.get_capability("web.provider_catalog")["connectionKeys"]["fixture"] = "another"
+        if outcome == "changed_file":
+            saved.write_bytes(b'{"externally":"changed"}')
+        if outcome == "changed_prefix":
+            changed = copy.deepcopy(ROWS)
+            changed[0]["content"] = "User edit"
+            await target.coord.context.set_messages(changed)
+        if outcome == "changed_writer":
+            target.host.writer_guard = lambda: True
+        if outcome == "changed_mounted_writer":
+            target.coord.register_capability("context.persist_checkpoint", lambda: None)
+        return SimpleNamespace(finish_reason="length" if outcome == "uncertain_terminal" else "stop",
+                               metadata={"provider_response_completed": outcome != "incomplete"})
+    target.raw.complete.side_effect = answer
+
+    async def project(request, provider):
+        if outcome == "removed_note":
+            return request.model_copy(update={"messages": [row for row in request.messages if NOTE not in str(row.content)]})
+        if outcome == "wrong_model":
+            return request.model_copy(update={"model": "different"})
+        return request
+    surface = SurfaceProvider(target.raw, SimpleNamespace(prepare=project, commit=lambda request: None))
+    target.route.execution_adapter = lambda raw: surface
+    dispatch = ChatRequest(messages=[Message(**row) for row in rows])
+    if outcome == "callback_removed_before_reply":
+        target.coord.register_capability("context.checkpoint.export", None)
+    if outcome == "failed":
+        with pytest.raises(RuntimeError, match="target failed"):
+            await target.route.complete(dispatch)
+    elif outcome == "canceled_transport":
+        with pytest.raises(asyncio.CancelledError):
+            await target.route.complete(dispatch)
+    else:
+        await target.route.complete(dispatch)
+    if outcome == "success":
+        completed = json.loads(saved.read_bytes())
+        assert completed["identity"] == {"provider": "fixture", "model": "b"}
+        assert completed["summary"]["text"] == NOTE and completed["unifiedPortableOrigin"]
+        assert completed["sourceRevision"]["messages"] >= old["sourceRevision"]["messages"]
+        for ordinary in (target, await session(saved.parent, "b")):
+            calls = ordinary.raw.complete.await_count
+            assert NOTE in str(await ordinary.prepare())
+            assert ordinary.raw.complete.await_count == calls
+    else:
+        assert saved.read_bytes() == (b'{"externally":"changed"}' if outcome == "changed_file" else original)
+    if outcome != "changed_prefix":
+        assert await target.coord.context.get_messages() == ROWS
 
 
 def test_sparse_or_partial_exports_are_never_given_an_origin():
