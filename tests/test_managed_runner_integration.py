@@ -1,6 +1,7 @@
 """Shared-action authority and preparation/guest cleanup commit boundaries."""
 # ruff: noqa: F401, F811
 import asyncio
+import sys
 import threading
 from unittest.mock import AsyncMock, Mock
 
@@ -12,6 +13,8 @@ from test_configuration_authority import app, grant
 from test_coordination_generation import agent, until
 from test_task_environments import backend, scope, act
 from test_test_queue import queue, record, submit, drive
+
+REAL_INVOKE = owner.invoke
 
 
 @pytest.fixture
@@ -359,3 +362,53 @@ async def test_long_preparation_does_not_hold_queue_admission(app, queue, backen
     await asyncio.wait_for(asyncio.gather(*queue.tasks.values()), 5)
     assert record(queue, app)['job']['status'] == 'cancelled'
     assert [action for action, _ in backend] == ['prepare']
+
+
+async def test_lost_launch_receipt_keeps_diagnostics_and_only_its_own_queue_barrier(
+        app, queue, backend, monkeypatch, tmp_path):
+    controlled_invoke = owner.invoke
+    sid = scope(app)['sessionId']
+    launches = []
+    monkeypatch.setattr(owner, '__file__', str(tmp_path / 'owner.py'))
+    (tmp_path / 'test_environment_worker.py').write_text(
+        "import json, sys\njson.load(sys.stdin)\n"
+        "for phase in ('preflight', 'compose-launch'):\n"
+        "    print(json.dumps({'launchPhase': phase}), flush=True)\n"
+        "print('#6 exporting to image', file=sys.stderr)\n"
+        "sys.exit(7)\n")
+
+    def invoke(config, home, row, action, args):
+        if action == 'start':
+            launches.append(row['sessionId'])
+            if row['sessionId'] == sid:
+                return REAL_INVOKE({**config, 'python': sys.executable}, home, row, action, args)
+        if row['sessionId'] == sid and action in {'read', 'reconcile', 'stop'}:
+            return {'ok': False, 'status': 'unknown'}
+        assert row['sessionId'] != sid or action == 'prepare', 'No guest check or removal without a verified launch'
+        return controlled_invoke(config, home, row, action, args)
+
+    monkeypatch.setattr(owner, 'invoke', invoke)
+    await submit(app, 'held')
+    await drive(queue)
+    held = record(queue, app, 'held')
+    row = owner.get(app.data_dir, sid, held['job']['resourceId'])
+    saved = app.operations.requests.read(sid, row['commandId'])
+    assert held['job']['status'] == 'unknown' and saved['state'] == 'outcome_unknown'
+    assert row['backendAdmitted'] and row['status'] != 'retired'
+    assert saved['result']['launchDiagnostics']['helperReceipt'] == 'helper-exited'
+    assert saved['result']['launchDiagnostics']['progressReported'] == ['image-export-reported']
+
+    assert (await submit(app, 'held'))['duplicate']
+    await submit(app, 'later')
+    peer = app.state['sessions'][1]['id']
+    await app.dispatch('workspace.tests.submit', {**scope(app), 'sessionId': peer,
+        'requestId': 'held', 'profileId': owner.PROFILE, 'command': 'true', 'notify': False})
+    await drive(queue)
+    assert record(queue, app, 'later')['job']['status'] == 'queued'
+    assert queue.get(queue.identity(peer, 'held'))['job']['status'] == 'passed'
+    assert launches == [sid, peer]
+
+    details = (await app.dispatch('workspace.tests.result', {**scope(app), 'requestId': 'held'}))['result']
+    assert details['launch'] == {'operation': queue.summary(saved),
+                                  'code': 'launch_result_unconfirmed', 'diagnostics': saved['result']['launchDiagnostics']}
+    assert app.operations.requests.read(sid, row['commandId']) == saved

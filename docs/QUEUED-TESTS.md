@@ -52,6 +52,13 @@ The result does not satisfy a shared-task dependency or prove product acceptance
   into every queue row or workspace catalog.
 - `workspace.tests.result` pages that exact recorded output after cleanup,
   preserving the exit code and any capture-limit indicator.
+  For new local Docker launch failures, it can also show the original launch
+  operation and bounded diagnostics: the last phases the helper entered,
+  recognized build or startup messages, and whether a valid helper response
+  arrived. Raw build and startup logs are not saved in this result. These
+  diagnostics can survive loss of the helper response if the host records the
+  operation result; they do not confirm that a guest started or is absent,
+  release reservations, or authorize a retry.
 - Full-access reviewers and their currently admitted native children can use
   these two read actions directly with the producer's `sessionId` and
   `workspaceId`. Same-workspace evidence is the default; another registered

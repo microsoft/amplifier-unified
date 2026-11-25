@@ -364,6 +364,59 @@ def cleanup_refusal_code(exc):
     }.get(str(exc), 'cleanup_admission_refused')
 
 
+class LaunchDiagnostics:
+    """Bounded advisory evidence. Never used to classify or settle backend effects."""
+
+    # Only these helper-authored frames and a fixed vocabulary derived from
+    # untrusted progress are retained. Never persist backend text, paths or args.
+    PHASES = ('preflight', 'compose-launch', 'backend-record', 'source-transfer',
+              'source-unpack', 'guest-initialization', 'source-ready-record')
+    FRAMES = {json.dumps({'launchPhase': phase}).encode(): phase for phase in PHASES}
+    SIGNALS = {
+        'build-progress-reported': re.compile(rb'(?m)^#\d+ (?:\[[^\n]{1,120}\]|DONE\b)'),
+        'image-export-reported': re.compile(rb'exporting to image|naming to|unpacking to'),
+        'image-built-reported': re.compile(rb'(?m)^[ \t]*Image [^\n]{1,120} Built\b'),
+        'container-create-reported': re.compile(rb'(?m)^[ \t]*Container [^\n]{1,120} Creat(?:ing|ed)\b'),
+        'container-start-reported': re.compile(rb'(?m)^[ \t]*Container [^\n]{1,120} (?:Starting|Started|Waiting)\b'),
+        'build-error-reported': re.compile(rb'failed to solve'),
+        'port-conflict-reported': re.compile(rb'port is already allocated|address already in use'),
+        'unhealthy-container-reported': re.compile(rb'container [^\n]{1,120} is unhealthy', re.I),
+        'startup-timeout-reported': re.compile(rb'application not healthy after'),
+        'mount-error-reported': re.compile(rb'invalid mount config|error while mounting'),
+        'network-error-reported': re.compile(rb'failed to (?:create network|set up container networking)'),
+    }
+
+    def __init__(self):
+        self.phases = []
+        self.signals = set()
+        self._tail = b''
+
+    def take_frames(self, output):
+        # Remove only complete, recognized checkpoints from the start of
+        # stdout. Legacy helpers still return an ordinary single JSON object.
+        while len(self.phases) < len(self.PHASES):
+            end = output.find(b'\n', 0, 64)
+            if end == -1:
+                break
+            phase = self.FRAMES.get(bytes(output[:end]))
+            if phase != self.PHASES[len(self.phases)]:
+                break
+            self.phases.append(phase)
+            del output[:end + 1]
+
+    def observe_stderr(self, chunk):
+        if len(self.signals) == len(self.SIGNALS):
+            return
+        window = self._tail + chunk
+        self.signals.update(name for name, pattern in self.SIGNALS.items()
+                            if name not in self.signals and pattern.search(window))
+        self._tail = window[-256:]
+
+    def receipt(self, transport, exit_code=None):
+        return {'version': 1, 'phasesEntered': self.phases, 'progressReported': sorted(self.signals),
+                'helperReceipt': transport, **({'helperExitCode': exit_code} if exit_code else {})}
+
+
 def invoke(config, home, row, action, args, *, _qualification=False,
            _cleanup_gate=None, _cleanup_permit=None):
     """Bound helper output and lifetime; killing a helper is not command cancellation."""
@@ -435,7 +488,14 @@ def invoke(config, home, row, action, args, *, _qualification=False,
         # Popen raises only after its failed child was reaped; no helper ran.
         # Once Popen returns, transport/process failures remain uncertain.
         return helper_not_started(row, action)
-    output, errors = bytearray(), bytearray()
+    output = bytearray()
+    launch = LaunchDiagnostics() if action == 'start' and config.get('backend', 'docker') == 'docker' else None
+
+    def unknown_launch(transport):
+        return {'ok': False, 'status': 'unknown', 'code': 'launch_result_unconfirmed',
+                'message': 'The test runner did not return a valid launch result. Inspect the retained launch details; it was not retried.',
+                'launchDiagnostics': launch.receipt(transport, process.returncode)}
+
     drained = False
     deadline = time.monotonic() + (450 if action == 'exportArtifacts' else 650 if action == 'start' else 750 if action == 'finishCleanup' else 750 if action == 'remove' and row.get('preparedDependencies', {}).get('executionContract') else 650 if action == 'remove' and config.get('backend') == 'incus' else 300 if action == 'prepare' else 30 if action in {'read', 'capacity', 'reconcile', 'job_start', 'job_read', 'job_cancel'} else args.get('timeoutSeconds', 60) + 150)
     try:
@@ -473,8 +533,8 @@ def invoke(config, home, row, action, args, *, _qualification=False,
             process.stdin.write(json.dumps(payload).encode())
         process.stdin.close()
         with selectors.DefaultSelector() as selector:
-            selector.register(process.stdout, selectors.EVENT_READ, output)
-            selector.register(process.stderr, selectors.EVENT_READ, errors)
+            selector.register(process.stdout, selectors.EVENT_READ)
+            selector.register(process.stderr, selectors.EVENT_READ)
             while selector.get_map():
                 if time.monotonic() >= deadline:
                     raise TimeoutError('The backend response timed out. The effect may still be running; inspect it without replay.')
@@ -482,18 +542,45 @@ def invoke(config, home, row, action, args, *, _qualification=False,
                     chunk = os.read(selected.fileobj.fileno(), 65536)
                     if not chunk:
                         selector.unregister(selected.fileobj)
-                    else:
-                        selected.data.extend(chunk[:max(0, OUTPUT_LIMIT - len(selected.data))])
-                        if selected.data is output and len(output) >= OUTPUT_LIMIT:
+                    elif selected.fileobj is process.stdout:
+                        output.extend(chunk)
+                        if launch:
+                            launch.take_frames(output)
+                        if len(output) >= OUTPUT_LIMIT:
+                            if launch:
+                                return unknown_launch('response-too-large')
                             raise ValueError('The backend response exceeded its bound; the outcome is unknown.')
+                    elif launch:
+                        launch.observe_stderr(chunk)
         drained = True
         process.wait(timeout=max(1, deadline - time.monotonic()))
         if process.returncode:
+            if launch:
+                return unknown_launch('helper-exited')
             raise ValueError('The managed backend exited without a valid result; inspect the retained environment.')
-        value = json.loads(output)
+        try:
+            value = json.loads(output)
+        except (ValueError, RecursionError):
+            if launch:
+                return unknown_launch('invalid-response')
+            raise
         if not isinstance(value, dict) or 'ok' not in value:
+            if launch:
+                return unknown_launch('invalid-response')
             raise ValueError('The managed backend returned an invalid receipt.')
+        if launch and type(value['ok']) is not bool:
+            return unknown_launch('invalid-response')
+        if launch and value['ok'] is False:
+            value['launchDiagnostics'] = launch.receipt('returned')
         return value
+    except (TimeoutError, subprocess.TimeoutExpired):
+        if launch:
+            return unknown_launch('timed-out')
+        raise
+    except OSError:
+        if launch:
+            return unknown_launch('transport-error')
+        raise
     finally:
         if process.poll() is None or not drained:
             try:
@@ -1108,6 +1195,8 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
         request = app.operations.requests.finish(request, 'outcome_unknown' if uncertain else 'failed', resourceId=row['id'],
             result={'ok': False, 'status': 'not-started' if not admitted else 'unknown',
                     'preparationCleanup': preparation_cleanup,
+                    **({'launchDiagnostics': result['launchDiagnostics']} if action == 'start'
+                       and isinstance(result, dict) and 'launchDiagnostics' in result else {}),
                     **({'effectAdmitted': False, 'code': cleanup_refusal_code(exc)} if cleanup_not_started else {}),
                     **({'removal': {'version': 1, 'phase': 'host-persistence',
                                     'code': 'metadata_unconfirmed', 'destroyEffect': 'confirmed'}} if confirmation else {}),

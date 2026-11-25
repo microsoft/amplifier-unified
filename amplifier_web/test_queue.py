@@ -353,10 +353,25 @@ class TestQueue:
                 else:
                     high = middle-1
             page = page[:low]
+            launch_details = None
+            launch_id = identity + ':start:' + str(receipt['job'].get('attempt', 0))
+            if row and row.get('commandId') == launch_id:
+                try:
+                    started = self.app.operations.requests.read(source['id'], launch_id)
+                except ValueError:
+                    started = {}
+                if (started.get('resourceId') == row['id']
+                        and started.get('sessionId') == source['id']
+                        and started.get('action') == 'workspace.environments.start'):
+                    diagnostics = (started.get('result') or {}).get('launchDiagnostics')
+                    if diagnostics:
+                        launch_details = {'operation': self.summary(started), 'diagnostics': diagnostics,
+                                          'code': started['result'].get('code')}
             return {'accepted': True, 'result': {'check': self.public(receipt), 'operation': self.summary(request),
                 'exitCode': output.get('exit_code'), 'text': page, 'offset': offset,
                 'nextOffset': offset+len(page) if offset+len(page)<len(content) else None,
                 'truncatedAtSource': bool(output.get('truncated') or output.get('stdout_truncated') or output.get('stderr_truncated')),
+                **({'launch': launch_details} if launch_details else {}),
                 'retention': environments.public(self.app.data_dir, row)['retention'] if row else None}}
         if action.endswith('.cancel'):
             row = None
