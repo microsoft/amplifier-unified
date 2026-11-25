@@ -28,8 +28,8 @@ from every conversation participant and execution runtime.
   misleading on/ready state. Composing always remains available.
 - **Advanced prompt suggestions** is one destination, linked from Chat & input
   and from Advanced's AI group. The everyday Settings landing is not a raw
-  prompt editor. Advanced contains saved connection/model/optional effort,
-  recent/full transcript selection and deeper prompt customization; it adds no
+  prompt editor. Advanced contains saved connection/model/optional effort
+  and deeper prompt customization; it adds no transcript sharing selector,
   generation button, speculative Smart context/summarization, or new
   budget/cache controls. A custom prompt has a visible active indicator.
   Editing or Reset to default stages that exact text for the existing Save
@@ -73,20 +73,26 @@ from every conversation participant and execution runtime.
 - The host obtains its own authorized display transcript. It never accepts
   transcript text, native model context, private files, system/developer blocks,
   reasoning, tool payloads, recovery/service inputs or unsent drafts from a client.
-  Public speaker IDs/labels are data, not instructions or recipient authority.
+  The provider receives only chronological human/assistant text, with fixed role
+  labels, no speaker identifiers, markup added by the host, or source metadata.
   `inputActor.kind` is human, agent, system or unknown from canonical saved
   provenance; role=user alone never establishes a human. ACP/shared accepted
   conversation inputs do not require native generation receipts. Native inputs
   retain their own progress checks, exact peer receipt attribution and public
   voice-input projection: spoken requests do not include reference-history envelopes.
-- `last_n` defaults to six human messages and the following public conversation
-  messages, counting humans across the displayed conversation, not agent-authored
-  user-role inputs. A selection is independently bounded to 100 source rows and
-  24 KiB of UTF-8 text/labels/identities. `full` requires a complete gap-free
-  display window within those bounds; it does not silently degrade to a suffix.
-  Individual raw text is limited to 16 KiB before sanitation. The existing
-  naming text cleaner removes context/system-reminder envelopes (including
-  unclosed envelopes), data URLs and encoded payloads; neither mode sends those.
+- Automatically fit recent complete messages to an estimated input budget up to
+  about 100,000 tokens. Only cached metadata for the exact selected account and
+  model may increase the conservative unknown-model budget. Smaller windows and
+  input limits reduce the budget with room for instructions, framing and output.
+  This is an estimate, not a tokenizer, cost guarantee or discovery request.
+  Keep the latest whole reply with a human exchange; do not clip a message,
+  replace it with older text, summarize, or jump across unvalidated gaps. An
+  omitted older prefix is not itself a failure. Peer inputs and replies known to
+  answer only nonhuman inputs are excluded, as are private/control envelopes
+  and encoded media. If there is no usable exchange, or it cannot fit, return
+  `empty` without contacting a provider. The selected chat's visible latest
+  text message must still match the request; a newer visible message cannot
+  leave a candidate from an earlier exchange current.
   Internal/worker/scheduled-only sources and update-activation pauses are ineligible.
 - One tool-free utility `provider.complete` call uses the selected account/model,
   requests 512 output tokens and is subject to a 15-second overall host deadline
@@ -183,6 +189,11 @@ request IDs or weaken candidate authorization.
 The host's `suggestionModels.enabled` and saved configuration retain their
 existing app-global scope. The everyday UI combines their actual receipt with
 the synced setting instead of presenting duplicate switches.
+Old enabled configurations, including both recent-turn and full-transcript
+choices, do not consent to the new policy. They read as unavailable until an
+explicit Save and enable under the new disclosure, with `shareRecentConversation:true`.
+An omitted sharing confirmation or a prompt-only save cannot activate it. The host preserves the
+saved account, model, prompt, effort and separately synced preference.
 Save and enable first completes the normal authorized global configuration
 write, then commits `settings.suggestedMessages:true`. Neither local draft UI
 state nor a stale browser value can substitute for either acknowledgement.
@@ -190,7 +201,7 @@ state nor a stale browser value can substitute for either acknowledgement.
 ## Wire
 
 `providers.suggestionModels {}` returns
-`{suggestionModels:{enabled,provider,model,effort,prompt,defaultPrompt,transcriptMode,humanTurns,revision,
+`{suggestionModels:{enabled,provider,model,effort,prompt,defaultPrompt,revision,
 takesEffect:"next_request"},providers:[existing nonsecret connection rows]}`.
 Each provider row includes `sharedCatalogKey`, derived by the ordinary discovery
 catalog identity owner from that app-global connection and qualified runtime.
@@ -218,7 +229,7 @@ support nor a cost, latency or availability guarantee. Refreshing a catalog uses
 its existing explicit owner; focus/save never probes merely for recommendations.
 Clients reread this projection after relevant catalog hydration/refresh and
 discard it when its exact catalog identity or freshness changes. No saved model,
-prompt, sharing choice or connection is migrated or silently replaced; manual
+prompt or connection is silently replaced; manual
 exact IDs remain unverified choices, never inferred recommendations. Another
 account, including one using the same module, cannot donate a recommendation.
 The catalog owner projects this bounded scalar hint synchronously, without
@@ -226,8 +237,8 @@ copying or encoding model bodies or hydrating a second inventory. Absent purpose
 metadata needs no model-row walk; an advertised ranking inspects only exact IDs
 in the existing bounded catalog. Normal cache retention/freshness still applies.
 
-`providers.configureSuggestions {enabled?,provider?,model?,effort?,prompt?,transcriptMode?,
-humanTurns?,expectedSuggestionModelsRevision?,scope:"global",configurationTarget:{kind:"global"}}` saves the same
+`providers.configureSuggestions {enabled?,provider?,model?,effort?,prompt?,shareRecentConversation?:true,
+expectedSuggestionModelsRevision?,scope:"global",configurationTarget:{kind:"global"}}` saves the same
 selection and returns `suggestionModels`, `configurationChanged:true`,
 `takesEffect:"next_request"` and the updated `configurationRevision`.
 Existing configuration authority applies. No setting changes a chat's model.
@@ -236,7 +247,7 @@ metadata supplies choices. Cached choices, when available, use the same validati
 as ordinary model selection without a save-time discovery or model call. Every
 omitted preference preserves its saved/effective value (or its default for old
 settings). Independent prompt-only/reset or model-only forms therefore do not
-disable the utility, clear its account/model or reset its transcript window.
+disable the currently enabled utility or clear its account/model.
 The complete merged value is validated before one atomic settings write;
 invalid partial edits change neither settings nor the configuration revision.
 Bundled setup/model/Advanced saves submit `expectedSuggestionModelsRevision`,
@@ -250,9 +261,9 @@ snapshot. A mismatch returns 409 (`suggestion_configuration_changed`) without
 changing settings, configuration/preference revisions, success cache or paid
 claims. The client retains staged account/model edits, rereads current settings
 and shows the new sharing disclosure for review before an explicit save. It does
-not silently replay, overwrite sharing with the private draft, or treat an
-earlier render check as commit-time consent. A refreshed successful model-only
-save still preserves omitted sharing/prompt settings. Each actual save retains
+not silently replay or treat an earlier render check as commit-time consent.
+A refreshed successful model-only save still preserves omitted settings.
+Each actual save retains
 the existing new intent witness, so A→B→A is not the original confirmation.
 `defaultPrompt` is read-only metadata; Reset sends its exact value as `prompt`.
 Effort/prompt edits change the settings/configuration witness and invalidate pending
@@ -346,6 +357,10 @@ captures the current command-receipt row boundary. An unprojectable old current
 source fails closed with `migration_prior_attempt_unavailable`; a changed
 discovery-process salt is not permission to infer again. A demonstrable old
 source match may acquire a stable alias without rewriting its original claim.
+The explicit opt-in to the plain-transcript policy establishes new configuration
+intent, not a replay of an old prompt. Existing request IDs, claims and any
+pre-existing hash-only migration fence remain intact; the policy change does
+not introduce a second installation-wide hold on previously unused chats.
 
 This is not a permanent hold on the conversation. A newly observed host
 assistant message for an exact post-boundary ordinary UI input can prove new
@@ -476,8 +491,9 @@ selection in that witness. Cooling or hydrating unchanged saved content therefor
 does not invalidate a suggestion. The existing page cache reuses a cold suffix
 only for its exact owner, indexed resource and fresh backing-file signature;
 a changed identity/signature rereads through `read_saved_window` under its existing
-8 MiB raw-read / 4 MiB record limits and 100-row suffix bound, then applies the independent
-24 KiB selected-input bound. Missing, malformed or unreadable backing sources
+8 MiB raw-read / 4 MiB record / 512 raw-record safeguards, then applies the
+independent model-input estimate. Generic browser pages retain their own limits.
+Missing, malformed or unreadable backing sources
 fail closed. No full resource read or new cache owner is introduced.
 As with native freshness, a cold cache miss/change performs this bounded read
 synchronously at currentness admission; repeated unchanged polls only validate
@@ -511,7 +527,9 @@ fixed-size SHA-256 hashes in indexed SQLite columns, not an in-memory journal.
 An exact-request tombstone commits before bounded capture. After capture, fresh
 authorization/currentness is rechecked under admission exclusion and the paid
 source claim commits from the exact bounded canonical model input plus
-principal/conversation/configuration identity, before provider dispatch. Resident,
+principal/conversation/configuration identity, before provider dispatch. The stable
+anchor also binds the latest complete reply to that disclosed configuration so a
+changed catalog budget alone cannot buy another call for the same reply. Resident,
 native and cold-storage stamps remain freshness checks, not paid identity:
 unchanged captured input cannot pay again merely because its storage retired.
 Duplicate automatic input can therefore report `pending` while capture runs,

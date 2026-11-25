@@ -28,8 +28,13 @@ def clip(text, budget):
 
 def clean_text(text):
     # Scan a finite envelope budget separately from retained meaningful text.
+    result = strip_context_payloads(clip(text, MAX_SCAN_BYTES), naming=True)
+    return clip(' '.join(result.split()), MAX_TEXT_BYTES)
+
+
+def strip_context_payloads(text, *, naming=False):
+    """Strip hidden envelopes/payloads; the caller bounds the source text."""
     # An unclosed envelope consumes the remaining scan, never exposes its body.
-    text = clip(text, MAX_SCAN_BYTES)
     parts, stack, start = [], [], 0
     for match in _TAG.finditer(text):
         if not stack:
@@ -45,7 +50,17 @@ def clean_text(text):
         parts.append(text[start:])
     # A truncated opening envelope must not become a request.
     result = re.split(r'<(?:context_file|system-reminders?)\b', ''.join(parts), flags=re.I)[0]
-    return clip(' '.join(_DATA.sub('[omitted payload]', result).split()), MAX_TEXT_BYTES)
+    def payload(match):
+        value = match[0]
+        # Naming deliberately strips any long word. Do not silently truncate
+        # legitimate long suggestion text/code, but keep data URLs and
+        # base64-looking payloads out of the plain transcript.
+        if (naming or value.startswith('data:') or value.endswith('=')
+                or (re.search(r'[a-z]', value) and re.search(r'[A-Z]', value)
+                    and re.search(r'[0-9+/]', value))):
+            return '[omitted payload]'
+        return value
+    return _DATA.sub(payload, result)
 
 
 def message_text(row):
