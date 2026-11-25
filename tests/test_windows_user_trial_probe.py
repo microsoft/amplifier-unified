@@ -3564,7 +3564,7 @@ nodes = tuple(json.loads(sys.argv[3]))
 exec(compile((root / "collector.py").read_text(), "<collector>", "exec"))
 paths = {os.path.normcase(str(p)): ("tests/" + p.name, len(p.read_bytes().splitlines()))
          for p in (root / "tests").glob("test_*.py") if p.name != "test_broken.py"}
-pytest.hookimpl(tryfirst=True)(Results.pytest_runtest_makereport)
+pytest.hookimpl(hookwrapper=True, tryfirst=True)(Results.pytest_runtest_makereport)
 selected = Results(paths)
 class Injection:
     def pytest_collection_modifyitems(self, items):
@@ -3623,6 +3623,138 @@ result = selected.snapshot(code)
         assert report["exitCode"] == 4 and report["phaseCount"] == 15
 
 
+@pytest.mark.parametrize("fault", ["pass", "call", "chain", "setup", "teardown", "cleanup", "subtest", "unavailable"])
+def test_remaining_real_unittest_failures_survive_report_bridge_without_private_text(tmp_path, fault):
+    """Exercise pytest's real unittest adapter; never run the native junction case."""
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    definitions = ast.unparse(ast.Module(body=[n for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in {
+            "safe_failure", "safe_lease_witness", "Results"}], type_ignores=[]))
+    (tmp_path / "collector.py").write_text(definitions, encoding="utf-8")
+    test = tmp_path / "test_unittest.py"
+    test.write_text('''import os, unittest
+FAULT = os.environ["CAPTURE_FAULT"]
+class Boundary(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(self.cleanup)
+        if FAULT == "setup": raise PermissionError("PRIVATE-SETUP")
+    def tearDown(self):
+        if FAULT == "teardown": raise OSError("PRIVATE-TEARDOWN")
+    def cleanup(self):
+        if FAULT == "cleanup": raise ValueError("PRIVATE-CLEANUP")
+    def test_boundary(self):
+        if FAULT in {"call", "unavailable"}: self.fail("PRIVATE-ASSERTION")
+        if FAULT == "chain":
+            try: raise PermissionError("PRIVATE-CAUSE")
+            except PermissionError as cause: raise RuntimeError("PRIVATE-OUTER") from cause
+        if FAULT == "subtest":
+            with self.subTest(explicit_home="/PRIVATE-SUBTEST-PATH"):
+                self.fail("PRIVATE-SUBTEST-ASSERTION")
+''', encoding="utf-8")
+    node = "test_unittest.py::Boundary::test_boundary"
+    runner = '''
+import json, os, pathlib, sys
+import pytest
+root, fault, node = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+os.chdir(root)
+os.environ["CAPTURE_FAULT"] = fault
+nodes = (node,)
+exec(compile((root / "collector.py").read_text(), "<collector>", "exec"))
+path = root / "test_unittest.py"
+paths = {os.path.normcase(str(path)): ("test_unittest.py", len(path.read_bytes().splitlines()))}
+pytest.hookimpl(hookwrapper=True, tryfirst=True)(Results.pytest_runtest_makereport)
+selected = Results(paths)
+early, actual = [], []
+class Early:
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_runtest_makereport(self, item, call):
+        early.append([call.when, call.excinfo is not None])
+    def pytest_runtest_logreport(self, report):
+        actual.append([report.nodeid, report.when, report.outcome])
+class MissingException:
+    @pytest.hookimpl(hookwrapper=True, trylast=True)
+    def pytest_runtest_makereport(self, item, call):
+        outcome = yield
+        report = outcome.get_result()
+        if fault == "unavailable" and report.failed:
+            call.excinfo = None  # Synthetic negative control; do not alter the actual report.
+code = pytest.main(["-q", "-p", "no:cacheprovider", "--rootdir", str(root),
+                    "--confcutdir", str(root), node], plugins=[selected, Early(), MissingException()])
+(root / "result.json").write_text(json.dumps({
+    "selection": selected.snapshot(code), "early": early, "actual": actual}), encoding="utf-8")
+'''
+    child = subprocess.run([sys.executable, "-I", "-B", "-c", runner, str(tmp_path), fault, node],
+        env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+        capture_output=True, text=True, timeout=30)
+    assert child.returncode == 0, child.stdout + child.stderr
+    raw = json.loads((tmp_path / "result.json").read_text())
+    report = raw["selection"]
+    assert report["collected"] == [node] and report["collectedCount"] == 1
+    assert report["phases"] == raw["actual"]
+    assert report["passed"] is (fault == "pass")
+    assert report["omittedCollected"] == report["omittedPhases"] == report["omittedFailures"] == 0
+    assert "PRIVATE" not in json.dumps(raw) and str(tmp_path) not in json.dumps(raw)
+    if fault == "pass":
+        assert report["exitCode"] == 0 and report["failureCount"] == report["unavailableFailureCount"] == 0
+        assert report["phases"] == [[node, phase, "passed"] for phase in ("setup", "call", "teardown")]
+        return
+    assert report["exitCode"] == 1 and not report["passed"]
+    assert any(row == [node, "call", "failed"] for row in report["phases"])
+    assert report["failureCount"] == len(report["failures"]) == 1
+    failure, = report["failures"]
+    assert failure["node"] == node and failure["phase"] == "call"
+    if fault == "unavailable":
+        assert report["unavailableFailureCount"] == 1 and failure["exceptionAvailable"] is False
+        assert failure["type"] == "unavailable" and failure["frames"] == [] and failure["chain"] == []
+    else:
+        assert report["unavailableFailureCount"] == 0 and failure["exceptionAvailable"] is True
+        expected = {"call": "AssertionError", "chain": "RuntimeError", "setup": "PermissionError",
+                    "teardown": "OSError", "cleanup": "ValueError", "subtest": "AssertionError"}[fault]
+        assert failure["type"] == expected
+        frames = [frame for frame in failure["frames"] if frame["file"] == "test_unittest.py"]
+        assert frames and ("raise " + expected if fault != "subtest" and fault != "call" else "self.fail(") in (
+            test.read_text().splitlines()[frames[-1]["line"] - 1])
+        if fault == "chain":
+            assert failure["chain"][0]["type"] == "PermissionError"
+            assert failure["chain"][0]["frames"][-1]["file"] == "test_unittest.py"
+    # Unittest caught the call's exception before pytest's report bridge ran.
+    # The early observer sees no exception; the post-bridge collector still does.
+    if fault != "subtest":
+        assert ["call", False] in raw["early"]
+
+
+@pytest.mark.parametrize("fault", ["pass", "late-exception", "unavailable", "report-error"])
+def test_remaining_failure_hook_observes_after_yield_without_replacing_outcome(fault):
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    namespace = inline_definitions(tree, ["safe_failure", "safe_lease_witness", "Results"],
+                                   {"os": os, "nodes": PREFIX_NODES})
+    result = namespace["Results"]()
+    item = types.SimpleNamespace(nodeid=PREFIX_NODES[1])
+    call = types.SimpleNamespace(when="call", excinfo=None)
+    original = PermissionError("PRIVATE-CAUSE")
+    report = types.SimpleNamespace(failed=fault != "pass", outcome="passed" if fault == "pass" else "failed")
+    def get_result():
+        if fault == "report-error": raise original
+        return report
+    hook = result.pytest_runtest_makereport(item, call)
+    assert next(hook) is None and result.failure_count == 0
+    if fault == "late-exception":
+        call.excinfo = types.SimpleNamespace(value=original)
+    if fault == "report-error":
+        with pytest.raises(PermissionError) as caught:
+            hook.send(types.SimpleNamespace(get_result=get_result))
+        assert caught.value is original and result.failure_count == 0
+    else:
+        with pytest.raises(StopIteration) as finished:
+            hook.send(types.SimpleNamespace(get_result=get_result))
+        assert finished.value.value is None
+        assert result.failure_count == (0 if fault == "pass" else 1)
+        assert result.unavailable_failures == (1 if fault == "unavailable" else 0)
+    assert vars(report) == {"failed": fault != "pass", "outcome": "passed" if fault == "pass" else "failed"}
+    assert call.excinfo is None if fault != "late-exception" else call.excinfo.value is original
+    assert "PRIVATE" not in json.dumps(result.snapshot(1))
+
+
 def test_remaining_evidence_overflow_is_explicit_and_never_a_pass():
     _, _, tree = remaining_ci_code(FIVE_STEP)
     cls = inline_definitions(tree, ["Results"], {"nodes": FIVE_NODES})["Results"]
@@ -3675,7 +3807,19 @@ def test_remaining_failure_projection_keeps_bounded_causes_without_exception_tex
 def test_remaining_workflow_keeps_full_selection_and_first_result_failure_hook():
     _, _, tree = remaining_ci_code(FIVE_STEP)
     body = ast.unparse(tree)
-    assert "pytest.hookimpl(tryfirst=True)(Results.pytest_runtest_makereport)" in body
+    assert "pytest.hookimpl(hookwrapper=True, tryfirst=True)(Results.pytest_runtest_makereport)" in body
+    results = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Results")
+    hook = next(n for n in results.body if isinstance(n, ast.FunctionDef) and n.name == "pytest_runtest_makereport")
+    hook_body = ast.unparse(hook)
+    assert isinstance(hook.body[0], ast.Assign) and isinstance(hook.body[0].value, ast.Yield)
+    assert ast.dump(hook.body[1], include_attributes=False) == ast.dump(
+        ast.parse("report = outcome.get_result()").body[0], include_attributes=False)
+    condition = ast.parse("call.excinfo is not None or report.failed", mode="eval").body
+    assert any(isinstance(n, ast.If) and ast.dump(n.test, include_attributes=False) ==
+               ast.dump(condition, include_attributes=False) for n in hook.body[2:])
+    assert "unavailableFailureCount" in body and "'exceptionAvailable': not unavailable" in hook_body
+    assert not any(isinstance(n, ast.Attribute) and n.attr in {
+        "force_result", "force_exception", "longrepr", "_excinfo", "f_locals"} for n in ast.walk(hook))
     assert "selected.snapshot(code)" in body
     assert "result['phases']" not in body and "[:15]" not in body
     assert "postTestAudit" in body and "wrapperFailure" in body
@@ -4271,13 +4415,20 @@ def test_native_lease_capture_observes_each_phase_without_replacing_failure():
     for phase in ("setup", "call", "teardown"):
         raw["restored"] = phase == "teardown"
         call = types.SimpleNamespace(when=phase, excinfo=types.SimpleNamespace(value=error) if phase == "call" else None)
-        assert result.pytest_runtest_makereport(item, call) is None
+        hook = result.pytest_runtest_makereport(item, call)
+        assert next(hook) is None
+        with pytest.raises(StopIteration) as finished:
+            hook.send(types.SimpleNamespace(get_result=lambda: types.SimpleNamespace(failed=phase == "call")))
+        assert finished.value.value is None
     report = result.snapshot(1)
     assert report["failureCount"] == 1 and report["failures"][0]["type"] == "PermissionError"
     assert [r["restored"] for r in report["leaseWitnesses"]] == [False, False, True]
     assert not report["passed"] and "PRIVATE" not in json.dumps(report)
     raw["PRIVATE"] = "PRIVATE"
-    result.pytest_runtest_makereport(item, types.SimpleNamespace(when="call", excinfo=None))
+    hook = result.pytest_runtest_makereport(item, types.SimpleNamespace(when="call", excinfo=None))
+    assert next(hook) is None
+    with pytest.raises(StopIteration):
+        hook.send(types.SimpleNamespace(get_result=lambda: types.SimpleNamespace(failed=False)))
     assert result.invalid and result.lease_witnesses[-1] == {
         "node": FIVE_NODES[0], "phase": "call", "status": "invalid"}
 

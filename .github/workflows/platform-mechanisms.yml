@@ -850,6 +850,7 @@ jobs:
                   self.collected, self.phases, self.failures = [], [], []
                   self.invalid, self.collection_seen = False, False
                   self.collected_count = self.phase_count = self.failure_count = 0
+                  self.unavailable_failures = 0
                   self.collect_failed = self.collect_skipped = self.xfailed = 0
                   self.unexpected_collected = self.unexpected_phases = 0
                   self.unknown_nodes = {}
@@ -878,6 +879,12 @@ jobs:
                   self.collect_failed += int(report.failed)
                   self.collect_skipped += int(report.skipped)
               def pytest_runtest_makereport(self, item, call):
+                  # Observe after pytest's unittest bridge has transferred its
+                  # caught exception to call.excinfo and made the real report.
+                  # Never replace that report, render longrepr or read subtest
+                  # parameters (which may contain private paths).
+                  outcome = yield
+                  report = outcome.get_result()
                   witness = getattr(item, '_native_lease_witness', None)
                   if witness is not None:
                       if len(self.lease_witnesses) < 15:
@@ -887,15 +894,21 @@ jobs:
                               'phase': call.when if call.when in ('setup', 'call', 'teardown') else 'other', **safe})
                       else:
                           self.invalid = True
-                  if call.excinfo is not None:
+                  if call.excinfo is not None or report.failed:
                       self.failure_count += 1
+                      unavailable = call.excinfo is None
+                      self.unavailable_failures += int(unavailable)
                       if len(self.failures) < 16:
+                          facts = safe_failure(call.excinfo.value, self.paths) if not unavailable else {
+                              'type': 'unavailable', 'category': 'error', 'frames': [],
+                              'omittedFrames': 0, 'traceTruncated': False, 'chain': [],
+                              'chainTruncated': False, 'groupMembersOmitted': 0}
                           self.failures.append({'node': self.node(item.nodeid),
                               'phase': call.when if call.when in ('setup', 'call', 'teardown') else 'other',
-                              **safe_failure(call.excinfo.value, self.paths)})
+                              'exceptionAvailable': not unavailable, **facts})
                       else:
                           self.invalid = True
-                  return None  # Observe only; pytest still makes the actual report.
+                  # No force_result/force_exception: preserve pytest's outcome.
               def pytest_runtest_logreport(self, report):
                   self.phase_count += 1
                   xfail = hasattr(report, 'wasxfail')
@@ -928,6 +941,7 @@ jobs:
                       'wasxfailCount': self.xfailed, 'invalid': self.invalid,
                       'exitCode': int(code) if isinstance(code, int) and 0 <= code <= 255 else None,
                       'failures': self.failures, 'failureCount': self.failure_count,
+                      'unavailableFailureCount': self.unavailable_failures,
                       'leaseWitnesses': self.lease_witnesses,
                       'omittedCollected': self.collected_count - len(self.collected),
                       'omittedPhases': self.phase_count - len(self.phases),
@@ -1001,7 +1015,7 @@ jobs:
                           paths[os.path.normcase(os.path.abspath(path))] = (name, len(path.read_bytes().splitlines()))
                       assert {p.name for p in target.iterdir()} == {'tests'}
                       import pytest
-                      pytest.hookimpl(tryfirst=True)(Results.pytest_runtest_makereport)
+                      pytest.hookimpl(hookwrapper=True, tryfirst=True)(Results.pytest_runtest_makereport)
                       result['stage'] = 'pytest'
                       selected = Results(paths)
                       code = pytest.main(['-q', '-p', 'no:cacheprovider', '-p', 'pytest_asyncio.plugin',
