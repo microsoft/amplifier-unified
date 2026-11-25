@@ -140,6 +140,12 @@ class ScheduleStore:
             new_owner = lease is None or lease[0] != self.owner
             self.db.execute('INSERT OR REPLACE INTO scheduler_lease VALUES(1,?,?)', (self.owner, now + ttl))
             if new_owner:
+                # A pre-start review block is final. Only its notification
+                # decision can still need attention after an interrupted tick.
+                self.recovered.extend(json.loads(row[0]) for row in self.db.execute(
+                    """SELECT value FROM schedule_runs WHERE phase='skipped'
+                       AND json_extract(value, '$.blockedBeforeStart')=1
+                       AND json_extract(value, '$.notificationDecision') IS NULL"""))
                 # Claims may have crossed an external input boundary. Never
                 # infer from process death that submission did not happen.
                 for row in self.db.execute("SELECT value FROM schedule_runs WHERE phase IN ('creating','claimed','submitting','accepted','running')").fetchall():
@@ -165,9 +171,19 @@ class ScheduleStore:
         ).rowcount == 1
 
     def claim(self, session_id, identity, now):
+        return self._record_due(session_id, identity, now, None, None)
+
+    def block_due(self, session_id, identity, now, *, expected_revision, reason):
+        """Record a verified pre-start block and hold the reviewed revision atomically."""
+        if type(expected_revision) is not int or not isinstance(reason, str) or not reason.strip():
+            raise ValueError('A reviewed schedule revision and reason are required')
+        return self._record_due(session_id, identity, now, expected_revision, reason)
+
+    def _record_due(self, session_id, identity, now, expected_revision, reason):
         with self.transaction():
             if not self.owns(now): raise ValueError('Scheduler lease is no longer held')
             schedule = self.get(session_id, identity)
+            if expected_revision is not None and schedule['revision'] != expected_revision: return None
             if schedule['status'] != 'active' or any(run['phase'] in ACTIVE_RUNS for run in self.runs(session_id, identity)): return None
             due = due_occurrence(schedule['spec'], schedule.get('nextDue'), now, schedule['missedRunPolicy'])
             if due is None: return None
@@ -175,11 +191,15 @@ class ScheduleStore:
             run = {'id': run_id, 'scheduleId': identity, 'sessionId': session_id, 'taskId': schedule.get('taskId'), 'taskRevision': schedule.get('taskRevision'), 'scheduleRevision': schedule['revision'], 'dueAt': due['dueAt'], 'phase': 'skipped' if due['skip'] else 'claimed', 'revision': 1, 'owner': self.owner, 'inputId': run_id, 'createdAt': now, 'updatedAt': now, 'detail': 'Missed occurrence skipped by the saved policy.' if due['skip'] else 'Due occurrence claimed.'}
             if authority_command := schedule.get('authorization', {}).get('commandId'):
                 run['authorizationCommandId'] = authority_command
-            self.db.execute('INSERT INTO schedule_runs VALUES(?,?,?,?,?,?)', (run_id, identity, session_id, run['dueAt'], run['phase'], json.dumps(run)))
             schedule.update(nextDue=due['nextDue'])
             if due['skip'] and due['nextDue'] is None:
                 schedule['status'] = 'completed'
                 schedule['revision'] += 1
+            elif reason is not None:
+                if not due['skip']:
+                    run.update(phase='skipped', blockedBeforeStart=True, detail=reason)
+                schedule.update(status='needs_review', revision=schedule['revision'] + 1, reviewReason=reason, updatedAt=now)
+            self.db.execute('INSERT INTO schedule_runs VALUES(?,?,?,?,?,?)', (run_id, identity, session_id, run['dueAt'], run['phase'], json.dumps(run)))
             self.put(schedule)
             self.put_run(run)
             return run
