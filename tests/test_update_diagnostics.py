@@ -170,6 +170,20 @@ def test_probe_import_origins_preserve_preinstall_relationship_and_partial_facts
     assert d.complete_probe_origins(facts['probe']['importOrigins']) is (fault is None)
 
 
+@pytest.mark.parametrize('module_index', [3, 4, 5])
+@pytest.mark.parametrize('ending', ['not-loaded', 'observed', 'unavailable'])
+def test_newly_loaded_optional_probe_module_cannot_hide_unavailable_evidence(module_index, ending):
+    from amplifier_web import update_diagnostics as d
+    value = origin_receipt('dependency-prepare')
+    name = d.PROBE_ORIGIN_MODULES[module_index]
+    value['samples'][0]['modules'][name] = {'status': 'not-loaded', 'scope': 'unknown'}
+    if ending != 'observed':
+        value['samples'][1]['modules'][name] = {
+            'status': ending, 'scope': 'unknown' if ending == 'not-loaded' else 'runtime-prefix'}
+    assert d.probe_origins(value) == value
+    assert d.complete_probe_origins(value) is (ending != 'unavailable')
+
+
 @pytest.mark.parametrize('fault', [None, 'missing', 'outside', 'relative', 'traversal', 'symlink',
                                   'too-large', 'changed-read', 'module-getattr'])
 def test_probe_origin_snapshot_reads_only_loaded_bounded_regular_files(tmp_path, monkeypatch, fault):

@@ -153,7 +153,13 @@ def provenance_files(root, names):
 async def observed_probe(process, args, settings, row):
     """Opt in on this actual invocation, retaining its result/exception unchanged."""
     from amplifier_web.update_diagnostics import probe_origins
-    assert '--project' in args and '--observe-import-origins' not in args
+    assert '--project' in args
+    if '--observe-import-origins' in args:
+        # updates.process recursively uses its module-global process for its
+        # one anonymous retry. Do not append the flag again, add a second
+        # logical observation or obstruct that original operation.
+        assert settings.get('_redaction_env') is not None
+        return await process(*args, **settings)
     project = Path(args[args.index('--project') + 1])
     row.update(before=provenance_files(project, ('pyproject.toml', 'uv.lock')), status='started',
                importOrigins=None)
@@ -172,6 +178,30 @@ async def observed_probe(process, args, settings, row):
         # Exception/body output is never retained here.
         probe = facts.get('probe', {}) if type(facts) is dict else {}
         row['importOrigins'] = probe_origins(probe.get('importOrigins')) if type(probe) is dict else None
+        row['command'] = probe_command_facts(facts)
+
+
+def probe_command_facts(facts):
+    """Retain original physical attempts separately, without their local text."""
+    from amplifier_web.update_diagnostics import command_attempts, probe_record, PROBE_PREFIX
+    if type(facts) is not dict:
+        return {'status': 'unavailable', 'attempts': []}
+    attempts = facts.get('commandAttempts', [facts])
+    if type(attempts) is not list or not 1 <= len(attempts) <= 2:
+        return {'status': 'unavailable', 'attempts': []}
+    result = []
+    for attempt in attempts:
+        if type(attempt) is not dict:
+            return {'status': 'unavailable', 'attempts': []}
+        clean, = command_attempts([attempt]) or [{}]
+        raw_probe = attempt.get('probe')
+        if type(raw_probe) is dict:
+            # Revalidate the existing closed producer facts, not stdout or
+            # local_command_details. Fixed frame bound still applies.
+            clean['probe'] = probe_record(PROBE_PREFIX + json.dumps(raw_probe))
+        result.append(clean)
+    return {'status': 'observed', 'anonymousRetry': facts.get('anonymousRetry') is True,
+            'gitCacheRetry': facts.get('gitCacheRetry') is True, 'attempts': result}
 
 
 @pytest.mark.parametrize('fault', [None, 'missing', 'oversize', 'link', 'private-package'])
@@ -234,6 +264,57 @@ async def test_observed_probe_preserves_actual_call_outcome_and_pre_teardown_fil
     shutil.rmtree(root)
     assert row['before']['pyproject.toml']['status'] == 'observed'
     assert str(tmp_path) not in json.dumps(row) and 'PRIVATE' not in json.dumps(row)
+
+
+@pytest.mark.parametrize('ending', ['success', 'failure'])
+async def test_observed_probe_keeps_original_anonymous_retry_and_two_attempts(tmp_path, monkeypatch, ending):
+    from amplifier_web import updates
+    from amplifier_web.update_diagnostics import CommandFailure
+    monkeypatch.delenv('AMPLIFIER_GITHUB_ACCESS', raising=False)
+    monkeypatch.setattr(updates.update_uv_cache, 'for_command', lambda *args: None)
+    root = tmp_path / 'prepare'
+    root.mkdir()
+    (root / 'pyproject.toml').write_text('declared')
+    (root / 'uv.lock').write_text('[[package]]\nname=\"example\"\nversion=\"1\"')
+    original, create = updates.process, asyncio.create_subprocess_exec
+    calls, rows = [], []
+    async def synthetic(*args, **kwargs):
+        calls.append((args, kwargs.get('env')))
+        assert args.count('--observe-import-origins') == 1
+        if len(calls) == 1:
+            code = 'print(\\'AMPLIFIER_UPDATE_PROBE={"ok":false,"repositoryAccessFailure":true}\\');raise SystemExit(128)'
+        elif ending == 'success':
+            code = 'print(\\'AMPLIFIER_UPDATE_PROBE={"ok":true,"stage":"complete"}\\')'
+        else:
+            code = 'print(\\'AMPLIFIER_UPDATE_PROBE={"ok":false,"stage":"prepare"}\\');raise SystemExit(9)'
+        return await create(sys.executable, '-I', '-S', '-c', code, **kwargs)
+    async def wrapper(*args, **settings):
+        if '--observe-import-origins' in args:
+            assert settings.get('_redaction_env') is not None
+            return await original(*args, **settings)
+        row = {}
+        rows.append(row)
+        return await observed_probe(original, args, settings, row)
+    monkeypatch.setattr(updates.asyncio, 'create_subprocess_exec', synthetic)
+    monkeypatch.setattr(updates, 'process', wrapper)
+    args = ('uv', 'run', '--project', str(root), 'python', 'update_probe.py')
+    if ending == 'failure':
+        with pytest.raises(CommandFailure) as caught:
+            await updates.process(*args, timeout=15)
+        value = caught.value
+    else:
+        value = await updates.process(*args, timeout=15)
+    assert len(calls) == 2 and len(rows) == 1
+    assert all(call[0] == args + ('--observe-import-origins',) for call in calls)
+    assert value.diagnostic_facts['anonymousRetry'] is True
+    result = rows[0]['command']
+    assert result['anonymousRetry'] and not result['gitCacheRetry']
+    assert [attempt['exitCode'] for attempt in result['attempts']] == [128, 0 if ending == 'success' else 9]
+    assert result['attempts'][0]['probe']['repositoryAccessFailure'] is True
+    assert result['attempts'][1]['probe']['ok'] is (ending == 'success')
+    assert rows[0]['status'] == ('returned' if ending == 'success' else 'failed')
+    assert rows[0]['importOrigins'] is None  # No synthetic origin proof invented.
+    assert str(tmp_path) not in json.dumps(rows) and 'local_command_details' not in json.dumps(rows)
 
 
 def test_native_provenance_keeps_original_path_cancel_and_private_output_boundaries():
@@ -824,6 +905,9 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
 
     async def process_after_the_helper(*args, **settings):
         if '--project' in args and any(Path(str(value)).name == 'update_probe.py' for value in args):
+            if '--observe-import-origins' in args:
+                assert settings.get('_redaction_env') is not None
+                return await app_process(*args, **settings)
             environment = Path(args[args.index('--project') + 1])
             if environment.name not in helper_times:
                 try:
@@ -1059,6 +1143,12 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         assert generated['uv.lock']['sha256'] == recorded['runtime.lock']['sha256']
         for observed in (preparation, compatibility):
             assert observed['status'] == 'returned' and complete_probe_origins(observed['importOrigins'])
+            command = observed['command']
+            assert command['status'] == 'observed' and 1 <= len(command['attempts']) <= 2
+            final_attempt = command['attempts'][-1]
+            assert final_attempt.get('exitCode') == 0
+            assert not any(final_attempt.get(key) for key in ('timedOut', 'outputLimitExceeded', 'stdoutTruncated', 'stderrTruncated'))
+            assert complete_probe_origins(final_attempt.get('probe', {}).get('importOrigins'))
             assert observed['importOrigins']['phase'] == (
                 'dependency-prepare' if observed is preparation else 'compatibility')
             assert all(row['status'] == 'observed' for row in observed['before'].values())

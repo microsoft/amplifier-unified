@@ -127,6 +127,8 @@ def complete_probe_origins(value):
     if value is None:
         return False
     samples = value['samples']
+    if any(row['status'] == 'unavailable' for row in samples[-1]['modules'].values()):
+        return False
     required = PROBE_ORIGIN_MODULES if value['phase'] == 'compatibility' else PROBE_ORIGIN_MODULES[:3]
     if any(samples[-1]['modules'][name]['status'] != 'observed' for name in required):
         return False
