@@ -12,6 +12,8 @@ async def test_guidance_requires_trusted_role_and_installs_once(role):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
     from amplifier_core import HookRegistry
+    from amplifier_web.memory_delivery import ORIENTATION as memory_hint, USE_GUIDE
+    from amplifier_web.surface_delivery import ORIENTATION as surface_hint, READ_GUIDE
     from amplifier_web.app_guidance import COMMON_GUIDANCE, execution_guidance, install_app_access
     from amplifier_web.coordination_guidance import READ_GUIDANCE, PLANNING_GUIDANCE, NATIVE_CHILD_GUIDANCE
 
@@ -37,6 +39,8 @@ async def test_guidance_requires_trusted_role_and_installs_once(role):
     assert (PLANNING_GUIDANCE in injection) is (role == 'root')
     assert (NATIVE_CHILD_GUIDANCE in injection) is (role == 'native_child')
     assert execution_guidance(role) in injection
+    assert surface_hint in injection and memory_hint in injection
+    assert READ_GUIDE not in injection and USE_GUIDE not in injection
     bridge.assert_not_awaited()
 
 

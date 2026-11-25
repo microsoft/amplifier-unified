@@ -472,7 +472,9 @@ rather than duplicating a port or build campaign.
    Do not use a moving branch or generate a replacement client lock.
 3. Use the existing [prepare, test and build workflow](#prepare-test-and-build)
    and [release policy](../docs/validation/release-qualification.md) for affected
-   checks. Preparation verifies the exact selection; build and `verify` check
+   checks. Preparation verifies the exact selection and composes both browser
+   registries. Include each selected client and host scenario once in the host
+   registry's `scenarioOrder`. Build and `verify` check
    artifact provenance. Neither `.build/web-client` nor `amplifier_web/static`
    is an alternative source owner. Released wheel/sdist installs use their
    included assets without Git, Node or a client source fetch.
