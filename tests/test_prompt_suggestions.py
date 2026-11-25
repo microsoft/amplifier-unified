@@ -223,12 +223,69 @@ class Requests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(Unavailable, 'input_not_settled'):
                     witness(self.app, 'chat', self.config)
                 self.assertNotIn('inputStatus', pending)  # Annotation remains a projection.
-                completed = {'id': 'completed-later', 'role': 'assistant', 'text': 'Later settled reply'}
+                completed = {'id': 'completed-later', 'role': 'assistant', 'text': 'Later settled reply',
+                             'sourceMessageId': 'human'}
                 rows.append(completed)
                 witness(self.app, 'chat', self.config)  # Old failed input is not a permanent hold.
                 projected = public_rows(display_inputs(self.app, self.app.session, rows))
                 self.assertEqual(projected[-1]['id'], 'completed-later')
                 self.assertFalse({'saved-input', 'partial', 'observation'} & {row['id'] for row in projected})
+
+    async def test_resident_unsettled_nonhuman_boundary_never_inherits_previous_human(self):
+        original = self.app.session['messages']
+        for phase in ('unknown', 'failed'):
+            for actor in ('agent', 'system'):
+                with self.subTest(phase=phase, actor=actor):
+                    unrelated = {'id': f'{phase}-{actor}', 'role': 'assistant', 'text': 'Not a human reply.'}
+                    self.app.session['messages'] = original + [
+                        {'id': 'control', 'role': 'user', 'inputActor': {'kind': actor},
+                         'text': 'Private coordination.', 'delivery': {'status': phase}}, unrelated]
+                    empty = await self.terminal_request(unrelated['id'], expectedLastMessageId=unrelated['id'])
+                    self.assertEqual((empty['status'], empty['reason'], empty['generationId']),
+                                     ('empty', None, None))
+        self.assertEqual(self.calls, [])
+        self.app.session['messages'].append(
+            {'id': 'linked', 'role': 'assistant', 'sourceMessageId': original[0]['id'],
+             'text': 'An exact reply to the earlier human input.'})
+        ready = await self.terminal_request('linked', expectedLastMessageId='linked')
+        self.assertEqual(ready['status'], 'ready')
+        self.assertEqual([row['id'] for row in self.calls[0]], ['human', 'assistant', 'linked'])
+        self.assertEqual(len(self.calls), 1)
+
+    async def test_native_unsettled_peer_boundary_never_inherits_previous_human(self):
+        root = Path(self.tmp.name)
+        path = root / 'transcript.jsonl'
+        def user(text, identity):
+            return {'role': 'user', 'content': text, 'metadata': {'amplifier_input': {
+                'version': 1, 'kind': 'user', 'id': identity, 'source': 'user'}}}
+        raw = [user('Real human question.', 'human-input'), {'role': 'assistant', 'content': 'Real answer.'},
+               user('Peer-only coordination.', 'peer-input'), {'role': 'assistant', 'content': 'Unlinked peer reply.'}]
+        path.write_text(''.join(json.dumps(row) + '\n' for row in raw))
+        self.app.db.execute('CREATE TABLE commands (id TEXT PRIMARY KEY, receipt TEXT)')
+        self.app.db.execute('INSERT INTO commands VALUES (?,?)', ('peer-input', json.dumps({
+            'commandAction': 'coordination.send', 'origin': 'agent'})))
+        self.app.session.update(historyManaged=True, nativeProject=str(root), nativeIdentity='chat')
+        with patch('amplifier_web.automatic_history.directory', return_value=root):
+            page = await self.app.history.windows.read('chat', limit=20)
+            last = page['items'][-1]['id']
+            for phase in ('unknown', 'failed'):
+                with self.subTest(phase=phase):
+                    self.app.session['messageAnnotations'] = {'input-status:peer-input': {
+                        'inputStatus': {'version': 1, 'inputId': 'peer-input', 'phase': phase,
+                                        'basis': 'execution_observed'}}}
+                    empty = await self.terminal_request(phase, expectedLastMessageId=last)
+                    self.assertEqual((empty['status'], empty['reason'], empty['generationId']),
+                                     ('empty', None, None))
+            self.assertEqual(self.calls, [])
+            with path.open('a') as stream:
+                for row in (user('A new human question.', 'next-human'),
+                            {'role': 'assistant', 'content': 'New genuine answer.'}):
+                    stream.write(json.dumps(row) + '\n')
+            page = await self.app.history.windows.read('chat', limit=20)
+            ready = await self.terminal_request('real-later-turn', expectedLastMessageId=page['items'][-1]['id'])
+            self.assertEqual(ready['status'], 'ready')
+        self.assertEqual([[row['text'] for row in call] for call in self.calls], [[
+            'Real human question.', 'Real answer.', 'A new human question.', 'New genuine answer.']])
 
     async def test_ready_retains_source_after_clock_expiry_and_reuses_new_audience_without_provider(self):
         async def reported(*args):
@@ -881,7 +938,7 @@ class Requests(unittest.IsolatedAsyncioTestCase):
                     {'id': 'human', 'inputId': 'external-' + participation, 'role': 'user',
                      'text': 'Accepted external human ' + participation, 'inputOrigin': 'ui',
                      'delivery': {'status': 'accepted', 'scope': 'conversation'}, 'roomSequence': 1},
-                    {'id': 'assistant', 'role': 'assistant', 'text': 'External response',
+                    {'id': 'assistant', 'role': 'assistant', 'text': 'External response ' + participation,
                      'agentId': 'agent-a', 'agentLabel': 'Agent A', 'roomSequence': 2}]
                 with patch('amplifier_web.input_status.annotate', side_effect=AssertionError('native progress')):
                     self.assertEqual((await self.request(participation))['status'], 'pending')
@@ -900,15 +957,15 @@ class Requests(unittest.IsolatedAsyncioTestCase):
              'inputActor': {'kind': 'agent', 'id': 'agent-b'}},
             {'id': 'system', 'role': 'user', 'text': 'System input', 'inputOrigin': 'ui',
              'inputActor': {'kind': 'system', 'id': 'host'}},
-            {'id': 'legacy', 'role': 'user', 'text': 'Unknown legacy input'}]
-        self.config['humanTurns'] = 1
+            {'id': 'legacy', 'role': 'user', 'text': 'Unknown legacy input'},
+            {'id': 'human-latest', 'role': 'user', 'text': 'Real latest input', 'inputOrigin': 'ui'}]
         await self.request()
         await self.settle()
         self.assertEqual((await self.status())['status'], 'ready')
         self.assertEqual([row['inputActor']['kind'] for row in self.calls[0]],
-                         ['human', 'agent', 'system', 'unknown', 'agent'])
-        self.assertEqual([row['text'] for row in self.calls[0]][1:4],
-                         ['Agent says go', 'System input', 'Unknown legacy input'])
+                         ['human', 'human', 'agent'])
+        self.assertEqual([row['text'] for row in self.calls[0]][1:],
+                         ['Real latest input', 'The plan is ready.'])
 
     async def test_native_peer_voice_and_legacy_provenance_exact_outbound_projection(self):
         from amplifier_web.voice_input_projection import PREFIX, START, END
@@ -931,7 +988,6 @@ class Requests(unittest.IsolatedAsyncioTestCase):
             messageAnnotations={'input-status:' + identity: {'inputStatus': {
                 'version': 1, 'inputId': identity, 'phase': 'done', 'basis': 'generation_finished'}}
                 for identity in ('human-input', 'peer-input', 'system-input', 'voice:call:request')})
-        self.config['transcriptMode'] = 'full'
         with patch('amplifier_web.automatic_history.directory', return_value=root):
             ordinary = await self.app.history.windows.read('chat', limit=100)
             last = ordinary['items'][-1]['id']
@@ -940,10 +996,9 @@ class Requests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.status())['status'], 'ready')
         outbound = self.calls[0]
         self.assertEqual([row['text'] for row in outbound],
-                         ['Known human', 'Peer input', 'System actor', 'Legacy unknown',
-                          'Current spoken request', 'Completed reply'])
+                         ['Known human', 'Current spoken request', 'Completed reply'])
         self.assertEqual([row['inputActor']['kind'] for row in outbound],
-                         ['human', 'agent', 'system', 'unknown', 'human', 'agent'])
+                         ['human', 'human', 'agent'])
         self.assertNotIn('PRIVATE REFERENCE', repr(outbound))
         await self.host.close()
         await self.app.history.windows.close()
@@ -978,6 +1033,41 @@ class Requests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(windows.project(self.app.session), before)
             again = await windows.read('chat', limit=20)
             self.assertEqual(again, ordinary)
+
+    async def test_native_older_gap_before_exchange_does_not_allow_peer_reply_or_stale_cache(self):
+        from amplifier_web.transcript_window import RECORD_LIMIT
+        root = Path(self.tmp.name)
+        path = root / 'transcript.jsonl'
+        def user(text, identity, source='user'):
+            return {'role': 'user', 'content': text, 'metadata': {'amplifier_input': {
+                'version': 1, 'kind': 'user', 'id': identity, 'source': source}}}
+        old = [user('Older prefix that is not covered', 'old'),
+               {'role': 'tool', 'content': 't' * RECORD_LIMIT}]
+        exchange = [user('First real request', 'human'),
+                    user('Do not send peer content', 'peer', 'agent'),
+                    {'role': 'assistant', 'content': 'Do not send the peer-only reply'},
+                    user('Next real request', 'new-human'),
+                    {'role': 'assistant', 'content': 'Here is the complete latest reply.'}]
+        path.write_text(''.join(json.dumps(row) + '\n' for row in old + exchange))
+        self.app.db.execute('CREATE TABLE commands (id TEXT PRIMARY KEY, receipt TEXT)')
+        self.app.session.update(historyManaged=True, nativeProject=str(root), nativeIdentity='chat')
+        with patch('amplifier_web.automatic_history.directory', return_value=root):
+            page = await self.app.history.windows.read('chat', limit=20)
+            self.assertTrue(page['unavailableRanges'])
+            last = page['items'][-1]['id']
+            self.assertEqual((await self.terminal_request('after-old-gap', expectedLastMessageId=last))['status'],
+                             'ready')
+            self.assertEqual([row['text'] for row in self.calls[0]], [
+                'First real request', 'Next real request', 'Here is the complete latest reply.'])
+            with path.open('a') as stream:
+                for row in (user('Newest peer input', 'peer-tail', 'agent'),
+                            {'role': 'assistant', 'content': 'Peer-only reply at the latest tail.'}):
+                    stream.write(json.dumps(row) + '\n')
+            self.assertEqual((await self.status('after-old-gap'))['status'], 'stale')
+            page = await self.app.history.windows.read('chat', limit=20)
+            latest = await self.terminal_request('peer-tail', expectedLastMessageId=page['items'][-1]['id'])
+            self.assertEqual((latest['status'], latest['generationId']), ('empty', None))
+            self.assertEqual(len(self.calls), 1)
 
     async def test_conflicting_request_id_is_rejected(self):
         await self.request()
@@ -1107,9 +1197,9 @@ class Requests(unittest.IsolatedAsyncioTestCase):
             ('created', self.app.session, {'createdAt': 123}),
             ('stop', self.app.session, {'interruptionRevision': 1}),
             ('rows_id', self.app.session['messages'][-1], {'id': 'SECRET id'}),
-            ('rows_role', self.app.session['messages'][-1], {'role': 'user'}),
+            ('rows_count', self.app.session['messages'][-1], {'role': 'user'}),
             ('rows_text', self.app.session['messages'][-1], {'text': 'SECRET candidate'}),
-            ('rows_actor', self.app.session['messages'][-1], {'inputActor': {'kind': 'system', 'id': 'SECRET actor'}}),
+            ('rows_actor', self.app.session['messages'][-1], {'inputActor': {'kind': 'agent', 'id': 'SECRET actor'}}),
             ('rows_label', self.app.session['messages'][-1], {'agentLabel': 'SECRET label'}),
         ]
         for name, target, values in cases:
@@ -1165,9 +1255,9 @@ class Requests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invisible_terminal_metadata_and_generic_save_do_not_stale_resident_capture(self):
         windows = self.app.history.windows
-        original = windows.read
+        from amplifier_web.suggestion_source import capture
         async def read_then_account(*args, **kwargs):
-            page = await original(*args, **kwargs)
+            page = await capture(*args, **kwargs)
             # Same invalidation invoked by service._save and session.naming /
             # runtime.ended events; none of these changes the public input.
             windows.invalidate({'chat'})
@@ -1175,7 +1265,7 @@ class Requests(unittest.IsolatedAsyncioTestCase):
             self.app.session['messages'].append({'id': 'checkpoint', 'role': 'system',
                                                 'text': 'Private checkpoint', 'visibility': 'internal'})
             return page
-        with patch.object(windows, 'read', side_effect=read_then_account):
+        with patch('amplifier_web.prompt_suggestions.capture', side_effect=read_then_account):
             pending = await self.request()
             await self.settle()
         ready = await self.status()
@@ -1347,13 +1437,13 @@ class Source(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             app = Service(Path(root))
             try:
-                config = {'transcriptMode': 'last_n', 'humanTurns': 6}
+                config = {'_inputBudget': 1000}
                 def old_resident():
                     session = app.session
                     owner = [_source(session), session.get('archived'), session.get('_deleting'),
                              session.get('status') in {'idle', 'ready'}, session.get('interruptionRevision')]
-                    return digest([owner, public_rows(select(public_rows(session['messages'], bounded=False),
-                                                             config, False))])
+                    return digest([owner, ('assistant', 'assistant'),
+                                   select(public_rows(session['messages']), config['_inputBudget'])])
                 baseline = {}
                 self.assertEqual(witness(app, 'chat', config, components=baseline), old_resident())
                 self.assertEqual(witness(app, 'chat', config), old_resident())
@@ -1378,21 +1468,21 @@ class Source(unittest.TestCase):
                 app.db.close()
 
     def test_sanitizes_closed_and_unclosed_host_envelopes_payloads_and_nonhuman_inputs(self):
-        rows = public_rows([
-            {'id': '1', 'role': 'user', 'text': '<system-reminders>PRIVATE</system-reminders> Human'},
-            {'id': '2', 'role': 'user', 'text': 'Visible <context_file path="x">FILE'},
+        rows = select(public_rows([
+            {'id': '1', 'role': 'user', 'inputOrigin': 'ui', 'text': '<system-reminders>PRIVATE</system-reminders> Human'},
+            {'id': '2', 'role': 'user', 'inputOrigin': 'ui', 'text': 'Visible <context_file path="x">FILE'},
             {'id': '3', 'role': 'user', 'text': 'data:image/png;base64,PRIVATE', 'inputOrigin': 'approval'},
             {'id': '4', 'role': 'user', 'text': 'Scheduled', 'scheduledRunId': 'run'},
-        ])
-        self.assertEqual(rows[0]['text'], 'Human')
-        self.assertEqual(rows[1]['text'], 'Visible')
+            {'id': '5', 'role': 'assistant', 'sourceMessageId': '2', 'text': 'Reply data:image/png;base64,PRIVATE'},
+        ]), 1000)
+        self.assertEqual(rows[0]['text'].strip(), 'Human')
+        self.assertEqual(rows[1]['text'].strip(), 'Visible')
         self.assertNotIn('PRIVATE', repr(rows))
-        self.assertTrue(rows[2]['agentId'])
-        self.assertTrue(rows[3]['agentId'])
+        self.assertEqual([row['id'] for row in rows], ['1', '2', '5'])
 
     def test_private_roles_delivery_recovery_and_labels(self):
         rows = [
-            {'id': 'human', 'role': 'user', 'text': 'Public human'},
+            {'id': 'human', 'role': 'user', 'inputOrigin': 'ui', 'text': 'Public human'},
             {'id': 'agent', 'role': 'assistant', 'text': 'Public agent', 'agentId': 'other', 'agentLabel': 'Agent B'},
             {'id': 'system', 'role': 'system', 'text': 'SYSTEM'},
             {'id': 'private', 'role': 'assistant', 'text': 'PRIVATE', 'visibility': 'internal'},
@@ -1404,24 +1494,12 @@ class Source(unittest.TestCase):
         self.assertEqual([r['id'] for r in result], ['human', 'agent'])
         self.assertEqual(result[-1]['agentLabel'], 'Agent B')
 
-    def test_human_turn_window_counts_humans_not_agent_user_roles(self):
-        rows = [{'id': str(i), 'role': 'user', 'text': str(i), 'inputOrigin': 'ui'} for i in range(9)]
-        rows.insert(8, {'id': 'agent', 'role': 'user', 'agentId': 'bot', 'text': 'agent input'})
-        selected = select(rows, {'transcriptMode': 'last_n', 'humanTurns': 2}, True)
-        self.assertEqual([r['id'] for r in selected], ['7', 'agent', '8'])
-        self.assertEqual(select(rows, {'transcriptMode': 'last_n', 'humanTurns': 20}, False), rows)
-        with self.assertRaises(Unavailable):
-            select(rows, {'transcriptMode': 'full'}, True)
-        with self.assertRaises(Unavailable):
-            select(rows, {'transcriptMode': 'last_n', 'humanTurns': 20}, True)
-
-    def test_independent_byte_and_row_limits(self):
-        with self.assertRaises(Unavailable):
-            public_rows([{'id': 'x', 'role': 'assistant', 'text': 'x' * 25000}])
-        with self.assertRaises(Unavailable):
-            public_rows([{'id': str(i), 'role': 'user', 'text': 'x'} for i in range(101)])
-        with self.assertRaises(Unavailable):
-            public_rows([{'id': 'x', 'role': 'assistant', 'text': '😀' * 7000}])
+    def test_latest_whole_reply_is_never_replaced_by_older_exchange(self):
+        rows = [{'id': str(i), 'role': role, 'text': text} for i, (role, text) in enumerate([
+            ('user', 'Older input'), ('assistant', 'Older reply'), ('user', 'Newest input'),
+            ('assistant', 'x' * 25000 + '\nExact final line.')])]
+        self.assertEqual(select(rows, 100), [])
+        self.assertEqual(select(rows, 8365), rows[-2:])
 
     def test_native_canonical_private_block_filter_preserves_display_id(self):
         with tempfile.TemporaryDirectory() as root:
@@ -1448,13 +1526,14 @@ class Source(unittest.TestCase):
             def __iter__(self):
                 raise AssertionError('whole-history iteration')
             def __getitem__(self, key):
-                if isinstance(key, slice):
-                    assert key.start >= len(self) - 100
+                assert not isinstance(key, slice)
+                assert key == -1 or key >= len(self) - 512
                 return super().__getitem__(key)
         with tempfile.TemporaryDirectory() as root:
             app = Service(Path(root))
             app.session['messages'] = Tail(
-                [{'id': str(i), 'role': 'user', 'text': 'x'} for i in range(36000)])
+                [{'id': str(i), 'role': 'user', 'inputOrigin': 'ui', 'text': 'x'} for i in range(35999)]
+                + [{'id': 'last', 'role': 'assistant', 'text': 'answer'}])
             first = witness(app, 'chat')
             app.session['messages'][-1]['text'] = 'changed same id'
             self.assertNotEqual(first, witness(app, 'chat'))
@@ -1465,7 +1544,7 @@ class Provider(unittest.IsolatedAsyncioTestCase):
         provider = SimpleNamespace(complete=AsyncMock(return_value=SimpleNamespace(
             content=[SimpleNamespace(type='text', text='{"suggestion":"Please continue."}')],
             usage={'input_tokens': 10, 'output_tokens': 6})))
-        result = await complete(provider, {}, 'explicit', [{'role': 'user', 'text': 'test'}], {})
+        result = await complete(provider, {}, 'explicit', 'Human:\ntest\n\nAssistant:\nreply', {})
         self.assertEqual(result['suggestion'], 'Please continue.')
         self.assertEqual(result['usage']['input_tokens'], 10)
         self.assertIsNone(result['cost'])
@@ -1480,6 +1559,7 @@ class Provider(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(request.reasoning_effort)
         self.assertNotIn('extended_thinking', provider.complete.call_args.kwargs)
         self.assertEqual(request.messages[0].content, INSTRUCTION + '\n\n' + OUTPUT_CONTRACT)
+        self.assertEqual(request.messages[1].content, 'Human:\ntest\n\nAssistant:\nreply')
 
     async def test_saved_prompt_is_literal_fixed_contract_separate_and_effort_uses_portable_options(self):
         prompt = 'Experiment with {transcript} and ${ENV}: prefer one concrete question.\nKeep this literal.'
@@ -1889,6 +1969,226 @@ class Parsing(unittest.TestCase):
 
 
 class Integration(unittest.IsolatedAsyncioTestCase):
+    async def test_cold_unsettled_nonhuman_boundary_never_inherits_previous_human(self):
+        await self.app.dispatch('session.create', {}, include_state=False)
+        session = self.app._session()
+        sid = session['id']
+        host = self.app.prompt_suggestions
+        host.settings = lambda: ({'enabled': True, 'provider': 'fixture', 'model': 'fixture'},
+                                  {'id': 'fixture'}, 'revision')
+        host.complete = AsyncMock(return_value={'status': 'ready', 'suggestion': 'A follow-up.',
+                                               'usage': None, 'cost': None})
+        self.app.clients.attach('cold-provenance-browser', kind='web')
+        client = self.app.clients.records['cold-provenance-browser']
+        token = BROWSER.set({'principal': 'cookie', 'valid': lambda: True})
+        async def request(reply):
+            client['selectedSessionId'] = sid
+            args = {'sessionId': sid, 'requestId': reply}
+            await host.dispatch('session.suggestion.request', {**args, 'expectedLastMessageId': reply}, 'ui')
+            await asyncio.gather(*tuple(host.jobs))
+            return await host.dispatch('session.suggestion.status', args, 'ui')
+        try:
+            with self.app.clients.bind('cold-provenance-browser'):
+                for phase in ('unknown', 'failed'):
+                    with self.subTest(phase=phase):
+                        session.update(status='idle', historyManaged=False, messages=[
+                            {'id': 'noise', 'role': 'tool', 'text': 'Synthetic tool output. ' * 800},
+                            {'id': 'human', 'role': 'user', 'inputOrigin': 'ui', 'text': 'Real question.'},
+                            {'id': 'answer', 'role': 'assistant', 'text': 'Real answer.'},
+                            {'id': 'control', 'role': 'user', 'inputActor': {'kind': 'system'},
+                             'text': 'Private control input.', 'delivery': {'status': phase}},
+                            {'id': phase, 'role': 'assistant', 'text': 'Unlinked control-only reply.'}])
+                        self.app._publish_changes(sessions={sid})
+                        self.app._state['selectedSessionId'] = None
+                        client['selectedSessionId'] = None
+                        with patch.object(self.app.cold_display, 'RECENT_LIMIT', 0):
+                            self.assertIn(sid, self.app.cold_display.retire(force=True))
+                        self.assertFalse(dict.__contains__(session, 'messages'))
+                        empty = await request(phase)
+                        self.assertEqual((empty['status'], empty['reason'], empty['generationId']),
+                                         ('empty', None, None))
+                        self.assertFalse(dict.__contains__(session, 'messages'))
+                        self.app.cold_display.hydrate(session)
+                host.complete.assert_not_awaited()
+                session['messages'].extend([
+                    {'id': 'next-human', 'role': 'user', 'inputOrigin': 'ui', 'text': 'Next real question.'},
+                    {'id': 'next-answer', 'role': 'assistant', 'text': 'Next real answer.'}])
+                self.app._publish_changes(sessions={sid})
+                self.app._state['selectedSessionId'] = None
+                client['selectedSessionId'] = None
+                with patch.object(self.app.cold_display, 'RECENT_LIMIT', 0):
+                    self.assertIn(sid, self.app.cold_display.retire(force=True))
+                self.assertEqual((await request('next-answer'))['status'], 'ready')
+                host.complete.assert_awaited_once()
+                self.assertEqual([row['id'] for row in host.complete.call_args.args[2]],
+                                 ['human', 'answer', 'next-human', 'next-answer'])
+                self.assertFalse(dict.__contains__(session, 'messages'))
+        finally:
+            BROWSER.reset(token)
+
+    async def test_existing_paid_claim_does_not_block_untouched_older_chat_after_explicit_consent(self):
+        from amplifier_web.service import AppService
+        from amplifier_web.suggestion_settings import digest
+        manager = self.app.prompt_suggestions.manager
+        manager.store.update(self.root, 'global', lambda value: value.update(
+            config={'providers': [{'id': 'saved', 'module': 'provider-openai',
+                                   'config': {'api_key': 'synthetic'}}]},
+            prompt_suggestions={'enabled': True, 'transcriptMode': 'full', 'humanTurns': 6,
+                                'provider': 'saved', 'model': 'exact', 'effort': None, 'prompt': 'Keep me.'}))
+        await self.app.dispatch('session.create', {}, include_state=False)
+        session = self.app._session()
+        sid = session['id']
+        session.update(status='idle', historyManaged=False, messages=[
+            {'id': 'user-before-upgrade', 'role': 'user', 'text': 'An old question.', 'inputOrigin': 'ui'},
+            {'id': 'old-reply', 'role': 'assistant', 'text': 'An old answer.'}])
+        self.app._publish_changes(sessions={sid})
+        await self.app.dispatch('settings.update', {'patch': {'suggestedMessages': True}}, include_state=False)
+        self.app.clients.attach('upgrade-browser', kind='web')
+        device = self.app.clients.records['upgrade-browser'].get('deviceOwner', 'local-owner')
+        audience = digest(['cookie', device, 'upgrade-browser'])
+        old_identity = digest([audience, sid, 'old-request'])
+        self.app.db.execute('INSERT INTO suggestion_requests VALUES (?,?)', (old_identity, 'prior-paid-hash'))
+        self.app.db.commit()
+        await self.app.close()
+        self.app = AppService(self.root / 'app', self.runtime, workspace=self.root)
+        host = self.app.prompt_suggestions
+        manager = host.manager
+        host.complete = AsyncMock(return_value={'status': 'ready', 'suggestion': 'Please continue.',
+                                               'usage': None, 'cost': None})
+        self.app.clients.attach('upgrade-browser', kind='web')
+        self.app.clients.records['upgrade-browser']['selectedSessionId'] = sid
+        token = BROWSER.set({'principal': 'cookie', 'valid': lambda: True})
+        authority = {'scope': 'global', 'configurationTarget': {'kind': 'global'}}
+        async def save(**change):
+            return (await self.app.dispatch('providers.configureSuggestions', {**authority, **change},
+                                            include_state=False))['result']['suggestionModels']
+        async def request(name):
+            args = {'sessionId': sid, 'requestId': name}
+            await host.dispatch('session.suggestion.request', {**args, 'expectedLastMessageId': 'old-reply'}, 'ui')
+            await asyncio.gather(*tuple(host.jobs))
+            return await host.dispatch('session.suggestion.status', args, 'ui')
+        try:
+            with self.app.clients.bind('upgrade-browser'):
+                config = describe(manager, self.root)
+                self.assertEqual((config['enabled'], config['model'], config['prompt']), (False, 'exact', 'Keep me.'))
+                self.assertNotIn('transcriptMode', config)
+                self.assertNotIn('humanTurns', config)
+                self.assertTrue(self.app.state['settings']['suggestedMessages'])
+                self.assertEqual((await request('before-consent'))['status'], 'disabled')
+                before = manager.store.path(self.root, 'global').read_bytes()
+                with self.assertRaisesRegex(Exception, 'confirm recent conversation sharing'):
+                    await save(enabled=True, expectedSuggestionModelsRevision=config['revision'])
+                self.assertEqual(manager.store.path(self.root, 'global').read_bytes(), before)
+                self.assertFalse((await save(prompt='Only change instructions.'))['enabled'])
+                with self.assertRaises(Exception):
+                    await save(enabled=True, shareRecentConversation=True,
+                               expectedSuggestionModelsRevision=config['revision'])
+                self.assertTrue((await save(enabled=True, shareRecentConversation=True,
+                    expectedSuggestionModelsRevision=describe(manager, self.root)['revision']))['enabled'])
+                self.assertEqual((await request('old-request'))['status'], 'expired')
+                host.complete.assert_not_called()
+                self.assertEqual((await request('new-consent-older-chat'))['status'], 'ready')
+                self.assertTrue((await request('revisit'))['reused'])
+                host.complete.assert_awaited_once()
+                self.assertEqual(self.app.db.execute(
+                    'SELECT source FROM suggestion_requests WHERE identity=?', (old_identity,)).fetchone(),
+                    ('prior-paid-hash',))
+        finally:
+            BROWSER.reset(token)
+
+    async def test_peer_heavy_cold_snapshot_uses_exact_selected_context_and_latest_whole_reply(self):
+        from amplifier_web.provider_catalog import model_key
+        from amplifier_web.suggestion_provider import estimate_tokens
+        host = self.app.prompt_suggestions
+        manager = host.manager
+        manager.store.update(self.root, 'global', lambda settings: settings.update(config={'providers': [
+            {'id': account, 'module': 'provider-openai', 'config': {'api_key': 'synthetic-' + account}}
+            for account in ('saved', 'other')]}))
+        configure(manager, {'enabled': True, 'shareRecentConversation': True, 'provider': 'saved',
+                            'model': 'utility'}, self.root, 'global')
+        key = model_key(manager.catalog_key({'id': 'saved'}, str(self.app.data_dir)))
+        other = model_key(manager.catalog_key({'id': 'other'}, str(self.app.data_dir)))
+        def catalog(which, window):
+            manager.catalog.put(which, {'models': [{'id': 'utility', 'context_window': window}],
+                'modelsSupported': True, 'modelsProvenance': 'provider-api',
+                'providerMetadata': {'module': 'provider-openai'}})
+        catalog(other, 500_000)
+        catalog(key, 128_000)
+
+        await self.app.dispatch('session.create', {}, include_state=False)
+        session = self.app._session()
+        sid = session['id']
+        prefix = [{'id': f'old-{i}', 'role': 'tool', 'text': 'Old tool output'} for i in range(530)]
+        exchange = []
+        for i in range(6):
+            exchange.extend([
+                {'id': f'ask-{i}', 'role': 'user', 'via': 'chat', 'inputOrigin': 'ui',
+                 'inputActor': {'kind': 'human', 'id': 'PRIVATE-ID'}, 'createdAt': 10 + i,
+                 'text': f'Question {i}: what is the next step?'},
+                {'id': f'reply-{i}', 'role': 'assistant', 'source': 'amplifier', 'via': 'chat',
+                 'agentLabel': 'PRIVATE-LABEL', 'createdAt': 20 + i,
+                 'text': f'Reply {i}:\n' + 'Review the staged results before continuing. ' * 1500
+                         + f'\nComplete final line {i}.'}])
+        noise = []
+        for i in range(46):
+            noise.extend([
+                {'id': f'peer-{i}', 'inputId': f'peer-input-{i}', 'role': 'user', 'inputOrigin': 'agent',
+                 'text': 'PEER TASK PAYLOAD', 'peerEnvelope': {'senderSessionId': 'other-chat'}},
+                {'id': f'peer-reply-{i}', 'inputId': f'peer-input-{i}', 'role': 'assistant',
+                 'text': 'PEER-ONLY REPLY'},
+                {'id': f'tool-{i}', 'role': 'tool', 'text': 'TOOL PAYLOAD'}])
+        # Retirement must not disconnect any borrowed nested mutable rows.
+        session.update(status='idle', historyManaged=False, messages=copy.deepcopy(prefix + exchange[:10] + noise + exchange[10:]))
+        self.app._publish_changes(sessions={sid})
+        self.app._state['selectedSessionId'] = None
+        with patch.object(self.app.cold_display, 'RECENT_LIMIT', 0):
+            self.assertIn(sid, self.app.cold_display.retire(force=True))
+        self.assertFalse(dict.__contains__(session, 'messages'))
+        self.app._state['settings']['suggestedMessages'] = True
+        self.app.clients.attach('plain-browser', kind='web')
+        self.app.clients.records['plain-browser']['selectedSessionId'] = sid
+        candidate = {'status': 'ready', 'suggestion': 'Please check the next result.', 'usage': None, 'cost': None}
+        token = BROWSER.set({'principal': 'cookie', 'valid': lambda: True})
+        async def request(name):
+            args = {'sessionId': sid, 'requestId': name}
+            await host.dispatch('session.suggestion.request', {**args, 'expectedLastMessageId': 'reply-5'}, 'ui')
+            await asyncio.gather(*tuple(host.jobs))
+            return await host.dispatch('session.suggestion.status', args, 'ui')
+        try:
+            with self.app.clients.bind('plain-browser'), \
+                    patch.object(manager, 'discover_catalog', AsyncMock(side_effect=AssertionError('no discovery'))), \
+                    patch.object(manager, 'probe', AsyncMock(return_value=candidate)) as probe:
+                result = await request('large-window')
+                self.assertEqual(result['status'], 'ready')
+                probe.assert_awaited_once()
+                action, payload, _ = probe.call_args.args
+                self.assertEqual((action, payload['id'], payload['model']), ('suggestion.complete', 'saved', 'utility'))
+                transcript = payload['transcript']
+                self.assertEqual(transcript, '\n\n'.join(
+                    ('Human' if row['role'] == 'user' else 'Assistant') + ':\n' + row['text']
+                    for row in exchange[-8:]))
+                self.assertGreater(estimate_tokens(transcript), 85_000)
+                self.assertLess(estimate_tokens(transcript), 100_000)
+                self.assertFalse(dict.__contains__(session, 'messages'))
+                self.assertTrue((await request('same-source'))['reused'])
+                probe.assert_awaited_once()
+
+                catalog(key, 32_000)  # One whole exchange fits; the foreign account cannot donate its window.
+                self.assertEqual((await request('smaller-same-consent'))['status'], 'duplicate_source')
+                probe.assert_awaited_once()
+                configure(manager, {'prompt': 'Offer one next action.'}, self.root, 'global')
+                self.assertEqual((await request('small-window-new-intent'))['status'], 'ready')
+                self.assertEqual(probe.await_count, 2)
+                self.assertEqual(probe.call_args.args[1]['transcript'],
+                                 'Human:\n' + exchange[-2]['text'] + '\n\nAssistant:\n' + exchange[-1]['text'])
+
+                catalog(key, 4_000)  # Never truncate or send the older exchange instead.
+                result = await request('unfit-window')
+                self.assertEqual((result['status'], result['reason'], result['generationId']), ('empty', None, None))
+                self.assertEqual(probe.await_count, 2)
+        finally:
+            BROWSER.reset(token)
+
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -2455,7 +2755,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             'source': 'git+https://github.com/microsoft/amplifier-module-provider-openai@main',
             'config': {'api_key': 'synthetic-key'}}]}))
         await self.app.dispatch('providers.configureSuggestions', {
-            'enabled': True, 'provider': 'saved', 'model': 'utility-model',
+            'enabled': True, 'shareRecentConversation': True, 'provider': 'saved', 'model': 'utility-model',
             'scope': 'global', 'configurationTarget': {'kind': 'global'}}, include_state=False)
         originals = {}
         token = BROWSER.set({'principal': 'same-authenticated-cookie', 'valid': lambda: True})
@@ -2467,8 +2767,8 @@ class Integration(unittest.IsolatedAsyncioTestCase):
                 sid = session['id']
                 session.update(status='idle', historyManaged=False, runtimeSessionId='old-worker-incarnation',
                     messages=[{'id': 'human', 'role': 'user', 'inputOrigin': 'ui',
-                               'text': 'Human ' + state + ' x' * 4200},
-                              {'id': 'assistant', 'role': 'assistant', 'text': 'Completed ' + state + ' y' * 4200}])
+                               'text': 'Human ' + state + ' example' * 2000},
+                              {'id': 'assistant', 'role': 'assistant', 'text': 'Completed ' + state + ' next' * 550}])
                 self.app._publish_changes(sessions={sid})
                 self.app.clients.records['original']['selectedSessionId'] = sid
                 with self.app.clients.bind('original'):
@@ -2577,7 +2877,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             'source': 'git+https://github.com/microsoft/amplifier-module-provider-openai@main',
             'config': {'api_key': 'synthetic-key'}}]}))
         await self.app.dispatch('providers.configureSuggestions', {
-            'enabled': True, 'provider': 'saved', 'model': 'utility-model',
+            'enabled': True, 'shareRecentConversation': True, 'provider': 'saved', 'model': 'utility-model',
             'scope': 'global', 'configurationTarget': {'kind': 'global'}}, include_state=False)
         await self.app.dispatch('session.create', {}, include_state=False)
         session = self.app._session()
@@ -2644,7 +2944,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             'source': 'git+https://github.com/microsoft/amplifier-module-provider-openai@main',
             'config': {'api_key': 'synthetic-key'}}]}))
         await self.app.dispatch('providers.configureSuggestions', {
-            'enabled': True, 'provider': 'saved', 'model': 'utility-model',
+            'enabled': True, 'shareRecentConversation': True, 'provider': 'saved', 'model': 'utility-model',
             'scope': 'global', 'configurationTarget': {'kind': 'global'}}, include_state=False)
         await self.app.dispatch('session.create', {}, include_state=False)
         session = self.app._session()
@@ -2779,7 +3079,8 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         config = {'transcriptMode': 'last_n', 'humanTurns': 6}
         before = {}
         resident = witness(self.app, sid, config, components=before)
-        expected = public_rows(select(public_rows(dict.get(session, 'messages')), config, False))
+        from amplifier_web.suggestion_provider import transcript_budget
+        expected = select(public_rows(dict.get(session, 'messages')), transcript_budget(INSTRUCTION))
         self.app._state['selectedSessionId'] = None
         with patch.object(self.app.cold_display, 'RECENT_LIMIT', 0):
             self.assertIn(sid, self.app.cold_display.retire(force=True))
@@ -2790,7 +3091,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(changed_component(before, after), 'current_source_storage_mode')
         page = await self.app.history.windows.read(sid, limit=100, public_only=True)
         retained = self.app.history.windows.pages[(sid, page['windowKey'])][0]['items']
-        actual = public_rows(select(public_rows(retained), config, page['hasEarlier']))
+        actual = select(public_rows(retained), transcript_budget(INSTRUCTION))
         self.assertEqual(actual, expected)  # Real storage transition, identical canonical bounded input.
         self.assertFalse(dict.__contains__(session, 'messages'))  # No hydration needed to classify.
         self.assertNotIn('Public row', repr(after))
@@ -3026,7 +3327,8 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         migrated = translate({'config': {'providers': [
             {'id': 'specialist', 'module': 'provider-specialist', 'config': {'chat_enabled': False}},
             {'id': 'chat', 'module': 'provider-openai', 'config': {'api_key': 'synthetic-chat-key'}}]},
-            'prompt_suggestions': {'enabled': True, 'provider': 'specialist', 'model': 'saved-stale-model'}},
+            'prompt_suggestions': {'enabled': True, 'shareRecentConversation': True,
+                                   'provider': 'specialist', 'model': 'saved-stale-model'}},
             {'provider-specialist': ({'decision_only': True}, lambda value: value)})
         self.assertNotIn('specialist', [row.get('id') for row in migrated['config']['providers']])
         self.assertIn('specialist', migrated['decision_models']['connections'])
@@ -3076,7 +3378,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             finally:
                 BROWSER.reset(token)
             saved = await self.app.dispatch('providers.configureSuggestions', {
-                'enabled': True, 'provider': 'chat', 'model': 'ordinary-model',
+                'enabled': True, 'shareRecentConversation': True, 'provider': 'chat', 'model': 'ordinary-model',
                 'scope': 'global', 'configurationTarget': {'kind': 'global'}}, include_state=False)
             self.assertEqual(saved['result']['suggestionModels']['provider'], 'chat')
             snapshot = manager.probe_snapshot('suggestion.complete', {'id': 'chat'}, str(self.app.data_dir))
@@ -3109,7 +3411,8 @@ class Integration(unittest.IsolatedAsyncioTestCase):
                 ordinary, = result['providers']
                 self.assertEqual((ordinary['id'], ordinary['module']), (alias, 'provider-openai'))
                 self.assertEqual(ordinary['sharedCatalogKey'], manager.catalog_key({'id': alias}, str(self.root)))
-                configure(manager, {'enabled': True, 'provider': alias, 'model': 'chat-model'}, self.root, 'global')
+                configure(manager, {'enabled': True, 'shareRecentConversation': True,
+                                    'provider': alias, 'model': 'chat-model'}, self.root, 'global')
                 _, selected_row, _ = selected(manager, self.root)
                 self.assertEqual(selected_row['module'], 'provider-openai')
                 self.assertEqual(manager.probe_snapshot('suggestion.complete', {'id': alias}, self.root)['module'],
@@ -3133,7 +3436,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(before['result']['suggestionModels']['prompt'], INSTRUCTION)
         self.assertEqual(before['result']['suggestionModels']['defaultPrompt'], INSTRUCTION)
         result = await self.app.dispatch('providers.configureSuggestions', {
-            'enabled': False, 'transcriptMode': 'last_n', 'humanTurns': 6,
+            'enabled': False,
             'scope': 'global', 'configurationTarget': {'kind': 'global'}}, include_state=False)
         self.assertEqual(result['result']['configurationRevision'], current + 1)
         self.assertEqual(self.app.browser_state()['configurationRevision'], current + 1)
@@ -3145,7 +3448,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         self.runtime.send.assert_not_called()
         with self.assertRaises(Exception):
             await self.app.dispatch('providers.configureSuggestions', {
-                'enabled': False, 'transcriptMode': 'last_n', 'humanTurns': 6, 'scope': 'global'},
+                'enabled': False, 'scope': 'global'},
                 origin='agent', caller_session_id=None, include_state=False)
 
     async def test_recommendation_roster_uses_current_exact_account_catalog_and_preserves_manual_choice(self):
@@ -3162,7 +3465,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         manager.store.update(self.root, 'global', lambda value: value.update(
             config={'providers': connections}))
         configure(manager, {'enabled': True, 'provider': 'one', 'model': 'Manual/Exact',
-                            'prompt': 'Preserved instructions.', 'transcriptMode': 'full'},
+                            'prompt': 'Preserved instructions.', 'shareRecentConversation': True},
                   self.root, 'global')
         before = copy.deepcopy(manager.store.read(self.root, 'global'))
         revision = describe(manager, self.root)['revision']
@@ -3208,10 +3511,9 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             return (await self.app.dispatch('providers.configureSuggestions', {**authority, **values},
                                            include_state=False))['result']['suggestionModels']
         initial = await save({'enabled': True, 'provider': 'old', 'model': 'saved',
-                              'prompt': 'Keep this instruction.', 'transcriptMode': 'last_n', 'humanTurns': 8})
-        # Compact form staged a new account while showing Recent. Another
-        # authorized client changes sharing before that compact form submits.
-        full = await save({'transcriptMode': 'full', 'expectedSuggestionModelsRevision': initial['revision']})
+                              'prompt': 'Keep this instruction.', 'shareRecentConversation': True})
+        # Another authorized client changes the selection before the staged save.
+        newer = await save({'model': 'newest', 'expectedSuggestionModelsRevision': initial['revision']})
         before = manager.store.path(self.root, 'global').read_bytes()
         config_revision = self.app.state['configurationRevision']
         preference = copy.deepcopy(self.app.state['settings'])
@@ -3229,13 +3531,11 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.app.state['settings'], preference)
             self.assertEqual(list(self.app.db.execute('SELECT * FROM suggestion_requests')), claims)
             invalidate.assert_not_called()
-            # Reviewed refreshed Full disclosure authorizes this explicit save;
-            # omitted sharing/prompt still come from current settings.
+            # The reviewed refreshed selection authorizes this explicit save.
             accepted = await save({'provider': 'new', 'model': 'staged',
-                                   'expectedSuggestionModelsRevision': full['revision']})
-            self.assertEqual((accepted['provider'], accepted['model'], accepted['transcriptMode'],
-                              accepted['humanTurns'], accepted['prompt']),
-                             ('new', 'staged', 'full', 8, 'Keep this instruction.'))
+                                   'expectedSuggestionModelsRevision': newer['revision']})
+            self.assertEqual((accepted['provider'], accepted['model'], accepted['enabled'], accepted['prompt']),
+                             ('new', 'staged', True, 'Keep this instruction.'))
             invalidate.assert_called_once()
             probe.assert_not_called()
         self.runtime.start.assert_not_called()
@@ -3251,8 +3551,8 @@ class Integration(unittest.IsolatedAsyncioTestCase):
                                            include_state=False))['result']
         initial = (await save({'enabled': True, 'provider': 'saved', 'model': 'utility',
                               'effort': 'low', 'prompt': 'Original advanced prompt.',
-                              'transcriptMode': 'full', 'humanTurns': 9}))['suggestionModels']
-        core = ('enabled', 'provider', 'model', 'effort', 'transcriptMode', 'humanTurns')
+                              'shareRecentConversation': True}))['suggestionModels']
+        core = ('enabled', 'provider', 'model', 'effort')
         # No fixture merge: these are the exact Advanced form payloads.
         edited = (await save({'prompt': 'Only the prompt changes.'}))['suggestionModels']
         self.assertEqual({key: edited[key] for key in core}, {key: initial[key] for key in core})
@@ -3288,7 +3588,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
             'id': 'saved', 'module': 'provider-openai', 'config': {
                 'api_key': 'synthetic-key', 'default_model': 'foreground', 'reasoning_effort': 'foreground-effort'}}]}))
         fields = {'enabled': True, 'provider': 'saved', 'model': 'utility-model',
-                  'transcriptMode': 'last_n', 'humanTurns': 6,
+                  'shareRecentConversation': True,
                   'scope': 'global', 'configurationTarget': {'kind': 'global'}}
         async def save(**values):
             return (await self.app.dispatch('providers.configureSuggestions', {**fields, **values},
@@ -3366,7 +3666,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
         manager.store.update(self.root, 'global', lambda value: value.update(config={'providers': [{
             'id': 'saved', 'module': 'provider-openai', 'config': {'api_key': 'synthetic-key'}}]}))
         args = {'enabled': True, 'provider': 'saved', 'model': 'utility',
-                'transcriptMode': 'last_n', 'humanTurns': 6}
+                'shareRecentConversation': True}
         with patch.object(manager.catalog, 'peek', return_value={'providerMetadata': {
                 'configSchema': {'fields': [{'id': 'reasoning_effort', 'choices': ['low', 'high']}]}}}), \
                 patch.object(manager, 'probe', AsyncMock(side_effect=AssertionError('save must not probe'))) as probe:
@@ -3453,7 +3753,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
                          'providerMetadata': {'configSchema': {'fields': [{
                              'id': 'reasoning_effort', 'choices': ['low', 'high']}]}}})
         args = {'enabled': True, 'provider': 'saved', 'model': 'utility',
-                'transcriptMode': 'last_n', 'humanTurns': 6, 'scope': 'global',
+                'shareRecentConversation': True, 'scope': 'global',
                 'configurationTarget': {'kind': 'global'}}
         with patch.object(SetupManager, 'probe', AsyncMock(side_effect=AssertionError('no discovery'))) as probe:
             accepted = await self.app.dispatch('providers.configureSuggestions', {**args, 'effort': 'low'},
@@ -3534,7 +3834,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
                 'api_key': '${SUGGESTION_FIXTURE_KEY}', 'default_model': 'chat-model'}}]}))
         with patch.dict(os.environ, {'SUGGESTION_FIXTURE_KEY': 'synthetic-one'}):
             result = configure(manager, {'enabled': True, 'provider': 'saved', 'model': 'cheap',
-                                         'transcriptMode': 'last_n', 'humanTurns': 6}, self.root, 'global')
+                                         'shareRecentConversation': True}, self.root, 'global')
             one = result['suggestionModels']['revision']
             self.assertEqual(manager.config(self.root).providers[0]['config']['default_model'], 'chat-model')
             self.assertNotIn('synthetic-one', repr(result))
@@ -3839,7 +4139,7 @@ class SuggestionConfigurationCAS(unittest.TestCase):
             {'id': 'saved', 'module': 'provider-openai', 'config': {
                 'api_key': 'synthetic-key', 'base_url': 'https://fixture.invalid'}}]}))
         self.initial = configure(self.manager, {'enabled': True, 'provider': 'saved', 'model': 'original',
-                                               'transcriptMode': 'last_n', 'humanTurns': 7,
+                                               'shareRecentConversation': True,
                                                'prompt': 'Preserve me.'}, self.root, 'global')['suggestionModels']
 
     def tearDown(self):
@@ -3853,7 +4153,7 @@ class SuggestionConfigurationCAS(unittest.TestCase):
             # Another writer wins before this operation acquires the canonical
             # lock; the caller's outer inventory snapshot is now stale.
             update(workspace, scope, lambda value:
-                   value['prompt_suggestions'].update(transcriptMode='full'))
+                   value['prompt_suggestions'].update(prompt='Newer settings.'))
             return update(workspace, scope, mutator, **kwargs)
         with self.manager.read_snapshot(self.root):
             snapshot = self.manager._config_snapshot
@@ -3864,14 +4164,14 @@ class SuggestionConfigurationCAS(unittest.TestCase):
             self.assertIs(self.manager._config_snapshot, snapshot)
         self.assertEqual(raised.exception.status, 409)
         actual = describe(self.manager, self.root)
-        self.assertEqual((actual['model'], actual['transcriptMode']), ('original', 'full'))
+        self.assertEqual((actual['model'], actual['prompt']), ('original', 'Newer settings.'))
         with self.manager.read_snapshot(self.root):
             snapshot = self.manager._config_snapshot
             accepted = configure(self.manager, {'model': 'new',
                 'expectedSuggestionModelsRevision': actual['revision']}, self.root, 'global')['suggestionModels']
             self.assertIs(self.manager._config_snapshot, snapshot)
-        self.assertEqual((accepted['model'], accepted['transcriptMode'], accepted['prompt']),
-                         ('new', 'full', 'Preserve me.'))
+        self.assertEqual((accepted['model'], accepted['enabled'], accepted['prompt']),
+                         ('new', True, 'Newer settings.'))
         self.assertEqual(accepted, describe(self.manager, self.root))
 
     def test_two_competing_writers_with_same_revision_have_one_winner(self):
@@ -3899,8 +4199,8 @@ class SuggestionConfigurationCAS(unittest.TestCase):
         self.assertEqual(sum(status == 409 for status, _ in results), 1)
         saved = next(value for status, value in results if status == 'saved')
         actual = describe(self.manager, self.root)
-        self.assertEqual((actual['model'], actual['transcriptMode'], actual['humanTurns'], actual['prompt']),
-                         (saved, 'last_n', 7, 'Preserve me.'))
+        self.assertEqual((actual['model'], actual['enabled'], actual['prompt']),
+                         (saved, True, 'Preserve me.'))
 
     def test_same_account_binding_edit_and_a_b_a_are_not_old_confirmation(self):
         from amplifier_web.errors import AppError
@@ -3910,9 +4210,9 @@ class SuggestionConfigurationCAS(unittest.TestCase):
             configure(self.manager, {'model': 'new',
                 'expectedSuggestionModelsRevision': self.initial['revision']}, self.root, 'global')
         current = describe(self.manager, self.root)
-        full = configure(self.manager, {'transcriptMode': 'full',
+        full = configure(self.manager, {'model': 'temporary',
             'expectedSuggestionModelsRevision': current['revision']}, self.root, 'global')['suggestionModels']
-        recent = configure(self.manager, {'transcriptMode': 'last_n',
+        recent = configure(self.manager, {'model': 'original',
             'expectedSuggestionModelsRevision': full['revision']}, self.root, 'global')['suggestionModels']
         self.assertNotEqual(current['revision'], recent['revision'])
         before = self.manager.store.path(self.root, 'global').read_bytes()

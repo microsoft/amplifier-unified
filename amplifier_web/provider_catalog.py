@@ -541,6 +541,27 @@ class ProviderCatalog:
         return ({'model': model, 'provenance': provenance, 'basis': 'provider-purpose'}
                 if model is not None else None)
 
+    def suggestion_model_limits(self, key, module, model):
+        """Borrow only exact cached model limits, never defaults for another model."""
+        value, error, loaded, failed = self._retained_record(key)
+        if (error or not self._fresh_record(loaded, failed) or not isinstance(value, dict)
+                or not value.get('modelsSupported')
+                or value.get('modelsProvenance') not in {'provider-api', 'configured', 'static'}):
+            return None, None
+        metadata, models = value.get('providerMetadata'), value.get('models')
+        if not isinstance(metadata, dict) or metadata.get('module') != module or not isinstance(models, list):
+            return None, None
+        match = None
+        for row in models:
+            if isinstance(row, dict) and row.get('id') == model:
+                if match is not None:
+                    return None, None
+                match = row
+        if match is None:
+            return None, None
+        return tuple(number if type(number) is int and number > 0 else None
+                     for number in (match.get('context_window'), match.get('max_input_tokens')))
+
     def discard(self, key):
         self._forget(key)
         self.saved.pop(fingerprint(key), None)
