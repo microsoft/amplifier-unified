@@ -228,6 +228,7 @@ jobs:
           AMPLIFIER_REQUIRE_LONG_PATHS_OFF: '1'
           AMPLIFIER_REQUIRE_CHAT_SETUP: '1'
           AMPLIFIER_CHAT_SETUP_TREE: ${{ runner.temp }}\chat-setup-tree.txt
+          AMPLIFIER_CHAT_SETUP_PROVENANCE: ${{ runner.temp }}\chat-setup-provenance.json
         run: |
           # A fact for the times below: whether Windows Defender scans new files on this runner.
           try {
@@ -235,30 +236,212 @@ jobs:
             $scan = "real-time protection $($defender.RealTimeProtectionEnabled), antivirus $($defender.AntivirusEnabled)"
           } catch { $scan = 'its state could not be read' }
           Write-Host "Windows Defender on this runner: $scan"
-          .\.venv\Scripts\python.exe -B -m pytest -q -rA -p no:cacheprovider tests/test_windows_chat_setup.py | Tee-Object -Variable lines
+          # Failure output can contain private attempt/command data. Retain it
+          # on this disposable runner only; never stream or upload that body.
+          $tests = @'
+          import json, os, pathlib, sys
+          import pytest
+          class ChatResults:
+              def __init__(self, source, expected, paths):
+                  from _pytest.reports import TestReport
+                  self.report_type = TestReport
+                  self.source, self.expected, self.paths = source, expected, paths
+                  self.nodes, self.collected, self.phases, self.reports = {}, [], [], []
+                  self.failures, self.failure_count = [], 0
+                  self.collection_seen = self.invalid = self.observer_error = False
+                  self.collection_count = self.phase_count = self.collection_errors = 0
+              def pytest_collection_finish(self, session):
+                  self.invalid |= self.collection_seen
+                  self.collection_seen = True
+                  counts = {name: 0 for name in self.expected}
+                  for item in session.items:
+                      self.collection_count += 1
+                      name = item.originalname or item.name
+                      if (str(item.path) != self.source or name not in counts or
+                              item.nodeid in self.nodes or len(self.nodes) >= 128):
+                          self.invalid = True
+                          continue
+                      counts[name] += 1
+                      # Function and occurrence ordinals only, never parameter IDs.
+                      label = str(list(self.expected).index(name) + 1) + '.' + str(counts[name])
+                      self.nodes[item.nodeid] = label
+                      self.collected.append(label)
+                  self.invalid |= counts != self.expected
+              def pytest_collectreport(self, report):
+                  if report.failed or report.skipped:
+                      self.collection_errors += 1
+                      self.invalid = True
+              def pytest_runtest_makereport(self, item, call):
+                  outcome = yield
+                  report = outcome.get_result()
+                  if not report.failed and call.excinfo is None:
+                      return
+                  self.failure_count += 1
+                  if len(self.failures) >= 128:
+                      self.invalid = True
+                      return
+                  try:
+                      error = call.excinfo.value if call.excinfo is not None else None
+                      allowed = {'AssertionError', 'RuntimeError', 'PermissionError', 'OSError',
+                          'FileNotFoundError', 'ValueError', 'TypeError', 'KeyError', 'ImportError',
+                          'ModuleNotFoundError', 'TimeoutError', 'SystemExit', 'CancelledError', 'Failed'}
+                      kind = type(error)
+                      name = ('unavailable' if error is None else kind.__name__
+                          if kind.__module__ in {'builtins', 'asyncio.exceptions', '_pytest.outcomes'}
+                          and kind.__name__ in allowed else 'other')
+                      frames, seen, omitted = [], 0, 0
+                      trace = error.__traceback__ if error is not None else None
+                      while trace is not None and seen < 128:
+                          seen += 1
+                          location = self.paths.get(os.path.normcase(os.path.abspath(trace.tb_frame.f_code.co_filename)))
+                          if location and 0 < trace.tb_lineno <= location[1] and len(frames) < 16:
+                              frames.append([location[0], trace.tb_lineno])
+                          else:
+                              omitted += 1
+                          trace = trace.tb_next
+                      self.failures.append({'case': self.nodes.get(item.nodeid, 'unknown'),
+                          'phase': call.when if call.when in ('setup', 'call', 'teardown') else 'other',
+                          'type': name, 'frames': frames, 'omittedFrames': omitted,
+                          'traceTruncated': trace is not None})
+                  except Exception:
+                      self.observer_error = True
+                  # Never format messages/locals/longrepr or replace the report.
+              def row(self, report):
+                  return [self.nodes.get(report.nodeid, 'unknown'),
+                      report.when if report.when in ('setup', 'call', 'teardown') else 'other',
+                      report.outcome if report.outcome in ('passed', 'failed', 'skipped') else 'other',
+                      hasattr(report, 'wasxfail'), type(report) is self.report_type]
+              def pytest_runtest_logreport(self, report):
+                  self.phase_count += 1
+                  if len(self.phases) >= 384:
+                      self.invalid = True
+                      return
+                  try:
+                      self.invalid |= any(report is previous for previous in self.reports)
+                      self.phases.append(self.row(report))
+                      self.reports.append(report)
+                  except Exception:
+                      self.observer_error = True
+              def snapshot(self, code):
+                  final = [self.row(report) for report in self.reports]
+                  ordered = [str(group) + '.' + str(ordinal)
+                      for group, count in enumerate(self.expected.values(), 1)
+                      for ordinal in range(1, count + 1)]
+                  expected = [[case, phase, 'passed', False, True]
+                              for case in self.collected for phase in ('setup', 'call', 'teardown')]
+                  passed = (code == 0 and self.collection_seen and not self.invalid and
+                      not self.observer_error and not self.collection_errors and not self.failure_count and
+                      self.collection_count == sum(self.expected.values()) and self.collected == ordered and
+                      self.phase_count == len(expected) and self.phases == final == expected)
+                  return {'schema': 1, 'pytestExitCode': int(code), 'passed': passed,
+                      'collectionObserved': self.collection_seen, 'collectionCount': self.collection_count,
+                      'expectedCount': sum(self.expected.values()), 'collectionErrors': self.collection_errors,
+                      'caseNames': list(self.expected), 'collected': self.collected,
+                      'phases': self.phases, 'finalPhases': final, 'phaseCount': self.phase_count,
+                      'omittedPhases': self.phase_count - len(self.phases),
+                      'failures': self.failures, 'failureCount': self.failure_count,
+                      'omittedFailures': self.failure_count - len(self.failures),
+                      'invalid': self.invalid, 'observerError': self.observer_error}
+          def save_summary(path, value):
+              try:
+                  raw = json.dumps(value)
+                  assert len(raw.encode('utf-8')) <= 524288
+                  path.write_text(raw, encoding='utf-8')
+                  return True
+              except (OSError, ValueError, TypeError, AssertionError):
+                  return False
+          def finish(selected, code, path):
+              try:
+                  value = selected.snapshot(code)
+              except Exception:
+                  value = {'schema': 1, 'pytestExitCode': int(code), 'passed': False, 'observerError': True}
+              saved = save_summary(path, value)
+              # An evidence failure must not replace pytest's original nonzero exit.
+              return int(code) if code else (0 if saved and value['passed'] else 1)
+          expected = {
+              'test_provenance_files_are_bounded_and_never_export_source_locations': 5,
+              'test_observed_probe_preserves_actual_call_outcome_and_pre_teardown_files': 4,
+              'test_observed_probe_keeps_original_anonymous_retry_and_two_attempts': 2,
+              'test_malformed_probe_facts_do_not_mask_original_failure_or_encode_private_payload': 10,
+              'test_native_provenance_keeps_original_path_cancel_and_private_output_boundaries': 1,
+              'test_the_programs_of_a_sign_in_session_are_not_processes_of_a_preparation_that_got_their_parents_id': 1,
+              'test_the_line_of_a_session_program_says_what_has_its_parents_id_now': 1,
+              'test_a_program_that_gets_the_id_of_an_ended_member_is_not_that_member_and_what_it_starts_is_no_member': 1,
+              'test_what_names_the_id_of_an_ended_member_and_was_created_after_the_list_without_it_is_no_child': 1,
+              'test_a_child_of_the_program_that_has_the_id_now_is_not_a_child_of_the_member_that_had_it': 1,
+              'test_a_program_with_the_creation_time_of_the_program_that_got_the_members_id_is_not_a_child_of_the_member': 1,
+              'test_a_program_that_a_list_took_for_a_child_is_no_member_when_a_later_list_shows_what_had_the_id': 1,
+              'test_a_list_that_holds_a_member_again_shows_that_it_runs': 1,
+              'test_what_a_member_starts_after_a_list_that_did_not_hold_it_is_not_found': 1,
+              'test_without_a_creation_time_the_rule_knows_only_the_id': 1,
+              'test_a_row_without_a_creation_time_with_the_id_of_a_member_that_runs_is_that_member': 1,
+              'test_a_row_without_a_creation_time_shows_nothing_about_an_ended_member_that_has_one': 1,
+              'test_a_row_without_a_creation_time_is_taken_for_an_ended_member_with_its_id_that_has_none_either': 1,
+              'test_another_process_with_the_members_id_and_no_later_creation_time_shows_that_the_member_ended_before_the_read': 1,
+              'test_the_wait_for_the_first_line_of_a_program_ends_when_the_program_prints_none': 1,
+              'test_a_process_of_the_preparation_is_still_found_after_its_parent_ended': 1,
+              'test_the_real_list_has_the_creation_time_of_each_process_and_finds_what_a_started_program_starts': 1,
+              'test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_installation_folder': 1,
+          }
+          source = pathlib.Path('tests/test_windows_chat_setup.py').absolute()
+          paths = {}
+          for ordinal, name in enumerate((
+                  'tests/test_windows_chat_setup.py', 'tests/test_windows_long_paths_off.py', 'tests/conftest.py',
+                  'amplifier_web/runtime_profiles.py', 'amplifier_web/updates.py', 'amplifier_web/update_probe.py',
+                  'amplifier_web/update_diagnostics.py', 'amplifier_web/windows_files.py')):
+              path = pathlib.Path(name).absolute()
+              paths[os.path.normcase(str(path))] = (ordinal + 1, len(path.read_bytes().splitlines()))
+          selected = ChatResults(str(source), expected, paths)
+          pytest.hookimpl(hookwrapper=True, tryfirst=True)(ChatResults.pytest_runtest_makereport)
+          code = pytest.main(['-q', '-rA', '-p', 'no:cacheprovider', '-p', 'pytest_asyncio.plugin',
+                              '-o', 'asyncio_mode=auto', 'tests/test_windows_chat_setup.py'], plugins=[selected])
+          raise SystemExit(finish(selected, code, pathlib.Path(os.environ['RUNNER_TEMP']) / 'chat-setup-results.json'))
+          '@
+          .\.venv\Scripts\python.exe -B -c $tests *> "$env:RUNNER_TEMP/private-chat-setup.log"
           $status = $LASTEXITCODE
           # The first start of the app's decision-catalog helper in each new worker environment, as the case
           # measured it, the creation of the process included. A start that took longer than the app's time
           # limit is a warning: it shows the runner's speed against that limit, and it does not fail the case.
-          # A line of the case begins with these words. pytest's report of a failure shows source lines, indented.
-          $measured = @($lines | Where-Object { "$_" -match '^MEASURED the decision-catalog helper' })
-          Write-Host "This step found $($measured.Count) measured first starts of the decision-catalog helper."
-          if ($measured.Count -gt 0) {
-            $summary = @('### The first start of the decision-catalog helper in each new worker environment', '',
-                         "Windows Defender on this runner: $scan", '') + ($measured | ForEach-Object { "- $_" })
-            # The lines are in this log too. A page that cannot be written must not fail a case that passed.
-            try { $summary -join "`n" >> $env:GITHUB_STEP_SUMMARY } catch { Write-Host "The run's page did not get the times: $_" }
-          }
-          foreach ($line in ($measured | Where-Object { "$_" -match 'LONGER THAN THE TIME LIMIT OF THE APP' })) {
-            Write-Host "::warning title=The test's first start of the decision-catalog helper took longer than the app's time limit::$line"
-          }
           if ($status -ne 0) { throw 'The setup of a chat was not prepared and checked with long paths off, or a needed path passes the limit.' }
           # A skipped case ends with exit code 0. The case writes the list only after every preparation.
           if (-not (Test-Path -LiteralPath $env:AMPLIFIER_CHAT_SETUP_TREE)) { throw 'The case did not run: it wrote no list of paths.' }
-          # A case that passed printed one line for each new worker environment, and -rA shows the output of
-          # a passed case. With none found, this step no longer reads them (a changed line, or pytest without
-          # -rA), and a first start over the app's limit would get no warning.
-          if ($measured.Count -eq 0) { throw 'The case passed, and this step found no measured first start of the decision-catalog helper.' }
+          # Consume only the bounded numeric record, never private pytest output.
+          $check = @'
+          import json, math, os, pathlib
+          path = pathlib.Path(os.environ['AMPLIFIER_CHAT_SETUP_PROVENANCE'])
+          with path.open('rb') as stream:
+              raw = stream.read(524289)
+          assert len(raw) <= 524288
+          receipt = json.loads(raw)
+          assert receipt['schema'] == 1 and receipt['status'] == 'PASS' and len(receipt['selected']) == 2
+          rows = receipt['helperTimings']
+          assert type(rows) is list and 0 < len(rows) <= 16
+          for row in rows:
+              assert set(row) == {'ordinal', 'firstSeconds', 'secondSeconds', 'bytecodeBefore', 'bytecodeAfter', 'limitSeconds'}
+              assert all(type(v) in (int, float) and math.isfinite(v) and 0 <= v <= 10**9 for v in row.values())
+              assert row['bytecodeAfter'] > row['bytecodeBefore']
+              print('MEASURED helper first/second seconds:', row['firstSeconds'], row['secondSeconds'])
+              if row['firstSeconds'] > row['limitSeconds']:
+                  print("::warning title=Slow first helper start::The measured first start exceeded the app limit.")
+          '@
+          .\.venv\Scripts\python.exe -I -B -c $check
+          if ($LASTEXITCODE -ne 0) { throw 'The closed actual-process provenance or helper measurements are unavailable.' }
+      - name: Keep only closed chat-setup test outcomes
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chat-setup-results
+          path: ${{ runner.temp }}\chat-setup-results.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Keep only closed chat-setup provenance
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chat-setup-provenance
+          path: ${{ runner.temp }}\chat-setup-provenance.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Keep the list of every path
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

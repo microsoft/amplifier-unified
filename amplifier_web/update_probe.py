@@ -25,11 +25,23 @@ async def main():
     parser.add_argument("--checked-sources", type=Path)
     parser.add_argument("--global-only", action="store_true")
     parser.add_argument("--runtime-plan", type=Path)
+    parser.add_argument("--observe-import-origins", action="store_true")
     args = parser.parse_args()
     runtime_plan = json.loads(args.runtime_plan.read_text()) if args.runtime_plan else None
     started = time.monotonic()
     async def deny(*args): return 'deny'
     facts={'ok':False,'stage':'prepare'}
+    origin_samples = []
+    def observe_origins(point):
+        # No new reads on ordinary preparation. Only this explicit diagnostic
+        # invocation observes the already-loaded, fixed module set.
+        if args.observe_import_origins:
+            from amplifier_web.update_diagnostics import PROBE_ORIGIN_MODULES, probe_origin_snapshot
+            try:
+                origin_samples.append(probe_origin_snapshot(point))
+            except Exception:
+                origin_samples.append({'point': point, 'modules': {
+                    name: {'status': 'unavailable', 'scope': 'unknown'} for name in PROBE_ORIGIN_MODULES}})
     session=None
     try:
         if args.profiles:
@@ -62,12 +74,14 @@ async def main():
                 checked = json.loads(args.checked_sources.read_text())
                 selection = await checked_batch_sources(batch, collector, load_config(args.workspace, global_only=True), checked)
                 verify_checked_selection(checked, selection, exact=True)
+            observe_origins('before-install')
             report = await batch.install()
             from amplifier_web.profile_catalog import save_catalog
             save_catalog(load_config(args.workspace, global_only=True), profiles, catalog)
             facts.update(ok=True, stage='prepared', dependenciesPrepared=True, **report)
         elif args.refresh_dependencies:
             from amplifier_web.host.session import prepare_dependencies
+            observe_origins('before-install')
             await prepare_dependencies(args.workspace,bundle=args.bundle,install_overrides=args.install_overrides, global_only=args.global_only, runtime_plan=runtime_plan)
             facts.update(ok=True,stage='prepared',dependenciesPrepared=True)
         else:
@@ -93,6 +107,12 @@ async def main():
         except (OSError, ValueError, KeyError):
             pass  # Missing recovery evidence retains the original refusal.
     finally:
+        observe_origins('before-cleanup')
+        if args.observe_import_origins:
+            facts['importOrigins'] = {
+                'schema': 1,
+                'phase': 'dependency-prepare' if args.profiles or args.refresh_dependencies else 'compatibility',
+                'samples': origin_samples}
         if session:
             try:await session.cleanup()
             except Exception as error:facts.update(ok=False,stage='cleanup',errorType=exception_type(error))

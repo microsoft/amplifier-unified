@@ -30,6 +30,123 @@ RUNTIME_SOURCE_REASONS = {'protected-runtime-source', 'runtime-source-constraint
 RESOLUTION_FIELDS = {'source', 'repository', 'ref', 'subdirectory', 'revision'}
 PROBE_STAGES = {'imports','package','assets','login','terminal','complete','prepare','prepared','capabilities','cleanup','worker-imports'}
 
+# Fixed diagnostic scope, not an inventory of every imported or installed module.
+PROBE_ORIGIN_MODULES = (
+    'amplifier_core', 'amplifier_foundation', 'amplifier_web.host.session',
+    'amplifier_foundation.session.activation',
+    'amplifier_foundation.session.transcript_guard',
+    'amplifier_foundation.session.shared_state',
+)
+PROBE_ORIGIN_MAXIMUM = 1024 * 1024
+
+
+def probe_origin_snapshot(point):
+    """Opt-in only: observe loaded modules, never import a target to fill a row.
+
+    At most six bounded regular-file reads. These are bytes at observation time,
+    not proof of every executed byte or a post-install replacement of an object
+    that Python already loaded.
+    """
+    import sys
+    from pathlib import Path
+    from types import ModuleType
+    from .test_origin_files import source_file
+    assert point in ('before-install', 'before-cleanup')
+    prefix, app = Path(sys.prefix).absolute(), Path(__file__).absolute().parent
+    rows = {}
+    for name in PROBE_ORIGIN_MODULES:
+        module = sys.modules.get(name)
+        row = {'status': 'not-loaded', 'scope': 'unknown'}
+        if module is not None:
+            row['status'] = 'unavailable'
+            # vars avoids invoking an arbitrary module's __getattr__.
+            origin = vars(module).get('__file__') if type(module) is ModuleType else None
+            if type(origin) is str and Path(origin).is_absolute() and '..' not in Path(origin).parts:
+                path = Path(origin)
+                row['scope'] = ('app-bootstrap' if name.startswith('amplifier_web.') and path.is_relative_to(app)
+                                else 'runtime-prefix' if path.is_relative_to(prefix) else 'outside')
+                if row['scope'] != 'outside':
+                    try:
+                        found = source_file(path.parent, path.name, '', PROBE_ORIGIN_MAXIMUM)
+                        if found is not None and found[0] in ('100644', '100755'):
+                            data = found[1]
+                            row.update(status='observed', bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
+                    except (OSError, ValueError):
+                        pass  # No path or refusal prose leaves this observation.
+        rows[name] = row
+    return {'point': point, 'modules': rows}
+
+
+def probe_origins(value):
+    """Closed optional receipt; malformed input is unavailable, never success."""
+    if type(value) is not dict or len(value) != 3 or set(value) != {'schema', 'phase', 'samples'}:
+        return None
+    if type(value['schema']) is not int or value['schema'] != 1 or type(value['phase']) is not str or value['phase'] not in (
+            'dependency-prepare', 'compatibility'):
+        return None
+    samples = value['samples']
+    if type(samples) is not list or not 1 <= len(samples) <= 2:
+        return None
+    points = [row.get('point') if type(row) is dict and type(row.get('point')) is str else None for row in samples]
+    if points not in (['before-cleanup'], ['before-install', 'before-cleanup']):
+        return None
+    if value['phase'] == 'compatibility' and points != ['before-cleanup']:
+        return None
+    result = {'schema': 1, 'phase': value['phase'], 'samples': []}
+    for sample in samples:
+        if len(sample) != 2 or set(sample) != {'point', 'modules'} or type(sample['modules']) is not dict:
+            return None
+        if len(sample['modules']) != len(PROBE_ORIGIN_MODULES) or set(sample['modules']) != set(PROBE_ORIGIN_MODULES):
+            return None
+        rows = {}
+        for name, row in sample['modules'].items():
+            if type(row) is not dict or len(row) > 4 or type(row.get('status')) is not str or row['status'] not in ('observed', 'not-loaded', 'unavailable'):
+                return None
+            keys = {'status', 'scope', 'bytes', 'sha256'} if row['status'] == 'observed' else {'status', 'scope'}
+            if set(row) != keys or type(row['scope']) is not str or row['scope'] not in ('runtime-prefix', 'app-bootstrap', 'outside', 'unknown'):
+                return None
+            if row['status'] == 'not-loaded' and row['scope'] != 'unknown':
+                return None
+            if row['status'] == 'observed':
+                if row['scope'] not in ('runtime-prefix', 'app-bootstrap'):
+                    return None
+                if row['scope'] == 'app-bootstrap' and not name.startswith('amplifier_web.'):
+                    return None
+                if type(row['bytes']) is not int or not 0 <= row['bytes'] <= PROBE_ORIGIN_MAXIMUM:
+                    return None
+                if type(row['sha256']) is not str or not re.fullmatch('[a-f0-9]{64}', row['sha256']):
+                    return None
+            rows[name] = dict(row)
+        result['samples'].append({'point': sample['point'], 'modules': rows})
+    return result
+
+
+def complete_probe_origins(value):
+    """Qualification requirement, separate from preserving a partial receipt."""
+    value = probe_origins(value)
+    if value is None:
+        return False
+    samples = value['samples']
+    if any(row['status'] == 'unavailable' for row in samples[-1]['modules'].values()):
+        return False
+    required = PROBE_ORIGIN_MODULES if value['phase'] == 'compatibility' else PROBE_ORIGIN_MODULES[:3]
+    if any(samples[-1]['modules'][name]['status'] != 'observed' for name in required):
+        return False
+    if value['phase'] == 'dependency-prepare':
+        if len(samples) != 2:
+            return False
+        if any(samples[0]['modules'][name]['status'] != 'observed' for name in required):
+            return False
+        if any(row['status'] == 'unavailable' for row in samples[0]['modules'].values()):
+            return False
+        # A loaded pre-install object is not silently rebound to changed disk
+        # bytes. Keep both observations, but do not qualify that relationship.
+        for name, before in samples[0]['modules'].items():
+            if before['status'] == 'observed' and before != samples[1]['modules'][name]:
+                return False
+    return True
+
+
 def sanitized_application_extras(value):
     """Public optional-feature scope; missing or malformed is unknown, not base."""
     if value is None:
@@ -173,6 +290,8 @@ def probe_record(output):
         if value.get('osError') in errno.errorcode.values():safe['osError']=value['osError']
         catalog = decision_catalog_facts(value.get('decisionCatalog'))
         if catalog:safe['decisionCatalog']=catalog
+        origins = probe_origins(value.get('importOrigins'))
+        if origins is not None:safe['importOrigins']=origins
         for key in ('version','pythonVersion'):
             if isinstance(value.get(key),str) and re.fullmatch(r'\d+\.\d+\.\d+',value[key]):safe[key]=value[key]
         for key in ('elapsedMs', 'sources', 'packages', 'resolverTransactions', 'profileIndex'):

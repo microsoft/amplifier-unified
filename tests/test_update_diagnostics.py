@@ -106,6 +106,207 @@ def test_probe_frame_filters_private_fields_and_nonversion_output():
     assert probe_record(PROBE_PREFIX+json.dumps({'ok':False,'stage':[],'errorType':{},'version':[]}))=={'ok':False}
 
 
+def origin_receipt(phase='compatibility'):
+    from amplifier_web.update_diagnostics import PROBE_ORIGIN_MODULES
+    sample = {'point': 'before-cleanup', 'modules': {
+        name: {'status': 'observed', 'scope': 'app-bootstrap' if name.startswith('amplifier_web.') else 'runtime-prefix',
+               'bytes': 24, 'sha256': 'a' * 64} for name in PROBE_ORIGIN_MODULES}}
+    samples = [sample]
+    if phase == 'dependency-prepare':
+        samples.insert(0, {**json.loads(json.dumps(sample)), 'point': 'before-install'})
+    return {'schema': 1, 'phase': phase, 'samples': samples}
+
+
+@pytest.mark.parametrize('fault', [None, 'extra', 'private-module', 'private-scope', 'path-hash',
+                                  'oversize', 'bool-size', 'extra-row', 'missing-module', 'order',
+                                  'private-phase', 'many-samples', 'non-dict'])
+def test_probe_import_origins_are_closed_optional_and_bounded(fault):
+    from amplifier_web import update_diagnostics as d
+    value = origin_receipt()
+    name = d.PROBE_ORIGIN_MODULES[0]
+    row = value['samples'][0]['modules'][name]
+    if fault == 'extra': value['private'] = '/PRIVATE'
+    elif fault == 'private-module': value['samples'][0]['modules']['PRIVATE'] = row
+    elif fault == 'private-scope': row['scope'] = '/PRIVATE'
+    elif fault == 'path-hash': row['sha256'] = '/PRIVATE'
+    elif fault == 'oversize': row['bytes'] = d.PROBE_ORIGIN_MAXIMUM + 1
+    elif fault == 'bool-size': row['bytes'] = True
+    elif fault == 'extra-row': row['path'] = '/PRIVATE'
+    elif fault == 'missing-module': value['samples'][0]['modules'].pop(name)
+    elif fault == 'order': value['samples'][0]['point'] = 'before-install'
+    elif fault == 'private-phase': value['phase'] = '/PRIVATE'
+    elif fault == 'many-samples': value['samples'] *= 3
+    elif fault == 'non-dict': value = ['PRIVATE']
+    raw = PROBE_PREFIX + json.dumps({'ok': True, 'stage': 'complete', 'importOrigins': value})
+    parsed = probe_record(raw)
+    assert len(raw) < 8192
+    if fault:
+        assert parsed == {'ok': True, 'stage': 'complete'}
+        assert not d.complete_probe_origins(value)
+    else:
+        assert parsed['importOrigins'] == value and d.complete_probe_origins(value)
+        row['sha256'] = 'b' * 64
+        assert parsed['importOrigins']['samples'][0]['modules'][name]['sha256'] == 'a' * 64
+    assert 'PRIVATE' not in json.dumps(parsed)
+    assert probe_record(PROBE_PREFIX + json.dumps({'ok': True, 'importOrigins': value, 'padding': 'x' * 8192})) is None
+
+
+@pytest.mark.parametrize('fault', [None, 'changed', 'before-unavailable', 'after-unavailable', 'not-loaded', 'no-before'])
+def test_probe_import_origins_preserve_preinstall_relationship_and_partial_facts(fault):
+    from amplifier_web import update_diagnostics as d
+    value = origin_receipt('dependency-prepare')
+    name = d.PROBE_ORIGIN_MODULES[0]
+    if fault == 'changed': value['samples'][1]['modules'][name]['sha256'] = 'b' * 64
+    elif fault in ('before-unavailable', 'after-unavailable'):
+        value['samples'][int(fault == 'after-unavailable')]['modules'][name] = {'status': 'unavailable', 'scope': 'runtime-prefix'}
+    elif fault == 'not-loaded':
+        value['samples'][0]['modules'][name] = {'status': 'not-loaded', 'scope': 'unknown'}
+    elif fault == 'no-before': value['samples'].pop(0)
+    projected = d.probe_origins(value)
+    assert projected == value  # Preserve the actual partial/changed relationship.
+    assert d.complete_probe_origins(value) is (fault is None)
+    facts = d.command_facts((PROBE_PREFIX + json.dumps({'ok': True, 'importOrigins': value})).encode(), b'', 0, .1)
+    assert facts['probe']['importOrigins'] == value
+    assert d.complete_probe_origins(facts['probe']['importOrigins']) is (fault is None)
+
+
+@pytest.mark.parametrize('module_index', [3, 4, 5])
+@pytest.mark.parametrize('ending', ['not-loaded', 'observed', 'unavailable'])
+def test_newly_loaded_optional_probe_module_cannot_hide_unavailable_evidence(module_index, ending):
+    from amplifier_web import update_diagnostics as d
+    value = origin_receipt('dependency-prepare')
+    name = d.PROBE_ORIGIN_MODULES[module_index]
+    value['samples'][0]['modules'][name] = {'status': 'not-loaded', 'scope': 'unknown'}
+    if ending != 'observed':
+        value['samples'][1]['modules'][name] = {
+            'status': ending, 'scope': 'unknown' if ending == 'not-loaded' else 'runtime-prefix'}
+    assert d.probe_origins(value) == value
+    assert d.complete_probe_origins(value) is (ending != 'unavailable')
+
+
+@pytest.mark.parametrize('fault', [None, 'missing', 'outside', 'relative', 'traversal', 'symlink',
+                                  'too-large', 'changed-read', 'module-getattr'])
+def test_probe_origin_snapshot_reads_only_loaded_bounded_regular_files(tmp_path, monkeypatch, fault):
+    from types import ModuleType
+    from amplifier_web import update_diagnostics as d, test_origin_files
+    names = d.PROBE_ORIGIN_MODULES
+    for name in names:
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    module = ModuleType(names[0])
+    path = tmp_path / 'module.py'
+    path.write_bytes(b'loaded module bytes')
+    module.__file__ = str(path)
+    calls = []
+    original = test_origin_files.source_file
+    def observe(root, name, mode, maximum):
+        calls.append((root, name, mode, maximum))
+        if fault == 'changed-read':
+            raise ValueError('PRIVATE changed during read')
+        return original(root, name, mode, maximum)
+    monkeypatch.setattr(test_origin_files, 'source_file', observe)
+    monkeypatch.setattr(sys, 'prefix', str(tmp_path))
+    if fault == 'outside': module.__file__ = str(tmp_path.parent / 'PRIVATE.py')
+    elif fault == 'relative': module.__file__ = 'PRIVATE.py'
+    elif fault == 'traversal': module.__file__ = str(tmp_path / '..' / 'PRIVATE.py')
+    elif fault == 'symlink':
+        link = tmp_path / 'link.py'
+        link.symlink_to(path)
+        module.__file__ = str(link)
+    elif fault == 'too-large': path.write_bytes(b'x' * (d.PROBE_ORIGIN_MAXIMUM + 1))
+    elif fault == 'module-getattr':
+        del module.__file__
+        module.__getattr__ = lambda name: pytest.fail('Diagnostic executed module __getattr__')
+    if fault != 'missing':
+        monkeypatch.setitem(sys.modules, names[0], module)
+    result = d.probe_origin_snapshot('before-cleanup')
+    assert set(result['modules']) == set(names)
+    row = result['modules'][names[0]]
+    assert row['status'] == ('observed' if fault is None else 'not-loaded' if fault == 'missing' else 'unavailable')
+    if fault is None:
+        import hashlib
+        assert row['sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
+        assert row['bytes'] == path.stat().st_size and row['scope'] == 'runtime-prefix'
+    assert len(calls) == (0 if fault in ('missing', 'outside', 'relative', 'traversal', 'module-getattr') else 1)
+    assert all(call[2:] == ('', d.PROBE_ORIGIN_MAXIMUM) for call in calls)
+    assert all(result['modules'][name] == {'status': 'not-loaded', 'scope': 'unknown'} for name in names[1:])
+    assert all(name not in sys.modules for name in names[1:])
+    assert str(tmp_path) not in json.dumps(result) and 'PRIVATE' not in json.dumps(result)
+
+
+def test_probe_origins_opt_in_capture_precedes_cleanup_without_ordinary_hashing():
+    import ast
+    from amplifier_web import update_diagnostics as d
+    tree = ast.parse((Path(d.__file__).with_name('update_probe.py')).read_text())
+    main = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef) and node.name == 'main')
+    observe = next(node for node in main.body if isinstance(node, ast.FunctionDef) and node.name == 'observe_origins')
+    assert isinstance(observe.body[0], ast.If)
+    assert ast.unparse(observe.body[0].test) == 'args.observe_import_origins'
+    branch = next(node for node in main.body if isinstance(node, ast.Try))
+    assert ast.unparse(branch.finalbody[0]) == "observe_origins('before-cleanup')"
+    assert isinstance(branch.finalbody[-1], ast.If) and ast.unparse(branch.finalbody[-1].test) == 'session'
+    text = ast.unparse(branch)
+    assert text.index("observe_origins('before-install')") < text.index('await batch.install()')
+    assert "await session.cleanup()" in text
+    assert "facts.update(ok=False, stage='cleanup', errorType=exception_type(error))" in text
+    assert '--observe-import-origins' in ast.unparse(main)
+    assert 'import_module' not in ast.unparse(observe) and 'runpy' not in ast.unparse(observe)
+
+
+@pytest.mark.parametrize('mode', ['ordinary', 'observed', 'cleanup-failed', 'observation-failed'])
+async def test_probe_origin_diagnostic_keeps_original_cleanup_and_outcome(tmp_path, monkeypatch, capsys, mode):
+    import argparse
+    import ast
+    import asyncio
+    import importlib.util
+    import time
+    from amplifier_web import update_diagnostics as d, runtime_qualification
+    from amplifier_web.host import session as host_session
+    source = Path(d.__file__).with_name('update_probe.py').read_text()
+    main = next(n for n in ast.parse(source).body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'main')
+    calls = []
+    def snapshot(point):
+        calls.append(point)
+        if mode == 'observation-failed':
+            raise ValueError('PRIVATE-OBSERVER')
+        return origin_receipt()['samples'][0]
+    async def cleanup():
+        calls.append('cleanup')
+        if mode == 'cleanup-failed':
+            raise PermissionError('PRIVATE-CLEANUP')
+    async def prepare(*args, **kwargs):
+        calls.append('prepare')
+        return SimpleNamespace(cleanup=cleanup), object(), {'standalone': True, 'providers': ['fixture']}
+    monkeypatch.setattr(d, 'probe_origin_snapshot', snapshot)
+    monkeypatch.setattr(runtime_qualification, 'require_session_api', lambda: None)
+    monkeypatch.setattr(host_session, 'prepare_manager', prepare)
+    monkeypatch.setattr(importlib.util, 'find_spec', lambda name: None)
+    monkeypatch.setattr(sys, 'argv', ['probe', str(tmp_path), 'fixture',
+                                    *([] if mode == 'ordinary' else ['--observe-import-origins'])])
+    namespace = {'argparse': argparse, 'asyncio': asyncio, 'Path': Path, 'importlib': importlib,
+                 'json': json, 'sys': sys, 'time': time, 'PROBE_PREFIX': PROBE_PREFIX,
+                 'probe_failure': d.probe_failure, 'exception_type': d.exception_type}
+    exec(compile(ast.Module(body=[main], type_ignores=[]), '<actual-probe-main>', 'exec'), namespace)
+    if mode == 'cleanup-failed':
+        with pytest.raises(SystemExit) as caught:
+            await namespace['main']()
+        assert caught.value.code == 1
+    else:
+        await namespace['main']()
+    output = capsys.readouterr().out
+    parsed = probe_record(output)
+    assert parsed['ok'] is (mode != 'cleanup-failed')
+    assert calls == (['prepare', 'cleanup'] if mode == 'ordinary'
+                     else ['prepare', 'before-cleanup', 'cleanup'])
+    if mode == 'ordinary':
+        assert 'importOrigins' not in parsed
+    else:
+        assert parsed['importOrigins']['samples'][0]['point'] == 'before-cleanup'
+        assert d.complete_probe_origins(parsed['importOrigins']) is (mode != 'observation-failed')
+    if mode == 'cleanup-failed':
+        assert parsed['stage'] == 'cleanup' and parsed['errorType'] == 'PermissionError'
+    assert 'PRIVATE' not in output and str(tmp_path) not in output
+
+
 async def test_failed_replacement_probe_has_phase_and_correlation_without_termination(tmp_path,monkeypatch):
     service,manager,_=await prepared_activation(tmp_path,monkeypatch)
     async def command(*args,**kwargs):
