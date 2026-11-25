@@ -128,3 +128,56 @@ async def test_coincident_missed_policy_skip_stays_quiet_and_holds_future_work(t
         app.management.notifications.send.assert_not_called()
     finally:
         await app.close()
+
+
+@pytest.mark.parametrize('cut', ['notice_save', 'decision_save'])
+async def test_interrupted_notice_and_decision_recover_once_with_current_preview(tmp_path, monkeypatch, cut):
+    app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
+    try:
+        await create(app, sid, now[0], notificationPolicy='failures_only')
+        app._session(sid)['selection']['effort'] = 'low'
+        now[0] += 61
+        with monkeypatch.context() as patch:
+            save = app._save_changes
+            put_run = app.schedules.store.put_run
+
+            def interrupt_notice(**scope):
+                if 'scheduleNotifications' in scope.get('globals', ()):
+                    raise OSError('interrupted notice write')
+                return save(**scope)
+
+            def interrupt_decision(run):
+                if run.get('notificationDecision') is not None:
+                    raise OSError('interrupted decision write')
+                return put_run(run)
+
+            if cut == 'notice_save':
+                patch.setattr(app, '_save_changes', interrupt_notice)
+            else:
+                patch.setattr(app.schedules.store, 'put_run', interrupt_decision)
+            with pytest.raises(OSError, match='interrupted'):
+                await app.schedules.tick()
+        run, = app.schedules.store.runs(sid)
+        assert run.get('notificationDecision') is None
+        assert len(app.state.get('scheduleNotifications', [])) == (cut == 'decision_save')
+        app.management.notifications.send.assert_not_called()
+    finally:
+        await app.close()
+
+    runtime = ConfiguredRuntime()
+    reopened = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    attach(reopened, runtime, now)
+    try:
+        assert len(reopened.state.get('scheduleNotifications', [])) == (cut == 'decision_save')
+        reopened.state['notificationSettings'] = {'preview': False, 'enabled': False}
+        now[0] += 60
+        await reopened.schedules.tick()
+        await reopened.schedules.tick()
+        notice, = reopened.browser_state()['notificationMessages']
+        assert notice['id'] == run['id'] + ':notice' and 'text' not in notice
+        saved, = reopened.schedules.store.runs(sid)
+        assert saved['id'] == run['id'] and saved['notificationDecision']['notify']
+        reopened.management.notifications.send.assert_called_once()
+        assert not runtime.inputs and not runtime.workers
+    finally:
+        await reopened.close()

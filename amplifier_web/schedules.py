@@ -529,19 +529,28 @@ class Schedules:
             failure = run.get('blockedBeforeStart') or run['phase'] in {'failed', 'unknown'} or (
                 run['phase'] == 'skipped' and schedule['status'] == 'needs_review')
             notify = failure or policy == 'always' or (policy == 'changes' and changed is True)
+            if notify:
+                text = report.get('detail') or run.get('detail') or 'Scheduled work needs attention.'
+                self._save_notice(session['id'], run['id'] + ':notice', text)
             run['notificationDecision'] = {'notify': notify, 'changed': changed, 'source': source, 'at': self.clock(), 'policy': policy}
             self.store.put_run(run)
             if schedule.get('nextDue') is None and schedule['status'] == 'active':
                 schedule.update(status='completed' if run['phase'] == 'completed' else 'needs_review', reviewReason=None if run['phase'] == 'completed' else 'The last scheduled run did not complete successfully.', revision=schedule['revision'] + 1)
                 self.store.put(schedule)
-        if notify:
-            message = {'id': run['id'] + ':notice', 'sessionId': session['id'], 'role': 'assistant', 'via': 'text', 'createdAt': self.clock(), 'text': report.get('detail') or run.get('detail') or 'Scheduled work needs attention.'}
-            notices = self.app.state.setdefault('scheduleNotifications', [])
-            if not any(row['id'] == message['id'] for row in notices): notices.append(message)
-            self.app.state['scheduleNotifications'] = notices[-100:]
+        if notify and self.app.management:
+            self.app._task(self.app.management.notifications.send(copy.deepcopy(session), {'generation_id': run['id'], 'text': text}))
+
+    def _save_notice(self, sid, identity, text):
+        notices = self.app.state.get('scheduleNotifications', [])
+        if any(row['id'] == identity for row in notices):
+            return
+        message = {'id': identity, 'sessionId': sid, 'role': 'assistant', 'via': 'text', 'createdAt': self.clock(), 'text': text}
+        self.app.state['scheduleNotifications'] = [*notices, message][-100:]
+        try:
             self.app._save_changes(globals={'scheduleNotifications'})
-            if self.app.management:
-                self.app._task(self.app.management.notifications.send(copy.deepcopy(session), {'generation_id': run['id'], 'text': message['text']}))
+        except BaseException:
+            self.app.state['scheduleNotifications'] = notices
+            raise
 
 
     def worker(self, session, payload):
