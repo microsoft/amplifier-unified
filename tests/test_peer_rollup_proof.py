@@ -186,7 +186,9 @@ async def test_long_pages_keep_cursor_order_and_immediate_preview(app, count):
 
 @pytest.mark.parametrize('count', [21, 100, 101])
 async def test_suggestion_capture_preserves_peer_windows_across_cooling(app, count, monkeypatch):
+    from amplifier_web.cold_display import load
     from amplifier_web.prompt_suggestions import BROWSER
+    from amplifier_web.state_records import load_owner
     from amplifier_web.suggestion_settings import configure
 
     service, source, receiving, mid = app
@@ -204,6 +206,15 @@ async def test_suggestion_capture_preserves_peer_windows_across_cooling(app, cou
     del originals  # Retirement must not strand an issued mutable peer-row alias.
     assert sum(len(row.get('text', '')) for row in receiving['messages']) < 16_000
     service._publish_changes(sessions={sid})
+    descriptor, _ = load_owner(service.db, sid)
+    saved = load(service.db, descriptor['$viewPayload'])
+    # Normal persistence uses the row threshold, independently of resident cooling.
+    if count <= 100:
+        assert saved['messages'] == receiving['messages']
+        assert 'messages' not in saved.get('_coldFields', {})
+    else:
+        assert 'messages' not in saved
+        assert load(service.db, saved['_coldFields']['messages']) == receiving['messages']
     expected_ids = [row['id'] for row in receiving['messages']]
     host, windows = service.prompt_suggestions, service.history.windows
     manager = host.manager
@@ -253,6 +264,9 @@ async def test_suggestion_capture_preserves_peer_windows_across_cooling(app, cou
                 service._state['selectedSessionId'] = None
                 with monkeypatch.context() as guard:
                     guard.setattr(service.cold_display, 'RECENT_LIMIT', 0)
+                    # Force the small fixture's representation transition, not
+                    # production eligibility; ownership/protection guards remain.
+                    guard.setattr(service.cold_display, 'MIN_BYTES', 1)
                     assert sid in service.cold_display.retire(force=True)
                 assert not dict.__contains__(receiving, 'messages')
                 with monkeypatch.context() as guard:
