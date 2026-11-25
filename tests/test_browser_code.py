@@ -2602,6 +2602,94 @@ def test_cleanup_of_a_refused_change_removes_its_own_record_and_no_other(host, m
     assert signed_in(with_key(host, made[0])) and wrong_key(with_key(host, PASSWORD))
 
 
+@pytest.mark.parametrize("replacement", [True, False], ids=["the-owner-set-a-new-password", "the-owner-set-nothing"])
+def test_owner_doings_during_the_hash_refuse_the_change_also_with_a_clock_that_was_set_back(host, monkeypatch, replacement):
+    """The page checked its session; during the hash the clock goes back and the owner signs out all browsers.
+
+    The second of that sign-out is before the session's second, so no second shows the order. The page is
+    bound to the sign-out record that the host had applied when it checked the session, and reads no clock.
+    """
+    home = host["service"].data_dir
+    now = clock(monkeypatch, 1_900_000_500)
+    session = auth.new_session(SECRET)
+    real = entry._scrypt
+
+    def during_the_hash(password, salt):
+        if password == PASSWORD.encode():                   # The hash of the page's change, in its thread.
+            now[0] -= 100                                   # The clock of the PC is set back.
+            assert auth.sign_out_all(home) == now[0]        # Sign-out, its "no key" write, and the host applies it.
+            entry.remove_key(home)
+            assert auth.refresh_sessions(host) is True
+            if replacement:
+                now[0] += 2
+                assert entry.set_password(home, "the replacement password") is False       # The owner's own save.
+        return real(password, salt)
+    monkeypatch.setattr(entry, "_scrypt", during_the_hash)
+    page, _ = owner_page(host, method="POST", session=session, form=set_form())
+    assert page.status == 403 and "A sign-out of all browsers ended this sign-in." in page.text
+    monkeypatch.setattr(entry, "_scrypt", real)
+    now[0] = 1_900_000_600                                  # The clock reaches the session's second again.
+    assert wrong_key(with_key(host, PASSWORD))
+    if replacement:
+        assert signed_in(with_key(host, "the replacement password"))
+    else:
+        assert auth.read_sign_in_key(home) is None
+
+
+@pytest.mark.parametrize("form", [set_form(), {"action": "remove"}], ids=["set", "remove"])
+def test_page_reads_the_record_before_it_looks_at_the_sign_out_record(host, monkeypatch, form):
+    """The owner signs out and sets a new password just before the page's change reads the record.
+
+    The change then reads that new record. It must look at the sign-out record after that read: a look
+    before it would pass, and the change would then swap out the owner's new record as its own.
+    """
+    home = host["service"].data_dir
+    entry.set_password(home, "the earlier password")
+    session = auth.new_session(SECRET)
+    read, done = auth.sign_in_key_bytes, []
+
+    def owner_goes_on_first(data_dir):
+        if not done:
+            done.append(True)
+            auth.sign_out_all(home)
+            entry.remove_key(home)
+            monkeypatch.setattr(auth.time, "time", lambda later=auth.time.time() + 5: later)
+            entry.set_password(home, "the replacement password")
+        return read(data_dir)
+    monkeypatch.setattr(auth, "sign_in_key_bytes", owner_goes_on_first)
+    page, _ = owner_page(host, method="POST", session=session, form=form)
+    assert done and page.status == 403 and "A sign-out of all browsers ended this sign-in." in page.text
+    assert auth.refresh_sessions(host) is True
+    assert signed_in(with_key(host, "the replacement password")) and wrong_key(with_key(host, PASSWORD))
+
+
+def test_look_at_the_sign_out_record_that_fails_is_not_a_sign_out(host, monkeypatch):
+    home = host["service"].data_dir
+    entry.set_password(home, "the earlier password")
+    earlier = auth.read_sign_in_key(home)
+    session = auth.new_session(SECRET)
+    look = auth._epoch_hint
+    unconfirmed = "Amplifier could not confirm that the password is saved."
+    # The first look fails: nothing is changed, and the page does not speak of a sign-out.
+    monkeypatch.setattr(auth, "_epoch_hint", lambda data_dir: auth._UNSEEN)
+    for form, text in ((set_form(), unconfirmed), ({"action": "remove"}, "Amplifier could not confirm the removal.")):
+        page, _ = owner_page(host, method="POST", session=session, form=form)
+        assert page.status == 500 and text in page.text and "sign-out of all browsers ended" not in page.text
+        assert auth.read_sign_in_key(home) == earlier
+    # The look after the record is in place fails: it is not known that no sign-out came, so that record goes.
+    looks = []
+    monkeypatch.setattr(auth, "_epoch_hint", lambda data_dir: look(data_dir) if not looks.append(1) and len(looks) < 2
+                        else auth._UNSEEN)
+    page, _ = owner_page(host, method="POST", session=session, form=set_form())
+    assert page.status == 500 and unconfirmed in page.text and "may no longer work" in page.text
+    assert auth.read_sign_in_key(home) is None and len(looks) == 2
+    # A host that could not look at the record at its start gives no change either.
+    monkeypatch.setattr(auth, "_epoch_hint", look)
+    host["sessions"].hint = auth._UNSEEN
+    page, _ = owner_page(host, method="POST", session=session, form=set_form())
+    assert page.status == 500 and unconfirmed in page.text and auth.read_sign_in_key(home) is None
+
+
 def test_swap_puts_a_record_in_place_only_where_the_expected_bytes_are(host):
     """On native Windows through the real private store: remove the exact bytes, then publish without replacement."""
     home = host["service"].data_dir

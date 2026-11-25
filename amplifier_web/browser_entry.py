@@ -547,44 +547,55 @@ def _save(data_dir: Path, value: str, again: str) -> bool:
     return replaced
 
 
-def _swap(data_dir: Path, issued: int, value) -> bool:
+def _swap(data_dir: Path, owner, value) -> bool:
     """The owner's page puts a record in place, or none for `value` None; True when a record was there before.
 
-    `issued` is the second of the browser session that asks. The sender of a
-    form decides how long its request takes, and the owner can sign out all
-    browsers at any moment of it. Two things keep a session that such a
-    sign-out ended from a change that counts.
+    `owner` is what the page knew when it last checked its session, in one
+    step and before any wait: the second of that session, and the look at the
+    sign-out record that the host had applied (`Sessions.hint`). The sender
+    of a form decides how long its request takes, a hash takes time, and the
+    owner can sign out all browsers at any moment of it. Three things keep a
+    session that such a sign-out ended from a change that counts, and from
+    undoing what the owner did after the sign-out.
+
+    The sign-out record must still be the one that the host had applied
+    then. A sign-out that was saved later, whatever its second and whether
+    the host applied it meanwhile or not, refuses the change. No clock is
+    read for this: it is the test of `auth.sign_in`. It is made before the
+    record goes in place and again after it; the second time, this call
+    removes its own record, by its exact bytes, and no other.
 
     The record gets the second of that session, not the present second. So
     the rule that ends a session ends its record (`auth.sign_in_key_is_current`):
-    a sign-out that ends the session has a second that is not before it, and
-    a sign-out that the host did not apply yet opens no session (`auth.sign_in`).
-    No moment has a record that opens a session for a session that is ended.
+    between the two tests there is no moment with a record that opens a
+    session for a session that is ended.
 
     The record goes in place only where the file still holds the bytes that
-    this call saw before it read the saved sign-out
-    (`auth.swap_sign_in_key`). A record that came later, for example the
-    owner's new password after that sign-out, is never replaced or removed.
-
-    A sign-out that is saved while this call runs, whatever its second,
-    refuses the change as well: the file of the sign-out is looked at before
-    all of this and again after the record is in place. This call then
-    removes its own record, by its exact bytes, and no other.
+    this call read first of all (`auth.swap_sign_in_key`). A record that came
+    later, for example the owner's new password after that sign-out, is
+    never replaced or removed.
     """
     from . import auth
-    signed_out = auth._epoch_hint(data_dir)                 # First of all: the sign-out record as it is now.
-    before = auth.sign_in_key_bytes(data_dir)               # Then the record that this change is for.
-    if signed_out is auth._UNSEEN or issued <= auth.saved_sign_out(data_dir):
-        raise OwnerSignedOut()                              # The saved second, not the one that the host applied.
+    issued, applied = owner
+    before = auth.sign_in_key_bytes(data_dir)               # First of all: the record that this change is for.
+    saved = auth._epoch_hint(data_dir)                      # Then the sign-out record, after that read.
+    if applied is auth._UNSEEN or saved is auth._UNSEEN:
+        raise OSError("The sign-out record could not be looked at.")     # Not a sign-out; nothing was changed.
+    if saved != applied:
+        raise OwnerSignedOut()
     there = before not in (None, auth._NO_SIGN_IN_KEY)
     if value is None and not there:
         return False
     record = None if value is None else (issued, value)
     if not auth.swap_sign_in_key(data_dir, before, record):
         raise ChangedMeanwhile()
-    if not auth._same_record(signed_out, auth._epoch_hint(data_dir)):
+    saved = auth._epoch_hint(data_dir)
+    if saved != applied:
+        # A sign-out was saved meanwhile, or it is not known that none was: this change's own record goes.
         if record is not None:
             auth.swap_sign_in_key(data_dir, f"{record[0]} {record[1]}\n".encode("ascii"), None)
+        if saved is auth._UNSEEN:
+            raise OSError("The sign-out record could not be looked at.")
         raise OwnerSignedOut()
     if auth.read_sign_in_key(data_dir) != record:
         raise OSError("The record was not saved.")
@@ -602,11 +613,11 @@ def make_key(data_dir: Path) -> tuple[str, bool]:
     return key, _save(data_dir, hashlib.sha256(key.encode("ascii")).hexdigest(), NEW_KEY)
 
 
-def set_password(data_dir: Path, text, issued=None) -> bool:
+def set_password(data_dir: Path, text, owner=None) -> bool:
     """Save the record of the owner's new password; True when a password or key was there before.
 
-    The caller is the owner's page on this computer, with the second of its
-    session (see `_swap`). Without that second the record is saved as a
+    The caller is the owner's page on this computer, with what it knew of
+    its session (see `_swap`). Without that, the record is saved as a
     command saves a key (see `_save`). The password is not kept and must never
     be logged or shown. This call takes about a tenth of a second: never on
     the event loop.
@@ -620,18 +631,18 @@ def set_password(data_dir: Path, text, issued=None) -> bool:
         raise PasswordRefused("This text has a character that cannot be saved. Use another password.")
     salt = secrets.token_bytes(16)
     value = _SCRYPT + salt.hex() + " " + _scrypt(password, salt)
-    return _save(data_dir, value, "Then set the password again.") if issued is None else _swap(data_dir, issued, value)
+    return _save(data_dir, value, "Then set the password again.") if owner is None else _swap(data_dir, owner, value)
 
 
-def remove_key(data_dir: Path, issued=None) -> bool:
+def remove_key(data_dir: Path, owner=None) -> bool:
     """End the saved key or password; True when a record was there. Browsers that are signed in stay signed in.
 
-    With `issued`, the second of the browser session that asks, the removal
-    is the page's (see `_swap`).
+    With `owner`, what the page knew of its session, the removal is the
+    page's (see `_swap`).
     """
     from . import auth
-    if issued is not None:
-        return _swap(data_dir, issued, None)
+    if owner is not None:
+        return _swap(data_dir, owner, None)
     try:
         if auth.read_sign_in_key(data_dir) is None:
             return False
@@ -1138,10 +1149,12 @@ async def password_page(request):
     form = await request.clone(client_max_size=16384).post()
     # Again, after the wait for the form: its sender decides how long that wait is, and a sign-out of all
     # browsers can end the session meanwhile.
-    from .auth import session_issued
+    # In one step, with no wait between: the session's second and the sign-out record that the host
+    # applied, which that session was checked against. The change is bound to both (see `_swap`).
+    from .auth import _UNSEEN, session_issued
     session = _session_here(request)
-    issued = session_issued(request.app, session)
-    if session is None or issued is None:
+    owner = (session_issued(request.app, session), getattr(request.app.get("sessions"), "hint", _UNSEEN))
+    if session is None or owner[0] is None:
         return page(_NOT_HERE, 403)
     if (not hmac.compare_digest(str(form.get("csrf", "")).encode(), _owner_csrf(request, session).encode())
             or any(len(form.getall(key)) != 1 for key in form)):
@@ -1150,7 +1163,7 @@ async def password_page(request):
     action = form.get("action")
     if action == "remove" and set(form) == {"csrf", "action"}:
         try:
-            await asyncio.to_thread(remove_key, data_dir, issued)
+            await asyncio.to_thread(remove_key, data_dir, owner)
         except OwnerSignedOut:
             return page(_SIGNED_OUT, 403)
         except ChangedMeanwhile:
@@ -1164,7 +1177,7 @@ async def password_page(request):
     if not isinstance(password, str) or password != form["confirm"]:
         return page(_owner_body(request, session, error="The two passwords are not the same. Type them again."), 400)
     try:
-        await asyncio.to_thread(set_password, data_dir, password, issued)
+        await asyncio.to_thread(set_password, data_dir, password, owner)
     except OwnerSignedOut:
         return page(_SIGNED_OUT, 403)
     except ChangedMeanwhile:

@@ -4554,9 +4554,12 @@ has a terminal.
   new key replaces a password. So a person has one secret to know, and the
   rules for the end of a key (a new one, `--remove`, the sign-out of all
   browsers and its "no key" write, the rule for the clock) are the rules of
-  the password, unchanged. A password's record is the second of its making,
-  then `scrypt 15 8 1`, a random salt of 16 bytes and the hash of 32 bytes:
-  125 bytes at most, and a reader accepts only these parameters. A version
+  the password, unchanged. A password's record is a second, then
+  `scrypt 15 8 1`, a random salt of 16 bytes and the hash of 32 bytes: 125
+  bytes at most, and a reader accepts only these parameters. The second is
+  that of the session that set the password on the owner's page, not that
+  of the making (see "A sign-out during a change" below); a record that a
+  command makes has the second of its making. A version
   before this one reads such a record as malformed, which is "no key".
 - **The hash.** scrypt with N = 2^15, r = 8, p = 1, from the standard
   library: about a tenth of a second and 32 MiB for each check. The hash
@@ -4577,10 +4580,10 @@ has a terminal.
   one starts the count again. That leaves a sender about 300 guesses in a
   day at most: at the longest wait, one in each 5 minutes is 288 in a day,
   and a new count costs one hour for 13 guesses, which is fewer. A test runs
-  both ways of sending against the real count. The count is in the memory of the host; a
-  restart of the host, which a sender cannot cause, starts it again. A text
-  that cannot be a password is a wrong password and needs no hash. A key
-  has no wait.
+  both ways of sending against the real count. The count is in the memory
+  of the host; a restart of the host, which a sender cannot cause, starts
+  it again. A text that cannot be a password is a wrong password and needs
+  no hash. A key has no wait.
 - **Why the wait is for everyone.** The request does not say which device
   sent it: a Tailscale forward connects from this computer for every device
   (see the code's "Where it works"). A wait for each address would be no
@@ -4611,43 +4614,47 @@ has a terminal.
   chat; it keeps a stolen remote session from a silent change of the
   password through this page.
 - **A sign-out during a change.** The sender of a form decides how long its
-  request takes, and the owner can sign out all browsers at any moment of
-  it. A session that such a sign-out ended must not finish a change that it
-  began before, and it must not undo what the owner did after the sign-out.
-  Four things do that (`browser_entry._swap`).
-  - The page checks the session again after it read the form.
-  - The change reads the saved sign-out itself, not the one that the host
-    applied, and does nothing for a session from a second that is not after
-    it.
+  request takes, the hash takes time, and the owner can sign out all
+  browsers at any moment of it. A session that such a sign-out ended must
+  not finish a change that it began before, and it must not undo what the
+  owner did after the sign-out. The page checks the session again after it
+  read the form. In the same step, before the hash and with no wait in
+  between, it takes the second of that session and the look at the
+  sign-out record that the host has applied, which the session was checked
+  against. The change is bound to both (`browser_entry._swap`).
+  - The sign-out record must still be that one. A sign-out that was saved
+    later refuses the change, whatever its second, and whether the host
+    applied it meanwhile or not. No clock is read for this; it is the test
+    that keeps a ticket or a code from a session while a saved sign-out
+    waits (`auth.sign_in`). The change makes this test before its record
+    goes in place and again after it. The second time, it removes its own
+    record, by its exact bytes, and no other.
   - A record that the page saves gets the second of its session, not the
-    present second. So the rule that ends a session ends its record: a
-    sign-out that ends the session has a second that is not before it, and
-    while the host did not apply a saved sign-out, nothing opens a session.
-    There is no moment with a record that opens a session for a session
-    that is ended. A cleanup after the write could not give that: the
-    record would count until the cleanup. The owner's commands keep the
-    present second; their authority is the private folder, not a session.
+    present second. So the rule that ends a session ends its record, and
+    between the two tests there is no moment with a record that opens a
+    session for a session that is ended. A cleanup after the write alone
+    could not give that: the record would count until the cleanup. The
+    owner's commands keep the present second; their authority is the
+    private folder, not a session.
   - The record goes in place only where the file still holds the bytes that
-    the change saw before it read the sign-out. On Windows the private
-    store removes only those exact bytes and then publishes without
+    the change read first of all, before its first test. On Windows the
+    private store removes only those exact bytes and then publishes without
     replacement; a writer in between wins. So a change of an ended session
     never replaces or removes a record that came later, for example the
     owner's new password after the sign-out. The page then says that
     another change came first.
-  The file of the sign-out is also looked at before all of this and again
-  after the record is in place. A sign-out that was saved meanwhile,
-  whatever its second, refuses the change, and the change removes its own
-  record by its exact bytes. This is for a clock that was set back, where
-  the seconds alone do not show the order.
+  A look at the sign-out record that fails is not a sign-out. The change is
+  then not made, or its own record is removed again, and the page says that
+  it could not confirm the change.
 - **The page.** Server-rendered, with no script, and it shows nothing from
   the request. Its texts are fixed; a notice comes from a fixed list
   (`?done=`) and shows only while the saved record agrees with it. The page
   shows whether a password or a key is set, never the password and not when
-  it was saved (the record of the page has the second of a session). It lists the addresses for other
-  devices, or says that there is none. The form answers with a redirect, so
-  that a reload sends no password again. A save or a removal that is not
-  confirmed is said as such, as for the key command. Setting takes the hash
-  and the private write in a thread.
+  it was saved (the record of the page has the second of a session). It
+  lists the addresses for other devices, or says that there is none. The
+  form answers with a redirect, so that a reload sends no password again. A
+  save or a removal that is not confirmed is said as such, as for the key
+  command. Setting takes the hash and the private write in a thread.
 - **The way to the page.** The web client's Settings has the page "Install
   app" with the link "Devices & apps", which opens the host's own page
   `/connect`. On a Windows host, for a browser that the owner's page would
@@ -4680,12 +4687,15 @@ passwords. Settings has no entry of its own for the page; the way goes
 through "Install app" and "Devices & apps". The page `/connect` and its
 script were read with the default text encoding of the host, which showed
 four of their characters wrong on a Windows host; they are read as UTF-8
-now. A record of the page has the limit of its session for a clock that
-was set back: a sign-out in that time ends neither, and the record has no
-lifetime; the sign-out command's "no key" write and the look at the file of
-the sign-out cover it, and only a failed write at that moment leaves it.
-On a host that is not a Windows host the swap of the record is two steps;
-only a Windows host has the page. Not measured: the page in a real browser
+now. A clock that was set back keeps its limit for sessions: a session
+from a second that the clock has not reached again counts again when the
+clock reaches it, and a sign-out in that time does not end it. Such a
+session can then set a password on the page, as it can do everything else,
+and that password has no lifetime; `browsers key --remove` ends it at any
+clock time. A change that was under way when a sign-out was saved is
+refused without a clock, also in that case. On a host that is not a
+Windows host the swap of the record is two steps; only a Windows host has
+the page. Not measured: the page in a real browser
 on a Windows PC by a person, a password manager, a phone browser.
 
 #### The next step for a browser on the PC that is not signed in

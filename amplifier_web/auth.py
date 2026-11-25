@@ -364,7 +364,8 @@ def _new_record(first, second) -> bool:
 
 _SIGN_IN_KEY = "sign-in-key"
 _NO_SIGN_IN_KEY = b"none\n"
-# The second of the making, then the SHA-256 of a key, or the scrypt parameters, salt and hash of a password.
+# A second (of the making by a command, or of the session that set it on the owner's page), then the SHA-256 of a
+# key, or the scrypt parameters, salt and hash of a password.
 _SIGN_IN_KEY_RECORD = re.compile(rb"([0-9]{1,12}) ([0-9a-f]{64}|scrypt 15 8 1 [0-9a-f]{32} [0-9a-f]{64})\n?")
 _SIGN_IN_KEY_LIMIT = 125  # The longest record: a password's, with a second of twelve digits.
 
@@ -379,9 +380,10 @@ def _sign_in_key_path(data_dir: Path) -> Path:
 def read_sign_in_key(data_dir: Path):
     """The record of the owner's saved sign-in key or password, or None when none is saved.
 
-    The record is the second of the making, and the SHA-256 of the key or the
-    scrypt parameters, salt and hash of the password; never the key or the
-    password. A record that cannot be read or is malformed is an error: it is
+    The record is a second, and the SHA-256 of the key or the scrypt
+    parameters, salt and hash of the password; never the key or the password.
+    The second is that of the making by a command, or that of the session
+    that set the record on the owner's page (see `browser_entry._swap`). A record that cannot be read or is malformed is an error: it is
     not "none", and it is not a key or password that works.
     """
     try:
@@ -464,8 +466,8 @@ def sign_in_key_hint(data_dir: Path):
 def sign_in_key_is_current(app, made: int) -> bool:
     """A saved key ends as a session ends: with the owner's sign-out of all browsers.
 
-    The key is good while the second of its making is after the sign-out that
-    this host applied, and not after the present second. It is the rule of
+    The key or password is good while the second of its record is after the
+    sign-out that this host applied, and not after the present second. It is the rule of
     `valid_session` for the session's own second.
     """
     return getattr(app.get("sessions"), "epoch", 0) < made <= int(time.time())
