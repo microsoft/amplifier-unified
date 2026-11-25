@@ -129,7 +129,10 @@ class ScheduleStore:
 
     def put_run(self, record):
         self.db.execute('INSERT OR REPLACE INTO schedule_runs VALUES(?,?,?,?,?,?)', (record['id'], record['scheduleId'], record['sessionId'], record['dueAt'], record['phase'], json.dumps(record)))
-        terminal = [row['id'] for row in self.runs(record['sessionId'], record['scheduleId']) if row['phase'] in TERMINAL_RUNS]
+        self._prune_history(record['sessionId'], record['scheduleId'])
+
+    def _prune_history(self, session_id, schedule_id):
+        terminal = [row['id'] for row in self.runs(session_id, schedule_id) if row['phase'] in TERMINAL_RUNS]
         for identity in terminal[self.history_limit:]: self.db.execute('DELETE FROM schedule_runs WHERE id=?', (identity,))
 
     def acquire(self, now, ttl=30):
@@ -201,7 +204,7 @@ class ScheduleStore:
                 schedule.update(status='needs_review', revision=schedule['revision'] + 1, reviewReason=reason, updatedAt=now)
             self.db.execute('INSERT INTO schedule_runs VALUES(?,?,?,?,?,?)', (run_id, identity, session_id, run['dueAt'], run['phase'], json.dumps(run)))
             self.put(schedule)
-            self.put_run(run)
+            self._prune_history(session_id, identity)
             return run
 
     def review(self, session_id, identity, reason, now):
