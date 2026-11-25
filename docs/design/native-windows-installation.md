@@ -4574,10 +4574,10 @@ has a terminal.
   first, and two times as long after each further wrong password, to 5
   minutes at most. During that time it checks nothing, also not the right
   password. The right password, a new record, or one hour with no wrong
-  one starts the count again. That leaves a sender about 300 guesses in a day at most: at
-  the longest wait, one in each 5 minutes is 288 in a day, and a new count
-  costs one hour for 13 guesses, which is fewer. A test runs both ways of
-  sending against the real count. The count is in the memory of the host; a
+  one starts the count again. That leaves a sender about 300 guesses in a
+  day at most: at the longest wait, one in each 5 minutes is 288 in a day,
+  and a new count costs one hour for 13 guesses, which is fewer. A test runs
+  both ways of sending against the real count. The count is in the memory of the host; a
   restart of the host, which a sender cannot cause, starts it again. A text
   that cannot be a password is a wrong password and needs no hash. A key
   has no wait.
@@ -4590,8 +4590,9 @@ has a terminal.
   wants no such wait uses a key.
 - **One check at a time.** The hash runs in a thread, away from the event
   loop, and only one runs. A second password that arrives meanwhile is not
-  checked and not counted; its page says that Amplifier was busy. So a flood
-  of wrong passwords costs one thread and 32 MiB, not more.
+  checked and not counted; its page says that the password was not checked
+  and asks for it again. So a flood of wrong passwords costs one thread and
+  32 MiB, not more.
 - **A change during a check.** After the hash, the host looks at the record
   again. A password that the owner changed or removed during its check opens
   nothing.
@@ -4610,19 +4611,39 @@ has a terminal.
   chat; it keeps a stolen remote session from a silent change of the
   password through this page.
 - **A sign-out during a change.** The sender of a form decides how long its
-  request takes, and a new record always gets a second after the last
-  sign-out. So a session that a sign-out of all browsers ended must not
-  finish a change that it began before. The page checks the session again
-  after it read the form. The save and the removal then read the saved
-  sign-out themselves, not the one that the host applied, and do nothing
-  for a session from a second that is not after it. The save reads it once
-  more after its write and removes the record again when a sign-out came in
-  between. A sign-out that is saved after that has a second that is not
-  before the record's, so the rule for the end of a key ends the record.
+  request takes, and the owner can sign out all browsers at any moment of
+  it. A session that such a sign-out ended must not finish a change that it
+  began before, and it must not undo what the owner did after the sign-out.
+  Four things do that (`browser_entry._swap`).
+  - The page checks the session again after it read the form.
+  - The change reads the saved sign-out itself, not the one that the host
+    applied, and does nothing for a session from a second that is not after
+    it.
+  - A record that the page saves gets the second of its session, not the
+    present second. So the rule that ends a session ends its record: a
+    sign-out that ends the session has a second that is not before it, and
+    while the host did not apply a saved sign-out, nothing opens a session.
+    There is no moment with a record that opens a session for a session
+    that is ended. A cleanup after the write could not give that: the
+    record would count until the cleanup. The owner's commands keep the
+    present second; their authority is the private folder, not a session.
+  - The record goes in place only where the file still holds the bytes that
+    the change saw before it read the sign-out. On Windows the private
+    store removes only those exact bytes and then publishes without
+    replacement; a writer in between wins. So a change of an ended session
+    never replaces or removes a record that came later, for example the
+    owner's new password after the sign-out. The page then says that
+    another change came first.
+  The file of the sign-out is also looked at before all of this and again
+  after the record is in place. A sign-out that was saved meanwhile,
+  whatever its second, refuses the change, and the change removes its own
+  record by its exact bytes. This is for a clock that was set back, where
+  the seconds alone do not show the order.
 - **The page.** Server-rendered, with no script, and it shows nothing from
   the request. Its texts are fixed; a notice comes from a fixed list
-  (`?done=`). It shows whether a password or a key is set and when the
-  password was saved, never the password. It lists the addresses for other
+  (`?done=`) and shows only while the saved record agrees with it. The page
+  shows whether a password or a key is set, never the password and not when
+  it was saved (the record of the page has the second of a session). It lists the addresses for other
   devices, or says that there is none. The form answers with a redirect, so
   that a reload sends no password again. A save or a removal that is not
   confirmed is said as such, as for the key command. Setting takes the hash
@@ -4659,8 +4680,13 @@ passwords. Settings has no entry of its own for the page; the way goes
 through "Install app" and "Devices & apps". The page `/connect` and its
 script were read with the default text encoding of the host, which showed
 four of their characters wrong on a Windows host; they are read as UTF-8
-now. Not measured: the page in a real browser on a Windows PC by a person, a password
-manager, a phone browser.
+now. A record of the page has the limit of its session for a clock that
+was set back: a sign-out in that time ends neither, and the record has no
+lifetime; the sign-out command's "no key" write and the look at the file of
+the sign-out cover it, and only a failed write at that moment leaves it.
+On a host that is not a Windows host the swap of the record is two steps;
+only a Windows host has the page. Not measured: the page in a real browser
+on a Windows PC by a person, a password manager, a phone browser.
 
 #### The next step for a browser on the PC that is not signed in
 

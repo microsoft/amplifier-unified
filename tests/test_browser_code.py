@@ -90,6 +90,11 @@ class PrivateFiles:
                 assert name in {"session-epoch", "sign-in-key"}     # Nothing else is ever written through this seam.
                 with files.native(path, owned_root=owned_root, create=True) as real:
                     real.publish_private(name, content, replace=replace)
+
+            def remove_private(self, name, expected_sha256):
+                assert name == "sign-in-key"                # The page's swap, and nothing else.
+                with files.native(path, owned_root=owned_root) as real:
+                    real.remove_private(name, expected_sha256)
         yield Pinned()
 
 
@@ -2320,7 +2325,11 @@ def test_owner_sets_changes_and_removes_the_password_on_the_page_of_the_pc(host,
     assert host["browser_key"].current(host)[1] == "password" and signed_in(with_key(host, PASSWORD))
     text = owner_page(host, session=session, query="?done=set")[0].text
     assert '<div id="notice" role="status">The password is set.</div>' in text
-    assert re.search(r"<p>A password is set\. It was saved on \d{4}-\d\d-\d\d, \d\d:\d\d\.</p>", text)
+    assert "<p>A password is set.</p>" in text
+    # The record has the second of the session that set it, not the present second (see `_swap`).
+    assert auth.read_sign_in_key(home)[0] == session_payload(session)["issued"]
+    # A notice shows only while the saved record agrees with it: a reload after a later change says nothing.
+    assert '<div id="notice" role="status"></div>' in owner_page(host, session=session, query="?done=removed")[0].text
     assert ">Change password</button>" in text and text.count("<form") == 2
     assert '<button name="action" value="remove">Remove password</button>' in text
     # A change replaces it at once.
@@ -2335,6 +2344,7 @@ def test_owner_sets_changes_and_removes_the_password_on_the_page_of_the_pc(host,
     assert auth.valid_session(host, signed) and auth.valid_session(host, session)
     text = owner_page(host, session=session, query="?done=removed")[0].text
     assert '<div id="notice" role="status">No password or key is set now.</div>' in text and "Remove password" not in text
+    assert '<div id="notice" role="status"></div>' in owner_page(host, session=session, query="?done=set")[0].text
     # A key from the command shows as one, and the page can replace or remove it.
     key = new_key(host)
     text = owner_page(host, session=session)[0].text
@@ -2364,20 +2374,29 @@ def test_owner_page_says_what_is_wrong_and_never_shows_the_password(host, monkey
         assert auth.read_sign_in_key(home) is None
     # A save that is not confirmed is said as such: the record can be in place.
     entry.set_password(home, "the earlier password")
-    write = auth.write_sign_in_key
+    swap_record = auth.swap_sign_in_key
 
-    def fails_after_the_save(*arguments):
-        write(*arguments)
+    def fails_after_the_swap(*arguments):
+        swap_record(*arguments)
         raise OSError("ABCDE")
-    monkeypatch.setattr(auth, "write_sign_in_key", fails_after_the_save)
+    monkeypatch.setattr(auth, "swap_sign_in_key", fails_after_the_swap)
     page, _ = owner_page(host, method="POST", session=session, form=set_form())
     assert page.status == 500 and ("Amplifier could not confirm that the password is saved. A password or key that you "
                                    "had before may no longer work. Set the password again.") in page.text
     assert "ABCDE" not in page.text and PASSWORD not in page.text
     page, _ = owner_page(host, method="POST", session=session, form={"action": "remove"})
     assert page.status == 500 and "Amplifier could not confirm the removal. Remove it again." in page.text
-    monkeypatch.setattr(auth, "write_sign_in_key", write)
-    # The clock of the PC is earlier than the last sign-out: nothing is saved, and the page says what to do.
+    # Another change of the record came first: this one is not made, and the page says so.
+    entry.set_password(home, "the earlier password")
+    earlier = auth.read_sign_in_key(home)
+    monkeypatch.setattr(auth, "swap_sign_in_key", lambda *arguments: False)
+    for form in (set_form(), {"action": "remove"}):
+        page, _ = owner_page(host, method="POST", session=session, form=form)
+        assert page.status == 409 and "<form" not in page.text and PASSWORD not in page.text
+        assert ("Another change of the password or key came first, so this change was not made. "
+                f'<a href="{entry.PASSWORD_PATH}">Open this page again</a>.') in page.text
+    monkeypatch.setattr(auth, "swap_sign_in_key", swap_record)
+    assert auth.read_sign_in_key(home) == earlier
     # A save that the clock stops (see `_save`) has its own text. A session cannot get there: it must be
     # from a second after the saved sign-out, and the present second is not before the session's.
     def stopped(*arguments):
@@ -2441,7 +2460,7 @@ def test_session_that_a_sign_out_ended_during_its_request_changes_nothing(host, 
         assert ("Open this page in Amplifier on the PC that runs it, in a browser that signed in there. A browser "
                 "that signed in with a password, a key or a code cannot set the password.") in page.text
     else:
-        assert "A sign-out of all browsers ended this sign-in, so nothing was changed." in page.text
+        assert "A sign-out of all browsers ended this sign-in. This change does not count." in page.text
         assert auth.refresh_sessions(host) is True
     assert wrong_key(with_key(host, PASSWORD)) and wrong_key(with_key(host, "the earlier password"))
 
@@ -2467,32 +2486,138 @@ def test_second_of_a_session_is_only_that_of_a_session_that_counts_now(host, mon
         assert auth.session_is_remote(value) is True, value
 
 
-def test_sign_out_that_is_saved_during_the_save_of_a_password_ends_that_password(host, monkeypatch):
-    """After the first look at the saved sign-out, during the hash or the write."""
+def during_the_swap(monkeypatch, *, before=None, after=None):
+    """Run the owner's other doings at an exact point of the page's change: before or after its record goes in place."""
+    real, done = auth.swap_sign_in_key, []
+
+    def swap_record(data_dir, expected, record):
+        first = not done
+        done.append(record)
+        if first and before:
+            before()
+        result = real(data_dir, expected, record)
+        if first and after:
+            after()
+        return result
+    monkeypatch.setattr(auth, "swap_sign_in_key", swap_record)
+    return done
+
+
+def signs_in(host, password):
+    """In a thread of the page's change: does the password open a session at this moment?"""
+    return signed_in(with_key(host, password))
+
+
+def test_record_that_the_page_saves_has_the_second_of_its_session(host, monkeypatch):
+    home = host["service"].data_dir
+    monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_500)
+    session = auth._signed(SECRET, {"kind": "session", "issued": 1_900_000_100, "nonce": "n"})
+    assert owner_page(host, method="POST", session=session, form=set_form())[0].status == 303
+    assert auth.read_sign_in_key(home)[0] == 1_900_000_100 and signed_in(with_key(host, PASSWORD))
+    # So the sign-out that ends that session ends the record, at whatever point of the change it is saved.
+    host["sessions"].epoch = 1_900_000_100
+    assert not auth.valid_session(host, session) and wrong_key(with_key(host, PASSWORD))
+    host["sessions"].epoch = 1_900_000_099
+    assert auth.valid_session(host, session) and signed_in(with_key(host, PASSWORD))
+    # The owner's command keeps the present second: its authority is the private folder.
+    assert entry.set_password(home, PASSWORD) is True and auth.read_sign_in_key(home)[0] == 1_900_000_500
+    key, _ = entry.make_key(home)
+    assert auth.read_sign_in_key(home)[0] == 1_900_000_500
+
+
+@pytest.mark.parametrize("applied", [True, False], ids=["the-host-applied-the-sign-out", "the-host-did-not-apply-it-yet"])
+@pytest.mark.parametrize("earlier", [True, False], ids=["a-password-was-set-before", "nothing-was-set-before"])
+def test_sign_out_after_the_page_looked_leaves_no_moment_with_a_password_that_counts(host, monkeypatch, applied, earlier):
+    """The page read the saved sign-out; then the owner signs out all browsers; then the page's record goes in place."""
+    home = host["service"].data_dir
+    if earlier:
+        entry.set_password(home, "the earlier password")
+    session = auth.new_session(SECRET)
+    moments = []
+
+    def owner_signs_out():
+        auth.sign_out_all(home)                             # The owner's command, with its "no key" write.
+        entry.remove_key(home)
+        if applied:
+            assert auth.refresh_sessions(host) is True
+
+    def at_this_moment():
+        moments.append((auth.read_sign_in_key(home), signs_in(host, PASSWORD)))
+    during_the_swap(monkeypatch, before=owner_signs_out, after=at_this_moment)
+    page, _ = owner_page(host, method="POST", session=session, form=set_form())
+    assert "<form" not in page.text and PASSWORD not in page.text
+    if earlier:
+        # The record that the page looked at is gone: the page's change is not made at all.
+        assert page.status == 409 and moments == [(None, False)]
+    else:
+        # The page's record was in place for a moment. It did not count, and the page removed it again.
+        assert page.status == 403 and "A sign-out of all browsers ended this sign-in." in page.text
+        assert moments[0][0][0] == session_payload(session)["issued"] and moments[0][1] is False
+    assert auth.read_sign_in_key(home) is None
+    auth.refresh_sessions(host)
+    assert wrong_key(with_key(host, PASSWORD)) and not auth.valid_session(host, session)
+
+
+@pytest.mark.parametrize("form", [set_form(), {"action": "remove"}], ids=["set", "remove"])
+def test_change_of_an_ended_session_never_touches_what_the_owner_did_after_the_sign_out(host, monkeypatch, form):
+    """The page looked; the owner signs out all browsers, signs in again and sets a new password; the page goes on."""
+    home = host["service"].data_dir
+    entry.set_password(home, "the earlier password")
+    session = auth.new_session(SECRET)
+    real_time = auth.time.time
+
+    def owner_goes_on():
+        auth.sign_out_all(home)
+        entry.remove_key(home)
+        assert auth.refresh_sessions(host) is True
+        monkeypatch.setattr(auth.time, "time", lambda: real_time() + 5)     # In a later second.
+        fresh = auth.new_session(SECRET)
+        assert owner_page(host, method="POST", session=fresh, form=set_form("the replacement password"))[0].status == 303
+    done = during_the_swap(monkeypatch, before=owner_goes_on)
+    page, _ = owner_page(host, method="POST", session=session, form=form)
+    assert page.status in {403, 409} and "<form" not in page.text
+    # The replacement is there, untouched, and it signs in. Neither password of the ended session does.
+    assert host["browser_key"].current(host)[1] == "password"
+    assert signed_in(with_key(host, "the replacement password"))
+    assert wrong_key(with_key(host, PASSWORD)) and wrong_key(with_key(host, "the earlier password"))
+    assert len(done) >= 2                                   # The replacement's own swap, and the ended session's.
+
+
+def test_cleanup_of_a_refused_change_removes_its_own_record_and_no_other(host, monkeypatch):
+    """The page's record is in place; then a sign-out is saved and the owner's command makes a key; then the look."""
     home = host["service"].data_dir
     session = auth.new_session(SECRET)
-    write, during = auth.write_sign_in_key, []
+    made = []
 
-    def sign_out_meanwhile(data_dir, record):
-        write(data_dir, record)
-        if record is not None and not during:
-            during.append(auth.sign_out_all(data_dir))      # The owner's command, when the record is in place.
-    monkeypatch.setattr(auth, "write_sign_in_key", sign_out_meanwhile)
+    def owner_goes_on():
+        auth.sign_out_all(home)
+        monkeypatch.setattr(auth.time, "time", lambda now=auth.time.time() + 5: now)
+        made.append(entry.make_key(home)[0])                # The owner's command: a write that replaces.
+    during_the_swap(monkeypatch, after=owner_goes_on)
     page, _ = owner_page(host, method="POST", session=session, form=set_form())
-    assert during and page.status == 403 and "A sign-out of all browsers ended this sign-in" in page.text
-    assert auth._sign_in_key_path(home).read_bytes() == b"none\n"
-    assert auth.refresh_sessions(host) is True and wrong_key(with_key(host, PASSWORD))
-    # A sign-out that is saved after the save is done ends the password by the rule, with the record in place.
-    monkeypatch.setattr(auth, "write_sign_in_key", write)
-    fresh = auth._signed(SECRET, {"kind": "session", "issued": int(auth.time.time()) + 1, "nonce": "n"})
-    monkeypatch.setattr(auth.time, "time", lambda now=auth.time.time() + 2: now)
-    assert owner_page(host, method="POST", session=fresh, form=set_form())[0].status == 303
-    made = auth.read_sign_in_key(home)[0]
-    assert auth.sign_out_all(home) >= made and auth.refresh_sessions(host) is True
-    assert auth.read_sign_in_key(home)[0] == made and wrong_key(with_key(host, PASSWORD))
-    # The owner's command has no session: it saves as before.
-    monkeypatch.setattr(auth.time, "time", lambda now=auth.time.time() + 2: now)
-    assert entry.set_password(home, PASSWORD) is False and signed_in(with_key(host, PASSWORD))
+    assert page.status == 403 and "A sign-out of all browsers ended this sign-in." in page.text
+    # The record in the file is the owner's key, untouched. Until the host applies the sign-out, nothing signs in.
+    assert host["browser_key"].current(host)[1] == "key" and wrong_key(with_key(host, made[0]))
+    assert auth.refresh_sessions(host) is True
+    assert signed_in(with_key(host, made[0])) and wrong_key(with_key(host, PASSWORD))
+
+
+def test_swap_puts_a_record_in_place_only_where_the_expected_bytes_are(host):
+    """On native Windows through the real private store: remove the exact bytes, then publish without replacement."""
+    home = host["service"].data_dir
+    first, second = (1_900_000_001, "a" * 64), (1_900_000_002, "b" * 64)
+    assert auth.sign_in_key_bytes(home) is None
+    assert auth.swap_sign_in_key(home, b"something", first) is False and auth.sign_in_key_bytes(home) is None
+    assert auth.swap_sign_in_key(home, None, first) is True
+    one = auth.sign_in_key_bytes(home)
+    assert one == b"1900000001 " + b"a" * 64 + b"\n" and auth.read_sign_in_key(home) == first
+    assert auth.swap_sign_in_key(home, None, second) is False        # A record is there; none was expected.
+    assert auth.swap_sign_in_key(home, one + b" ", second) is False and auth.sign_in_key_bytes(home) == one
+    assert auth.swap_sign_in_key(home, one, second) is True and auth.read_sign_in_key(home) == second
+    assert auth.swap_sign_in_key(home, one, None) is False and auth.read_sign_in_key(home) == second
+    assert auth.swap_sign_in_key(home, auth.sign_in_key_bytes(home), None) is True
+    assert auth.sign_in_key_bytes(home) == b"none\n" and auth.read_sign_in_key(home) is None
+    assert auth.swap_sign_in_key(home, b"none\n", first) is True and auth.read_sign_in_key(home) == first
 
 
 OWNER_REFUSED = {

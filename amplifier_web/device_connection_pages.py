@@ -113,7 +113,7 @@ def setup_routes(app):
 
     async def catalog(request):
         browser_cookie(request)
-        manifest = json.loads((ASSETS / 'extension/manifest.json').read_text())
+        manifest = json.loads((ASSETS / 'extension/manifest.json').read_text(encoding='utf-8'))
         import base64, hashlib
         extension_id = ''.join(chr(ord('a') + int(c, 16)) for c in hashlib.sha256(base64.b64decode(manifest['key'])).hexdigest()[:32])
         return web.json_response({'extensionId': extension_id, 'download': '/connect/download/extension',

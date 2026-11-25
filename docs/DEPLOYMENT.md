@@ -339,7 +339,7 @@ device to it. For a LAN address without Tailscale, see
   Amplifier command if Amplifier uses a non-default data directory.
 - Sign-in with a code needs a version after 0.98.7. Sign-in with a saved key
   needs version 0.128.0 or a later one. Sign-in with a password that you set
-  in the app needs version 0.129.0 or a later one.
+  in the app needs version 0.130.0 or a later one.
   `amplifier-unified --version` shows the version.
 - `<port>` is the port that Amplifier uses. `amplifier-unified config get port`
   shows it. Type the number in place of `<port>`, without the angle brackets.

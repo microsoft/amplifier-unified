@@ -412,6 +412,50 @@ def write_sign_in_key(data_dir: Path, record) -> None:
         write_private(_sign_in_key_path(data_dir), content)
 
 
+def sign_in_key_bytes(data_dir: Path) -> bytes | None:
+    """The exact bytes of the saved record, or None when there is no file. See `swap_sign_in_key`."""
+    try:
+        if _WINDOWS:
+            from . import windows_files
+            root = windows_files.address(data_dir)
+            with windows_files.directory(root / "config" / "auth", owned_root=root) as pinned:
+                return pinned.read_private(_SIGN_IN_KEY, limit=4096)
+        return _sign_in_key_path(data_dir).read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def swap_sign_in_key(data_dir: Path, expected: bytes | None, record) -> bool:
+    """Put a record in place, or None for none, only where the file still holds `expected`. False when it does not.
+
+    For the owner's page: its change must never replace a record that came after its own look at the file.
+    On Windows the private store removes only the exact bytes that it was given and then publishes without
+    replacement. So a writer that comes in between wins, and this call says False. A record that was removed
+    and not published leaves no key, which opens nothing. Elsewhere the comparison and the write are two
+    steps; only a Windows host has that page.
+    """
+    content = _NO_SIGN_IN_KEY if record is None else f"{record[0]} {record[1]}\n".encode("ascii")
+    if _WINDOWS:
+        from . import windows_files
+        root = validated_data_dir(data_dir, create=True)
+        with windows_files.directory(root / "config" / "auth", owned_root=root, create=True) as pinned:
+            if expected is not None:
+                try:
+                    pinned.remove_private(_SIGN_IN_KEY, hashlib.sha256(expected).hexdigest())
+                except (FileNotFoundError, ValueError):
+                    return False                            # Another record is there, or none.
+            try:
+                pinned.publish_private(_SIGN_IN_KEY, content, replace=False)
+            except FileExistsError:
+                return False                                # Another writer came first.
+        return True
+    if sign_in_key_bytes(data_dir) != expected:
+        return False
+    auth_dir(data_dir)
+    write_private(_sign_in_key_path(data_dir), content)
+    return True
+
+
 def sign_in_key_hint(data_dir: Path):
     """The change hint of the saved key's record; compare as for `_epoch_hint`."""
     return _record_hint(_sign_in_key_path(data_dir))
