@@ -232,9 +232,10 @@ async def test_maintenance_commit_gate_cursor_and_backup_deferral(app_factory,mo
     app._save_changes()
     assert not app.db.in_transaction
     await app._storage_maintenance_task
-    assert app._resource_scan is not None
+    assert app._resource_scan is None
     first=len(calls)
-    assert first == 1
+    assert first == 3  # one admission drains three bounded directory pages
+    assert app._resource_scan_status['complete']
     storage_migration.maintenance(app)
     assert len(calls)==first, '60-second gate should not mark again'
     app._last_storage_sweep=0
