@@ -665,20 +665,25 @@ def load_plan(root, path):
             raise ValueError('Prepare the selected repository client before reading its registry')
         client_path = client / 'tests/browser-checks.json'
         client_plan = json.loads(client_path.read_text())
-        rows = [*validate_plan(plan),
-                *[{**row, 'cwd': str(Path('.build/web-client') / row.get('cwd', '.'))}
-                  for row in validate_plan(client_plan)]]
-        order = plan['scenarioOrder']
-        if len(order) != len(rows) or len(set(order)) != len(order) or set(order) != {row['id'] for row in rows}:
-            raise ValueError('Assembly scenario order must include each owned scenario exactly once')
-        validate_plan({'schemaVersion': 1, 'scenarios': rows})
-        by_id = {row['id']: row for row in rows}
-        plan = {'schemaVersion': 1, 'scenarios': [by_id[name] for name in order]}
+        plan = compose_browser_plan(plan, client_plan)
         provenance.update(browserLayout='separate-owners',
                           registrySha256={'unified': digest(path), 'client': digest(client_path)},
                           clientSelectionSha256=digest(selection_path))
     validate_plan(plan)
     return plan, provenance
+
+
+def compose_browser_plan(host_plan, client_plan):
+    """Compose the host and client scenarios in Unified's declared order."""
+    rows = [*validate_plan(host_plan),
+            *[{**row, 'cwd': str(Path('.build/web-client') / row.get('cwd', '.'))}
+              for row in validate_plan(client_plan)]]
+    order = host_plan['scenarioOrder']
+    if len(order) != len(rows) or len(set(order)) != len(order) or set(order) != {row['id'] for row in rows}:
+        raise ValueError('Assembly scenario order must include each owned scenario exactly once')
+    validate_plan({'schemaVersion': 1, 'scenarios': rows})
+    by_id = {row['id']: row for row in rows}
+    return {'schemaVersion': 1, 'scenarios': [by_id[name] for name in order]}
 
 
 def validate_plan(plan):
