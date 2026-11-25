@@ -4474,7 +4474,8 @@ addition; the code stays for a device that must not keep a secret.
   the key is random and long, and a reader of that folder can already read
   the session secret. `browsers key --remove` writes "no key" in the same
   file. A record that cannot be read or is malformed is never a key that
-  works, and the host reads it again at the next attempt.
+  works. The host keeps a malformed record as "no key" until the file
+  changes, and it makes a read that failed again at the next attempt.
 - **Who can make one.** The authority is the owner's private folder, as for
   the sign-out of all browsers: no running host, no credential and no network
   request. The command refuses when no address for other devices is

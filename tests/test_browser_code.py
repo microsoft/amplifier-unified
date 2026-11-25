@@ -1817,8 +1817,8 @@ def test_key_command_shows_a_new_key_once_and_saves_only_its_record(key_command,
         f"    {shown}\n\n"
         'On the other device, open Amplifier and type the key in the field "Sign-in key". '
         f"Addresses for other devices:\n  {REMOTE}\n  {OTHER}\n"
-        "Amplifier must be running. An address that you added after Amplifier started works after you "
-        "stop Amplifier and start it again.\n"
+        'Amplifier must be running. It uses a new address only after the steps "Turn remote access on" '
+        "of the deployment guide.\n"
         "The key works until you make a new key, remove it (amplifier-unified browsers key --remove) "
         "or sign out all browsers.\n")
     digest = auth.read_sign_in_key(home)[1]
@@ -1862,6 +1862,12 @@ def test_key_command_removes_the_key_and_the_sign_out_command_ends_it(key_comman
     def fails_after_the_save(*arguments):
         write(*arguments)
         raise OSError("ABCDE")
+    # A host that is not a Windows host has no key and no key command: its sign-out names neither.
+    remove = entry.remove_key
+    monkeypatch.setattr(entry, "remove_key", lambda data_dir: pytest.fail("The key's record was looked at"))
+    key_command(command="sign-out", windows=False)
+    assert capsys.readouterr().out == signed_out and auth.read_sign_in_key(home) == later
+    monkeypatch.setattr(entry, "remove_key", remove)
     for writer, record in ((fails, later), (fails_after_the_save, None)):
         monkeypatch.setattr(auth, "write_sign_in_key", writer)
         key_command(command="sign-out")                     # The sign-out itself is done: no error exit.
@@ -1869,6 +1875,29 @@ def test_key_command_removes_the_key_and_the_sign_out_command_ends_it(key_comman
             "Amplifier could not confirm that the saved sign-in key is removed. Run this: "
             "amplifier-unified browsers key --remove.\n")
         assert auth.read_sign_in_key(home) == record
+
+
+def test_sign_out_command_ends_a_key_from_a_second_that_the_clock_has_not_reached_again(
+        key_command, home, monkeypatch, capsys):
+    """The clock of the PC was ahead when the key was made, or it was set back later."""
+    now = clock(monkeypatch, 1_900_000_500)
+    key_command()
+    key = re.search(f"^    ((?:[{entry.CODE_ALPHABET}]{{5}}-){{4}}[{entry.CODE_ALPHABET}]{{5}})$",
+                    capsys.readouterr().out, re.M)[1]
+    record = auth.read_sign_in_key(home)
+    app = {"service": SimpleNamespace(data_dir=home), "sessions": auth.Sessions.load(home)}
+    saved = entry.SavedKey()
+    assert record[0] == 1_900_000_500 and saved.accepts(app, key)
+    now[0] = 1_900_000_100                                  # The clock was set back.
+    assert not saved.accepts(app, key)                      # A key from a later second opens nothing now.
+    key_command(command="sign-out")
+    assert "The saved sign-in key no longer works." in capsys.readouterr().out
+    assert auth.refresh_sessions(app) is True and app["sessions"].epoch < record[0]    # An earlier second than the key's.
+    now[0] = 1_900_000_600                                  # The clock reaches the second of the key again.
+    assert auth.read_sign_in_key(home) is None and not saved.accepts(app, key)
+    # The rule alone reads the clock: with the record still there, the key would be back.
+    auth.write_sign_in_key(home, record)
+    assert saved.accepts(app, key)
 
 
 def test_key_command_refusals_are_plain_and_change_nothing(key_command, home, monkeypatch, capsys):
@@ -1905,6 +1934,7 @@ def test_key_command_refusals_are_plain_and_change_nothing(key_command, home, mo
             said = str(stopped.value)
             assert said.startswith(phrase) and str(home) in said and "Run the command again." in said
             # No sentence says that nothing changed, and none says what works: neither is known.
+            said = said.replace(str(home), "")
             assert "ABCDE" not in said and "NOT" not in said and "Nothing was changed" not in said
         assert capsys.readouterr().out == ""                # No key was shown.
         changed = auth.read_sign_in_key(home) != record

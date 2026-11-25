@@ -567,7 +567,8 @@ def _browser_key(args, data_dir):
         # saved and not shown is known to nobody.
         raise SystemExit(f"Amplifier could not confirm that a new sign-in key is saved (its record is in {data_dir}). "
                          "No key is shown. A key that you had before may no longer work. "
-                         "Run the command again.") from None
+                         "Run the command again. If it fails again, run amplifier-unified browsers sign-out, "
+                         "then this command.") from None
     print("Save this sign-in key now, for example in a password manager. Amplifier does not show it again.")
     print()
     print("    " + browser_entry.SavedKey.display(key))
@@ -576,8 +577,8 @@ def _browser_key(args, data_dir):
           "Addresses for other devices:")
     for origin in remote:
         print("  " + origin)
-    print("Amplifier must be running. An address that you added after Amplifier started works after you "
-          "stop Amplifier and start it again.")
+    print('Amplifier must be running. It uses a new address only after the steps "Turn remote access on" '
+          "of the deployment guide.")
     print("The key works until you make a new key, remove it (amplifier-unified browsers key --remove) "
           "or sign out all browsers.")
     if replaced:
@@ -752,6 +753,8 @@ def main():
                              f"{data_dir}. Nothing was changed.") from None
         print("All browsers on all devices are signed out. A running Amplifier applies this within a few seconds.")
         print("To use Amplifier in a browser again, open it from this computer.")
+        if not browser_entry.is_windows():
+            return                                          # Only a Windows host has a sign-in key.
         try:
             # The saved second ends a key from before it (auth.sign_in_key_is_current). That rule reads the
             # clock of this PC, so the record of the key is removed as well: a key must not come back when a

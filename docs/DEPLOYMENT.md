@@ -439,10 +439,11 @@ at the PC, save it, and type it on any device, also when you are not at the PC.
    the field **Sign-in key**. Select **Sign in with key**.
 
 The key works at every address for other devices, as often as you need it. A
-typing mistake does not end it. Amplifier must be running, and an address that
-you added after Amplifier started works after you stop Amplifier and start it
-again. The key is a password for your Amplifier: everyone who has the key and
-can reach one of those addresses can sign in. Treat it as one.
+typing mistake does not end it. Amplifier must be running. It uses a new
+address only after the steps of [Turn remote access on](#turn-remote-access-on):
+the certificate must name the address, and Amplifier must start again. The key
+is a password for your Amplifier: everyone who has the key and can reach one of
+those addresses can sign in. Treat it as one.
 
 - To replace the key, run the command again. The earlier key stops working.
   Browsers that are signed in stay signed in.
