@@ -15,6 +15,7 @@ from filelock import FileLock
 from filelock import Timeout as LockTimeout
 from amplifier_worktrees.git import atomic
 from .workspace_placement import _validate_created_directory
+from .bundle_defaults import automatic_starter
 
 GIT_TIMEOUT_SECONDS = 180
 GIT_STDOUT_LIMIT = 65536
@@ -48,6 +49,7 @@ def recover(home, identity):
                 value.update(status='interrupted', error='Setup was interrupted. No operations were replayed.',
                              revision=value['revision'] + 1)
                 atomic(target, value)
+            _release_default(home, value, target)
             return value
     except LockTimeout:
         return inspect(home, identity)  # Another live owner holds its setup lease.
@@ -119,6 +121,90 @@ def _write_new(root, directory, filename, content):
         except FileNotFoundError:
             pass
         os.close(fd)
+
+
+def _release_default(home, value, target):
+    """Convert only an unchanged, proven host-generated legacy starter setting.
+
+    Setup/placement receipts remain historical evidence; no conversation or
+    custom definition is migrated. Foreign or edited files remain explicit.
+    """
+    starter = value.get('starter', {})
+    if (os.name != 'posix' or not value.get('scaffolded') or not automatic_starter(starter)
+            or starter.get('bundleDefault') == 'release' or value.get('bundleDefaultMigration')):
+        return
+    try:
+        placement = json.loads((home / 'workspace-placement' / (value['id'] + '.json')).read_text())
+        if (not isinstance(placement, dict)
+                or placement.get('starter') != starter or placement.get('path') != value['path']
+                or placement.get('planId') != value['id'] or not placement.get('attempt')):
+            return
+        attempt = placement['attempt']
+        if Path(attempt).name != attempt or not attempt.startswith('receipt-'):
+            return
+        created = json.loads((home / 'workspace-placement' / attempt).read_text())
+        if (not isinstance(created, dict)
+                or created.get('outcome') != 'created' or created.get('starter') != starter
+                or created.get('planId') != value['id'] or created.get('path') != value['path']
+                or created.get('directoryIdentity') != value['directoryIdentity']):
+            return
+        _validate_created_directory(value)
+        root = os.open(value['path'], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            opened = os.fstat(root)
+            if [opened.st_dev, opened.st_ino] != value['directoryIdentity']:
+                return
+            directory = os.open('.amplifier', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root)
+            try:
+                import yaml
+                replacement = yaml.safe_dump({'bundle': {'releaseDefault': starter['id']}})
+                if starter.get('bundle'):
+                    if {'path': '.amplifier/settings.yaml', 'status': 'created'} not in value['files']:
+                        return
+                    expected = yaml.safe_dump({'bundle': {'active': starter['bundle']}}).encode()
+                    fd = os.open('settings.yaml', os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=directory)
+                    with os.fdopen(fd, 'rb') as stream:
+                        info = os.fstat(stream.fileno())
+                        if not stat.S_ISREG(info.st_mode) or stream.read(len(expected) + 1) != expected:
+                            return
+                    # Share the normal settings writer's lease. Recheck the
+                    # inode and exact bytes under that lease before replacement.
+                    path = Path(value['path']) / '.amplifier/settings.yaml'
+                    with FileLock(str(path) + '.lock', timeout=0):
+                        fd = os.open('settings.yaml', os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=directory)
+                        with os.fdopen(fd, 'rb') as stream:
+                            current = os.fstat(stream.fileno())
+                            if (not stat.S_ISREG(current.st_mode)
+                                    or (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino)
+                                    or stream.read(len(expected) + 1) != expected):
+                                return
+                        temporary = '.starter-' + uuid.uuid4().hex
+                        try:
+                            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                         0o600, dir_fd=directory)
+                            with os.fdopen(fd, 'w') as stream:
+                                stream.write(replacement)
+                                stream.flush()
+                                os.fsync(stream.fileno())
+                            os.replace(temporary, 'settings.yaml', src_dir_fd=directory, dst_dir_fd=directory)
+                        finally:
+                            try:
+                                os.unlink(temporary, dir_fd=directory)
+                            except FileNotFoundError:
+                                pass
+                else:
+                    if _write_new(root, '.amplifier', 'settings.yaml', replacement) != 'created':
+                        return
+            finally:
+                os.close(directory)
+        finally:
+            os.close(root)
+        value['bundleDefaultMigration'] = {'policy': 'release', 'starterId': starter['id']}
+        value['revision'] += 1
+        atomic(target, value)
+    except (OSError, ValueError, KeyError, TypeError, LockTimeout):
+        # Missing/ambiguous provenance is not permission to rewrite a setting.
+        return
 
 
 def _raw_git(fd, *args, overrides=(), allow_missing=False, extra_fds=(), _anonymous=False, _timeout=None):
@@ -300,9 +386,9 @@ def run(home, identity, progress=None):
                     includes = ('@../AGENTS.md\n' if starter['instructions'] else '') + ('@../SCRATCH.md\n' if starter.get('scratch') else '')
                     status = _write_new(root, '.amplifier', 'AGENTS.md', includes)
                     value['files'].append({'path': '.amplifier/AGENTS.md', 'status': status})
-                if starter['bundle']:
+                if starter['bundle'] or automatic_starter(starter):
                     import yaml
-                    settings = {'bundle': {'active': starter['bundle']}}
+                    settings = {'bundle': {'releaseDefault': starter['id']}} if automatic_starter(starter) else {'bundle': {'active': starter['bundle']}}
                     if starter.get('bundleSource'):
                         settings['bundle']['added'] = {starter['bundle']: starter['bundleSource']}
                     status = _write_new(root, '.amplifier', 'settings.yaml', yaml.safe_dump(settings))

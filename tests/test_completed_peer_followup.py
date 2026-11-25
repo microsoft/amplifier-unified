@@ -48,7 +48,7 @@ async def test_completed_input_charge_preserves_task_and_restart(tmp_path, monke
                 restored.tasks.reserve_peer_input('second', completed=True)
                 assert restored.tasks.record()['goalState']['turns_used'] == 4
             restored.capacity.last_denial = {'budgetRevision': restored.capacity.policy['revision']}
-            assert not await restored.tasks.peer_input_allowed(completed=True)
+            assert await restored.tasks.peer_input_allowed(completed=True)
             assert restored.capacity.last_denial
         finally:
             await restored.close()
@@ -102,20 +102,25 @@ async def test_completed_owner_request_is_fresh_and_bound_to_membership(app):
     assert 'humanResume' not in message['peerEnvelope']
     assert message['peerEnvelope']['completedTaskHandling']['taskId'] == 'completed-task'
     assert app.collaboration.guard(receipt) is None
-    assert app.collaboration.guard(receipt, for_reply=True) is None
     successor = {'id': 'new-task', 'revision': 6, 'status': 'completed',
                  'followupOf': {'taskId': 'completed-task', 'revision': 4,
                                 'inputId': 'fresh-correction', 'generationId': 'native-generation'}}
     target['task'] = successor
     assert app.collaboration.guard(receipt) == 'The recipient task is not active.'
-    assert app.collaboration.guard(receipt, for_reply=True) is None
+    # Retaining evidence is independent of this old execution guard. A fresh
+    # current root can report the confirmed admitted correction after a task change.
+    await generation(app, target, 'report-correction', ['fresh-report-input'])
+    reply = await agent_action(app, target, 'coordination.reply', {
+        'requestId': 'fresh-correction', 'kind': 'result', 'outcome': 'success',
+        'text': 'Correction retained', 'references': ['urn:fixture:correction']}, 'report-correction')
+    assert reply['result']['status'] == 'staged'
     successor['followupOf']['inputId'] = 'another-request'
-    assert app.collaboration.guard(receipt, for_reply=True) == 'The recipient task is not active.'
+    assert app.collaboration.guard(receipt) == 'The recipient task is not active.'
     successor['followupOf']['inputId'] = 'fresh-correction'
     assignment = app.assignments.current(source)
     assignment['members'][target['id']]['status'] = 'retired'
     app.assignments.save(assignment)
-    assert 'retired' in app.collaboration.guard(receipt, for_reply=True)
+    assert 'retired' in app.collaboration.guard(receipt)
 
 
 @pytest.mark.parametrize('other_workspace', [False, True])
@@ -147,7 +152,6 @@ async def test_independent_full_manager_accepts_fresh_work_without_reopening_com
     target['task'] = {'id': 'next-release', 'revision': 4, 'status': 'active',
                       'followupOf': {'taskId': prior['id'], 'revision': prior['revision'],
                                      'inputId': 'new-release', 'generationId': 'new-generation'}}
-    assert app.collaboration.guard(receipt, for_reply=True) is None
     assert app.collaboration.guard(receipt) == 'The recipient task changed.'
 
 

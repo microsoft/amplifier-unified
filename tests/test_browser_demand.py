@@ -1,5 +1,8 @@
 from copy import deepcopy
+import asyncio
 import json
+
+import pytest
 
 from amplifier_web.browser_demand import project
 from amplifier_web.shell_wire import compact
@@ -34,6 +37,100 @@ def test_normal_chat_retains_live_facts_without_settings_history():
     assert result['runtimeControl']['chat']['configuration.providers'] == {'provider': 'ready'}
 
 
+def test_off_chat_notification_candidates_are_content_free_before_demand_filter():
+    state = heavy()
+    state['attention']['items'] += [
+        {'id': 'question:q', 'sessionId': 'other', 'fingerprint': 'v1', 'read': False,
+         'title': 'Private question', 'detail': 'Private details'},
+        {'id': 'approval:a', 'sessionId': 'other', 'fingerprint': 'v2', 'read': True,
+         'detail': 'Private arguments'}]
+    result = project(state)
+    assert result['notificationAttention'] == [
+        {'id': 'question:q', 'sessionId': 'other', 'fingerprint': 'v1', 'read': False},
+        {'id': 'approval:a', 'sessionId': 'other', 'fingerprint': 'v2', 'read': True}]
+    assert not any(row.get('sessionId') == 'other' for row in result['attention']['items'])
+    assert 'Private' not in json.dumps(result['notificationAttention'])
+
+
+@pytest.mark.parametrize('body_size', [32, 100_000])
+async def test_bound_browser_receives_published_off_chat_decision_headers(live, monkeypatch, body_size):
+    from amplifier_web.attention import session_item_at, session_item_count
+    from amplifier_web.directory_attention import DirectoryAttention, receipts
+    from amplifier_web.transcript_window import TranscriptWindowReader
+
+    service, first, second = live
+    await command(service, 'browser-a', 'session.select', {'id': first})
+    await command(service, 'browser-a', 'view.update', {'patch': {'panel': None}})
+    assert snapshot(service, 'browser-a')['notificationAttention'] == []
+    other = service._session(second)
+    private = 'Private off-chat body ' + 'x' * body_size
+    other.update(messages=[{'id': 'other-message', 'role': 'user', 'text': private}],
+                 approvals=[{'id': 'off-chat-approval', 'status': 'pending', 'title': private}],
+                 error=private, errorAt=1, completion={'id': 'other-completion', 'at': 2})
+    question = {'id': 'off-chat-question', 'sessionId': second, 'createdAt': 1,
+                'status': 'pending', 'required': True, 'revision': 1, 'prompt': private}
+    service.questions.store.put(question)
+    service.questions.sync({second})
+    service._publish_changes(sessions={second})
+
+    def current_headers():
+        return [{key: item[key] for key in ('id', 'sessionId', 'fingerprint', 'read')}
+                for slot in range(session_item_count(other))
+                if (item := session_item_at(other, service._state.get('attentionRead', {}), slot))]
+
+    def observe():
+        expected = current_headers()
+        commands = service.db.execute('SELECT count(*) FROM commands').fetchone()[0]
+        def forbidden(*args, **kwargs):
+            raise AssertionError('Ordinary browser projection must not decode notices or load history')
+        with monkeypatch.context() as guarded:
+            guarded.setattr(DirectoryAttention, 'decode', forbidden)
+            guarded.setattr(service.cold_display, 'hydrate', forbidden)
+            guarded.setattr('amplifier_web.automatic_history.read_transcript', forbidden)
+            guarded.setattr(TranscriptWindowReader, 'read_window', forbidden)
+            result = snapshot(service, 'browser-a')
+            # The same scoped producer still carries exact reviewed errors, but
+            # neither off-chat completions nor decision bodies.
+            projected = service.projections.attention(service.state, session_ids=(first,))
+            assert [item for item in projected['items'] if item.get('sessionId') == second] == [
+                item for item in expected if not item['id'].startswith('completion:')]
+            # Existing navigation receipt consumers do not opt into decisions.
+            assert receipts(service.directory, service.state, {second}) == [
+                item for item in expected if item['id'].startswith(('session:', 'completion:'))]
+        candidates = [item for item in expected if item['id'].startswith(('question:', 'approval:'))]
+        assert {item['id'] for item in candidates} == {
+            'question:off-chat-question', 'approval:off-chat-approval'}
+        assert result['notificationAttention'] == candidates
+        assert result['selectedSessionId'] == first
+        assert all(item.get('sessionId') != second for item in result['attention']['items'])
+        assert all(not row.get('messages') for row in result['sessions'] if row['id'] == second)
+        assert private not in json.dumps(result)
+        assert service.db.execute('SELECT count(*) FROM commands').fetchone()[0] == commands
+        assert not result.get('deviceCommands')
+        assert not any(record.get('deviceCommands') for record in service.clients.records.values())
+        assert not service.runtime.started and not service.runtime.sent
+        return candidates
+
+    initial = observe()
+    assert all(not item['read'] for item in initial)
+    # Explicit acknowledgement changes the scalar read fact, not the decision.
+    review = current_headers()
+    await command(service, 'browser-a', 'attention.read', {
+        'ids': [item['id'] for item in review if not item['id'].startswith('completion:')],
+        'fingerprints': {item['id']: item['fingerprint'] for item in review}})
+    assert observe() == [{**item, 'read': True} for item in initial]
+    question['revision'] += 1
+    service.questions.store.put(question)
+    service.questions.sync({second})
+    other['approvals'][0]['title'] = private + ' changed'
+    service._publish_changes(sessions={second})
+    changed = observe()
+    assert all(not item['read'] for item in changed)
+    assert all(item['fingerprint'] != old['fingerprint'] for item, old in zip(changed, initial))
+    assert other['questions'][0]['status'] == other['approvals'][0]['status'] == 'pending'
+    assert other['messages'][0]['text'] == private
+
+
 def test_requested_resources_arrive_and_retire_without_deleting_evidence():
     state = heavy()
     for page, key in [('updates', 'updates'), ('smart-tools', 'smartTools')]:
@@ -62,6 +159,89 @@ async def test_demand_is_client_scoped_and_full_reads_keep_evidence(live):
     await command(service, 'browser-a', 'view.update', {'patch': {'panel': None}})
     assert 'items' not in snapshot(service, 'browser-a')['updates']
     assert service._state['updates']['items']
+
+
+@pytest.mark.parametrize('surface', ['modal', 'canvas'])
+@pytest.mark.parametrize('page', ['chat-input', 'suggestion-advanced'])
+async def test_selected_chat_suggestion_settings_demands_exact_global_model_catalog(live, monkeypatch, surface, page):
+    from amplifier_web.management import Management
+    from amplifier_web.provider_catalog import model_key
+    from amplifier_web.setup import SetupManager
+
+    service, first, _ = live
+    service.management = Management(service)
+    manager = service.prompt_suggestions.manager
+    workspace = str(service.data_dir)
+    manager.store.update(workspace, 'global', lambda value: value.update(config={'providers': [{
+        'id': 'saved', 'module': 'provider-openai', 'config': {'api_key': 'synthetic-key'}}]}))
+    key = manager.catalog_key({'id': 'saved'}, workspace)
+    models = [{'id': 'utility-model', 'display_name': 'Utility model'}]
+    metadata = {'configSchema': {'fields': [
+        {'id': 'reasoning_effort', 'choices': ['low', 'high']}]}}
+    service.management.provider_catalog.put(model_key(key), {
+        'models': models, 'modelsSupported': True, 'modelsProvenance': 'provider-api',
+        'providerMetadata': metadata})
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError('Viewing cached Settings must not discover or call a model')
+    monkeypatch.setattr(SetupManager, 'probe', forbidden)
+    monkeypatch.setattr(SetupManager, 'discover_catalog', forbidden)
+    for client in ('browser-a', 'browser-b'):
+        await command(service, client, 'session.select', {'id': first})
+        await command(service, client, 'view.update', {'patch': {'panel': None}})
+    await command(service, 'browser-a', 'providers.list', {
+        'configurationTarget': {'kind': 'global'}})
+    # Complete the ordinary cached list/warm publication, not a hand-shaped
+    # browser response or a separate catalog owner.
+    while service.tasks:
+        await asyncio.gather(*tuple(service.tasks))
+    roster = (await command(service, 'browser-a', 'providers.suggestionModels'))['result']['providers']
+    assert roster[0]['sharedCatalogKey'] == key
+    service._session(first)['runtimeReport'] = {'provider_choices': [
+        {'id': 'saved', 'sharedCatalogKey': key}]}
+    service._publish_changes(sessions={first})
+    saved_settings = deepcopy(manager.store.read(workspace, 'global'))
+    model_selection = deepcopy(service._session(first).get('selection'))
+    config_revision = service._state.get('configurationRevision', 0)
+    paid_claims = list(service.db.execute('SELECT * FROM suggestion_requests'))
+
+    def assert_deferred(client):
+        closed = snapshot(service, client)
+        assert closed['selectedSessionId'] == first
+        assert closed['modelCatalogs'][key]['modelsDeferred'] is True
+        assert 'models' not in closed['modelCatalogs'][key]
+        assert 'providerCatalogs' not in closed['setup']
+        return closed
+
+    assert_deferred('browser-a')
+    patch = {'panel': 'settings' if surface == 'modal' else None,
+             'settingsExpanded': [page]}
+    if surface == 'canvas':
+        service.clients.records['browser-a']['canvas'] = {
+            'id': 'suggestion-settings', 'kind': 'settings', 'open': True}
+    await command(service, 'browser-a', 'view.update', {'patch': patch})
+    opened = snapshot(service, 'browser-a')
+    assert opened['selectedSessionId'] == first
+    assert opened['setup']['configurationTarget'] == {'kind': 'global'}
+    assert opened['setup']['providerCatalogs']['saved']['sharedCatalogKey'] == key
+    assert opened['modelCatalogs'][key]['models'] == models
+    assert opened['modelCatalogs'][key]['metadata'] == metadata
+    assert 'modelsDeferred' not in opened['modelCatalogs'][key]
+    assert_deferred('browser-b')
+    # These overview destinations link to controls but mount no model picker.
+    # In particular the superseded Privacy form must not keep demand alive.
+    for other_page in ('privacy', 'advanced', 'appearance', 'updates'):
+        await command(service, 'browser-a', 'view.update', {'patch': {'settingsExpanded': [other_page]}})
+        assert_deferred('browser-a')
+    service.clients.records['browser-a']['canvas'] = {}
+    await command(service, 'browser-a', 'view.update', {'patch': {'panel': None}})
+    assert_deferred('browser-a')
+    assert service._state['modelCatalogs'][key]['models'] == models
+    assert manager.store.read(workspace, 'global') == saved_settings
+    assert service._session(first).get('selection') == model_selection
+    assert service._state.get('configurationRevision', 0) == config_revision
+    assert list(service.db.execute('SELECT * FROM suggestion_requests')) == paid_claims
+    assert not service.runtime.started and not service.runtime.sent
 
 
 def test_shell_dedup_preserves_different_scopes_and_inputs():

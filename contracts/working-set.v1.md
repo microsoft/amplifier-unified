@@ -43,6 +43,15 @@ accepted execution -> runtime admission -> working -> safely evictable when idle
    repeating unused historical bodies. Omitted detail retains its authorized read
    path until an explicit WS7 retention policy expires it; projection alone never
    truncates the canonical record or invents empty coverage.
+   The chat Plan is the **last successfully reported root-agent checklist**,
+   saved with the existing session presentation. It is not execution state,
+   completion evidence, an approval gate or a claim about current historical
+   files. Failed or malformed updates leave that report unchanged; a valid
+   empty report clears it. A legacy session without a saved report has no Plan
+   panel until its next ordinary successful report. Opening a chat or updating
+   its Plan performs no historical reconstruction or model call. Manual edits
+   to old logs do not recompute this display. The explicit `session.plans`
+   history API retains its separate read contract.
    Broken: opening the sidebar starts dormant workers. Affected: people and active executions.
 
 4. **WS4 — Bound resident work.** Runtime, projection, replay and subscriber caches
@@ -53,6 +62,8 @@ accepted execution -> runtime admission -> working -> safely evictable when idle
    retain exact identities; completed detail remains accessible through durable reads.
    Associated processes and temporary environments can retire or wake through their
    lifecycle owner only when actual work, other consumers and review holds allow it.
+   An idle live Amplifier worker still holds its native writer. Retirement saves
+   and rechecks pending work before exit; idle events alone never release ownership.
    Viewer absence alone is not an idle witness; archive is not permission to delete
    durable conversation or agent memory. Retention follows its separate owner/policy.
    Broken: one slow client grows memory without limit or eviction cancels work. Affected: all users.
@@ -73,6 +84,13 @@ accepted execution -> runtime admission -> working -> safely evictable when idle
    conversation history merely to make an inspection view current. Preparation
    reuses a request-scoped observation within one fitted request, without reusing
    it across requests or replacing transport-time authority/revocation checks.
+   A synchronous native refresh and publication may reuse one verified legacy
+   read under its writer lock, without crossing an await or retaining the read
+   after exit. Detached snapshots stay independent of later saves; existing live
+   aliases retain their authority. Failure or cancellation clears the temporary
+   read without selecting a staged durable root. Private native selection and
+   aggregation may read those verified rows without copying them; only the new
+   aggregate and activity diagnostics leave that read-only projection.
    Full catalog metadata reconciliation commits its changed owners and global
    records without checkpointing unchanged conversation histories. Pending progress
    still joins that commit, and failed commits remain recoverable.

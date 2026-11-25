@@ -35,6 +35,49 @@ def source(tmp_path):
             ('user','First user turn'),('assistant','First answer'),('user','Second user turn'),('assistant','Second answer')])]}
 
 
+async def test_edit_transport_projects_unrelated_host_state_before_copy(tmp_path, monkeypatch):
+    from amplifier_web import history_revision
+    from amplifier_web.runtime_protocol import encode_message, MAX_MESSAGE_BYTES
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    src = source(tmp_path)
+    blob = 'x' * MAX_MESSAGE_BYTES
+    src.update(execution={'nodes': [{'kind': 'tool', 'output': blob}]},
+               historyEdit={'text': blob}, draft=blob, workers=[{'report': blob}])
+    attachment = {'id': 'a' * 32, 'name': 'fixture.png', 'size': 1_000_000}
+    src['messages'][2]['attachments'] = [attachment]
+    arguments = {'source': src, 'messageId': '2', 'operationId': 'projected-edit',
+                 'text': 'Small edited question', 'attachments': [attachment]}
+    envelope = {'op': 'control', 'operation': 'history.edit', 'arguments': arguments}
+    with pytest.raises(ValueError, match='48 MB transport limit'):
+        encode_message(envelope)  # Baseline causal path, before native mutation.
+
+    class NoCopy(dict):
+        def __deepcopy__(self, memo):
+            raise AssertionError('Unrelated execution must not be copied')
+    src['execution'] = NoCopy(src['execution'])
+    frozen = history_revision.edit_source(src)
+    arguments['source'] = frozen
+    assert len(encode_message(envelope)) < 10_000
+    assert frozen['messages'] == src['messages']
+    assert frozen['messages'] is not src['messages']
+    assert frozen['messages'][2]['attachments'] == [attachment]
+    assert not {'execution', 'historyEdit', 'draft', 'workers'} & frozen.keys()
+    controls = Controls(tmp_path, frozen, transcript())
+    await controls.checkpoint()
+    result = await rewind(controls, arguments)
+    assert controls.rows == transcript()[:6]
+    assert [row['text'] for row in result['messages']] == ['First user turn', 'First answer']
+    assert len(encode_message({'type': 'history.revised', **result})) < 10_000
+    assert src['draft'] == blob and src['messages'][2]['attachments'] == [attachment]
+
+    # Required message content is never truncated to fit. Reject it before the
+    # worker command, checkpoint, rewind or input submission can run.
+    src['messages'][0]['text'] = blob
+    required = history_revision.edit_source(src)
+    with pytest.raises(ValueError, match='48 MB transport limit'):
+        encode_message({**envelope, 'arguments': {**arguments, 'source': required}})
+
+
 async def test_rewind_retains_tool_context_and_all_events_under_same_identity(tmp_path, monkeypatch):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME',str(tmp_path))
     src=source(tmp_path);controls=Controls(tmp_path,src,transcript());await controls.checkpoint()
@@ -134,7 +177,8 @@ async def test_current_edit_is_one_generation_in_same_chat_and_blocks_competing_
     await reopened.close()
 
 
-async def test_revision_preserves_earlier_execution_and_reconciles_after_restart(tmp_path,monkeypatch):
+@pytest.mark.parametrize('receipt_phase', ['committed', 'prepared'])
+async def test_revision_preserves_earlier_execution_and_reconciles_after_restart(tmp_path,monkeypatch,receipt_phase):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME',str(tmp_path))
     app=AppService(tmp_path,workspace=tmp_path)
     await app.dispatch('session.create',{})
@@ -142,18 +186,44 @@ async def test_revision_preserves_earlier_execution_and_reconciles_after_restart
     src['messages'][0]['inputId']='first';src['messages'][2]['inputId']='second'
     src['execution']={'currentTurnId':'second','turns':[{'id':name,'inputId':name,'anchorMessageId':str(i),'phase':'completed'} for name,i in [('first',0),('second',2)]],
         'nodes':[{'id':name+'-tool','turnId':name,'kind':'tool'} for name in ['first','second']]}
+    src['execution']['nodes'].append({'id': 'second-model', 'turnId': 'second',
+        'kind': 'llm', 'phase': 'completed', 'liveObservation': True,
+        'usage': {'totalTokens': 17}})
     src['historyEdit']={'phase':'working','operationId':'restart-edit','messageId':'2','text':'Changed second','via':'chat','attachments':[]}
     controls=Controls(tmp_path,src,transcript());await controls.checkpoint()
     result=await rewind(controls,{'source':src,'messageId':'2','operationId':'restart-edit'})
+    path = receipt_path(tmp_path, identity, 'restart-edit')
+    receipt = json.loads(path.read_text())
+    receipt['phase'] = receipt_phase
+    write_private(path, json.dumps(receipt))
+    original_receipt = path.read_bytes()
+    native = controls.store.directory(identity) / 'transcript.jsonl'
+    native_before = native.read_bytes()
+    # Existing assistance and uncertain paid claims are not recovery inputs.
+    app.db.execute("INSERT INTO suggestion_requests VALUES ('old-request','old-source')")
+    app.db.execute('UPDATE suggestion_cache_policy SET legacy=1')
+    app.db.execute('INSERT INTO suggestion_success_cache VALUES (?,?,?,?,?)',
+                   ('owner', identity, 'prior-source', '{"status":"empty","suggestion":null}', 1))
+    tables = ('suggestion_requests', 'suggestion_cache_policy',
+              'suggestion_success_cache', 'suggestion_fresh_completion')
+    suggestions = {table: list(app.db.execute(f'SELECT * FROM {table}')) for table in tables}
     app._publish();await app.close()
-    app=AppService(tmp_path,workspace=tmp_path)
+    from test_automatic_history import ObservedRuntime
+    runtime = ObservedRuntime()
+    app=AppService(tmp_path,runtime,workspace=tmp_path)
     restored=app._session(identity)
     assert [row['text'] for row in restored['messages']]==['First user turn','First answer','Changed second']
     assert restored['messages'][-1]['delivery']['status']=='unknown'
     assert [row['id'] for row in restored['execution']['nodes']]==['first-tool']
+    assert [(row['id'], row['usage']) for row in restored['execution']['retiredUsageNodes']] == [
+        ('second-model', {'totalTokens': 17})]
     assert restored['sharedHistoryTotal']==3 and not restored['configurationBusy']
     assert 'restarted during this edit' in restored['error']
     assert controls.store.load(identity)[0]==transcript()[:6]  # Restart did not submit edited input.
+    assert native.read_bytes() == native_before and path.read_bytes() == original_receipt
+    assert runtime.started == runtime.sent == []
+    assert {table: list(app.db.execute(f'SELECT * FROM {table}')) for table in tables} == suggestions
+    assert not app.prompt_suggestions.jobs and app.prompt_suggestions._manager is None
     await app.close()
 
 
@@ -257,9 +327,9 @@ def test_edit_snapshot_metadata_retry_preserves_content_guard(tmp_path, monkeypa
     original = history._read_metadata
     calls = 0
 
-    def racing_read(path):
+    def racing_read(path, **kwargs):
         nonlocal calls
-        result = original(path)
+        result = original(path, **kwargs)
         calls += 1
         if calls == 1:
             path.write_text(json.dumps({**result, 'name': 'New title'}))

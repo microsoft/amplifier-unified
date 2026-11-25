@@ -6,10 +6,12 @@ fixture-foundation never replaces amplifier-foundation in the test interpreter.
 The profile-probe adapter does not mount a conversation or call a provider.
 """
 import importlib.metadata
+import hashlib
 import json
 import os
 import shutil
 import sys
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -282,7 +284,7 @@ async def incremental_sources(tmp_path, monkeypatch, request):
         overrides = await qualification.prepare_overrides(project, stage / 'runtime-install-overrides.txt')
         return project, overrides
 
-    return SimpleNamespace(home=home, repos=repos, commits=commits, manager=manager, collect=collect,
+    return SimpleNamespace(kind=kind, home=home, repos=repos, commits=commits, manager=manager, collect=collect,
                            make_stage=make_stage, empty_project=empty_project, commands=commands)
 
 
@@ -445,6 +447,17 @@ async def test_optional_incompatible_source_refuses_before_batch_install(increme
     c = incremental_sources
     stage = c.make_stage('d' * 32)
     project, overrides = await c.empty_project(stage)
+    if c.kind == 'pin':
+        # A full SHA at the exact selected/checked identity is compatible, but
+        # never grants permission to advance. Keep this negative genuinely
+        # incompatible: main moves while the authored skills pin stays fixed.
+        authored_pin = c.commits['foundation']
+        (c.repos['foundation'] / 'revision.txt').write_text('foundation:1\n')
+        git(c.repos['foundation'], 'commit', '-am', 'advance beyond authored pin')
+        c.commits['foundation'] = git(c.repos['foundation'], 'rev-parse', 'HEAD')
+        assert c.commits['foundation'] != authored_pin
+        assert tomllib.loads((c.repos['skills'] / 'pyproject.toml').read_text())[
+            'tool']['uv']['sources'][FOUNDATION]['rev'] == authored_pin
     entry = await c.collect(stage, project, overrides)
     checked = {}
     for name, (repository, subdirectory) in PACKAGES.items():
@@ -466,6 +479,65 @@ async def test_optional_incompatible_source_refuses_before_batch_install(increme
     assert entry.report['packages'][FOUNDATION]['status'] == 'authored-constraint'
     assert not entry.batch.installed and entry.batch.report()['resolverTransactions'] == 0
     assert source_files(stage) == before and qualification.installed_graph(project) == graph == []
+    assert not any({'fetch', 'checkout', 'restore'}.intersection(command)
+                   for command in c.commands[start:] if command[0] == 'git')
+    assert not (stage / 'runtime.lock').exists() and not (stage / 'runtime-installed.json').exists()
+
+
+@pytest.mark.parametrize('incremental_sources', ['pin'], indirect=True)
+@pytest.mark.parametrize('checked_case', ['same', 'advance', 'unchecked'])
+async def test_optional_exact_pin_allows_only_unchanged_checked_identity(incremental_sources, checked_case):
+    c = incremental_sources
+    stage = c.make_stage('9' * 32)
+    project, overrides = await c.empty_project(stage)
+    entry = await c.collect(stage, project, overrides)
+    pin = c.commits['foundation']
+    package = entry.report['packages'][FOUNDATION]
+    assert package['status'] == 'explicit-pin'
+    assert {key: package[key] for key in ('url', 'ref', 'revision', 'subdirectory')} == {
+        'url': URLS['foundation'], 'ref': 'main', 'revision': pin, 'subdirectory': ''}
+    skills_manifest = entry.roots['skills'] / 'pyproject.toml'
+    assert tomllib.loads(skills_manifest.read_text())['tool']['uv']['sources'][FOUNDATION] == {
+        'git': URLS['foundation'], 'rev': pin}
+    [authored] = [row for row in package['authoredConstraints'] if row['package'] == 'fixture-skills']
+    assert authored == {
+        'package': 'fixture-skills', 'url': URLS['skills'], 'revision': c.commits['skills'],
+        'subdirectory': '', 'manifestSha256': hashlib.sha256(skills_manifest.read_bytes()).hexdigest(),
+        'declarations': [{'url': URLS['foundation'], 'ref': pin, 'refKind': 'rev', 'subdirectory': ''}],
+    }
+    # Compatibility cannot turn an explicit pin into moving-ref migration.
+    migrated, decisions = reconciliation.selected_policies({
+        FOUNDATION: {'url': URLS['foundation'], 'ref': pin, 'current': pin, 'subdirectory': ''}},
+        entry.report)
+    assert migrated == {} and decisions == {FOUNDATION: 'explicit-pin'}
+    assert alignment.protected_selection(entry.roots['foundation'], entry.report)
+    if checked_case == 'advance':
+        (c.repos['foundation'] / 'revision.txt').write_text('foundation:1\n')
+        git(c.repos['foundation'], 'commit', '-am', 'checked branch advances beyond pin')
+    checked = {}
+    for name, (repository, subdirectory) in PACKAGES.items():
+        proof = await update_checks.ref_policy(URLS[repository], 'main', updates.process)
+        assert proof['kind'] == 'branch'
+        checked[name] = {'url': URLS[repository], 'ref': 'main',
+                         'revision': proof['revision'], 'subdirectory': subdirectory}
+    assert (checked[FOUNDATION]['revision'] == pin) is (checked_case != 'advance')
+    if checked_case == 'unchecked':
+        del checked[FOUNDATION]
+    (stage / 'runtime-sources.json').write_text(json.dumps(checked))
+    before = source_files(stage)
+    selection = json.dumps(entry.report, sort_keys=True)
+    start = len(c.commands)
+    if checked_case == 'same':
+        await alignment.align_checked_sources(c.manager, stage, selection=entry.report)
+        alignment.verify_checked_selection(checked, entry.report, exact=True)
+    else:
+        with pytest.raises(environments.ProtectedRuntimeSource) as caught:
+            await alignment.align_checked_sources(c.manager, stage, selection=entry.report)
+        assert caught.value.diagnostic_facts == {
+            'errorType': 'ValueError', 'reason': 'runtime-source-constraint', 'package': FOUNDATION}
+    assert json.dumps(entry.report, sort_keys=True) == selection
+    assert source_files(stage) == before and qualification.installed_graph(project) == []
+    assert not entry.batch.installed and entry.batch.report()['resolverTransactions'] == 0
     assert not any({'fetch', 'checkout', 'restore'}.intersection(command)
                    for command in c.commands[start:] if command[0] == 'git')
     assert not (stage / 'runtime.lock').exists() and not (stage / 'runtime-installed.json').exists()

@@ -95,18 +95,19 @@ class SourceContextTests(unittest.TestCase):
         for name in names:
             self.assertTrue((self.root / name).is_file())
 
-    def test_copied_client_is_opt_in_but_its_selection_and_owner_stay_visible(self):
+    def test_public_client_selection_and_owner_stay_visible(self):
         guides = ['components/README.md', 'components/AGENTS.md', 'components/web-client.source.json']
-        copied = ['components/web-client/README.md', 'components/web-client/package.json',
-                  'components/web-client/src/app.js', 'components/web-client/public/pwa.js',
-                  'components/web-client/tests/app.test.mjs']
-        self.add(*guides, *copied)
-        visible = {row['path'] for row in json.loads(self.cli('--format', 'json').stdout)}
-        self.assertTrue(set(guides) <= visible)
-        self.assertTrue(set(copied).isdisjoint(visible))
-        selected = json.loads(self.cli('--format', 'json', '--all', '--under', 'components/web-client').stdout)
-        self.assertEqual({row['path'] for row in selected}, set(copied))
-        self.assertTrue(all(row['kind'] == 'generated' for row in selected))
+        self.add(*guides)
+        visible = {row['path']: row['kind']
+                   for row in json.loads(self.cli('--format', 'json').stdout)}
+        self.assertEqual({path: visible[path] for path in guides}, {
+            'components/README.md': 'documentation',
+            'components/AGENTS.md': 'guidance',
+            'components/web-client.source.json': 'configuration',
+        })
+        selection = json.loads((ROOT / guides[-1]).read_text())
+        self.assertEqual(selection['delivery'], {'type': 'repository'})
+        self.assertFalse((ROOT / 'components/web-client').exists())
 
     def test_unclassified_invalid_and_unset_attributes_remain_visible(self):
         self.add('future/owner.py', 'tests/web/invalid.mjs', 'tests/web/unset.mjs', 'contracts/current.md')

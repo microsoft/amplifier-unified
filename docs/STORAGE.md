@@ -27,6 +27,11 @@ Unified and app-cli use the same native project session layout:
 `AMPLIFIER_HOME` relocates the community root. The CI-supported
 `AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH` can separately relocate capture files.
 Project slugs follow the CLI exactly, including spaces, underscores and periods.
+One exception, on Windows only: a chat folder that the app allocated
+(`chats\<chat id>\files`) uses the short name `chat-<16 hex digits>`, because
+its CLI slug makes session paths longer than Windows accepts by default. See the
+[history contract](workspaces/contracts/history.v1.md#what-it-is) and the
+[path budget](design/native-windows-installation.md#path-budget-below-the-installation-folder).
 
 The community CI hook owns session event capture; Unified reads it rather than
 serializing UI progress into another session event log. The host emits the same
@@ -48,8 +53,9 @@ sidebar. Worker histories stay in the same native files and remain accessible
 through their parent conversation; independent forks are top-level chats.
 Browsing them reads a page of their native transcript without starting a worker;
 the displayed history refreshes after CLI changes. The next worker activation
-reads the latest native transcript under the shared lock. Warm workers reuse
-unchanged mounts; native transcript/metadata/backup changes force a remount.
+reads the latest native transcript under the shared lock. Live workers retain
+that lock while idle; another cooperating writer must request retirement first.
+Replacement starts a fresh worker, never a hot reload of ownerless live context.
 An external transcript/backup write during an active turn is rejected before Unified saves,
 preserving the older CLI compatibility guard.
 
@@ -305,9 +311,12 @@ transcripts, externalizes artifacts and shrinks the database. Existing shared
 transcripts win. Old app-owned session files are left intact. Large installations
 can take several minutes for this one-time offline migration.
 
-Normal backups run file copying and compression in a background thread. They
-include app configuration (including credentials), artifacts, operation/index
-state, and shared root/worker sessions used by this app, including explicitly
+Normal backups run file copying and compression in a background thread. Restore
+the archived `attachments/` directory alongside `app.sqlite3` in the private
+app home to keep original files downloadable from their saved URLs, including
+uploads in unsent drafts. Backups also include app configuration (including
+credentials), artifacts, operation/index state, and shared root/worker sessions
+used by this app, including explicitly
 relocated CI captures. Automatically discovered CLI entries are a rebuildable
 index: listing them does not expand backups, read transcript/event bodies, or run
 legacy canvas migration. Opening a chat loads its transcript and lazily scans
@@ -422,6 +431,12 @@ existing updater maintenance triggers; update/activation work takes priority.
 Successful runner selection only wakes this policy owner; it cannot bypass the
 global off setting or retention grace. Explicit user uninstall and Skip actions
 retain their separate existing authorization and exact-owner guards.
+Docker now uses ordinary Smart Tool package updates, not purpose-installed
+certification candidates. Historical candidate/install references and unresolved
+owners remain protected; this change neither rewrites old proofs nor retires
+old environments. New disposable Docker copies retain selected `/artifacts`
+and the original source snapshot, with full guest-source export only when
+`preserveSource: true` is explicit. Old owners retain their preservation contract.
 
 The policy never deletes chats, project folders, Git worktrees, saved test source
 or result archives, the only copy of an artifact, dependency stores owned by other components, or
@@ -483,13 +498,16 @@ retains exact original manifest hashes and its own package qualification.
 Settings → Storage → **Saved test evidence** reads recorded sizes only when the
 user chooses **Review saved test sizes**. Each page covers at most 32 canonical
 test allocations. Earlier pages replace the displayed page; totals apply only
-to the displayed, fully accounted records. Newly saved or changed records can
+to the displayed, fully accounted records. Results-only export sizes are shown
+separately. Newly saved or changed records can
 appear after Refresh. This is not a snapshot of all host storage.
 
 Original source, final workspace, and test results are separate roles. Complete
 accounting requires a completed removal receipt bound to the allocation's
 resource, root, environment and source hash, with a verified complete archive
-selection and matching byte totals. A full-environment archive includes the
+selection and matching byte totals. A verified results-only export reports its single
+results archive size and that the final workspace was not exported. Its source
+size and overall total remain unavailable. A full-environment archive includes the
 workspace and results without inventing separate sizes. Missing or inconsistent
 records remain visible as unavailable, rather than zero. Remote receipts say
 whether downloaded copies are recorded; a total counts one evidence set, not

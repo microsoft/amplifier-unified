@@ -61,7 +61,7 @@ gestures that cannot move vertically during call following, and
 allows one CSS pixel of rounding only in its bottom-geometry checks. Deliberate
 scrollback, browser focus movement and another conversation retain their behavior.
 
-`components/web-client/tests/chat-scroll-call-boundaries-browser.mjs` exercises fractional
+[tests/chat-scroll-call-boundaries-browser.mjs](https://github.com/microsoft/amplifier-client-web/blob/main/tests/chat-scroll-call-boundaries-browser.mjs) exercises fractional
 geometry, Work collapse/growth, resize, boundary wheel gestures and intentional
 scrollback. `tests/web/voice-follow-latest-browser.mjs` also checks starting
 a call from a saved reading position and new transcript delivery after a downward

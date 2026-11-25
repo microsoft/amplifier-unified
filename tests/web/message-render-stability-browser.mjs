@@ -51,8 +51,8 @@ try{
  // The latest page is bounded; the older-page positive control below must
  // load rows which were not already present at startup.
  const initialMessages=await page.evaluate(()=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId).messages.map(row=>row.id));
- assert.equal(initialMessages.length,100);
- assert.equal(initialMessages[0],'message-20');
+ assert.equal(initialMessages.length,20);
+ assert.equal(initialMessages[0],'message-100');
  await expect(page.locator('[data-message-id="message-0"]')).toHaveCount(0);
  await expect(page.getByRole('timer')).toBeVisible();
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);

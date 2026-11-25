@@ -15,10 +15,14 @@ WORKFLOW = ROOT / ".github/workflows/platform-mechanisms.yml"
 SPEC = importlib.util.spec_from_file_location("bootstrap_ci", ROOT / "tests/fixtures/windows_bootstrap_ci.py")
 CI = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CI)
-OLD_JOBS = ("passive-process-check", "windows-private-config-tls",
-            "windows-user-trial", "windows-default-runtime")
-OLD_GUARD = "${{ !inputs.bootstrap_only && !inputs.foreground_only }}"
-DEFAULT_GUARD = "${{ !inputs.bootstrap_only && !cancelled() && (inputs.foreground_only || needs.windows-user-trial.result == 'success') }}"
+# windows-local-connection (#2065) and instance-branding-storage (#2235) are
+# two more ordinary lanes. storage_only (#1815) selects the user-trial job
+# alone, for its sharing controls.
+OLD_JOBS = ("instance-branding-storage", "passive-process-check", "windows-private-config-tls",
+            "windows-local-connection", "windows-user-trial", "windows-default-runtime")
+OLD_GUARD = "${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}"
+TRIAL_GUARD = "${{ inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only) }}"
+DEFAULT_GUARD = "${{ !inputs.bootstrap_only && !inputs.storage_only && !cancelled() && (inputs.foreground_only || needs.windows-user-trial.result == 'success') }}"
 NEW_GUARD = "${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap_only }}"
 
 
@@ -30,28 +34,46 @@ class RouteTests(unittest.TestCase):
         self.assertEqual([name for name, _ in jobs], [*OLD_JOBS, "windows-bootstrap-offline"])
         for name, body in jobs:
             expected = (NEW_GUARD if name == "windows-bootstrap-offline" else
-                        DEFAULT_GUARD if name == "windows-default-runtime" else OLD_GUARD)
+                        DEFAULT_GUARD if name == "windows-default-runtime" else
+                        TRIAL_GUARD if name == "windows-user-trial" else OLD_GUARD)
             self.assertEqual(re.search(r"^    if: (.*)$", body, re.M).group(1), expected)
-        for event, bootstrap, foreground, selected in (
-            ("workflow_dispatch", True, False, ["windows-bootstrap-offline"]),
-            ("workflow_dispatch", True, True, ["windows-bootstrap-offline"]),
-            ("workflow_dispatch", False, False, list(OLD_JOBS)),
-            ("workflow_dispatch", False, True, ["windows-default-runtime"]),
-            ("pull_request", False, False, list(OLD_JOBS)),
+        for event, bootstrap, foreground, storage, selected in (
+            ("workflow_dispatch", True, False, False, ["windows-bootstrap-offline"]),
+            ("workflow_dispatch", True, True, False, ["windows-bootstrap-offline"]),
+            ("workflow_dispatch", False, False, False, list(OLD_JOBS)),
+            ("workflow_dispatch", False, True, False, ["windows-default-runtime"]),
+            ("pull_request", False, False, False, list(OLD_JOBS)),
+            # storage_only starts the user-trial job alone.
+            ("workflow_dispatch", False, False, True, ["windows-user-trial"]),
+            # storage_only with another selection still starts the user-trial
+            # job; its first step rejects the combination (asserted below).
+            ("workflow_dispatch", False, True, True, ["windows-user-trial"]),
+            ("workflow_dispatch", True, False, True, ["windows-user-trial", "windows-bootstrap-offline"]),
+            ("workflow_dispatch", True, True, True, ["windows-user-trial", "windows-bootstrap-offline"]),
         ):
             # For the dependent job, retain 1c4's success/cancellation sequencing.
             # The ordinary table assumes the required user-trial job succeeded.
             observed = [name for name, _ in jobs if
                         (event == "workflow_dispatch" and bootstrap if name == "windows-bootstrap-offline"
-                         else not bootstrap if name == "windows-default-runtime"
-                         else not bootstrap and not foreground)]
+                         else not bootstrap and not storage if name == "windows-default-runtime"
+                         else storage or (not bootstrap and not foreground) if name == "windows-user-trial"
+                         else not bootstrap and not foreground and not storage)]
             self.assertEqual(observed, selected)
+        self.assertIn(
+            "    steps:\n"
+            "      - name: Reject conflicting storage diagnostic selections\n"
+            "        if: ${{ inputs.storage_only && (inputs.bootstrap_only || inputs.foreground_only) }}\n"
+            "        shell: pwsh\n"
+            "        run: throw 'storage_only cannot be combined with bootstrap_only or foreground_only.'\n",
+            dict(jobs)["windows-user-trial"])
         self.assertRegex(source, r"(?s)workflow_dispatch:\n    inputs:\n      bootstrap_only:.*?type: boolean.*?default: false")
+        self.assertRegex(source, r"\n      storage_only:\n(?:        .+\n)*?        type: boolean\n(?:        .+\n)*?        default: false\n")
 
     def test_custom_shells_no_installs_and_pinned_action_allowlist(self):
         body = WORKFLOW.read_text().split("  windows-bootstrap-offline:\n", 1)[1]
         shells = re.findall(r"^        shell: (.*)$", body, re.M)
         self.assertEqual(shells, [
+            "python -I -S -B {0}",
             "python -I -S -B {0}",
             "powershell -NoLogo -NoProfile -NonInteractive -File {0}",
             "pwsh -NoLogo -NoProfile -NonInteractive -File {0}",
@@ -71,6 +93,8 @@ class RouteTests(unittest.TestCase):
         self.assertIn("if: always()", body)
         self.assertIn("persist-credentials: false", body)
         self.assertIn("result.json", body)
+        self.assertIn("tests/fixtures/windows_native_bootstrap_ci.py", body)
+        self.assertIn("unified-native-bootstrap-offline/result.json", body)
         self.assertIn("if-no-files-found: error", body)
         self.assertIn("timeout-minutes: 12", body)
 

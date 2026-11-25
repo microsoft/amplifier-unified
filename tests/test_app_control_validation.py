@@ -18,8 +18,26 @@ async def mounted_tool(bridge):
         get=lambda kind: tools if kind == 'tools' else None,
         get_capability=capabilities.get, register_capability=capabilities.__setitem__,
         mount=mount, hooks=SimpleNamespace(register=lambda *args, **kwargs: None))
-    await install_app_access(coordinator, bridge)
+    await install_app_access(coordinator, bridge, execution_role='root')
     return tools['app_control']
+
+
+async def test_link_target_never_dispatches_or_reads_context_locally():
+    bridge = AsyncMock(return_value={"availability": "online"})
+    tool = await mounted_tool(bridge)
+    target = {"instanceId": "a" * 32}
+    for operation, args in (
+        ("dispatch", {"action": "session.create", "target": target}),
+        ("history", {"target": target}),
+        ("context.read", {"target": None}),
+        ("context.focus", {"target": target}),
+    ):
+        refused = await tool.execute({"operation": operation, "args": args})
+        assert refused.success is False and refused.error["code"] == "link_unsupported"
+    bridge.assert_not_called()
+    observed = await tool.execute({"operation": "get_state", "args": {"target": target}})
+    assert observed.success and observed.output == {"availability": "online"}
+    bridge.assert_awaited_once_with("get_state", {"target": target})
 
 
 async def test_mounted_app_reads_overlap_without_loosening_other_operations():
@@ -189,14 +207,30 @@ async def test_reported_theme_envelope_has_executable_read_only_recovery(tmp_pat
             return await app.app_bridge(operation, args, session_id)
         bridge = AsyncMock(side_effect=real_bridge)
         tool = await mounted_tool(bridge)
+        before = deepcopy(app.state)
         result = await tool.execute({'operation': 'list_actions', 'parameters': {'prefix': 'theme.'}})
         assert not result.success and result.error['effect'] == 'none'
         bridge.assert_not_awaited()
+        assert app.state == before
         correction = result.error['recovery']
         assert correction == {'operation': 'list_actions', 'args': {'prefix': 'theme.'}}
         result = await tool.execute(correction)
-        assert result.success and 'theme.apply' in str(result.output)
+        assert result.success
+        listing = next(row for row in result.output['items'] if row['name'] == 'theme.list')
+        assert listing['inputSchema'] == {
+            'type': 'object', 'properties': {}, 'required': [], 'additionalProperties': False}
         bridge.assert_awaited_once_with('list_actions', {'prefix': 'theme.'})
+        assert app.state == before
+        # Discovery must lead to a current read-only control, not a retired apply.
+        action = {'action': listing['name'], 'args': {}}
+        result = await tool.execute({'operation': 'dispatch', 'args': action})
+        assert result.success and result.output['accepted']
+        assert result.output['effects'] == []
+        assert result.output['result']['items'] and not result.output['result']['errors']
+        assert all('css' not in row for row in result.output['result']['items'])
+        assert bridge.await_count == 2
+        bridge.assert_awaited_with('dispatch', action)
+        assert app.state == before
     finally:
         await app.close()
 

@@ -65,8 +65,14 @@ including selected-wrapper model and configuration overrides. Neither the
 selected preference nor a provider default can overrule a final `extra_body`
 model. Pending/unknown native state refuses ordinary fallback after a change.
 
-The pinned loop intentionally disables its boundary-only anchored input
-capability for native mounts. Unified's worker control uses a host-owned native
+Ordinary conversation input uses the loop's existing user inbox: live steering
+first when ready, otherwise ordered request-boundary insertion within the current
+turn, or a new turn when idle. It is not pinned to a displayed generation. Only
+actual provider lifecycle events report native sent/accepted/pending/applied;
+the inbox acknowledgement alone does not.
+
+The loop intentionally disables its boundary-only anchored input
+capability for native mounts. Unified's explicit worker control uses a host-owned native
 bridge for those explicit mounts, binding the input to its exact generation
 before any await and checking it again at outbound admission. It never puts that
 input into a later-generation inbox. Duplicate input IDs return their existing

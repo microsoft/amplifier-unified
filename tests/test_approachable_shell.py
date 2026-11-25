@@ -352,16 +352,42 @@ async def test_successful_composition_retires_only_superseded_module_keys(app, t
         assert (await recent_query(app, 'owner'))['limit'] == 100
         await recent_command(app, 'owner', 'shell.view.update', instanceId='chats', patch={'navRecentLimit': 160})
         assert sum(key[:2] == ('owner', 'chats') for key in app.shell.recent_limits) == 1
-    # Unchanged appearance/reorder transitions keep the current module ownership.
-    kept = deepcopy(app.shell.recent_limits)
-    current = app.shell.client('owner')
-    target = deepcopy(current['preview']['composition'] if current['preview'] else current['composition'])
-    target['presentation']['density'] = 'compact'
-    change = await recent_command(app, 'owner', 'shell.changes.prepare',
-                                  expectedRevision=current['revision'], composition=target)
-    await recent_command(app, 'owner', 'shell.changes.apply',
-                         expectedRevision=current['revision'], changeId=change['result']['id'])
-    assert app.shell.recent_limits == kept
+    # Presentation-bearing changes activate only after this browser's storage
+    # acknowledgment. Neither admission nor activation retires unchanged modules.
+    from test_appearance_preferences import report, ack
+    with app.clients.bind('owner'):
+        queue = app.subscribe()
+    try:
+        await report(app, client='owner')
+        kept = deepcopy(app.shell.recent_limits)
+        before = app.appearance.read('owner')
+        before_shared = deepcopy(app.appearance.shared())
+        before_other = app.appearance.read('other-live')
+        current = app.shell.client('owner')
+        revision = current['revision']
+        target = deepcopy(current['preview']['composition'] if current['preview'] else current['composition'])
+        target['presentation']['density'] = 'compact'
+        change = await recent_command(app, 'owner', 'shell.changes.prepare',
+                                      expectedRevision=revision, composition=target)
+        queued = await recent_command(app, 'owner', 'shell.changes.apply',
+                                      expectedRevision=revision, changeId=change['result']['id'])
+        assert queued['accepted'] is True
+        assert queued['result']['status'] == 'awaiting-storage'
+        assert queued['result']['stored'] is False
+        assert queued['result']['activated'] is False
+        assert app.shell.client('owner')['revision'] == revision
+        assert app.appearance.read('owner')['effective'] == before['effective']
+        assert app.shell.recent_limits == kept
+        stored = await ack(app, client='owner')
+        assert stored['stored'] is True and stored['activated'] is True
+        assert stored['rendered'] is False
+        assert app.shell.client('owner')['revision'] == revision + 1
+        assert app.appearance.read('owner')['effective']['density'] == 'compact'
+        assert app.appearance.shared() == before_shared
+        assert app.appearance.read('other-live') == before_other
+        assert app.shell.recent_limits == kept
+    finally:
+        app.unsubscribe(queue)
 
 
 async def test_rejected_or_deferred_composition_keeps_expanded_prefix_keys(app, tmp_path):
@@ -440,9 +466,9 @@ async def test_workspace_pin_shell_actions_are_passive_and_preserve_other_client
             raise AssertionError('Pin actions must not rewrite sessions, scan folders or flush pending progress')
         with monkeypatch.context() as patch:
             import amplifier_web.session_projection as session_projection
-            import amplifier_web.workspace_canvas as workspace_canvas
+            import amplifier_web.workspace_selection as workspace_selection
             patch.setattr(session_projection, 'persist', forbidden)
-            patch.setattr(workspace_canvas, 'refresh_workspace_availability', forbidden)
+            patch.setattr(workspace_selection, 'refresh_workspace_availability', forbidden)
             patch.setattr(app, '_commit_pending_progress', forbidden)
             await app.dispatch('shell.command', {'clientId': 'reader', 'instanceId': 'workspaces',
                                                 'action': 'workspace.pin', 'args': {'id': empty_id, 'pinned': True}})

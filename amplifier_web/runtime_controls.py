@@ -33,6 +33,11 @@ def public_config(value, *, module=None, metadata=False):
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
     if isinstance(value, dict):
+        if module == "hook-context-intelligence" and isinstance(value.get("destinations"), dict):
+            others = {key: item for key, item in value.items() if key != "destinations"}
+            return {**public_config(others, module=module, metadata=metadata),
+                    "destinations": {name: public_config(dest, metadata=metadata)
+                                     for name, dest in value["destinations"].items()}}
         return {str(key): REDACTED if credential_field(key, module=module)
                 else public_config(item, module=value.get("module") if key == "config" else None,
                                    metadata=metadata)
@@ -50,6 +55,50 @@ def identity(row):
     return row.get("instance_id") or row.get("id") or row.get("module")
 
 
+def mounted_provider_sources(coordinator, prepared):
+    """Capture changed root choices from this mount, not later settings reads."""
+    from collections import Counter
+    from .provider_isolation import identity as mounted_identity, UnavailableProvider
+    from amplifier_core.module_sources import ModuleNotFoundError as UnpreparedSource
+    from .host.components import portable_module_sources
+    resolver = getattr(prepared, 'resolver', None)
+    catalog = coordinator.get_capability('web.provider_catalog') or {}
+    sources = catalog.get('sources', {})
+    providers = coordinator.get('providers') or {}
+    rows = coordinator.config.get('providers', [])
+    counts = Counter(mounted_identity(row) for row in rows)
+    snapshot = getattr(resolver, 'prepared_sources', None)
+    if not callable(snapshot) or not sources:
+        return {}
+    # Module-only paths cannot distinguish two instances of one provider.
+    qualified = {(module, hint): path for module, hint, path in snapshot() if hint is not None}
+    captured = {}
+    for row in rows:
+        module, instance, hint = row['module'], mounted_identity(row), row.get('source')
+        selected, provider = sources.get(instance), providers.get(instance)
+        if (not row.get('enabled', True) or counts[instance] != 1 or provider is None
+                or isinstance(provider, UnavailableProvider)
+                or not isinstance(hint, str) or not isinstance(selected, str) or selected == hint
+                or module in getattr(getattr(resolver, 'components', None), 'installed', {})):
+            continue
+        original_path, selected_path = qualified.get((module, hint)), qualified.get((module, selected))
+        if original_path is None or selected_path is None or original_path != selected_path:
+            continue
+        # Synchronous prepared resolution cannot fetch or activate a new source.
+        try:
+            original_resolved = resolver.resolve(module, source_hint=hint).resolve()
+            selected_resolved = resolver.resolve(module, source_hint=selected).resolve()
+        except (UnpreparedSource, OSError, ValueError):
+            continue  # Missing/failed preparation is not a source-selection witness.
+        if original_resolved != original_path or selected_resolved != selected_path:
+            continue
+        pair = portable_module_sources({'providers': [
+            {'module': module, 'source': hint}, {'module': module, 'source': selected}]}, app_home())['providers']
+        if pair[0]['source'] != pair[1]['source']:
+            captured[(module, identity(row), hint)] = (pair[1]['source'], instance, provider)
+    return captured
+
+
 _MISSING_SETTING = object()
 
 
@@ -65,6 +114,13 @@ def restore_redactions(value, old, *, _config=False):
                 or value.get("module") != old.get("module")
                 or value.get("source") != old.get("source")):
             old = _MISSING_SETTING
+        if value.get("module") == "hook-context-intelligence" and isinstance(old, dict):
+            from .host.hook_config import destinations_in
+            original = dict(destinations_in(old.get("config")))
+            for name, dest in destinations_in(value.get("config")):
+                if (dest.get("api_key") == REDACTED
+                        and original.get(name, {}).get("url") != dest.get("url")):
+                    raise ValueError("Enter the credential reference for the changed Context Intelligence destination.")
         return {key:restore_redactions(item, old.get(key, _MISSING_SETTING)
                                       if isinstance(old, dict) else _MISSING_SETTING,
                                       _config=_config or key == "config" and isinstance(value.get("module"), str))
@@ -132,6 +188,8 @@ class RuntimeControls:
         self.coordinator = session.coordinator
         self.configurator = self.coordinator.get_capability("web.configurator")
         self.prepared = self.coordinator.get_capability("web.prepared")
+        self._mounted_provider_sources = ({} if preserve_configuration else
+                                          mounted_provider_sources(self.coordinator, self.prepared))
         self.agent_definitions = copy.deepcopy({
             **(self.coordinator.get_capability("web.agent_definitions") or {}),
             **self.coordinator.config.get("agents", {})})
@@ -148,6 +206,9 @@ class RuntimeControls:
             self.selection = {key:copy.deepcopy(root_provider.selection[key])
                               for key in ("instance", "model", "effort") if key in root_provider.selection}
         self.selection_cleared = False
+        self.selection_revision = None
+        self.selection_binding = None
+        self._selection_unbound_override = False
         self.max_output_tokens = None
         self.logins = {}
         self.kernels = None
@@ -155,6 +216,11 @@ class RuntimeControls:
         self.catalog_revision=str(uuid.uuid4())
         self.coordinator.register_capability("web.controls.persist", self.persist)
         self.coordinator.register_capability("web.context_recovery.contract", self.recovery_contract)
+        self.coordinator.register_capability("web.context_transition.contract", self.transition_contract)
+        self.coordinator.register_capability("web.context_transition.foreground", self.transition_foreground)
+        self.coordinator.register_capability("web.context_transition.selection", lambda: copy.deepcopy({
+            "selection": self.selection, "selectionRevision": self.selection_revision,
+            "connection": self.selection_binding}))
         from .task_continuity import TaskController
         self.tasks = TaskController(self)
         from .capacity import CapacityController
@@ -187,6 +253,9 @@ class RuntimeControls:
         self.persist()
 
     async def _restore_saved(self, saved, *, selection_override=None):
+        self.selection_revision = saved.get("selectionRevision")
+        self.selection_binding = saved.get("selectionBinding")
+        self._selection_unbound_override = saved.get("selectionBindingPending") is True
         if self.configurator:
             await self.configurator.apply_saved_settings(saved.get("configurator", {}))
         self.coordinator.session_state["goal"] = saved.get("goal")
@@ -209,12 +278,36 @@ class RuntimeControls:
             await self._perform("budget.set", budget)
         if selection_override is not None:
             await self._perform("provider.select", selection_override)
+            if (saved.get("selection") != self.selection
+                    or selection_override.get("expectedConnectionKey") is not None
+                    and saved.get("selectionBinding") != selection_override["expectedConnectionKey"]):
+                self.selection_revision = str(uuid.uuid4())
+                self.selection_binding = selection_override.get("expectedConnectionKey")
+                self._selection_unbound_override = self.selection_binding is None
         elif saved.get("selection"):
             await self._perform("provider.select", saved["selection"])
         elif "selection" in saved:
             await self._perform("provider.reset", {})
         if saved.get("mode"):
             await self.mode("mode.set", {"name":saved["mode"]})
+        if ("selectionRevision" not in saved and saved.get("selection")
+                and self.selection == saved["selection"] and not self.selection_revision
+                and self.coordinator.get_capability("web.context_transition.originals") is not True):
+            # Old explicit controls predate transition revisions. Migrate only
+            # an actual saved choice and a currently verified mounted account;
+            # absent selection/default drift and explicit null fork markers do
+            # not gain foreground admission by being restored. A transferred
+            # fork may have lost that marker in an older portable control schema;
+            # its canonical fork metadata still proves an inherited choice.
+            from .provider_catalog import require_mounted_binding
+            instance = self.selection.get("instance")
+            catalog = self.coordinator.get_capability("web.provider_catalog") or {}
+            binding = saved.get("selectionBinding") or catalog.get("connectionKeys", {}).get(instance)
+            if binding:
+                require_mounted_binding(self.coordinator, instance, binding)
+                self.selection_revision = str(uuid.uuid4())
+                self.selection_binding = binding
+                self._selection_unbound_override = False
 
     def persist(self, *, task_only=False):
         if self.preserve_configuration or self._restoring:
@@ -231,6 +324,8 @@ class RuntimeControls:
             "capacity":self.capacity.policy,"capacityReceipts":self.capacity.receipts,"capacityLastDenial":self.capacity.last_denial,
             "goal":self.coordinator.session_state.get("goal"),"task":self.coordinator.session_state.get("task"),"taskReceipts":self.tasks.receipts,"taskHistory":self.tasks.history,"mode":self.coordinator.session_state.get("active_mode"),
             "selection":None if self.selection_cleared else self.selection or previous.get("selection"),"budget":budget,
+            "selectionRevision":self.selection_revision,"selectionBinding":self.selection_binding,
+            "selectionBindingPending":self._selection_unbound_override,
             "configurationCheckpoint": self.coordinator.session_state.get("configurationCheckpoint")},default=str))
         if task_only:
             return
@@ -247,6 +342,17 @@ class RuntimeControls:
                 plan["agents"][name] = self.agent_definitions[name]
         from .decision_accounts import logical_plan
         plan = logical_plan(plan)
+        # Only this root mount's unchanged declarations may inherit its captured
+        # choices. Never resolve sources or inspect Git on the checkpoint path.
+        from collections import Counter
+        providers = self.coordinator.get('providers') or {}
+        identities = Counter(identity(row) for row in plan.get('providers', []))
+        for row in plan.get('providers', []):
+            captured = self._mounted_provider_sources.get((row['module'], identity(row), row.get('source')))
+            if captured and row.get('enabled', True) and identities[identity(row)] == 1:
+                source, instance, provider = captured
+                if providers.get(instance) is provider:
+                    row['source'] = source
         if self.coordinator.get_capability("web.provider_credentials_bound"):
             from .provider_environment import credential_bindings
             plan = credential_bindings(plan)
@@ -277,6 +383,64 @@ class RuntimeControls:
             "loop": getattr(loop, "config", {}),
             "mode": self.coordinator.session_state.get("active_mode"),
         })
+
+    def transition_contract(self):
+        """Bind model changes to their mounted connection and selection revision."""
+        return {**self.recovery_contract(),
+                "selectionRevision": self.selection_revision,
+                "selectionBinding": self.selection_binding}
+
+    def restore_applied_fork_choice(self, receipt):
+        """Bind a fork's own acknowledged choice, never its parent's controls."""
+        if (self.selection_revision or self.selection_cleared or self.preserve_configuration or self._selection_unbound_override
+                or not receipt.get("parentId")
+                or self.coordinator.get_capability("web.context_transition.fork_parent") != receipt["parentId"]
+                or receipt.get("sessionId") != self.session.session_id
+                or receipt.get("selection") != self.selection or not self.selection
+                or not receipt.get("connection") or type(receipt.get("revision")) is not int
+                or receipt["revision"] < 0 or self.selection_binding not in (None, receipt["connection"])):
+            return
+        from .provider_catalog import require_mounted_binding
+        require_mounted_binding(self.coordinator, self.selection["instance"], receipt["connection"])
+        previous_binding = self.selection_binding
+        self.selection_revision = str(uuid.uuid5(uuid.NAMESPACE_URL, "amplifier/fork-choice/" +
+            json.dumps(receipt, sort_keys=True, separators=(",", ":"))))
+        self.selection_binding = receipt["connection"]
+        try:
+            self.persist(task_only=True)
+        except BaseException:
+            # A failed write cannot grant in-memory admission. An exact retry
+            # derives the same revision even if the write reached disk.
+            self.selection_revision = None
+            self.selection_binding = previous_binding
+            raise
+
+    def transition_foreground(self):
+        """A saved choice plus an actually delivered new ordinary input.
+
+        Startup, configuration reads, automatic job continuations and duplicate
+        submission checks do not create this native generation/input pair.
+        """
+        generation = getattr(self.runtime, "generation", None) or {}
+        identity = generation.get("initial_input_id")
+        command = getattr(self.runtime, "accepted", {}).get(identity)
+        origin = self.coordinator.get_capability("web.context_transition.input")
+        binding = origin() if callable(origin) else None
+        if (not self.selection_revision or not self.selection or not identity
+                or not isinstance(binding, dict) or binding.get("inputId") != identity
+                or binding.get("selectionRevision") != self.selection_revision
+                or identity not in generation.get("input_ids", ())
+                or getattr(command, "kind", None) != "user"
+                or getattr(self.runtime, "closed", False)
+                or getattr(self.runtime, "stop_requested", False)):
+            return None
+        return copy.deepcopy({"generationId": generation["id"], "inputId": identity,
+            "inputIds": generation["input_ids"],
+            "selectionRevision": self.selection_revision, "selection": self.selection,
+            "connection": self.selection_binding,
+            **({key: binding[key] for key in ("recoveryAllowance", "allowanceStopRevision")}
+               if "recoveryAllowance" in binding else {}),
+            "originals": self.coordinator.get_capability("web.context_transition.originals") is True})
 
     def configuration(self):
         from .decision_accounts import logical_plan
@@ -365,6 +529,8 @@ class RuntimeControls:
 
     def prepare_configuration(self, config):
         from .decision_accounts import logical_plan
+        from .host.components import portable_module_sources
+        validate_plan(config)
         previous = logical_plan(self.coordinator.config)
         stored = override_path(self.session.session_id)
         if stored.exists():
@@ -373,11 +539,18 @@ class RuntimeControls:
                 current = {identity(row) for row in previous.get(section, [])}
                 previous.setdefault(section, []).extend(
                     row for row in saved.get(section, []) if identity(row) not in current)
-        plan = restore_redactions(config, previous)
+        # The host seals portable sources before dispatch. Compare the edited
+        # and live declarations in one fresh provenance pass before restoring
+        # redacted fields; module/instance/source ownership stays exact.
+        pair = portable_module_sources(
+            {'agents': {'edited': config, 'previous': previous}}, app_home())['agents']
+        plan = restore_redactions(pair['edited'], pair['previous'])
         validate_plan(plan)
         return {key: value for key, value in plan.items() if key in PLAN_KEYS}
 
     def save_configuration(self, plan):
+        from .host.components import portable_module_sources
+        plan = portable_module_sources(plan, app_home())
         write_private(override_path(self.session.session_id), json.dumps(plan, indent=2))
         # A full mount-plan edit supersedes previous live module toggles.
         if self.state_path().exists():
@@ -402,7 +575,10 @@ class RuntimeControls:
             if continuity is None:
                 raise ValueError("Explicit context recovery is unavailable in this runtime")
             if operation == "context.recovery.status":
-                return continuity.recovery_status()
+                read = getattr(continuity, "recovery_control_status", None)
+                if "cacheMoveFromGeneration" in args and callable(read):
+                    return await read(cache_move_from=args["cacheMoveFromGeneration"])
+                return await read() if callable(read) else continuity.recovery_status()
             self.require_idle()
             trusted = args.get("_recoveryCommand")
             if (not isinstance(trusted, dict) or not isinstance(trusted.get("id"), str)
@@ -561,6 +737,10 @@ class RuntimeControls:
                 raise
             self.selection=None
             self.selection_cleared=True
+            if not self._restoring:
+                self.selection_revision = None
+                self.selection_binding = None
+                self._selection_unbound_override = False
             self.persist()
             return {'selection':None,'scope':'main session'}
         if operation == "provider.verifyConnection":
@@ -582,8 +762,18 @@ class RuntimeControls:
             selected = {key:args[key] for key in ("instance","model","effort") if key in args}
             effective = {**selected, **({"max_output_tokens":self.max_output_tokens} if self.max_output_tokens else {})}
             self.coordinator.get("orchestrator").root_provider = SelectedProvider(providers[args["instance"]], effective,self.coordinator.get_capability('web.provider_transform'))
+            confirmed_override = (self._selection_unbound_override and self.selection == selected
+                                  and args.get('expectedConnectionKey') is not None)
+            changed = self.selection != selected or (
+                self.selection_binding != args.get('expectedConnectionKey') and not confirmed_override)
             self.selection = selected
             self.selection_cleared = False
+            if not self._restoring and (changed or not self.selection_revision):
+                self.selection_revision = str(uuid.uuid4())
+                self.selection_binding = args.get('expectedConnectionKey')
+            if confirmed_override:
+                self.selection_binding = args['expectedConnectionKey']
+                self._selection_unbound_override = False
             self.persist()
             return {"selection":selected,"scope":"main session"}
         if operation == "tool.invoke":
@@ -614,8 +804,8 @@ class RuntimeControls:
                 if isinstance(captured,dict) and name in captured.get('connectionKeys',{}):
                     shared['connectionKey']=captured['connectionKeys'][name]
                 if mounted and isinstance(captured,dict) and name in captured.get('keys',{}):
-                    from .provider_catalog import configuration_key
-                    current=configuration_key(captured['workspace'],mounted['module'],mounted.get('config',{}),captured['sources'][name],home=captured['home'])
+                    from .provider_catalog import configuration_key, mounted_provider_config
+                    current=configuration_key(captured['workspace'],mounted['module'],mounted_provider_config(mounted),captured['sources'][name],home=captured['home'])
                     if current==captured['keys'][name]:shared['sharedCatalogKey']=current
                 listing = await model_list_info(provider)
                 rows.append({"id":name,**({"available":False,"failure":provider.failure} if isinstance(provider,UnavailableProvider) else {}),"module":mounted.get('module'),"catalogKey":catalog_key,**shared,"info":public_config(info, metadata=True),"configSchema":public_config(schema, metadata=True),
@@ -705,8 +895,10 @@ class RuntimeControls:
                 path = path.parent
             uri = state.uri
             try:
-                commit = subprocess.run(["git","-C",str(path),"rev-parse","HEAD"],capture_output=True,text=True,check=True,timeout=2).stdout.strip()
-                repository = Path(subprocess.run(["git","-C",str(path),"rev-parse","--show-toplevel"],capture_output=True,text=True,check=True,timeout=2).stdout.strip()).resolve()
+                commit = subprocess.run(["git","-C",str(path),"rev-parse","HEAD"],capture_output=True,text=True,check=True,timeout=2,
+                    creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0)).stdout.strip()
+                repository = Path(subprocess.run(["git","-C",str(path),"rev-parse","--show-toplevel"],capture_output=True,text=True,check=True,timeout=2,
+                    creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0)).stdout.strip()).resolve()
                 base = uri.split("#",1)[0]
                 if "@" in base.split("github.com/",1)[-1]:
                     base = base.rsplit("@",1)[0]

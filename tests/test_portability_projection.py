@@ -1,6 +1,7 @@
 """Large chat libraries share a projection snapshot, never cached write authority."""
 from pathlib import Path
 from types import SimpleNamespace
+import os
 import uuid
 
 import pytest
@@ -22,22 +23,39 @@ def receipt(sid, *, phase='active', generation=1):
             'evidence': {'notes': ['retained']}}
 
 
-def test_empty_receipts_scan_once_for_22915_chat_library(portability, monkeypatch):
+def test_empty_receipts_read_one_index_page_for_22915_chat_library(portability, monkeypatch):
     sessions = [{'id': f'history-{index}'} for index in range(22_915)]
     sessions[0]['configurationBusy'] = True
     portability.app.state['sessions'] = sessions
     scans = []
     original_glob = Path.glob
+    original_scandir = os.scandir
+    pages = []
+    original_page = portability.node.page
+
+    def tracked_page(**kwargs):
+        pages.append(kwargs)
+        return original_page(**kwargs)
 
     def tracked_glob(path, pattern, *args, **kwargs):
         if path == portability.node.directory / 'receipts':
             scans.append(pattern)
         return original_glob(path, pattern, *args, **kwargs)
 
+    def tracked_scandir(path):
+        if Path(path) == portability.node.directory / 'receipts':
+            scans.append('scandir')
+        return original_scandir(path)
+
     monkeypatch.setattr(Path, 'glob', tracked_glob)
+    monkeypatch.setattr(os, 'scandir', tracked_scandir)
+    monkeypatch.setattr(portability.node, 'page', tracked_page)
     portability.sync()
 
-    assert scans == ['*.json']
+    # The selected Portability now owns an index. An empty aggregate is one
+    # real page read, not one receipt-directory scan per resident conversation.
+    assert pages == [{'sid': None, 'cursor': None, 'limit': 100}]
+    assert scans == []
     assert portability.app.state['portability']['receipts'] == []
     assert all('portability' not in session for session in sessions)
     assert sessions[0]['configurationBusy'] is True

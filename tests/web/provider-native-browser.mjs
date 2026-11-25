@@ -6,7 +6,7 @@ import {isAbsolute,relative,resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
-import {showComposerOption} from './composer-options-helpers.mjs';
+import {composerOptionsPanel,showComposerOption} from './composer-options-helpers.mjs';
 import {discoveryProblems,listRequestProblems} from './provider-native-readiness.mjs';
 
 const root=process.env.AMPLIFIER_TEST_ARTIFACTS;
@@ -119,15 +119,62 @@ try{
   JSON.parse(await readFile(process.env.PROVIDER_SELECTION_STATIC_MANIFEST,'utf8')):
   await sourceStatic(checkout+'/amplifier_web/static');
  await save('expected-static.json',staticManifest);
+ const presentationResponse=await page.request.get(url+'/fixture/presentation');
+ assert.equal(presentationResponse.status(),200);
+ const presentation=await presentationResponse.json();
+ assert.equal(presentation.document.inputSha256,staticManifest['amplifier_web/static/index.html']);
+ assert.equal(presentation.manifest.inputSha256,staticManifest['amplifier_web/static/manifest.webmanifest']);
+ assert.equal(presentation.icon.markSha256,staticManifest['amplifier_web/static/branding/pwa/pwa-512.png']);
+ const producer=installed?JSON.parse(await readFile(process.env.AMPLIFIER_TEST_INSTALLED_IDENTITY,'utf8')).files['amplifier_web/instance_branding.py']:
+  createHash('sha256').update(await readFile(checkout+'/amplifier_web/instance_branding.py')).digest('hex');
+ assert.equal(presentation.producer.sha256,producer);
+ await save('expected-presentation.json',presentation);
+ const presentations=new Map([['192:',Promise.resolve(presentation)]]),negativeAssets=new Set();
+ const assertBytes=(bytes,expected,path)=>{
+  assert.ok(expected,'Unmanifested static response '+path);
+  const sha256=createHash('sha256').update(bytes).digest('hex');assert.equal(sha256,expected,path);return sha256;
+ };
  const assetPromises=[];let assetWrites=Promise.resolve();
  page.on('response',response=>{
   const address=new URL(response.url());if(address.origin!==new URL(url).origin)return;
-  const path=address.pathname==='/'?'index.html':address.pathname.slice(1),expected=staticManifest['amplifier_web/static/'+path];
-  if(!expected&&!path.startsWith('assets/')&&(path.startsWith('api/')||!['script','stylesheet','image','font','media'].includes(response.request().resourceType())))return;
+  const path=address.pathname==='/'?'index.html':address.pathname.slice(1),staticExpected=staticManifest['amplifier_web/static/'+path];
+  const icon=/^instance-icon\/(32|180|192|512)\.png$/.exec(path);
+  if(!staticExpected&&!icon&&!path.startsWith('assets/')&&(path.startsWith('api/')||!['script','stylesheet','image','font','media'].includes(response.request().resourceType())))return;
   assetPromises.push((async()=>{
-   assert.ok(expected,'Unmanifested static response '+path);assert.equal(response.status(),200);
-   const sha256=createHash('sha256').update(await bounded(response.body(),10000,'Static '+path)).digest('hex');
-   assert.equal(sha256,expected,path);return{path,sha256};
+   let expected=staticExpected,kind='static',owner=null;
+   if(path==='index.html'){expected=presentation.document.sha256;kind='branded-document';owner=presentation}
+   if(icon||path==='manifest.webmanifest'){
+    assert.ok([...address.searchParams.keys()].every(key=>['v','accent'].includes(key)),'Unexpected presentation query');
+    for(const key of ['v','accent'])assert.ok(address.searchParams.getAll(key).length<=1,'Ambiguous presentation query');
+    if(icon)assert.equal(address.searchParams.get('v'),presentation.branding.revision,'Icon belongs to this fixture listener');
+    const accent=address.searchParams.get('accent'),size=icon?Number(icon[1]):192;
+    assert.ok(accent===null||/^[0-9a-f]{6}$/.test(accent),'Invalid fixture accent');
+    const key=`${size}:${accent||''}`;
+    if(!presentations.has(key))presentations.set(key,(async()=>{
+     const response=await page.request.get(url+'/fixture/presentation?'+new URLSearchParams({size:String(size),...(accent?{accent}:{})}));
+     assert.equal(response.status(),200);const result=await response.json();
+     assert.deepEqual(result.branding,presentation.branding);
+     assert.deepEqual(result.producer,presentation.producer);
+     assert.equal(result.icon.markSha256,presentation.icon.markSha256);
+     assert.equal(result.manifest.inputSha256,presentation.manifest.inputSha256);
+     assert.equal(result.icon.size,size);assert.equal(result.icon.accent,accent);return result;
+    })());
+    owner=await bounded(presentations.get(key),10000,'Presentation identity');
+    expected=icon?owner.icon.sha256:owner.manifest.sha256;kind=icon?'listener-icon':'listener-manifest';
+    assert.equal(response.headers()['cache-control'],'no-store');
+   }
+   assert.equal(response.status(),200);
+   const bytes=await bounded(response.body(),10000,'Static '+path),sha256=assertBytes(bytes,expected,path);
+   if(icon)assert.match(response.headers()['content-type'],/^image\/png\b/);
+   if(path==='index.html')assert.match(response.headers()['content-type'],/^text\/html\b/);
+   if(path==='manifest.webmanifest')assert.match(response.headers()['content-type'],/^application\/manifest\+json\b/);
+   if(!negativeAssets.has(kind)){
+    assert.ok(bytes.length);const changed=Buffer.from(bytes);changed[changed.length-1]^=1;
+    assert.throws(()=>assertBytes(changed,expected,path),{code:'ERR_ASSERTION'});
+    assert.throws(()=>assertBytes(bytes,undefined,'assets/unmanifested-fixture.js'),{code:'ERR_ASSERTION'});
+    negativeAssets.add(kind);
+   }
+   return{path,query:address.search,kind,sha256,expected,owner,changedBytesRejected:true};
   })().catch(error=>({path,error:error.message})).then(row=>{
    assets.push(row);assetWrites=assetWrites.then(()=>appendFile(evidence+'/consumed-assets.jsonl',JSON.stringify(row)+'\n'));return row;
   }));
@@ -138,6 +185,7 @@ try{
   await bounded(Promise.all(responses),12000,'Observed action receipts');await eventWrites;
   await bounded(Promise.all(assetPromises),12000,'Consumed assets');await assetWrites;
   await save('actions.json',actions);await save('consumed-assets.json',assets);
+  await save('asset-negative-controls.json',[...negativeAssets]);
  };
  proof=async()=>{
   const response=await page.request.get(url+'/fixture/native-proof',{timeout:10000});assert.equal(response.status(),200);return response.json();
@@ -146,7 +194,7 @@ try{
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const model=page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true});
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
- const dialog=page.getByRole('dialog',{name:'Chat options',exact:true});
+ const dialog=composerOptionsPanel(page);
  const A={instance:'native-a',model:'native-model',effort:'low'};
  const B={instance:'native-b',model:'native-model',effort:'high'};
  const ALT={instance:'native-alt',model:'native-model',effort:'high'};
@@ -286,7 +334,9 @@ try{
   await showComposerOption(page,'effort');const effort=dialog.locator('#chat-effort');
   await expect(effort).toBeVisible();await expect(effort).toHaveAttribute('aria-valuetext',expected.effort,{timeout});
   row.effort=await effort.getAttribute('aria-valuetext');await close();
-  await expect(model.locator(':scope > span')).toHaveText(`${expected.model} (${expected.effort})`,{timeout});
+  // The compact chip shows explicit effort only. These scenarios inherit
+  // low/high from the connection; the picker and actual calls prove that value.
+  await expect(model.locator(':scope > span')).toHaveText(expected.model,{timeout});
   row.chip=await model.locator(':scope > span').innerText();row.dismissed=true;
   await save('visible.json',boundaries);return row;
  }
@@ -427,17 +477,33 @@ try{
  await expect(setupJourney).toBeHidden();
  await settleManagedDraft();
  const initial=await proof();await save('native-initial.json',initial);assert.equal(initial.calls.length,0);assert.equal(initial.readiness.importsReady,true);
+ const savedConnections=initial.discovery.setup.providers;
+ assert.deepEqual(savedConnections.map(row=>row.id).sort(),['native-a','native-alt','native-b'],
+  'Every connection used by the journey must belong to the saved browsing inventory');
+ assert.equal(Object.hasOwn(savedConnections.find(row=>row.id==='native-alt').config,'priority'),false,
+  'The shared alternate connection must leave its root-specific priority unset');
+ assert.deepEqual(initial.discovery.draftDefaults[managedKey].providers.map(row=>[row.id,row.priority]),
+  [['native-a',1],['native-b',20],['native-alt',100]]);
  const originalSession=await send(A);
  await model.click();await showComposerOption(page,'provider');
  const configurePromise=page.waitForResponse(response=>{
   const request=response.request();if(request.method()!=='POST'||new URL(request.url()).pathname!=='/api/actions')return false;
   const command=request.postDataJSON();return command.action==='conversation.configure'&&command.args.sessionId===originalSession&&command.args.selection?.instance==='native-b';
  },{timeout:15000});
+ const callsBeforeChoice=(await proof()).calls.length,choicesBefore=actions.length;
  await dialog.locator('#chat-provider').selectOption('native-b');
+ await showComposerOption(page,'model');
+ await expect(dialog.locator('#chat-model')).toHaveValue('');
+ assert.equal(actions.slice(choicesBefore).filter(row=>row.command.action==='conversation.configure').length,0,
+  'Choosing a connection stages its model, without committing a guess');
+ assert.equal((await proof()).calls.length,callsBeforeChoice,'Connection browsing cannot send a model request');
+ await dialog.locator('#chat-model').selectOption('native-model');
  const configured=await configurePromise,configureCommand=configured.request().postDataJSON(),configureReceipt=await bounded(configured.json(),10000,'Configuration receipt');
  await save('existing-chat-choice.json',{command:configureCommand,status:configured.status(),receipt:configureReceipt});
  assert.equal(configured.status(),200);assert.equal(configureReceipt.accepted,true);
  assert.equal(configureReceipt.result.revision,configureCommand.args.expectedRevision+1);
+ assert.deepEqual(configureCommand.args.selection,{instance:B.instance,model:B.model},
+  'The explicit model choice must not pin the inherited connection effort');
  acceptedConfiguration={revision:configureReceipt.result.revision,command:configureCommand,receipt:configureReceipt};
  await close();await visible(B);
  // Same-model/effort negative uses the SAME visible observer; no extra send.
@@ -453,8 +519,8 @@ try{
   const id=await send(A);assert.ok(!sessionIds.includes(id));sessionIds.push(id);
  }
  const four=await proof();assert.equal(four.calls.length,4);await save('four-send-complete.json',four);
- // A distinct ordinary root adds native-alt at priority 0. Shared A=1/B=20
- // stay unchanged; no draft pin. Hold only this test's resolution boundary.
+ // The alternate root gives the saved native-alt connection priority 0.
+ // Shared A=1/B=20 stay unchanged; no draft pin. Hold only resolution.
  assert.equal((await action('session.draft')).accepted,true);
  await settleManagedDraft();await visible(A);
  const alternate=four.readiness.alternateBundle.path;
@@ -497,12 +563,21 @@ try{
   assert.equal(process.command.at(-1),resolved.readiness.sources['draft_defaults_probe.py'].path);
  }
  assert.equal(readyProbe.result.bundle,alternate);assert.equal(readyProbe.result.globalOnly,true);
+ assert.deepEqual(readyProbe.result.providers.map(row=>[row.id,row.priority]),
+  [['native-alt',0],['native-a',1],['native-b',20]],
+  'Actual composed priorities, not a UI pin or settings rewrite, change the default');
  assert.deepEqual(tuple(readyProbe.result.effective),ALT);
  assert.equal(resolved.calls.length,4,'Readiness must not perform inference');
  await visible(ALT);await save('delayed-ready.json',resolved);
  const alternateSession=await send(ALT);
  assert.ok(!sessionIds.includes(alternateSession));sessionIds.push(alternateSession);
  await flush();assert.deepEqual(pageErrors,[]);assert.deepEqual(evidenceErrors,[]);assert.deepEqual(assets.filter(row=>row.error),[]);
+ assert.ok(assets.some(row=>row.kind==='branded-document')&&assets.some(row=>row.kind==='listener-icon'),
+  'The actual browser must consume both the branded bootstrap and its listener icon');
+ for(const extension of ['.js','.css'])assert.ok(assets.some(row=>row.kind==='static'&&row.path.endsWith(extension)),
+  'Actual bundled scripts and styles must retain byte-exact attestation');
+ for(const kind of ['static','branded-document','listener-icon'])assert.ok(negativeAssets.has(kind),
+  'Changed bytes must fail through the same asset verifier: '+kind);
  const final=await proof();assert.equal(final.calls.length,5);
  assert.equal(final.sessions.find(row=>row.id===alternateSession).bundle,alternate);
  assert.ok(final.calls[4].atNs>readyProbe.finishedAtNs);
@@ -598,4 +673,4 @@ try{
 }
 if(primary){console.error(JSON.stringify({primary:primary.message,cleanupErrors}));throw primary}
 await save('result.json',{...journey,cleanupErrors,fixtureClosed:true});
-console.log('Native provider boundary passed: shared A -> same-worker B -> shared A -> shared A -> delayed root-local native-alt; real preparation, production probe and provider entry.');
+ console.log('Native provider boundary passed: shared A -> same-worker B -> shared A -> shared A -> delayed alternate-root default; real preparation, production probe and provider entry.');

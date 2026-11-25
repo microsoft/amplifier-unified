@@ -4,7 +4,6 @@ on:
     paths:
       - 'components/web-client.source.json'
       - 'scripts/web_client_*.py'
-      - 'components/web-client/commands.json'
       - 'amplifier_operations/coordination.py'
       - 'amplifier_web/coordination.py'
       - 'amplifier_web/peer_scope.py'
@@ -19,6 +18,12 @@ on:
       - 'amplifier_web/collaboration*.py'
       - 'amplifier_web/app_guidance.py'
       - 'amplifier_web/assignments.py'
+      - 'amplifier_web/assignment_retirement.py'
+      - 'amplifier_web/assignment_adoption.py'
+      - 'tests/test_assignment_retirement.py'
+      - 'tests/test_assignment_retirement_recovery.py'
+      - 'tests/test_assignment_adoption.py'
+      - 'tests/test_assignment_readmission_native.py'
       - 'amplifier_web/assignment_brief.py'
       - 'tests/test_assignment_brief.py'
       - 'amplifier_web/workspace_awareness.py'
@@ -28,7 +33,6 @@ on:
       - 'tests/test_pretransport_refit_native.py'
       - 'tests/test_full_refit_authority.py'
       - 'amplifier_web/coordination_guidance.py'
-      - 'components/web-client/src/workspace-awareness.jsx'
       - 'tests/web/workspace-awareness-browser.mjs'
       - 'tests/test_workspace_awareness.py'
       - 'tests/test_coordination_delivery.py'
@@ -44,8 +48,6 @@ on:
       - 'amplifier_web/host/children.py'
       - 'amplifier_web/host/session.py'
       - 'amplifier_web/host/storage.py'
-      - 'components/web-client/src/coordination*'
-      - 'components/web-client/src/main.jsx'
       - 'tests/test_coordination.py'
       - 'tests/test_coordination_generation.py'
       - 'tests/test_coordination_revisions.py'
@@ -101,16 +103,13 @@ on:
       - 'tests/test_native_result_readers.py'
       - 'amplifier_web/test_reservation_maintenance.py'
       - 'tests/test_background_reservation_recovery.py'
-      - 'components/web-client/src/workspace-managed-resources.jsx'
-      - 'components/web-client/src/workspace-test-environments.jsx'
-      - 'components/web-client/src/work-shell.jsx'
       - 'tests/fixtures/test_environments_ui_server.py'
       - 'tests/web/test-environments-browser.mjs'
       - 'tests/web/standard-ux-inventory.json'
-      - 'components/web-client/src/workspace-resource-*.jsx'
       - 'tests/test_resource_reservations.py'
       - 'tests/test_multi_repository_worktrees.py'
-      - 'components/web-client/src/worktrees.jsx'
+      - 'components/worktrees.source.json'
+      - 'components/worktrees-delivery/**'
       - 'tests/fixtures/worktrees_ui_server.py'
       - 'tests/web/multi-repository-worktrees-browser.mjs'
       - 'tests/web/resource-reservations-browser.mjs'
@@ -160,16 +159,43 @@ jobs:
       - name: Verify and retain coordination runtime readiness
         run: |
           uv run --no-sync python - <<'PY'
-          import json, subprocess, sys, tomllib
+          import hashlib, json, subprocess, sys, tomllib
           from importlib import import_module
-          from importlib.metadata import version
+          from importlib.metadata import distributions, version
+          from importlib.util import find_spec
           from pathlib import Path
+          def runtime_identity():
+              installed = sorted([{
+                  'name': d.metadata['Name'].lower().replace('_', '-').replace('.', '-'),
+                  'version': d.version,
+                  'directUrl': json.loads(d.read_text('direct_url.json') or 'null'),
+              } for d in distributions()], key=lambda row: json.dumps(row, sort_keys=True))
+              by_name = {row['name']: row for row in installed}
+              sources = {}
+              for name in ('amplifier-module-loop-live', 'amplifier-module-loop-streaming',
+                           'amplifier-module-context-simple'):
+                  spec = find_spec(name.replace('-', '_'))
+                  sources[name] = {'distribution': by_name.get(name),
+                                   'moduleOrigin': spec.origin if spec else None}
+              return {
+                  'executable': sys.executable, 'prefix': sys.prefix, 'python': sys.version,
+                  'selectedLoopRevision': subprocess.check_output(
+                      ['git', '-C', '.ci/loop-live', 'rev-parse', 'HEAD'], text=True).strip(),
+                  'sources': sources,
+                  'installedFingerprint': hashlib.sha256(
+                      json.dumps(installed, sort_keys=True).encode()).hexdigest(),
+              }
+          output = Path('output/coordination-runtime-readiness.json')
+          record = {'runtime': runtime_identity()}
+          output.parent.mkdir(parents=True, exist_ok=True)
+          output.write_text(json.dumps(record, indent=2) + '\n')
+          print(json.dumps(record), flush=True)
           from amplifier_module_loop_live import BundleLiveOrchestrator
           from amplifier_module_context_simple import mount
           assert callable(BundleLiveOrchestrator) and callable(mount)
           declared = tomllib.loads(Path('amplifier_web/runtime_deps/pyproject.toml').read_text())
           git = lambda *args: subprocess.check_output(['git', *args], text=True).strip()
-          record = {
+          record.update({
               'candidate': git('rev-parse', 'HEAD'),
               'declaredLoopRevision': declared['tool']['uv']['sources']['amplifier-module-loop-live']['rev'],
               'selectedLoopRevision': git('-C', '.ci/loop-live', 'rev-parse', 'HEAD'),
@@ -179,12 +205,27 @@ jobs:
                   'amplifier-module-loop-streaming', 'amplifier-module-context-simple')},
               'imports': {name: bool(import_module(name)) for name in (
                   'amplifier_module_loop_live', 'amplifier_module_context_simple')},
-          }
-          output = Path('output/coordination-runtime-readiness.json')
-          output.parent.mkdir(parents=True, exist_ok=True)
+          })
           output.write_text(json.dumps(record, indent=2) + '\n')
-          print(json.dumps(record))
+          print(json.dumps(record), flush=True)
           PY
+      - name: Verify settled retirement and separate standing readmission
+        run: |
+          uv run --no-sync pytest -q tests/test_assignment_retirement.py \
+            tests/test_assignment_retirement_recovery.py tests/test_assignment_adoption.py \
+            tests/test_assignment_readmission_native.py --junitxml=output/assignment-retirement.xml
+          uv run --no-sync python - <<'PY'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/assignment-retirement.xml').getroot().findall('.//testcase')
+          assert rows and all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PY
+      - name: Retain retirement and readmission evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: assignment-retirement-evidence
+          path: output/assignment-retirement.xml
+          if-no-files-found: warn
       - run: >-
           uv run --no-sync pytest
           tests/test_coordination.py tests/test_coordination_generation.py
@@ -303,14 +344,63 @@ jobs:
             ${{ runner.temp }}/peer-return/**/reviewer.jsonl
           if-no-files-found: warn
       - name: Verify mounted child identity and file boundaries
-        run: >-
-          uv run --locked
-          --with 'amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@main'
-          --with 'amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@main'
-          python -c "import os, sys, pytest; os.environ['UNIFIED_RUNTIME_PYTHON'] = sys.executable;
-          sys.exit(pytest.main(['-q', 'tests/test_child_app_authority.py', 'tests/test_child_file_policy.py',
-          'tests/test_child_image_policy.py', 'tests/test_child_resume_admission.py', 'tests/test_runtime_worker.py',
-          'tests/test_app_guidance.py']))"
+        run: |
+          uv run --no-sync python - <<'PY'
+          import hashlib, json, subprocess, sys
+          from importlib.metadata import distributions
+          from importlib.util import find_spec
+          from pathlib import Path
+          def runtime_identity():
+              installed = sorted([{
+                  'name': d.metadata['Name'].lower().replace('_', '-').replace('.', '-'),
+                  'version': d.version,
+                  'directUrl': json.loads(d.read_text('direct_url.json') or 'null'),
+              } for d in distributions()], key=lambda row: json.dumps(row, sort_keys=True))
+              by_name = {row['name']: row for row in installed}
+              sources = {}
+              for name in ('amplifier-module-loop-live', 'amplifier-module-loop-streaming',
+                           'amplifier-module-context-simple'):
+                  spec = find_spec(name.replace('-', '_'))
+                  sources[name] = {'distribution': by_name.get(name),
+                                   'moduleOrigin': spec.origin if spec else None}
+              return {
+                  'executable': sys.executable, 'prefix': sys.prefix, 'python': sys.version,
+                  'selectedLoopRevision': subprocess.check_output(
+                      ['git', '-C', '.ci/loop-live', 'rev-parse', 'HEAD'], text=True).strip(),
+                  'sources': sources,
+                  'installedFingerprint': hashlib.sha256(
+                      json.dumps(installed, sort_keys=True).encode()).hexdigest(),
+              }
+          output = Path('output/coordination-runtime-readiness.json')
+          record = json.loads(output.read_text())
+          record['mountedRuntime'] = runtime_identity()
+          output.write_text(json.dumps(record, indent=2) + '\n')
+          print(json.dumps(record), flush=True)
+          assert record['mountedRuntime'] == record['runtime'], 'Coordination runtime changed after readiness'
+          from amplifier_module_loop_live import BundleLiveOrchestrator
+          from amplifier_module_context_simple import mount
+          assert callable(BundleLiveOrchestrator) and callable(mount)
+          import os, pytest
+          os.environ['UNIFIED_RUNTIME_PYTHON'] = sys.executable
+          result = pytest.main(['-q', '-rs', '--junitxml=output/mounted-child-boundaries.xml',
+              'tests/test_child_app_authority.py', 'tests/test_child_file_policy.py',
+              'tests/test_child_image_policy.py', 'tests/test_child_resume_admission.py', 'tests/test_runtime_worker.py',
+              'tests/test_app_guidance.py'])
+          if result:
+              sys.exit(result)
+          from collections import Counter
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/mounted-child-boundaries.xml').getroot().findall('.//testcase')
+          counts = Counter(row.get('classname') for row in rows)
+          print(json.dumps({'mountedChildClassCounts': dict(counts)}), flush=True)
+          assert set(counts) == {
+              'tests.test_child_app_authority', 'tests.test_child_file_policy',
+              'tests.test_child_image_policy', 'tests.test_child_resume_admission',
+              'tests.test_runtime_worker', 'tests.test_app_guidance'}
+          assert counts['tests.test_child_resume_admission'] == 23
+          assert all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          sys.exit(result)
+          PY
       - run: |
           npm ci --prefix .build/web-client
           npm ci --prefix tests/web
@@ -355,4 +445,5 @@ jobs:
           path: |
             ${{ runner.temp }}/test-environments
             output/coordination-runtime-readiness.json
+            output/mounted-child-boundaries.xml
           if-no-files-found: warn

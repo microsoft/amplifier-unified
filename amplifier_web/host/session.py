@@ -10,9 +10,11 @@ import json
 import os
 from pathlib import Path
 
-from .config import HostConfig, expand_environment, load_config, merge, write_private, provider_mount_sources
+from .config import HostConfig, expand_environment, load_config, merge, write_private, provider_mount_sources, provider_dropped
+from . import hook_config
 from .components import HostComponents, ComponentResolver, compose_bundles, imagegen_defaults, capability_defaults, explicit_context_forwarding, installed_package_source
 from .components import declarations, git_source
+from ..surface_delivery import _accepts_exact_count
 from ..provider_environment import iter_provider_rows, materialize_bundle_providers
 
 LOOP_SOURCE = "git+https://github.com/microsoft/amplifier-module-loop-live@main"
@@ -47,6 +49,8 @@ def live_plan(plan, background_delegate=True):
         if context.get("module") == "context-managed" and context.get("config", {}).get("engine", "boundary") == "boundary":
             context.setdefault("config", {}).setdefault("durable_checkpoints", True)
             context["config"].setdefault("archive_recovery", True)
+            context["config"].setdefault("foreground_continuation", True)
+            context["config"].setdefault("compaction_schedule", "after_turn")
         loop = node.get("session", {}).get("orchestrator", {})
         if loop.get("module") in {"loop-streaming", "loop-live"}:
             original = loop["module"]
@@ -87,6 +91,9 @@ class _SelectedRequest:
     choices: dict
     selected: object
     refitted: bool = False
+    execution: object = None
+    release_options: object = None
+    foreground: object = None
 
 
 class SelectedProvider:
@@ -96,13 +103,38 @@ class SelectedProvider:
         self.execution_adapter = execution_adapter
         self._selected_requests = []
         self._refused_requests = []
+        self.portable_handoff = None
+        from ..overflow_feedback import OverflowFeedback
+        self._overflow_feedback = OverflowFeedback()
     def _execution_provider(self):
         return self.execution_adapter(self.original) if callable(self.execution_adapter) else self.original
+
+    def prepared_foreground(self, request, *, request_options=None):
+        from ..foreground_preparation import prepare
+        return prepare(self._execution_provider(), request, request_options, selection=self)
+
+    def owns_budget_route(self, provider):
+        """Recognize the loop's exact pre-transport wrapper around this selection."""
+        if provider is self:
+            return True
+        try:
+            from amplifier_module_loop_streaming._request_refit import RefitProvider
+        except ImportError:
+            return False
+        return type(provider) is RefitProvider and provider.provider is self
+
     def __getattr__(self, name):
         if name == "default_model" and self.selection.get("model"):
             return self.selection["model"]
-        execution = self._execution_provider() if name in {'stream', 'request_budget', 'refit_request'} else self.original
+        execution = self._execution_provider() if name in {
+            'stream', 'request_budget', 'refit_request', 'recover_context_overflow'} else self.original
         method = getattr(execution, name)
+        if name == 'recover_context_overflow' and callable(method):
+            def recover(request, error, *, context_estimate, request_options=None):
+                return self._overflow_feedback.recover(request, error,
+                    context_estimate=context_estimate, request_options=request_options,
+                    owner=self._execution_provider(), binding=self.selection)
+            return recover
         if name == 'refit_request' and callable(method):
             async def refit(request, *, error, request_options=None, **kwargs):
                 # The execution adapter owns the refusal. Forward its exact
@@ -140,6 +172,10 @@ class SelectedProvider:
                 selected = selected.model_copy(update={"max_output_tokens": request.max_output_tokens})
                 return await method(selected, **kwargs)
             return compact
+        if name == "supports_native_compaction" and callable(method) and "model" in inspect.signature(method).parameters:
+            def supports(*, model=None):
+                return method(model=model or self.selection.get("model"))
+            return supports
         if name == "validate_compacted_context" and callable(method):
             def validate(message):
                 if "model" in inspect.signature(method).parameters:
@@ -154,13 +190,25 @@ class SelectedProvider:
                 return self._stream_selected(execution, method, request, kwargs)
             return selected_stream
         if name == "request_budget" and callable(method):
-            def selected_budget(request, *, request_options=None, **kwargs):
+            def selected_budget(request, *, request_options=None, require_measurement=False, **kwargs):
+                self._overflow_feedback.forget(request)
+                prior = next((row for row in self._selected_requests if row.original is request), None)
+                if prior is not None and prior.execution is not None and prior.execution is not execution:
+                    self._forget_request(request)
                 # Preserve named-option feature detection through this wrapper,
                 # translating to keywords only for a legacy provider budget.
                 kwargs['request_options'] = request_options
                 selected, kwargs = self._selected_request(request, kwargs)
                 try:
                     self._budget_options(kwargs)
+                    entry = next(row for row in self._selected_requests if row.selected is selected)
+                    entry.execution = execution
+                    entry.release_options = copy.deepcopy({
+                        **(kwargs.get('request_options') or {}),
+                        **{key: value for key, value in kwargs.items()
+                           if key not in {'request_options', 'context_estimate'}}})
+                    if require_measurement and _accepts_exact_count(method):
+                        kwargs['require_measurement'] = True
                     result = method(selected, **kwargs)
                 except BaseException:
                     self._forget_request(request)
@@ -183,8 +231,34 @@ class SelectedProvider:
             overrides["reasoning_effort"] = self.selection["effort"]
         return info.model_copy(update={"defaults": {**info.defaults, **overrides}})
     def _forget_request(self, request):
+        for entry in self._selected_requests:
+            if entry.original is request and entry.execution is not None:
+                release = getattr(entry.execution, 'release_media_request', None)
+                if callable(release):
+                    release(entry.selected, request_options=entry.release_options)
         self._selected_requests = [row for row in self._selected_requests if row.original is not request]
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
+
+    def release_media_request(self, canonical, *, request_options=None):
+        updates, options = self._selection_overrides(canonical, dict(request_options or {}))
+        entry = self._cached_request(canonical, updates)
+        if entry is None or entry.execution is None:
+            return False
+        release = getattr(entry.execution, 'release_media_request', None)
+        if not callable(release) or release(entry.selected, request_options=options) is not True:
+            return False
+        self._forget_request(canonical)
+        return True
+
+    def _check_media_fit(self, request, execution):
+        entry = next((row for row in self._selected_requests if row.original is request), None)
+        owns = getattr(entry.execution, 'has_prepared_media_request', None) if entry else None
+        if entry is None or not callable(owns) or owns(entry.selected) is not True:
+            return
+        updates, _ = self._selection_overrides(request, {})
+        if (entry.execution is not execution or entry.snapshot != request or entry.choices != updates):
+            self._forget_request(request)
+            raise ValueError("The fitted image source or selected provider changed; request a new explicit budget.")
 
     def _budget_options(self, kwargs):
         budget = getattr(self.original, 'request_budget', None)
@@ -232,6 +306,8 @@ class SelectedProvider:
             selected = request.model_copy(update=updates)
             self._forget_request(request)
             if not consume:
+                for old in self._selected_requests[:-3]:
+                    self._forget_request(old.original)
                 self._selected_requests = (self._selected_requests + [
                     _SelectedRequest(request, copy.deepcopy(request), dict(updates), selected)])[-4:]
                 self._refused_requests = [row for row in self._refused_requests
@@ -246,15 +322,20 @@ class SelectedProvider:
             return False
         entry = next((row for row in self._selected_requests
                       if row.original is request and row.selected is selected), None)
-        if entry is None or entry.refitted:
+        if entry is None or entry.refitted or entry.foreground is not None:
             return False
         self._refused_requests = ([row for row in self._refused_requests if row[0] is not request]
                                   + [(request, error, execution, selected)])[-4:]
         return True
 
     async def _stream_selected(self, execution, method, request, kwargs):
+        options = dict(kwargs)
+        self._overflow_feedback.forget(request)
+        self._check_media_fit(request, execution)
         selected, kwargs = self._selected_request(request, kwargs)
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
+        feedback = self._overflow_feedback.capture(request, selected, options, kwargs,
+                                                   execution, binding=self.selection)
         retained, emitted, iterator = False, False, None
         try:
             iterator = aiter(method(selected, **kwargs))
@@ -264,6 +345,7 @@ class SelectedProvider:
         except BaseException as error:
             if not emitted:
                 retained = self._retain_refusal(request, selected, execution, error)
+                self._overflow_feedback.remember(feedback, error)
             raise
         finally:
             if not retained:
@@ -272,14 +354,30 @@ class SelectedProvider:
                 await iterator.aclose()
 
     async def complete(self, request, **kwargs):
-        selected, kwargs = self._selected_request(request, kwargs)
+        options = dict(kwargs)
+        self._overflow_feedback.forget(request)
         execution = self._execution_provider()
+        from ..foreground_preparation import active
+        candidate = active()
+        if candidate is not None and candidate.selection is self and candidate.original is request:
+            candidate.check_selection(execution, kwargs)
+        elif any(row.original is request and row.foreground is not None for row in self._selected_requests):
+            raise ValueError("Ordinary request belongs to another preparation task")
+        self._check_media_fit(request, execution)
+        selected, kwargs = self._selected_request(request, kwargs)
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
+        feedback = self._overflow_feedback.capture(request, selected, options, kwargs,
+                                                   execution, binding=self.selection)
         retained = False
         try:
+            if self.portable_handoff and not (getattr(selected, "metadata", None) or {}).get("purpose"):
+                from ..portable_handoff import complete
+                handoff, self.portable_handoff = self.portable_handoff, None
+                return await complete(self, execution, selected, kwargs, handoff)
             return await execution.complete(selected, **kwargs)
         except BaseException as error:
             retained = self._retain_refusal(request, selected, execution, error)
+            self._overflow_feedback.remember(feedback, error)
             raise
         finally:
             if not retained:
@@ -327,7 +425,10 @@ def _apply_settings(bundle, config):
              for key in ('allowed_write_paths', 'allowed_read_paths') if key in row.get('config', {})}
         for row in bundle.tools if row.get('module') == 'tool-filesystem'
     }
-    bundle.providers = merge(bundle.providers, config.providers)
+    # Settings keeps decision services out of the ordinary LLM list. Runtime
+    # preparation still receives the same logical roster, in declaration order,
+    # before DecisionAccounts projects its accounts onto exact-source hooks.
+    bundle.providers = merge(bundle.providers, getattr(config, "connections", config.providers))
     bundle.providers.sort(key=lambda row: row.get("config", {}).get("priority", 100))
     for kind in ("tools", "hooks"):
         values = merge(getattr(bundle, kind), settings.get("modules", {}).get(kind, []))
@@ -358,7 +459,7 @@ def _apply_settings(bundle, config):
             if kind == "providers" and not override_id:
                 override_id = row["module"].removeprefix("provider-")
             override = merge(overrides.get(row.get("module"), {}), overrides.get(override_id, {}))
-            if override.get("enabled") is False or (kind == "providers" and (row.get("id") or row.get("instance_id") or row["module"].removeprefix("provider-")) in settings.get("configurator", {}).get("disabled", {}).get("providers", [])):
+            if provider_dropped(row, settings) if kind == "providers" else override.get("enabled") is False:
                 if kind == "providers":
                     # Removing a connection must not erase its old image intent
                     # and silently authorize another account through routing.
@@ -400,7 +501,10 @@ def _apply_settings(bundle, config):
                     row["source"] = expand_environment(row["source"])
                 values.append(row)
             else:
-                values.append(expand_environment(row))
+                expanded = expand_environment(row)
+                if kind == "hooks" and row.get("module") == hook_config.MODULE and "config" in row:
+                    hook_config.retain_references(row["config"], expanded["config"])
+                values.append(expanded)
         setattr(bundle, kind, values)
     # Foundation intentionally skips source-less rows during preparation and
     # will not let another account's prepared module stand in at mount time.
@@ -521,7 +625,9 @@ def _expand_module_configuration(node, in_provider=False):
     provider = in_provider or node.get("module", "").startswith("provider-")
     result = {}
     for key, value in node.items():
-        if key in {"config", "source"}:
+        if key == "config" and node.get("module") == hook_config.MODULE:
+            result[key] = hook_config.declared_config(value)
+        elif key in {"config", "source"}:
             result[key] = copy.deepcopy(value) if provider and key == "config" else expand_environment(value)
         elif key in {"instruction", "instructions", "system_prompt"}:
             result[key] = copy.deepcopy(value)
@@ -542,6 +648,12 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
     workspace = str(Path(execution_workspace or config.workspace).expanduser().resolve())
     history_root = Path(config.workspace).expanduser().resolve()
     execution_root = Path(workspace)
+    # The reference web mount fills this missing default in its supplied
+    # config from session.working_dir. Materialize the same root-host value
+    # before construction snapshots, rather than mutate the plan during mount.
+    for row in bundle.tools:
+        if isinstance(row, dict) and row.get("module") == "tool-web":
+            row.setdefault("config", {}).setdefault("working_dir", workspace)
     policy_keys = {"allowed_write_paths", "denied_write_paths", "allowed_read_paths", "denied_read_paths"}
     def paths(values):
         if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
@@ -595,8 +707,16 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
             allowed, denied = f'allowed_{kind}_paths', f'denied_{kind}_paths'
             if allowed in policy and allowed in current:
                 shared, local = paths(policy[allowed]), paths(current[allowed])
-                policy[allowed] = list(dict.fromkeys(str(a if a.is_relative_to(b) else b)
-                    for a in shared for b in local if a.is_relative_to(b) or b.is_relative_to(a)))
+                # Preserve an already permitted declaration, including its
+                # order. Expanding it into redundant shared descendants makes
+                # repeated host projection drift even without an access change.
+                restricted = []
+                for path in local:
+                    if any(path.is_relative_to(root) for root in shared):
+                        restricted.append(path)
+                    else:
+                        restricted.extend(root for root in shared if root.is_relative_to(path))
+                policy[allowed] = list(dict.fromkeys(str(path) for path in restricted))
             elif allowed in policy:
                 policy[allowed] = [str(path) for path in paths(policy[allowed])]
             if denied in policy:
@@ -827,18 +947,18 @@ def installed_naming_source():
     return installed_package_source('amplifier-module-hooks-session-naming', 'amplifier_module_hooks_session_naming')
 
 
-def required_components():
+def required_components(*, resolved_plan=False):
     # Any bundle naming hook and the app adapter must share one implementation.
     # Resolve the included dependency without changing saved mount declarations.
     return HostComponents({'loop-live': LOOP_SOURCE}, {'loop-live': installed_loop_source,
-        'hooks-session-naming': installed_naming_source})
+        'hooks-session-naming': installed_naming_source}, resolved_plan=resolved_plan)
 
 
-def module_source(config, snapshot, module, source, components=None):
+def module_source(config, snapshot, module, source, components=None, *, portable=False):
     components = components or required_components()
     selected = components.source(module, source, installed=True)
     owned = components.owns(module, source)
-    result = selected if owned else source if snapshot else config.module_sources.get(module) or source
+    result = selected if owned else source if snapshot or components.resolved_plan else config.module_sources.get(module) or source
     observer = getattr(config, '_source_policy_observer', None)
     if observer:
         # Observe the winning host declaration too. A resolved relative module
@@ -847,6 +967,10 @@ def module_source(config, snapshot, module, source, components=None):
         explicit_local = bool(not snapshot and config.module_sources.get(module) == result)
         explicit_local |= owned and module in getattr(components, 'installed', {})
         observer.observe(result, config, explicit_local=explicit_local)
+    if portable:
+        from .components import portable_module_sources
+        result = portable_module_sources(
+            {'providers': [{'module': module, 'source': result}]}, config.home)['providers'][0]['source']
     return result
 
 
@@ -920,6 +1044,46 @@ class ResolvedRoot:
         return root
 
 
+def _inherited_provider_authorization(loaded, edited, config):
+    """Normalize mounted root sources only; children retain exact source matching."""
+    from ..runtime_controls import identity
+    from ..provider_environment import HOST_CREDENTIAL
+    from ..decision_accounts import logical_plan
+    from .components import portable_module_sources
+    authorized = logical_plan(loaded.to_mount_plan())
+    snapshot = is_snapshot(loaded)
+    components = getattr(loaded, '_host_components', None) or required_components()
+
+    def bound(value):
+        if isinstance(value, dict):
+            return value == HOST_CREDENTIAL or any(bound(item) for item in value.values())
+        return isinstance(value, list) and any(bound(item) for item in value)
+
+    def visit(node, host):
+        for row in node.get('providers', []):
+            if not row.get('enabled', True) or not bound(row.get('config', {})):
+                continue
+            matches = [old for old in host.get('providers', [])
+                       if old.get('module') == row['module'] and identity(old) == identity(row)]
+            if len(matches) > 1:
+                raise ValueError('Ambiguous authorized provider instance/source.')
+            if not matches or not matches[0].get('enabled', True):
+                continue  # The unchanged exact credential matcher owns refusal.
+            old = matches[0]
+            pair = portable_module_sources({'providers': [row, old]}, config.home)['providers']
+            if pair[0].get('source') == pair[1].get('source'):
+                continue  # Saved explicit C/C wins, even with an ambient B.
+            selected = module_source(config, snapshot, old['module'], old.get('source'), components,
+                                     portable=True)
+            if isinstance(selected, str) and selected == pair[0].get('source'):
+                old['source'] = selected
+    # Root mount capture never rewrites agent declarations. Do not authorize
+    # their mismatched sources from ambient policy during credential rebinding.
+    # The existing exact credential matcher still visits those scopes itself.
+    visit(edited, authorized)
+    return authorized
+
+
 def apply_runtime_plan(loaded, edited, config, execution_workspace):
     from ..runtime_controls import validate_plan
     from ..decision_accounts import logical_plan
@@ -930,7 +1094,8 @@ def apply_runtime_plan(loaded, edited, config, execution_workspace):
         # plan has no authority to restore the automatic-origin exception.
         loaded._host_automatic_routing = False
     from ..provider_environment import rebind_provider_credentials
-    edited, bound = rebind_provider_credentials(edited, loaded.to_mount_plan())
+    authorized = _inherited_provider_authorization(loaded, edited, config)
+    edited, bound = rebind_provider_credentials(edited, authorized, home=config.home)
     loaded._host_provider_credentials_bound = bound
     for key in ("providers", "tools", "hooks"):
         if key in edited:
@@ -939,6 +1104,10 @@ def apply_runtime_plan(loaded, edited, config, execution_workspace):
     for key in ("session", "agents", "context", "instruction"):
         if key in edited:
             setattr(loaded, key, edited[key])
+    # The saved plan already includes bundle/settings source selection. Reusing
+    # that composition's maps would overwrite later per-conversation edits and
+    # distinct child/instance sources. Only required host components still win.
+    loaded._host_components = required_components(resolved_plan=True)
     from ..write_policy_refresh import WritePolicySource
     # An edited live plan is already composed. Retain its explicit ceilings,
     # rather than trusting provenance imported from bundle data.
@@ -982,7 +1151,8 @@ async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None
             if (bundle or config.active_bundle) == config.active_bundle:
                 if facts['hasLoop'] and not facts['supportedLoop']:
                     live_plan(loaded.to_mount_plan())  # Explain the unsupported choice.
-                raise ValueError('The selected conversation profile is incomplete: ' + ', '.join(facts['missing']))
+                from ..profile_catalog import incomplete
+                raise incomplete(facts)
             return None
     adapted, _ = live_plan(loaded.to_mount_plan())
     components = getattr(loaded, '_host_components', None) or required_components()
@@ -1031,7 +1201,8 @@ def install_checkpoint_hooks(coordinator, runtime, checkpoint):
                         pass
         return HookResult()
     for event in ("tool:post", "tool:error", "orchestrator:complete", "context:compaction_finished"):
-        coordinator.hooks.register(event, checkpoint_hook, name="unified-checkpoint-" + event)
+        from .media import registration_hooks
+        registration_hooks(coordinator).register(event, checkpoint_hook, name="unified-checkpoint-" + event)
 
 
 async def prepare_manager(workspace, *, runtime=None, bundle=None, background_delegate=True,
@@ -1072,7 +1243,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     # a stale or corrupt checkpoint cannot prevent opening valid native history.
     native_guard = NativeTranscriptGuard(store.directory(runtime.session_id) / "transcript.jsonl")
     with startup_timing.phase('manager.history.load'):
-        saved = store.load(runtime.session_id) if resume else None
+        saved = store.load(runtime.session_id, prepare_index=True) if resume else None
         history_source = "native" if saved is not None else "new"
         if resume and saved is None:
             if shared_snapshot is None and shared_handle is not None:
@@ -1090,7 +1261,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 # Migration intentionally writes once; take its stamp before the
                 # read so a concurrent older CLI write cannot become our baseline.
                 native_guard.saved()
-                saved = store.load(runtime.session_id)
+                saved = store.load(runtime.session_id, prepare_index=True)
                 if saved is None and shared_handle is None:
                     saved = store.import_cli(runtime.session_id, workspace=config.workspace)
                 if saved is not None:
@@ -1133,7 +1304,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         components = getattr(loaded, "_host_components", None) or required_components()
         components.apply(loaded)
         from .config import configure_skill_cache
-        configure_skill_cache(loaded, config.registry_home)
+        injected_skill_caches = configure_skill_cache(loaded, config.registry_home)
         adapted = components.normalize(adapted)
         write_private(directory / "baseline-mount-plan.json", json.dumps(redact(baseline), indent=2, default=str))
         write_private(directory / "live-mount-plan.json", json.dumps(redact(adapted), indent=2, default=str))
@@ -1154,7 +1325,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     # shared AMPLIFIER_HOME still owns history/settings, not app module caches.
     with startup_timing.phase('manager.bundle.prepare'):
         from .components import prepare_bundle
-        prepared = await prepare_bundle(loaded, strict=True, install_deps=not (qualification_readonly or os.environ.get("AMPLIFIER_RUNTIME_IMMUTABLE") == "1"), **preparation_policy,
+        prepared = await prepare_bundle(loaded, source_home=config.home,
+            strict=True, install_deps=not (qualification_readonly or os.environ.get("AMPLIFIER_RUNTIME_IMMUTABLE") == "1"), **preparation_policy,
             cache_dir=config.registry_home / "cache",
             source_resolver=lambda module, source: module_source(config, snapshot, module, source, components),
             progress_callback=progress)
@@ -1178,8 +1350,11 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                     row["enabled"] = False
         apply_provider_environment(environment_plan)
     from ..decision_accounts import DecisionAccounts, AccountResolver, logical_plan
+    # Decision projection must keep the same canonical hints prepared above,
+    # including host-selected physical overrides. Its envelopes are validated
+    # together; never rewrite only their hook source later during persistence.
     decision_accounts = DecisionAccounts(prepared.mount_plan, isolation,
-        lambda module, source: module_source(config, snapshot, module, source, components))
+        lambda module, source: module_source(config, snapshot, module, source, components, portable=True))
     prepared.mount_plan = decision_accounts.plan
     if decision_accounts.aliases:
         prepared.resolver = AccountResolver(prepared.resolver, decision_accounts.aliases)
@@ -1198,8 +1373,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             messages, recovered = jobs.recover(messages or [])
         if messages is not None:
             messages = repair_interrupted_receipts(messages)
-    approvals = Approvals(runtime, ask)
     session = None
+    approvals = Approvals(runtime, ask, coordinator=lambda: session.coordinator if session else None)
     from ..provider_catalog import mounted_catalog_keys
     catalog_sources={row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-'):
         module_source(config,snapshot,row['module'],row.get('source'),components)
@@ -1215,15 +1390,33 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         def retain_session(constructing):
             nonlocal session
             session = constructing
+        from .media import bind_media, finish_initial_media_mounts, hook_configuration
+        def media(constructing):
+            bind_media(constructing, store)
         initialization = initialization_hooks(isolation=isolation, decision_accounts=decision_accounts,
                                               routing=routing, retain=retain_session,
-                                              ephemeral_servers=ephemeral_mcp_servers)
+                                              ephemeral_servers=ephemeral_mcp_servers,
+                                              providers=prepared.mount_plan.get('providers', []),
+                                              hooks=prepared.mount_plan.get('hooks', []), media=media)
         with startup_timing.phase('manager.session.create'):
             session = await prepared.create_session(session_id=runtime.session_id,
                 session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None,
                 **initialization)
         decision_accounts.require_complete()
         coordinator = session.coordinator
+        from ..skill_cache_move import verified_move
+        coordinator.register_capability("web.context_transition.skill_cache_move",
+            lambda contract, old_sha, generation: verified_move(
+                config.home, config.registry_home, injected_skill_caches, contract, old_sha, generation))
+        # Native initialization has finished. Report the first configured
+        # failure before adapting delegate, applying settings, or mounting the
+        # attachment context, all of which rely on completed construction.
+        failures = getattr(coordinator.get("orchestrator"), "load_failures", [])
+        fatal_failures = [row for row in failures if not isolation or row.get("type") != "provider"]
+        if fatal_failures:
+            from ..module_failures import persist_failures
+            raise persist_failures(directory, fatal_failures)
+        media_unavailable = finish_initial_media_mounts(coordinator)
         if ephemeral_mcp_servers is not None:
             ready = coordinator.get_capability("mcp.ephemeral_ready")
             if ready != sorted(ephemeral_mcp_servers):
@@ -1268,12 +1461,18 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                                         copy.deepcopy(coordinator.config.get("agents", {})))
         with startup_timing.phase('manager.settings'):
             if not snapshot:
-                await configurator.apply_saved_settings(config.settings.get("configurator") or {})
+                settings = config.settings.get("configurator") or {}
+                if settings:
+                    with hook_configuration(coordinator):
+                        await configurator.apply_saved_settings(settings)
+                else:
+                    await configurator.apply_saved_settings(settings)
             configurator.take_snapshot()
         providers = coordinator.get("providers") or {}
         if not providers:
             raise RuntimeError("No provider is configured. Add config.providers to the shared Amplifier settings.yaml.")
         with startup_timing.phase('manager.provider.info'):
+            from ..next_message_impact import cache_traits
             choices = []
             for identity, provider in providers.items():
                 info = provider.get_info()
@@ -1281,7 +1480,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                     info = await info
                 defaults = getattr(info, "defaults", {}) or {}
                 choices.append({"id": identity, "provider": getattr(info, "id", identity),
-                    "display_name": getattr(info, "display_name", None),
+                    "display_name": getattr(info, "display_name", None), "promptCacheTraits": cache_traits(info),
                     **({"available": False, "failure": provider.failure} if isinstance(provider, UnavailableProvider) else {}),
                     "model": defaults.get("model"), "effort": defaults.get("reasoning_effort") or next((row.get("config",{}).get("reasoning_effort") for row in prepared.mount_plan.get("providers",[]) if (row.get("instance_id") or row.get("id") or row["module"].removeprefix("provider-"))==identity),None), "sharedCatalogKey":catalog_keys.get(identity), "models": []})
         # Keep public connection choices available even when a saved ID prevents
@@ -1306,6 +1505,11 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             "created": (saved[1].get("created") if saved else None) or datetime.now(UTC).isoformat(),
             "application_host": application_host, "config": redact(logical_plan(session.config))}
         continuity = None
+        coordinator.register_capability("web.context_transition.originals",
+                                        bool(saved and saved[1].get("fork")))
+        fork = saved[1].get("fork") if saved else None
+        if isinstance(fork, dict) and fork.get("source_session_id") and not saved[1].get("portabilityOrigin"):
+            coordinator.register_capability("web.context_transition.fork_parent", fork["source_session_id"])
         published_anchors = None
         def recovery_write_guard():
             # A recovery write uses the same native ownership checks, without
@@ -1318,7 +1522,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             native_guard.check()
             if held is not None:
                 held.check()
-        async def checkpoint(status="in_progress", *, timing=None, transcript_required=True):
+        async def checkpoint(status="in_progress", *, timing=None, transcript_required=True,
+                             capture_messages=True):
             nonlocal published_anchors
             if write_guard:
                 write_guard()
@@ -1335,26 +1540,48 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                     held.check()
                 return
             if timing:timing.mark('context.start')
-            transcript = await coordinator.get("context").get_messages()
-            if timing:timing.mark('context.end')
-            held = shared_handle_getter() if shared_handle_getter else shared_handle
-            native_guard.check()
-            if held is not None:
-                # Cross-host ownership remains Foundation's responsibility;
-                # native transcript/metadata are the only newly written history.
-                held.check()
-            if timing:timing.mark('store.start')
-            canonical = store.save(runtime.session_id, transcript, {**metadata, "status": status,
-                "last_updated": datetime.now(UTC).isoformat(),
-                "turn_count": sum(row.get("role") == "user" for row in transcript)})
-            if timing:timing.mark('store.end')
-            native_guard.saved()
-            if continuity:
-                if timing:timing.mark('continuity.start')
-                continuity.save()
-                if timing:timing.mark('continuity.end')
-            from ..collaboration_input import checkpoint_anchors
-            anchors = checkpoint_anchors(canonical, runtime)
+            canonical, anchors = None, None
+            def persist(transcript):
+                nonlocal canonical, anchors
+                if timing:timing.mark('context.end')
+                held = shared_handle_getter() if shared_handle_getter else shared_handle
+                native_guard.check()
+                if held is not None:
+                    # Cross-host ownership remains Foundation's responsibility;
+                    # native transcript/metadata are the only newly written history.
+                    held.check()
+                if timing:timing.mark('store.start')
+                saved_rows = store.save(runtime.session_id, transcript, {**metadata, "status": status,
+                    "last_updated": datetime.now(UTC).isoformat(),
+                    "turn_count": sum(row.get("role") == "user" for row in transcript)})
+                from .media import acknowledge_media
+                acknowledge_media(coordinator, store, runtime.session_id, saved_rows)
+                if timing:timing.mark('store.end')
+                native_guard.saved()
+                if continuity:
+                    if timing:timing.mark('continuity.start')
+                    continuity.save()
+                    if timing:timing.mark('continuity.end')
+                from ..collaboration_input import checkpoint_anchors
+                anchors = checkpoint_anchors(saved_rows, runtime)
+                if capture_messages:
+                    canonical = saved_rows
+
+            # Startup and automatic hooks discard the returned history. Let its
+            # owner lend rows only for the synchronous save/anchor calculation;
+            # no transcript reference escapes into the notification await below.
+            visit = coordinator.get_capability("context.history.visit") if not capture_messages else None
+            if callable(visit):
+                result = visit(persist)
+                if inspect.isawaitable(result):
+                    if inspect.iscoroutine(result):
+                        result.close()
+                    raise RuntimeError("Context history visitation must be synchronous")
+                del result
+                if anchors is None:
+                    raise RuntimeError("Context history visitor did not provide history")
+            else:
+                persist(await coordinator.get("context").get_messages())
             if anchors and anchors != published_anchors:
                 # Transcript persistence above is unconditional. This bounded
                 # notification carries message/generation identity, not a save
@@ -1364,20 +1591,19 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 published_anchors = anchors  # A failed emit remains retryable.
             return canonical
         coordinator.register_capability("live.checkpoint", checkpoint)
+        coordinator.register_capability("session.durable_checkpoint",
+                                        partial(checkpoint, capture_messages=False))
+        from ..attachments import install_media_context
+        await install_media_context(coordinator)
         from ..context_continuity import install as install_continuity
         continuity = install_continuity(coordinator, runtime.session_id, edited_path.parent,
-                                       checkpoint, writer_guard=recovery_write_guard)
-        install_checkpoint_hooks(coordinator, runtime, checkpoint)
+                                       partial(checkpoint, capture_messages=False), writer_guard=recovery_write_guard)
+        install_checkpoint_hooks(coordinator, runtime, partial(checkpoint, capture_messages=False))
         async def cleanup_jobs():
             jobs.close()
         coordinator.register_cleanup(cleanup_jobs)
         with startup_timing.phase('manager.checkpoint'):
-            await checkpoint()
-        failures = getattr(loop, "load_failures", [])
-        fatal_failures = [row for row in failures if not isolation or row.get("type") != "provider"]
-        if fatal_failures:
-            from ..module_failures import persist_failures
-            raise persist_failures(directory, fatal_failures)
+            await checkpoint(capture_messages=False)
         from ..module_failures import clear_failures
         clear_failures(directory)
         # Stamp only explicit, local bundle resources actually consumed by this
@@ -1407,6 +1633,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             "provider_failures": isolation.outcomes(coordinator) if isolation else [],
             "decision_account_failures": decision_accounts.failures}
         report["config_inputs"] = config_inputs
+        if media_unavailable:
+            report["tool_image_unavailable"] = media_unavailable
         report["history_source"] = history_source
         report["execution_workspace"] = str(execution_workspace)
         with startup_timing.phase('manager.report'):

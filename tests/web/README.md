@@ -36,6 +36,10 @@ selects its working directory. Use the runner's help for modes, time budgets and
 it retains both registry identities in evidence.
 Named host journeys are also available through this directory's package scripts.
 
+The opt-in `--app004-qualification` appends the fixed chat-reference units and
+deliberate reload check. [The feature validator](chat_reference_qualification.py)
+defines the expected cases and reads evidence from the browser journey.
+
 Fixtures use synthetic state and an owned Python interpreter selected through
 `fixture-python.mjs`; install matching Playwright Chromium or reuse the matching
 owned browser cache. Preserve fixture lifecycle, cancellation and cleanup helpers
@@ -43,8 +47,8 @@ rather than starting a shared application. Renderer checks use the selected
 client's dependency tree, not a second production dependency owner. Shared generic
 helpers keep one implementation with injected test-framework facades.
 
-Current source inspection belongs in the canonical client repository or its
-selected delivery copy at `components/web-client`; `.build/web-client` is prepared,
-disposable input, not an authoring location. Keep saved historical results bound
+Current source inspection belongs in the canonical client repository or its exact
+selected `.build/web-client` preparation. The latter is disposable input, not an
+authoring location. Keep saved historical results bound
 to their original paths and sources. After review, remove unneeded owned fixtures,
 outputs and dependencies while retaining finite evidence and recoverable changes.

@@ -91,7 +91,7 @@ async def mounted(app, tmp_path, monkeypatch):
 
     monkeypatch.setattr(app.management, 'command', retain_authority)
     worker.bridge = transport
-    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
+    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator), execution_role='root')
     registry = await install_children(parent, prepared, Runtime('native-root'), SessionStore(tmp_path / 'children'), approvals)
     failures = []
 
@@ -193,7 +193,7 @@ async def test_mounted_full_configuration_and_own_reads_keep_actual_actor(mounte
             h.worker.context_inputs = ['later-input']
             h.worker.context_bindings = {'later-input': {'clientId': None, 'targets': []}}
             if mode == 'nested-reprepare':
-                await install_app_access(coordinator, h.worker.app_access_bridge(coordinator))
+                await install_app_access(coordinator, h.worker.app_access_bridge(coordinator), execution_role='native_child')
             await h.registry.spawn('worker', 'nested configuration', h.registry.sessions['child'], sub_session_id='grandchild')
         return 'configured'
 
@@ -500,3 +500,32 @@ async def test_mounted_child_does_not_borrow_grants_or_root_controls(mounted, mo
 
     h.install_execute(execute)
     await h.registry.spawn('worker', 'inspect', h.parent, sub_session_id='child')
+
+
+async def test_mounted_full_root_saves_peer_choice_but_child_cannot(mounted):
+    """Real app-control/Worker/RuntimeManager envelopes, no provider inference."""
+    h = mounted
+    await save(h.app)
+    target = h.app.state['sessions'][1]
+    target['bundle'] = 'anchors-amp-dev'
+    root_control = h.parent.coordinator.get('tools')['app_control']
+    result = await dispatch(root_control, 'conversation.configure', {
+        'sessionId': target['id'], 'expectedRevision': 0, 'bundle': 'work-amp-dev'}, 'native-root-peer-choice')
+    assert result.success, result.error
+    assert target['bundle'] == 'anchors-amp-dev'
+    assert target['pendingBundleSelection']['bundle'] == 'work-amp-dev'
+    authority = target['pendingBundleSelection']['authority']['chain'][0]
+    assert authority['sessionId'] == h.source['id'] and authority['runtimeSessionId'] == 'native-root'
+    assert authority['generationId'] == 'generation-1'  # Model-supplied forgery was replaced.
+    assert authority['inputIds'] == ['assigned-input']
+    before = deepcopy(target['pendingBundleSelection'])
+
+    async def execute(self, prompt, context, providers, tools, hooks, coordinator):
+        refused = await dispatch(tools['app_control'], 'conversation.configure', {
+            'sessionId': target['id'], 'expectedRevision': 1, 'bundle': 'anchors'}, 'native-child-peer-choice')
+        assert not refused.success
+        return 'unchanged'
+
+    h.install_execute(execute)
+    await h.registry.spawn('worker', 'inspect', h.parent, sub_session_id='child')
+    assert target['nextMessageRevision'] == 1 and target['pendingBundleSelection'] == before

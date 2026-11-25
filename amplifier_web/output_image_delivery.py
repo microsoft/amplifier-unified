@@ -201,7 +201,8 @@ class OutputImageDelivery:
             blocks.append({'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': pixels}})
         return request.model_copy(update={'messages': [*request.messages, Message(role='user', content=blocks,
             metadata={'ephemeral': True, 'outputImageObservation': {**identity,
-                'toolCallId': tool_call_id, 'epoch': copy.deepcopy(observation['epoch'])}})]})
+                'toolCallId': tool_call_id, 'epoch': copy.deepcopy(observation['epoch'])},
+                'contextAnchorToolCalls': [tool_call_id] if tool_call_id else []})]})
 
     def _pair_message(self, request, observation, *, value=None, reason_code=None):
         from amplifier_core.message_models import Message
@@ -219,7 +220,9 @@ class OutputImageDelivery:
         identity = {'images': requested, 'receipt': saved['inspection']['receipt'],
                     'epoch': copy.deepcopy(observation['epoch'])}
         return request.model_copy(update={'messages': [*request.messages, Message(role='user', content=blocks,
-            metadata={'ephemeral': True, 'outputImagePairObservation': identity})]})
+            metadata={'ephemeral': True, 'outputImagePairObservation': identity,
+                      'contextAnchorToolCalls': [observation['tool_call_id']]
+                      if observation.get('tool_call_id') else []})]})
 
     async def revalidate(self, request):
         from amplifier_core.message_models import Message

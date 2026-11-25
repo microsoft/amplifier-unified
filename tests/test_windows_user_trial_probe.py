@@ -1141,6 +1141,9 @@ def test_first_turn_discriminators_keep_real_send_and_outcome_assertions():
                 for target in node.targets)]
     assert set(steps) == probe.TURN_STEPS and len(steps) == len(probe.TURN_STEPS)
     source = ast.unparse(journey)
+    assert "get('idle')" in source
+    assert "get('parked')" not in source
+    assert "SessionHistoryStore(directory).load_messages()" in source
     for required in (
         "await action('conversation.send'",
         "await until(completed)",
@@ -2226,14 +2229,46 @@ def test_workflow_keeps_old_lane_commands_and_bounded_installed_candidate_job():
     # Strip only EOF scalar newline; appending a new job adds one to the prior
     # final block in YAML. No command, matrix, dependency or budget may change.
     # Frozen 177b9c98 commands, including the already accepted bootstrap lane.
+    # windows-private-config-tls is frozen again at ab6af87f. Since 177b9c98
+    # it has exactly two accepted changes: the filelock floor follows the
+    # product's security floor (#1840), and its pytest command also runs
+    # tests/test_windows_task_runtime.py (#1920). New checks go in a new job.
     golden = {"passive-process-check": "fa89a68443d5cbbda12ea3513cd5cfa12bb5cb42adbf0f7744f240fdeb3b3d8b",
-              "windows-private-config-tls": "557dd004afccf2bff8d53e3a40ad62ca232ee6a218ba1a56e9bbda71ad302987"}
+              "windows-private-config-tls": "7a355e16976e1ff7fc3423f58f6dd637b14ed0fb91f7d42d6465bb705bae7980"}
+    # Accepted since the freeze: three steps that each run native cases with no
+    # skip (#2247, #2269), and the general command leaves out the case that one
+    # of them runs alone (#2247). The case takes exactly these out and compares
+    # the rest with the frozen hashes, so every older command stays as it was.
+    # Each accepted step is frozen too, as it was accepted.
+    added = {"passive-process-check": {
+                 "Require the native replaced-while-read cases with no skip":
+                     "1752535296af4fd5375953cfd22c4b232a5a5ff8a6d5becc5a386459e64942c5"},
+             "windows-private-config-tls": {
+                 "Require the native replaced-root record cases with no skip":
+                     "931cce3200d4218944a7fd82412022b6707e419dcde1d278bd6b22612c30d6c7",
+                 "Require the stop command's reads against a writing host with no skip":
+                     "2d42134c19a9cd20cbf5be3ca4eaadc17098f06d7aed99f034ab3b6388a7be6d"}}
+    left_out = " and not stop_reads_the_receipt_while_the_host_writes_its_phases"
     for name, expected in golden.items():
         job = copy.deepcopy(workflow["jobs"][name])
         assert job.pop("if") == "${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}"
+        accepted = [step for step in job["steps"] if step.get("name") in added[name]]
+        assert [step["name"] for step in accepted] == list(added[name])
+        for step in accepted:
+            found = hashlib.sha256(json.dumps(step, sort_keys=True).encode()).hexdigest()
+            assert found == added[name][step["name"]], (
+                f"The step {step['name']!r} of the job {name} of platform-mechanisms.yml differs from the step "
+                f"that was accepted. If the change is wanted, its new value in `added` above is {found}.")
+        job["steps"] = [step for step in job["steps"] if step.get("name") not in added[name]]
         if name == "windows-private-config-tls":
             job["steps"][-1]["run"] = job["steps"][-1]["run"].rstrip("\n")
-        assert hashlib.sha256(json.dumps(job, sort_keys=True).encode()).hexdigest() == expected
+            general = next(step for step in job["steps"] if step.get("name", "").startswith("Check private configuration"))
+            assert general["run"].count(left_out) == 1
+            general["run"] = general["run"].replace(left_out, "")
+        found = hashlib.sha256(json.dumps(job, sort_keys=True).encode()).hexdigest()
+        assert found == expected, (
+            f"The job {name} of platform-mechanisms.yml differs from its frozen commands. Put a new check into "
+            f"a new job. For an accepted new step of this job, add its name and its hash to `added` above.")
     job = workflow["jobs"]["windows-user-trial"]
     assert job["timeout-minutes"] == 15 and job["runs-on"] == "windows-latest"
     commands = "\n".join(step.get("run", "") for step in job["steps"])
@@ -2319,8 +2354,19 @@ def test_default_command_job_is_separate_finite_and_requires_real_native_node():
                and part.func.attr == "validate_report" for part in ast.walk(runner))
     upload = next(step for step in job["steps"] if step.get("name") == "Upload only the bounded default-runtime result")
     assert upload["if"] == "always()" and upload["with"]["name"] == "windows-default-runtime"
-    assert upload["with"]["path"] == "${{ runner.temp }}/dr-ci/evidence/publicresult.json"
+    # Exactly two named files, no pattern: the public result and the count
+    # summary of the metadata observation tests (fd77d428). That summary is a
+    # closed set of four counts and a status; its raw log stays private.
+    assert upload["with"]["path"] == (
+        "${{ runner.temp }}/dr-ci/evidence/publicresult.json\n"
+        "${{ runner.temp }}/dr-ci/evidence/metadata-observation-tests.json\n")
     assert "*" not in upload["with"]["path"] and "private" not in upload["with"]["path"]
+    summary = next(step["run"] for step in job["steps"]
+                   if step.get("name") == "Check closed metadata observation and original-outcome preservation")
+    assert ('result = {key: getattr(selected, key) for key in ("collected", "passed", "failed", "skipped")}\n'
+            in summary and summary.count("metadata-observation-tests.json") == 1)
+    assert ('(base / "evidence/metadata-observation-tests.json").write_text(json.dumps(result), encoding="utf-8")'
+            in summary and '(base / "private-observation-tests.log").open("x", encoding="utf-8")' in summary)
 
 
 @pytest.mark.parametrize("fault", [None, "missing", "wrong-node", "duplicate", "skip", "failed",
@@ -2393,18 +2439,26 @@ def test_foreground_cli_output_is_private_bounded_and_preserves_export_bytes():
     assert len(output.getvalue()) == 65536
 
 
-@pytest.mark.parametrize("fault", [None, "wrong-code", "wrong-object", "wrong-port", "repeat", "not-serve"])
-def test_foreground_cli_bind_guard_is_exact_real_asyncio_socket_only(tmp_path, monkeypatch, fault):
+@pytest.mark.parametrize("fault", [None, "wrong-code", "wrong-object", "wrong-port", "repeat", "not-serve",
+                                  "unresolved", "other-binds", "helper-port"])
+def test_foreground_cli_bind_guard_is_exact_acquisition_socket_only(tmp_path, monkeypatch, fault):
+    from amplifier_web import cli
     guard = probe.CliNetworkGuard(tmp_path / "network.jsonl", 8942, serve=fault != "not-serve")
+    guard.resolved = fault != "unresolved"
     stream = types.SimpleNamespace(family=socket.AF_INET, type=socket.SOCK_STREAM)
-    code = probe.asyncio.BaseEventLoop.create_server.__code__
-    frame = types.SimpleNamespace(f_code=code, f_locals={"sock": stream})
+    code = cli._listener_sockets.__wrapped__.__code__
+    frame = types.SimpleNamespace(f_code=code, f_locals={
+        "sock": stream, "binds": ["127.0.0.1"], "port": 8942})
     if fault == "wrong-code":
         frame.f_code = (lambda: None).__code__
     if fault == "wrong-object":
         frame.f_locals["sock"] = object()
     if fault == "repeat":
         guard.listener = object()
+    if fault == "other-binds":
+        frame.f_locals["binds"] = ["127.0.0.1", "192.0.2.1"]
+    if fault == "helper-port":
+        frame.f_locals["port"] = 8943
     # No socket, loop, process or real network event is emitted by this model.
     with monkeypatch.context() as patch:
         patch.setattr(probe.sys, "_getframe", lambda *a: frame)
@@ -2417,6 +2471,80 @@ def test_foreground_cli_bind_guard_is_exact_real_asyncio_socket_only(tmp_path, m
     assert guard.port is None  # Serving never admits outbound app networking.
     if fault:
         assert guard.blocked == 1 and tmp_path.joinpath("network.jsonl").exists()
+
+
+@pytest.mark.parametrize("fault", [None, "wrong-wrapper", "wrong-helper", "no-helper", "other-binds",
+    "helper-port", "hostname", "wrong-port", "family", "datagram", "protocol", "flags",
+    "repeat", "not-serve", "wrong-event-args"])
+def test_foreground_numeric_resolution_guard_is_exact_configured_helper_only(tmp_path, monkeypatch, fault):
+    from amplifier_web import cli
+    guard = probe.CliNetworkGuard(tmp_path / "network.jsonl", 8942, serve=fault != "not-serve")
+    helper = types.SimpleNamespace(f_code=cli._listener_sockets.__wrapped__.__code__,
+                                  f_locals={"binds": ["127.0.0.1"], "port": 8942})
+    frame = types.SimpleNamespace(f_code=socket.getaddrinfo.__code__, f_back=helper, f_locals={
+        "host": "127.0.0.1", "port": 8942, "family": socket.AF_UNSPEC,
+        "type": socket.SOCK_STREAM, "proto": 0, "flags": socket.AI_PASSIVE})
+    event_args = ("127.0.0.1", 8942, socket.AF_UNSPEC, socket.SOCK_STREAM, 0)
+    if fault == "wrong-wrapper":
+        frame.f_code = (lambda: None).__code__
+    if fault == "wrong-helper":
+        helper.f_code = (lambda: None).__code__
+    if fault == "no-helper":
+        frame.f_back = None
+    if fault == "other-binds":
+        helper.f_locals["binds"] = ["localhost"]
+    if fault == "helper-port":
+        helper.f_locals["port"] = 8943
+    for label, field, value in (("hostname", "host", "localhost"), ("wrong-port", "port", 8943),
+        ("family", "family", socket.AF_INET6), ("datagram", "type", socket.SOCK_DGRAM),
+        ("protocol", "proto", socket.IPPROTO_UDP), ("flags", "flags", 0)):
+        if fault == label:
+            frame.f_locals[field] = value
+    if fault == "repeat":
+        guard.resolved = True
+    if fault == "wrong-event-args":
+        event_args = ("private.invalid", 8942, socket.AF_UNSPEC, socket.SOCK_STREAM, 0)
+    with monkeypatch.context() as patch:
+        patch.setattr(probe.sys, "_getframe", lambda *a: frame)
+        if fault is None:
+            guard.audit("socket.getaddrinfo", event_args)
+            assert guard.resolved and guard.blocked == 0
+        else:
+            with pytest.raises(PermissionError):
+                guard.audit("socket.getaddrinfo", event_args)
+    if fault:
+        assert guard.blocked == 1
+    assert guard.port is None
+
+
+def test_foreground_guard_accepts_actual_numeric_helper_and_still_denies_unowned_network(tmp_path):
+    # Real stdlib audit frames and helper socket identity, in a child because
+    # audit hooks cannot be removed. No app/runtime/provider or remote network.
+    script = r'''
+import importlib.util, pathlib, socket, sys
+from amplifier_web import cli
+spec = importlib.util.spec_from_file_location("probe", sys.argv[1])
+probe = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(probe)
+with socket.socket() as unused:
+    unused.bind(("127.0.0.1", 0))
+    port = unused.getsockname()[1]
+guard = probe.CliNetworkGuard(pathlib.Path(sys.argv[2]), port, serve=True)
+sys.addaudithook(guard.audit)
+with cli._listener_sockets(["127.0.0.1"], port) as sockets:
+    assert guard.resolved and guard.listener is sockets[0]
+    assert guard.listener.getsockname() == ("127.0.0.1", port)
+assert guard.listener.fileno() == -1 and guard.verify()["unknownAttempts"] == 0
+try:
+    socket.getaddrinfo("127.0.0.1", port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE)
+except PermissionError:
+    assert guard.blocked == 1
+else:
+    raise AssertionError("unowned same-target resolution admitted")
+'''
+    result = subprocess.run([sys.executable, "-B", "-c", script, SPEC.origin, str(tmp_path / "network.jsonl")],
+                            capture_output=True, text=True, timeout=15, cwd=ROOT)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("event", ["socket.getaddrinfo", "socket.gethostbyname",

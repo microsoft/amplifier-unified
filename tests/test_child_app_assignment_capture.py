@@ -94,7 +94,7 @@ async def test_first_child_mount_retains_invoking_assignment_through_provider_wa
 
     worker.bridge = transport
     monkeypatch.setattr(app, '_app_bridge', current_execution)
-    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
+    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator), execution_role='root')
     registry = await install_children(parent, prepared, Runtime('root'), SessionStore(tmp_path / 'children'), approvals)
     entered, release = asyncio.Event(), asyncio.Event()
 
@@ -116,7 +116,9 @@ async def test_first_child_mount_retains_invoking_assignment_through_provider_wa
         origin = envelopes[-1]['_childOrigin']
         assert origin == {'rootSessionId': 'root', 'runtimeSessionId': 'child',
                           'generationId': 'original-generation', 'inputIds': ['original-input'],
-                          'runId': registry.rows['child']['runId'], **original_execution}
+                          'runId': registry.rows['child']['runId'],
+                          'taskBinding': {'id': None, 'revision': None, 'status': None},
+                          **original_execution}
         assert '_runtimeOwnerId' not in envelopes[-1]  # The host, not model/child, binds it.
         if advance in {'unchanged', 'input', 'generation'}:
             assert result.success

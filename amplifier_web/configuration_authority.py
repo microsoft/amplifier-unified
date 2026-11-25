@@ -23,7 +23,7 @@ EFFECTS = {
 PERSISTENT = {
     **dict.fromkeys(('permissions.save', 'permissions.reset'), 'file_access'),
     **dict.fromkeys(('providers.save', 'providers.remove', 'providers.move', 'providers.reorder', 'providers.login', 'providers.configureDecisions'), 'connections'),
-    **dict.fromkeys(('providers.finishSetup', 'routing.use', 'routing.save'), 'model_defaults'),
+    **dict.fromkeys(('providers.finishSetup', 'providers.configureSuggestions', 'routing.use', 'routing.save'), 'model_defaults'),
     **dict.fromkeys(('modules.save', 'modules.remove', 'modules.validate', 'modules.reconcile', 'sources.save', 'sources.remove', 'sources.validate'), 'modules'),
 }
 BUNDLE_GLOBAL = {'bundles.add', 'bundles.toggle', 'bundles.remove', 'bundles.move', 'bundles.reorder'}
@@ -52,6 +52,10 @@ def definitions(schema, string):
 
 
 def requirement(action, args):
+    if action in {'instanceBranding.update', 'instanceBranding.reset'}:
+        return 'host_defaults', 'global'
+    if action in {'externalAgents.get', 'externalAgents.save', 'externalAgents.remove'}:
+        return 'connections', 'global'
     if action in {'testing.capacity.save', 'testing.machine.save', 'testing.runners.register', 'testing.runners.refresh', 'testing.runners.enable', 'testing.runners.enrollment.cancel', 'testing.runners.enrollment.reconcile', 'testing.runners.machine.save', 'testing.runners.capacity.save', 'testing.execution.save'}:
         return 'host_defaults', 'global'
     if action in {'workspace.environments.setup', 'workspace.environments.setup.cleanup'}:
@@ -68,7 +72,7 @@ def requirement(action, args):
         return 'bundles', 'local' if args['scope'] == 'workspace' else 'global'
     if action == 'bundle.save':
         return 'bundles', 'global'
-    if action in {'bundle.switch', 'bundle.fork'} or action == 'conversation.configure' and 'bundle' in args:
+    if action in {'bundle.switch', 'bundle.fork'} or action == 'conversation.configure' and ('bundle' in args or 'restorePreviousInputId' in args):
         return 'bundles', 'session'
     if action in {'configuration.apply', 'configuration.patchPlacement.bind'}:
         return 'runtime_configuration', 'session'
@@ -430,6 +434,10 @@ class ConfigurationAuthority:
     def capture(self, action, args, origin, caller):
         if origin in {'ui', 'user'}:
             return None
+        from .conversation_configuration import capture
+        operator = capture(self.service, action, args, origin, caller)
+        if operator is not None:
+            return operator
         if action == 'settings.update':
             patch = args.get('patch', {})
             effects = []
@@ -442,7 +450,7 @@ class ConfigurationAuthority:
             return self._capture(action, args, origin, caller, ('host_defaults', 'global'))
         return self._capture(action, args, origin, caller)
 
-    def full_peer_authorities(self, source, inputs):
+    def full_peer_authorities(self, source, inputs, *, effect='runtime_configuration', scope='session', require_full=False):
         """Recovery's Full caller ceiling includes authenticated peer ancestry.
 
         Reuse retained collaboration lineage and Full revisions, not a grant
@@ -487,13 +495,15 @@ class ConfigurationAuthority:
                     self.error('The originating peer cannot supply current recovery authority.')
                 authority = {'sessionId': sender['id'], 'workspace': sender['workspace'],
                     'interruptionRevision': sender.get('interruptionRevision', 0),
-                    'effect': 'runtime_configuration', 'scope': 'session'}
+                    'effect': effect, 'scope': scope}
                 reviewed = ()
                 if self.service.access_mode.full(sender):
                     authority['accessRevision'] = self.service.access_mode.snapshot(sender)['revision']
                 else:
+                    if require_full:
+                        self.error('The originating peer cannot supply Full other-chat configuration authority.')
                     grant = next((row for row in self.eligible(sender) if self.valid(row, sender)
-                        and 'runtime_configuration' in row['effects'] and 'session' in row['scopes']), None)
+                        and effect in row['effects'] and scope in row['scopes']), None)
                     if grant is None:
                         self.error('The originating peer cannot supply current recovery authority.')
                     authority.update(grantId=grant['id'], grantRevision=grant['revision'])
@@ -582,6 +592,10 @@ class ConfigurationAuthority:
 
     def check(self, authority, *, workspace=None, scope=None):
         if authority is None:
+            return
+        if 'operatorConfiguration' in authority:
+            from .conversation_configuration import check
+            check(self.service, authority, workspace=workspace, scope=scope)
             return
         if 'chain' in authority:
             for item in authority['chain']:
@@ -716,7 +730,7 @@ class ConfigurationAuthority:
         self.service._message(session, 'user', f'Permission {decision}:\n\n{comment}', 'permission',
                               approvalId=grant['id'], inputOrigin='approval')
 
-    async def decide(self, args, origin, command_id):
+    async def decide(self, args, origin, command_id, *, admission_check=None):
         if origin not in {'ui', 'user'}:
             self.error('Only the user can answer a configuration approval.')
         sid = args.get('sessionId') or self.service.state.get('selectedSessionId')
@@ -732,6 +746,8 @@ class ConfigurationAuthority:
                 if grant['status'] != 'expired':
                     self.service._task(self.notify_waiter(grant))
                 return {**receipt, 'duplicate': True}
+            if admission_check is not None:
+                admission_check()
             grant = self.record(args['id'])
             if grant['sessionId'] != sid:
                 self.error('The approval belongs to another conversation.')
@@ -762,6 +778,12 @@ class ConfigurationAuthority:
                 self.error('This configuration approval is no longer pending.', 409)
             if args.get('expectedRequestHash') and args['expectedRequestHash'] != self.request_view(session, args['id'])['requestHash']:
                 self.error('The request changed. Review its current scope before deciding.', 409)
+            if args.get('expectedApprovalScope'):
+                from .approval_policy import descriptor
+                card = next(row for row in session['approvals'] if row['id'] == args['id'])
+                current = descriptor(self.service, session, card)
+                if not current or current['key'] != args['expectedApprovalScope']:
+                    self.error('The configuration target changed. Review its current scope before deciding.', 409)
             if (grant['workspace'] != session['workspace'] or grant['interruptionRevision'] != session.get('interruptionRevision', 0)
                     or grant.get('expiresAt', time.time() + 1) <= time.time()):
                 self.error('The configuration request expired or the conversation changed. Request current scope again.', 409)

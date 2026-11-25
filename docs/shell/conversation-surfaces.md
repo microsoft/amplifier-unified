@@ -225,24 +225,24 @@ dispatch arbitrary app actions. Parent messages are checked against the exact
 frame, bridge channel and definition revision. The bridge exposes only state,
 declared events and declared requests. Host approval is outside the iframe.
 
-The initial action allowlist is `theme.preview`, `theme.apply`, `theme.revert`.
-Declare a request with `action` and an input `schema`. Preview/apply inputs
-are preferably `{name, tokens}` for palette changes. `tokens` is a nonempty
-map of the host token names below to six-digit hex colors, for example
-`{name: "Forest", tokens: {accent: "#3e7052", bg: "#eef3eb"}}`. The host
-retains the complete applied skin and materializes the exact CSS for review;
-authors do not need to copy the existing stylesheet. For deeper changes,
-`{name, css}` accepts complete, self-contained shell CSS. Supply tokens or CSS,
-not both. Revert uses `{}`.
+The action allowlist is `appearance.preview`, `appearance.preview.cancel`,
+`appearance.preferences.update`, `appearance.preferences.select` and
+`appearance.preferences.undo`. Declare a request with `action` and an input
+`schema`, using the installed [appearance API](themes.md). Preview takes
+`{name, css}` for an intentional Reference delta; cancel takes `{}` for the
+resolving document. Preference update/select requests carry the captured
+destination and exact CAS fields; Undo takes its exact `undoId`. Global and This
+browser are independent complete profiles, not field overlays.
 The host validates both the declared schema and the actual action schema.
 Queued requests have no effect until resolved. The host's review controls
-show exact CSS, scope and approve/decline actions. They use the same theme
-implementation as ordinary controls and agent commands.
+show the exact payload, scope and approve/decline actions. They use the same
+appearance owner as ordinary controls and agent commands.
 
-Preview is local to the chosen client; apply changes the shared shell. Revert
-ends a local preview first, otherwise undoes that client's last application
-only if no newer theme has replaced it. Approval rejects a request based on
-an outdated shell theme. `canvas.apps.resolve` lets an authorized agent use
+Preview is document-local and changes neither profile. Browser preference writes
+require storage acknowledgement; that is separate from observed rendering.
+Stale requests conflict without forcing newer revisions. Public preference Undo
+is conditional on its exact whole-profile CAS, not a fresh-revision retry.
+`canvas.apps.resolve` lets an authorized agent use
 the same path, with an explicit `clientId` and current revisions. The sandbox
 cannot approve its own request. An agent should resolve only changes covered
 by the user's instruction.
@@ -307,15 +307,18 @@ before calculating its radius; redraw on reveal and respect reduced motion.
 Subscriptions are deduplicated and deferred while local writes are pending, but
 an author must still preserve unsaved local work when new shared state arrives.
 
-For authorized theme application, the agent (outside the sandbox) performs:
+For an authorized appearance change, the agent (outside the sandbox) performs:
 
 1. Inspect the surface and intended browser client.
-2. Queue the declared apply request using current revisions and small tokens.
+2. Queue the declared request using current surface revisions: `{name, css}` for
+   `appearance.preview`, or the captured profile destination and exact CAS fields
+   for preference update/select. Cancel and conditional Undo are separate actions.
 3. Inspect its exact request input and current revisions.
 4. Call `canvas.apps.resolve` with `id`, `clientId`, `requestId`, `approve: true`,
    `expectedRevision`, and `expectedStateRevision`.
-5. Verify the request result and the target view. Do not ask again for permission
-   already supplied by the user. Resolve only the change that was authorized.
+5. Verify the request result, any required storage ACK and the target render ACK.
+   Do not ask again for permission already supplied by the user. Resolve only the
+   change that was authorized.
 
 ## Acceptance evidence
 

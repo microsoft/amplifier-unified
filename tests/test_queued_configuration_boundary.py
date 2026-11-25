@@ -11,6 +11,7 @@ import asyncio
 import copy
 import json
 import time
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -36,7 +37,11 @@ class ControlsTransport:
     """Only process creation/loading is simulated; mutation and idle checks aren't."""
 
     def __init__(self, home, sid):
+        from amplifier_web.runtime import RuntimeManager
         self.home, self.sid = home, sid
+        # No process is launched by this transport. Reuse the real stopped-root
+        # ownership boundary rather than inventing an absent-worker receipt.
+        self.absent_owner = RuntimeManager(retention={'prewarm_on_select': False})
         self.native = SimpleNamespace(generation=None, queued_inputs=0)
         self.loop = SimpleNamespace(root_provider=None, jobs={})
         capabilities = {}
@@ -120,9 +125,20 @@ class ControlsTransport:
         # the host's projection. This is not an all-success fake control.
         return {"accepted": True}
 
+    @contextmanager
+    def stopped_boundary(self, session):
+        assert session['id'] == self.sid
+        if self.native.generation is not None or self.native.queued_inputs:
+            raise RuntimeError('Wait for the fixture generation and queued inputs to settle.')
+        with self.absent_owner.stopped_boundary(session) as observation:
+            yield observation
+
     async def close(self):
         self.release.set()
-        await self.controls.close()
+        try:
+            await self.controls.close()
+        finally:
+            await self.absent_owner.close()
 
 
 @pytest.fixture
@@ -149,6 +165,30 @@ async def boundary(tmp_path, monkeypatch):
         if runtime is not None:
             runtime.release.set()
         await app.close()
+
+
+@pytest.mark.parametrize('busy', ['generation', 'queued', 'foreign-writer'])
+async def test_controls_transport_stopped_boundary_keeps_owner_guards(boundary, busy):
+    from amplifier_foundation.session import SessionBusyError, SharedSessionStore
+    runtime, owner = boundary.runtime, boundary.owner
+    if busy == 'generation':
+        runtime.native.generation = {'id': 'still-running'}
+    elif busy == 'queued':
+        runtime.native.queued_inputs = 1
+    held = None
+    try:
+        if busy == 'foreign-writer':
+            held = SharedSessionStore(owner['workspace'], owner['id']).acquire(app='fixture-other-owner')
+        with pytest.raises((RuntimeError, SessionBusyError)):
+            with runtime.stopped_boundary(owner):
+                pytest.fail('An occupied boundary must not yield an absence witness')
+    finally:
+        if held is not None:
+            held.release()
+        runtime.native.generation, runtime.native.queued_inputs = None, 0
+    with runtime.stopped_boundary(owner) as observation:
+        assert observation['workerAbsent'] and observation['ownershipAcquisitionId']
+    assert not runtime.absent_owner.workers and not runtime.calls
 
 
 async def queue(boundary, identity="original-apply"):
@@ -1893,7 +1933,8 @@ def require_no_child_cleanup_fallback(report):
 
 
 @pytest.mark.parametrize("variant", ["original", "skip-save-regression", "settings-continuation",
-                                   "targeted-saved", "targeted-preparation-revoked", "update-held"])
+                                   "targeted-saved", "targeted-preparation-revoked", "update-held",
+                                   "producer-roundtrip", "producer-public-structure", "producer-write-order"])
 async def test_real_native_recovery_and_deliberately_regressed_save_witness(tmp_path, variant):
     """No importorskip: the admitted fixed workflow owns native prerequisites."""
     import os
@@ -1909,6 +1950,13 @@ async def test_real_native_recovery_and_deliberately_regressed_save_witness(tmp_
     if variant == "settings-continuation":
         command.append("--settings-continuation")
     targeted = variant in {"targeted-saved", "targeted-preparation-revoked"}
+    producer = variant.startswith("producer-")
+    if producer:
+        command.append("--producer-roundtrip")
+    if variant == "producer-public-structure":
+        command.append("--public-request-shape")
+    if variant == "producer-write-order":
+        command.append("--write-policy-order")
     if targeted:
         command.append("--targeted-saved")
     if variant == "update-held":
@@ -1977,15 +2025,26 @@ async def test_real_native_recovery_and_deliberately_regressed_save_witness(tmp_
     report = json.loads(evidence_path.read_text())
     (output / "evidence.json").write_text(json.dumps(report, indent=2) + "\n")
     require_no_child_cleanup_fallback(report)  # Applies to both original and save-skipping variant.
-    expected_workers = 1 if variant == 'update-held' else 3 if targeted else 2
+    expected_workers = (3 if variant in {"producer-roundtrip", "producer-write-order"} else 2 if producer else
+                        1 if variant == 'update-held' else 3 if targeted else 2)
     assert len(report["processes"]) == expected_workers
     assert all(row["returncode"] is not None for row in report["processes"])
     assert not report["cleanupErrors"] and report["runtimeRowsAfterClose"] == 0
-    assert report["heldWriterControl"] and report["writerAvailableAfterClose"] is True
+    assert report["writerAvailableAfterClose"] is True
     assert len(report["workerSources"]) == expected_workers
     assert all(row["mutant"] is mutant for row in report["workerSources"])
     assert all((row["originalFunction"] != row["executedFunction"]) is mutant
         for row in report["workerSources"])
+    if producer:
+        assert process.returncode == 0, stderr.decode(errors="replace")[-6000:]
+        assert report["oneSavePerOperation"] and report["noTargetProviderCalls"]
+        assert all(row["attempts"] == 1 and row["savedMatchesRequest"]
+                   and row["disabledRows"] == 0 for row in report["producerRoundtrip"])
+        assert report["attempts"] == (1 if variant == "producer-public-structure" else 2)
+        assert report["mountedPlanVerified"]
+        assert all(row["loadedMatchesRequest"] for row in report["producerRoundtrip"])
+        return
+    assert report["heldWriterControl"]
     if variant == 'update-held':
         assert process.returncode == 0, stderr.decode(errors='replace')[-6000:]
         assert report['updateTerminalHeld'] and report['noTargetProviderCalls']
@@ -2027,7 +2086,7 @@ async def test_real_native_recovery_and_deliberately_regressed_save_witness(tmp_
         assert process.returncode == 0, stderr.decode(errors="replace")[-3000:]
         assert report["mountedPlanVerified"] and report["nextInputUsable"]
         assert report["originalInputCount"] == report["originalToolResultCount"] == 1
-        assert report["duplicateResumePassive"] and report["writerReleasedWhileParked"]
+        assert report["duplicateResumePassive"] and report["writerRetainedWhileIdle"]
 
 
 @pytest.mark.parametrize("exit_signal", ["SIGTERM", "SIGKILL"])

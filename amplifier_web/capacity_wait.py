@@ -11,6 +11,7 @@ from .handoff_admission import finishing_turn
 from .model_capacity_settings import policy
 from .model_admission_identity import input_id
 from .child_execution import current as child_execution
+from .settled_compaction import assignment_scope, matches as settled_origin_matches
 
 
 async def admit(service, sid, args):
@@ -18,24 +19,29 @@ async def admit(service, sid, args):
     binding = BINDING.get() or {}
     has_child_scope = '_childOrigin' in binding
     child_scope = copy.deepcopy(binding.get('_childOrigin'))
+    settled = bool(binding.get('_settledCompaction'))
     def child_guard(current):
         if not has_child_scope:
             return None
-        live = child_execution(service, current, child_id=row.get('sessionId'))
-        if live is None or live != child_scope or input_id(row) not in live['inputIds']:
-            return 'The native child execution changed; no provider request was sent.'
-    if not args.get('waitForCapacity') or row.get('lifecycle') == 'background':
+        live, reason = child_execution(service, current, child_id=row.get('sessionId'), explain=True)
+        if live is None:
+            return f'{reason} No provider request was sent.'
+        if live != child_scope:
+            return 'The authenticated child execution binding changed while waiting. No provider request was sent.'
+        if input_id(row) not in live['inputIds']:
+            return 'The child input is outside its authorized assignment. No provider request was sent.'
+    if not settled and (not args.get('waitForCapacity') or row.get('lifecycle') == 'background'):
         return await admission(service, sid, args, guard=child_guard)
     async with service.lock:
-        session = service._session(sid)
+        session = service._session(sid, hydrate=False)
         assignment = service.assignments.current(session)
-        if assignment is None:
-            direct = True
-        else:
-            direct = False
+        if assignment or settled:
             active = session.get('collaborationGeneration') or {}
-            expected = ((BINDING.get() or {}).get('_generationId'), tuple(active.get('inputIds', [])),
+            expected = (binding.get('_generationId'), tuple(active.get('inputIds', [])),
                         session.get('interruptionRevision', 0), session.get('configurationPendingRevision', 0))
+            runtime_workers = getattr(service.runtime, 'workers', None)
+            native = runtime_workers.get(sid) if isinstance(runtime_workers, dict) else None
+        if assignment:
             queue = getattr(service, '_model_admission_waiters', None)
             if queue is None:
                 queue = service._model_admission_waiters = []
@@ -43,10 +49,6 @@ async def admit(service, sid, args):
                 return {'allowed': False, 'state': 'cancelled',
                         'reasons': ['This model call is already waiting; it was not submitted again.']}
             ticket = {'sid': sid, 'id': row.get('id'), 'assignment': assignment['id'], 'visible': False}
-            runtime_workers = getattr(service.runtime, 'workers', None)
-            native = runtime_workers.get(sid) if isinstance(runtime_workers, dict) else None
-    if direct:
-        return await admission(service, sid, args, guard=child_guard)
 
     def guard(current):
         if reason := child_guard(current):
@@ -55,11 +57,14 @@ async def admit(service, sid, args):
         drain = args.get('_handoffDrain')
         draining = current.get('configurationBusy') and finishing_turn(
             service, current, row, drain, args.get('_nativeChild'))
+        if settled and (has_child_scope or not settled_origin_matches(current, row, binding)):
+            return 'The conversation changed since compaction was scheduled. No provider request was sent.'
         now = (active.get('id'), tuple(active.get('inputIds', [])),
                current.get('interruptionRevision', 0), current.get('configurationPendingRevision', 0))
         if (PRINCIPAL.get() != (current.get('runtimeSessionId') or sid)
                 or (not has_child_scope and not draining and (not expected[0] or now != expected
-                    or active.get('terminal') or input_id(row) not in expected[1]))
+                    or (active.get('terminal') and not (settled and active.get('completed')))
+                    or input_id(row) not in expected[1]))
                 or now[2:] != expected[2:]
                 or current.get('status') in {'stopped', 'stopping', 'interrupted', 'error'}):
             return 'The input or generation changed while waiting; no provider request was sent.'
@@ -69,14 +74,18 @@ async def admit(service, sid, args):
         if (current.get('failure') or {}).get('category') in {'content_filter', 'computer_capture_stop'}:
             return 'A safety halt prevents this waiting request from continuing.'
         value = service.assignments.current(current)
-        if not value or value['id'] != ticket['assignment'] or value['status'] != 'active':
+        if assignment is None:
+            if value or assignment_scope(current):
+                return 'The originating assignment changed. No provider request was sent.'
+        elif not value or value['id'] != ticket['assignment'] or value['status'] != 'active':
             return 'The assignment stopped or membership changed; no provider request was sent.'
         if isinstance(runtime_workers, dict) and (runtime_workers.get(sid) is not native
                 or native is None or native.get('closing') or native.get('yielded') or native.get('yielding')
                 or native['process'].returncode is not None):
             return 'The originating worker is no longer available; no provider request was sent.'
         if row.get('sessionId') not in {sid, current.get('runtimeSessionId')}:
-            children = current.get('execution', {}).get('nodes', [])
+            from .execution_working_set import readonly
+            children = readonly(current).get('nodes', [])
             child = next((n for n in reversed(children) if n.get('kind') == 'worker'
                           and n.get('sessionId') == row.get('sessionId')), None)
             if (child and (not child_scope or child.get('runId') == child_scope['runId'])
@@ -84,6 +93,9 @@ async def admit(service, sid, args):
                 return 'The originating child finished while waiting; no provider request was sent.'
         if service.closed:
             return 'The host is closing; no provider request was sent.'
+
+    if assignment is None:
+        return await admission(service, sid, args, guard=guard if settled else child_guard)
 
     def turn():
         first = next((item for item in queue if item['assignment'] == ticket['assignment']), None)
@@ -120,9 +132,9 @@ async def admit(service, sid, args):
             if remaining is not None and remaining <= 0:
                 return {'allowed': False, 'state': 'wait_expired',
                         'reasons': ['Waiting for model capacity timed out. No provider request was sent; saved results and budgets are unchanged.']}
-            if not visible:
+            if not visible and not settled:
                 async with service.lock:
-                    current = service._session(sid)
+                    current = service._session(sid, hydrate=False)
                     if reason := guard(current):
                         return {'allowed': False, 'state': 'cancelled', 'reasons': [reason]}
                     prior = next((item for item in queue if item['sid'] == sid and item['visible']), None)
@@ -140,7 +152,7 @@ async def admit(service, sid, args):
         async with service.lock:
             if ticket in queue:
                 queue.remove(ticket)
-            current = service._session(sid)
+            current = service._session(sid, hydrate=False)
             other_visible = any(item['sid'] == sid and item['visible'] for item in queue)
             if (visible and not other_visible and guard(current) is None
                     and (current.get('activity') or {}).get('phase') == 'capacity'):

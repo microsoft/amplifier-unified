@@ -16,7 +16,7 @@ TRANSPORT_FIELDS = {'_generationId', '_runtimeSessionId', '_inputBindings', '_in
 
 def coordinator(session_id):
     capabilities = {}
-    return SimpleNamespace(session_id=session_id, get_capability=capabilities.get,
+    return SimpleNamespace(session_id=session_id, session_state={}, get_capability=capabilities.get,
                            register_capability=capabilities.__setitem__,
                            cancellation=SimpleNamespace(is_cancelled=False))
 

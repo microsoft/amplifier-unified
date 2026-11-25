@@ -43,7 +43,7 @@ def align(session, native):
     Repeated speech or multiple delegations remain distinct: never guess which
     utterance owns a native boundary. Exact already-bound identities survive.
     """
-    from .automatic_history import display_identity
+    from .native_message_projection import display_identity
     current = session.get('messages', [])
     by_id = {row['id']: row for row in native if row.get('voiceDelegation')}
     candidates, utterances = {}, {}

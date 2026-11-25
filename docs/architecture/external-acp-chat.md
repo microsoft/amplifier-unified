@@ -1,0 +1,285 @@
+# External ACP chat pilot
+
+Unified can own a new conversation whose agent executes in an operator-configured
+external process. This is an opt-in text pilot in the existing host, not a new
+host protocol or conversion of native Amplifier chats. Existing native chats keep
+their runtime and history owners. Core is unchanged.
+
+The host owns the chat ID, accepted messages, displayed replies, command receipts,
+workspace association and saved access choice. The external agent owns its
+execution session, tools, model and private context. A singleton's
+`externalAgent.sessionId`, or each group member's
+`externalAgent.participants[].sessionId`, is its remote execution identity;
+it never becomes `runtimeSessionId`, `nativeProject`
+or `nativeIdentity`. Launch arguments and enrollment secrets are not public chat
+metadata. Host-owned messages use the existing view persistence mechanism under
+`external-conversations/<host-id-digest>` rather than a fictitious native session.
+
+## Operator setup
+
+Use **Settings → External agents** to add or edit an entry in the existing private
+server configuration. Saves take effect for new launches without restarting the
+host, installing software or making a test connection. Existing entries carry a
+revision so another editor's changes are not silently overwritten. The picker
+lists names and IDs, not launch arguments or credential locations. Settings reads
+one private launch configuration only when editing it; that read is not stored in
+shared command receipts. Authenticated users and agents with existing global
+`connections` authority (including standing Full access) use the same actions:
+`externalAgents.list`, `.get`, `.save` and `.remove`. Adding an entry may omit its
+ID; the host derives a stable `savedId` from the command identity. If the private
+file was saved but its command receipt was not, retrying that same command
+recovers the identical saved entry without another write; different contents
+conflict. Editing and removing require the current
+`expectedRevision` from the list or detail. Removing a connection preserves its
+chats, history and already accepted work; it prevents a later new send through
+that removed entry.
+
+Manual setup can still add an `externalAgents` entry to `config/server.yaml`,
+followed by a normal host restart. For a published Constellation Instance, use its maintained
+stdio ACP command (the exact command is version-dependent; Instance 0.22 uses
+`agent-instance acp`). Enroll a dedicated ACP client through the Instance owner's
+normal mechanism. The token file belongs to the host service user; do not put its
+contents in configuration, messages or URLs.
+
+```yaml
+externalAgents:
+  - id: research-instance
+    label: Research Instance
+    command: /absolute/path/to/agent-instance
+    args: [acp, --home, /owned/instance-home, --token-file, /private/acp-token]
+    sessionCwd: /absolute/workspace/on/the/agent
+```
+
+Optional `cwd` is the local launch directory. `sessionCwd` is the execution
+location sent to the agent, defaulting to the chat's workspace. Neither is a new
+filesystem grant. Arguments are passed directly, without a shell. A fixed SSH
+launcher can use the same stdio boundary; remote deployment is not qualified by
+the local pilot. For a fixed agent workspace, optionally enable **Also use the selected
+project in new chats** (`includeChatWorkspace: true`). This sends just that chat's
+selected project as an ACP additional directory on creation and resume if it differs
+from the agent workspace. The path must also exist and be permitted on the agent.
+Peers must advertise additional directories. Existing chats keep their saved scope
+when this setting changes.
+
+Choose the external agent in New chat and an existing workspace, then submit the
+first message. The draft stays private and creates no conversation or connection
+until submission. The same `session.create` action accepts an explicit existing
+`workspace` and `externalAgentId`, or a unique `externalAgentIds` list for a group;
+it does not allocate a managed or new folder for an external chat. The two
+selection forms cannot be combined. **Add agent** includes another configured
+participant before creation. Selecting several agents creates a shared room;
+messages are posted to the conversation without choosing a recipient. Selecting
+one agent retains the existing direct chat experience. Earlier saved directed
+groups retain their **Send to** control and captured recipients. The existing chat
+interface displays external ownership and omits unsupported
+native configuration, voice, attachments, edit and fork controls. Rename, pin,
+archive, ordinary text, Stop and the existing Access control remain host actions.
+
+## Shared conversations
+
+New multi-agent conversations record `externalAgent.participation: "shared"`.
+This marker selects shared participation; existing native, singleton external
+and unmarked directed conversations keep their current admission, streaming,
+Stop and continuation behavior. No saved history is silently converted.
+
+A public message is accepted once by Unified independently of any model turn.
+Each participant has its own exact source/execution binding and delivery record.
+People may post while agents work; separate participants can execute concurrently,
+while each native execution retains one writer and one active prompt. Public
+participant metadata contains current activity and compact receipt facts; streamed
+text belongs to the selected conversation body, not the catalog.
+
+The room connector supplies original message identity/time and bounded attributed
+public context to the agent's advertised Instance attention capability. The
+instance decides whether to engage. Without that optional capability, the
+connector uses one ordinary ACP contribution-or-silence turn on the same
+participant session, not a separate private JSON decision prompt followed by
+another prompt. The agent can contribute to addressed or ambient conversation,
+return no text, or return exactly `[[PASS]]` to remain silent. A possible silence
+marker stays private while its chunks arrive; unambiguous ordinary reply text
+streams live with its author. Silence produces no public post or peer trigger.
+This ordinary turn can use already-authorized tools where the former quiet
+preflight refused client permission callbacks. Existing permission choices, Full,
+Stop and backend tool policy still apply; membership, addressing and received
+text grant no new authority. Negotiated attention remains the sole attention
+owner when advertised: a hold sends no contribution prompt, and its errors do
+not silently fall back or repeat. See the canonical
+[Instance attention contract](https://github.com/microsoft/amplifier-constellation-instance/blob/main/docs/attention.md).
+
+Completed public agent contributions are committed once and offered to the other
+participants as source activity, preserving their actual author. Own echoes,
+private tool/reasoning updates and streaming chunks do not trigger new turns.
+Names and optional addressing are context, not mandatory routing controls. A
+participant can remain silent without posting a blank response or acknowledgment.
+
+A busy participant can receive negotiated awareness tied to its actual active
+prompt. Without confirmed incorporation, positively unsubmitted source events
+remain pending consideration after its current turn; later public context can
+show that a request is already resolved. An ambiguous observation remains
+unknown and is not replayed. Neither receiving an event nor observing a cursor
+proves model incorporation or completed effects.
+
+Room Stop advances the existing durable interruption boundary, cancels current
+participant turns and pending opportunities through that boundary, and prevents
+late callbacks from restarting the exchange. A later explicit message may
+continue normally. Restart resumes only known-unsubmitted opportunities with
+their original identities; interrupted or uncertain dispatches retain unknown
+receipts without automatic replay. Update-held inputs stay under the existing
+update owner's admission boundary. An independent participant's failure does not
+transfer or repeat its work through another agent.
+
+When a peer negotiates `com.microsoft.amplifier.agent-instance` version 1, the
+connector also binds its advertised public agent ID to the exact room source:
+the existing primary configured public origin and conversation ID. Without a
+configured origin, `urn:amplifier:conversation:<room-id>` provides only local UUID
+scope, not cross-installation copy/import disambiguation or authentication.
+The selected source is saved with the binding and reused even if the configured
+origin later changes; reconnect never silently rebinds it. Original input identity,
+immutable revision 0, attributed actor, conversation audience and reply target
+travel as prompt metadata, not as a new grant or JSON-RPC request identity.
+Reconnect fences a changed or missing public identity and resumes the saved
+execution; it never converts an old unbound execution. The peer's session receipt
+supplies its current interruption revision. After Stop, a later explicit input
+refreshes that revision through exact resume rather than guessing it. This
+optional profile does not add a source registry or replay uncertain inputs.
+
+The shared-room connector supplies bounded public context. When the peer advertises
+standard HTTP MCP support and the host has a primary configured HTTPS public
+origin, session creation/resume also supplies `unified-room-context`. Its
+`conversation_read` tool returns up to 20 source rows per page with source IDs,
+sequence and author, an older-page cursor and explicit text truncation.
+`conversation_read_text` follows a returned continuation. The existing saved
+message-window owner reads actual public text; there is no copied transcript store.
+Private reasoning, tools, interrupted partial replies, composer drafts and browser
+action/detail grants are excluded. A page can contain fewer public messages than
+its source range; follow its cursor rather than assuming an empty page is the end.
+
+Room membership and the saved endpoint identity authorize these reads without an
+approval step. An ephemeral bearer credential is only their transport: it is scoped
+to one room, participant and exact source binding and is checked before and after
+asynchronous reads. Removal or source replacement denies future reads, including
+an in-flight result; it cannot erase material already received by the agent.
+The credential persists across turns and ordinary connection/viewer loss, and is
+cleared on host shutdown. Text continuations/cursors expire when their saved
+window or source changes; errors never silently reset paging. Stop keeps its
+existing execution meaning and does not remove room membership.
+
+The primary configured HTTPS origin must be reachable and trusted by the external
+runtime; it is never guessed from request headers or localhost. Missing origin or
+HTTP capability leaves ordinary chat unchanged with `roomContext: false` in the
+participant capability receipt. Failed advertised tool attachment is an ordinary
+connection failure, not a reason to silently remove tools or recreate the native
+session. No Instance administrator secret, provider registry or new listener is
+required. Singleton and earlier directed chats retain their existing behavior.
+
+## Earlier directed conversations with multiple agents
+
+A group has one host-owned public transcript and a separate saved execution
+binding per participant. `conversation.send.recipientAgentId` explicitly selects
+one group member. The browser captures that choice with the submitted input,
+including retries and uncertain receipts; navigation or a later picker change
+does not redirect it. Saved messages retain their recipient or author's ID and
+label. Streaming and interrupted partial replies retain the actual author.
+Existing singleton chats and their saved bindings remain usable.
+
+One turn executes at a time in each conversation. Stop addresses that active
+participant; it does not cancel another member's idle execution session. Each
+member resumes its own exact remote identity. Unknown delivery remains attached
+to the original input and recipient, never replayed through another agent.
+This is explicit directed participation, not a broadcast or autonomous group
+workflow. Adding/removing participants in an existing conversation is separate.
+
+During an app update, each external chat can hold one known-unsubmitted input.
+Its recipient is saved immediately, without marking a remote turn active.
+Another send to that chat is refused before acceptance while the input waits;
+other chats keep their own admission. After release and settlement, an explicit
+next input can proceed. This does not keep unrelated chats waiting for an
+external model turn behind the global update boundary.
+
+Before a group turn, the addressed agent receives a bounded projection of prior
+public messages: at most 32 rows and 24,000 text characters, with speaker/source
+identities and an explicit omission marker. The current request remains a
+separate prompt block. Historical requests are labeled as context, not new work.
+The projection never reads another agent's private working context or unsent
+client drafts and does not claim complete-history retrieval. On-demand retrieval
+from an experience remains a separate capability.
+
+## Delivery, recovery and permission
+
+The maintained `agent-client-protocol` SDK owns JSON-RPC framing, stream dispatch
+and local subprocess cleanup. Unified initializes without advertising client file
+or terminal callbacks. Backend-owned tools remain the agent's responsibility.
+Pending ACP permission requests appear in the conversation with their agent,
+current tool request and exact offered choices. A choice is bound to the request,
+participant, remote session, active turn and durable Stop revision. A replaced,
+withdrawn, completed or restarted request cannot receive a late decision. Reading
+or reconnecting the browser does not create or replay a request.
+The host saves a selected decision before waking its callback; that delivery is
+owned by the host, so browser disconnection or display notification failure does
+not strand it. Stop invalidates choices immediately and sends cancellation rather
+than waking the agent with an ordinary permission refusal. A terminal turn
+retires any outstanding permission RPC while preserving the reusable connection.
+
+The saved host Full choice selects only an offered **Allow once** option. It never
+creates a remembered rule in another agent. A person can explicitly select an
+offered **Always allow** option; its scope and revocation belong to that agent's
+policy owner. Unified retains the decision receipt, not a second rule store.
+Constellation Instance provides matching-request rules and its explicit Automatic
+setting. Its supported scope descriptor is displayed without deriving authority
+from model-authored prose. Generic ACP agents retain their own offered meanings.
+OS permissions, execution limits and tool validation remain enforced by their
+owners regardless of an approval choice.
+
+The named external Instance connection uses that shared agent policy. Direct
+native operator chats keep their existing native access settings and histories;
+they are not silently routed through an Instance or migrated. Changing host access
+preserves revision and authority checks without scheduling a native remount for
+an external chat. Optional notes are not offered for ACP choices because that
+protocol decision has no faithful note-delivery field.
+
+The host saves the remote session identity before sending its first prompt. The
+initial receipt means the host accepted the message and delivery is `sending`;
+ACP has no early prompt-acceptance acknowledgement. A completed prompt response
+confirms delivery. A lost response after dispatch remains `unknown`, preserving
+partial visible text. Receipt retries never resend it. A new explicit message can
+continue after cleanup; the earlier unknown message remains unknown.
+
+Reconnect uses the same saved remote identity only when the agent advertises
+`session/resume`; an unsupported or failed resume does not create a replacement.
+This pilot does not import legacy history. Singleton continuation keeps its
+existing prompt behavior; group turns include only the bounded public context
+described above. Changing a configured launch identity requires a new chat rather than
+silently rebinding existing work.
+
+Stop records the ordinary durable interruption revision before sending
+`session/cancel`. This revision also revokes pending Full permission decisions.
+Cancellation has a bounded wait; losing confirmation leaves delivery unknown.
+Closing an attach process is not a promise that remote effects were rolled back
+or background work survived. Instance/backend lifecycle rules still apply.
+
+For peers that advertise exact resume and the optional policy-driven
+`_amplifier/retirementRequested` extension, Unified can close a settled attachment
+after the peer's conditional native retirement acknowledgement. Ordinary turn
+completion and older `retirementAvailable` advertisements do not trigger this
+cleanup. The supported Unified backend retains its existing warm-worker budget
+and idle timeout; confirmed cleanup also retires that worker, so a later message
+pays startup cost while resuming the same saved session.
+
+Cleanup reserves only that participant. New public messages remain accepted;
+other room participants can progress while the reserved participant finishes
+cleanup. In-flight awareness, approvals and pending work prevent cleanup. The
+transport stays open after a refused, malformed, lost or timed-out retirement
+response. A later explicit input can reconcile the same retirement result before
+any prompt is sent; it never replays earlier work or creates a replacement
+session. Room context capabilities remain bound to the room and participant.
+Hints received during a turn or cleanup may be ignored; the producer's existing
+retention sweep can ask again, without a client polling or retry loop. Dormant
+room history is not loaded solely to close an attachment.
+
+## Validation scope
+
+Maintained tests use a real SDK stdio peer without a model and the actual host
+service/storage paths. They cover new/resume, stream, Stop, lost responses,
+duplicate receipts, explicit later input, endpoint identity, saved history and
+Full authorization. Real Instance/browser acceptance is separate evidence, not a
+claim of parity for native tools, arbitrary ACP extensions or other platforms.

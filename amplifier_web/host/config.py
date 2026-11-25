@@ -93,6 +93,19 @@ def merge(base, overlay):
     return copy.deepcopy(overlay)
 
 
+def provider_dropped(row, settings):
+    """Whether host composition drops this provider row.
+
+    One rule for bundle composition (host.session._apply_settings) and for the
+    update owner's question "does a connection exist" (profile_catalog).
+    """
+    identity = row.get("id") or row.get("instance_id") or row["module"].removeprefix("provider-")
+    overrides = settings.get("overrides", {})
+    override = merge(overrides.get(row.get("module"), {}), overrides.get(identity, {}))
+    return (override.get("enabled") is False
+            or identity in settings.get("configurator", {}).get("disabled", {}).get("providers", []))
+
+
 def _read_keys(path):
     """Read the shared key file with the same private-file/parser boundary."""
     values = {}
@@ -234,7 +247,8 @@ class HostConfig:
 
     @property
     def active_bundle(self):
-        return self.settings.get("bundle", {}).get("active") or "work"
+        from ..bundle_defaults import fallback
+        return self.settings.get("bundle", {}).get("active") or fallback(self.settings)
 
     @property
     def app_bundles(self):
@@ -243,16 +257,33 @@ class HostConfig:
 
     @property
     def providers(self):
-        rows=self.settings.get("config", {}).get("providers", [])
+        from ..decision_namespace import connections, logical_rows
+        dedicated = {key for key, row in connections(self.settings).items() if "provider" not in row}
+        from ..decision_namespace import key
+        rows = [row for row in logical_rows(self.settings) if key(row) not in dedicated]
         return sorted(rows, key=lambda row: row.get("config", {}).get("priority", 100))
+
+    @property
+    def connections(self):
+        """All logical accounts for setup/binding, not the ordinary LLM list."""
+        from ..decision_namespace import logical_rows
+        return sorted(logical_rows(self.settings), key=lambda row: row.get("config", {}).get("priority", 100))
 
     @property
     def configured_connections(self):
         """Explicit connection rows with the same overrides as bundle composition."""
+        return self._configured_connections(self.providers)
+
+    @property
+    def saved_connections(self):
+        """Settings inventory, including decision-only accounts, not LLM discovery."""
+        return self._configured_connections(self.connections)
+
+    def _configured_connections(self, originals):
         overrides = self.settings.get('overrides', {})
         disabled = self.settings.get('configurator', {}).get('disabled', {}).get('providers', [])
         rows = []
-        for original in self.providers:
+        for original in originals:
             identity = original.get('id') or original.get('instance_id') or original['module'].removeprefix('provider-')
             patch = merge(overrides.get(original['module'], {}), overrides.get(identity, {}))
             row = merge(original, {key:value for key,value in patch.items() if key in {'source','config'}})
@@ -265,7 +296,7 @@ class HostConfig:
         result = dict(self.settings.get("sources", {}).get("modules", {}))
         result.update({key:row["source"] for key,row in self.settings.get("overrides", {}).items()
             if isinstance(row, dict) and "source" in row})
-        result.update({row["module"]:row["source"] for row in self.providers if row.get("source")})
+        result.update({row["module"]:row["source"] for row in self.connections if row.get("source")})
         return result
 
     @property
@@ -329,8 +360,9 @@ def prepare_registry(config):
 
 def configure_skill_cache(bundle, registry_home):
     """Keep remote clones private while local user/workspace skills stay shared."""
-    def apply(tools, agents):
-        for row in tools:
+    injected = []
+    def apply(tools, agents, path):
+        for index, row in enumerate(tools):
             if isinstance(row, dict) and row.get("module") == "tool-skills":
                 config = row.setdefault("config", {})
                 # Explicit user paths remain authoritative; only the default
@@ -338,11 +370,13 @@ def configure_skill_cache(bundle, registry_home):
                 # settings, instructions and native history share that root.
                 if config.get("cache_dir") is None:
                     config["cache_dir"] = str(Path(registry_home) / "cache/skills")
+                    injected.append((*path, "tools", index))
         from .components import agent_roster
-        for child in agent_roster(agents).values():
+        for name, child in agent_roster(agents).items():
             if isinstance(child, dict):
-                apply(child.get("tools", []), child.get("agents", {}))
-    apply(getattr(bundle, "tools", []), getattr(bundle, "agents", {}))
+                apply(child.get("tools", []), child.get("agents", {}), (*path, "agents", name))
+    apply(getattr(bundle, "tools", []), getattr(bundle, "agents", {}), ())
+    return tuple(injected)
 
 def declared_shared_home(legacy_home=None):
     """Preserve the declared Windows spelling until private IO validates it."""

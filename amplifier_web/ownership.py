@@ -43,6 +43,7 @@ class WorkerOwnership:
                     "owner_changed", "This runtime no longer owns that acquisition."
                 )
             self.yielding = True
+            worker.computer_episodes.fence()
             request.report_progress("draining")
             publish(
                 {
@@ -60,6 +61,10 @@ class WorkerOwnership:
         try:
             if worker.execution:
                 await asyncio.shield(worker.execution)
+            receipt = await worker.computer_episodes.close()
+            if not receipt["settled"]:
+                from .computer_episodes import SettlementPending
+                raise SettlementPending(receipt)
             if (
                 worker.naming
                 and worker.naming.pending
@@ -76,13 +81,16 @@ class WorkerOwnership:
                     )
                     if checkpoint is None:
                         raise RuntimeError("Session persistence is unavailable")
-                    await checkpoint("cancelled")
+                    try:
+                        await checkpoint("cancelled")
+                    except Exception as error:
+                        worker.persistence_failed(error)
+                        raise
                     if worker.controls:
                         await worker.controls.close()
                     await worker.session.cleanup()
                     worker.activation_gate.release(worker.activation)
                     worker.session = worker.runtime = worker.controls = None
-                    worker.parked = True
                 finally:
                     worker.activation_gate.reset(token)
             # Foundation releases after this callback returns. Publish success
@@ -112,3 +120,4 @@ class WorkerOwnership:
             publish(
                 {"type": "runtime.ownership", "status": "yielded", "source": source}
             )
+            self.worker.shutdown.set()

@@ -10,9 +10,9 @@ from .private_policy_file import write as write_policy_file
 
 PEER_INBOX_COUNTS = ('maxPendingPeerInputs', 'maxPendingPeerInputsPerSender',
                      'maxPendingPeerInputsPerAssignment')
+RETIRED_CONCURRENCY_FIELDS = frozenset({'maxResourceReservations', 'maxResourceReservationsPerChat'})
 CONCURRENCY_DEFAULTS = {'maxTaskChatsPerSource': 0, 'maxEnvironmentsPerChat': 0,
                         'maxOwnedResources': 0, 'maxOwnedResourcesPerChat': 0,
-                        'maxResourceReservations': 0, 'maxResourceReservationsPerChat': 0,
                         **dict.fromkeys(PEER_INBOX_COUNTS, 0),
                         'maxPeerMessagesPerMinute': 0, 'maxPendingWatchesPerTarget': 0}
 
@@ -86,6 +86,16 @@ def load(app):
                 or info.st_nlink != 1 or info.st_size > 65536):
             raise ValueError('Test execution settings must be a private regular file.')
         value = json.load(stream)
+    # Decode only the two retired cooperative-claim limits from existing policy.
+    # Preserve every other field, strict validation and the ordinary CAS boundary;
+    # loading never rewrites the file or resets unrelated positive limits.
+    if isinstance(value, dict) and isinstance(value.get('concurrency'), dict):
+        if any(type(item) is not int or not 0 <= item <= profiles.MAX_SECONDS
+               for key, item in value['concurrency'].items() if key in RETIRED_CONCURRENCY_FIELDS):
+            raise ValueError('Legacy work concurrency limits must be nonnegative whole numbers.')
+        value = {**value, 'concurrency': {
+            key: item for key, item in value['concurrency'].items()
+            if key not in RETIRED_CONCURRENCY_FIELDS}}
     return validate(value)
 
 

@@ -205,6 +205,234 @@ async def test_restart_of_uncertain_delivery_does_not_replay_answer(tmp_path):
         await restored.close()
 
 
+@pytest.mark.parametrize('delivery_status', ['unknown', 'rejected'])
+async def test_dismiss_answer_reminder_roundtrip_preserves_truth_and_other_attention(tmp_path, delivery_status):
+    runtime = Runtime()
+    runtime.failure = TimeoutError('Lost acknowledgement') if delivery_status == 'unknown' else AppError(
+        'Owned elsewhere', 409, code='session_busy')
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        q = await create_question(app, sid)
+        answer_args = {'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': 'Summary'}
+        original = (await app.dispatch('question.answer', answer_args, command_id='answer-before-dismiss'))['result']
+        assert original['delivery']['status'] == delivery_status
+        required = await create_question(app, sid, prompt='Still needs an answer')
+        await app.dispatch('session.create', {'title': 'Selected elsewhere'})
+        selected = app._session()['id']
+        await app.dispatch('view.update', {'patch': {'draft': 'Independent unsent draft'}})
+        app._session(sid)['approvals'] = [{'id': 'permission', 'status': 'pending'}]
+        before = copy.deepcopy(app._session(sid))
+        calls = list(runtime.sent)
+        async def no_runtime(*args, **kwargs):
+            pytest.fail('Dismissing a reminder must not inspect or send runtime input')
+        runtime.send = runtime.delivery = no_runtime
+        args = {'sessionId': sid, 'id': q['id'], 'expectedRevision': original['revision'],
+                'inputId': original['delivery']['inputId']}
+        assert any(i['id'] == 'question:' + q['id'] for i in app.get_state()['attention']['items'])
+        app.clients.attach('reader')
+        with app.clients.bind('reader'):
+            cleared = (await app.dispatch('question.dismiss', args, command_id='clear-reminder'))['result']
+        assert cleared['revision'] == original['revision'] + 1
+        assert cleared['reminderDismissal'] == {
+            'inputId': args['inputId'], 'dismissedAt': cleared['updatedAt'], 'origin': 'ui', 'clientId': 'reader'}
+        for field in ('status', 'answer', 'delivery', 'contentRevision', 'required', 'dependency'):
+            assert cleared[field] == original[field]
+        from amplifier_web.navigation_summary import activity
+        assert activity({'status': 'idle', 'questions': [original]})['label'] == 'Check answer delivery'
+        assert activity({'status': 'idle', 'questions': [cleared]}) == {'kind': 'idle', 'label': 'Idle'}
+        assert activity({'status': 'idle', 'questions': [cleared, required]})['label'] == 'Answer requested'
+        assert app.questions.answer_for_dependency(sid, q['id']) == original['answer']
+        assert app._session(sid)['messages'] == before['messages']
+        assert app._session(sid)['execution'] == before['execution']
+        assert app._session(sid)['status'] == before['status']
+        assert app._session(sid)['approvals'] == before['approvals']
+        attention_ids = {i['id'] for i in app.get_state()['attention']['items']}
+        assert 'question:' + q['id'] not in attention_ids
+        assert 'question:' + required['id'] in attention_ids
+        assert 'approval:permission' in attention_ids
+        receipts = app.projections.attention(app.state, session_ids=set())['items']
+        assert 'question:' + q['id'] not in {i['id'] for i in receipts}
+        assert 'question:' + required['id'] in {i['id'] for i in receipts}
+        assert app.state['selectedSessionId'] == selected
+        assert app.state['view']['draft'] == 'Independent unsent draft'
+        with app.clients.bind('reader'):
+            retry = await app.dispatch('question.dismiss', args, command_id='clear-reminder')
+        assert retry['duplicate'] and retry['result'] == cleared
+        with app.clients.bind('reader'), pytest.raises(AppError, match='different contents'):
+            await app.dispatch('question.dismiss', {**args, 'inputId': 'different'}, command_id='clear-reminder')
+        again = await app.dispatch('question.dismiss', {**args, 'expectedRevision': cleared['revision']})
+        assert again['result'] == cleared
+        assert runtime.sent == calls
+    finally:
+        await app.close()
+    restored = AppService(tmp_path, runtime, workspace=tmp_path)
+    try:
+        read = (await restored.dispatch('question.read', {'sessionId': sid, 'id': q['id']}))['result']
+        assert read == cleared
+        restored.clients.attach('reader')
+        with restored.clients.bind('reader'):
+            assert (await restored.dispatch('question.dismiss', args, command_id='clear-reminder'))['result'] == cleared
+        listed = (await restored.dispatch('question.list', {'sessionId': sid, 'status': 'answered'}))['result']
+        assert listed['items'] == [cleared]
+        assert cleared in restored._session(sid)['questions']
+        assert 'question:' + q['id'] not in {i['id'] for i in restored.get_state()['attention']['items']}
+        assert runtime.sent == calls
+    finally:
+        await restored.close()
+
+
+async def test_dismiss_reminder_guards_exact_answer_identity_revision_and_pending_dependency(tmp_path):
+    runtime = Runtime()
+    runtime.failure = TimeoutError('Uncertain')
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        q = await create_question(app, sid)
+        pending = await create_question(app, sid, prompt='Unanswered required question')
+        cancelled = await create_question(app, sid)
+        await app.dispatch('question.cancel', {'sessionId': sid, 'id': cancelled['id'], 'expectedRevision': 1})
+        answered = (await app.dispatch('question.answer', {
+            'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': 'Saved'}))['result']
+        await app.dispatch('session.create', {})
+        other = app._session()['id']
+        args = {'sessionId': sid, 'id': q['id'], 'expectedRevision': answered['revision'],
+                'inputId': answered['delivery']['inputId']}
+        before = app.questions.store.all()
+        for patch in ({'sessionId': other}, {'inputId': 'question:other:answer'},
+                      {'expectedRevision': 1}, {'id': pending['id'], 'expectedRevision': 1},
+                      {'id': cancelled['id'], 'expectedRevision': 2}):
+            with pytest.raises(AppError):
+                await app.dispatch('question.dismiss', {**args, **patch})
+            assert app.questions.store.all() == before
+        with pytest.raises(AppError, match='calling conversation'):
+            await app.app_bridge('dispatch', {'action': 'question.dismiss', 'args': args}, other)
+        with pytest.raises(AppError, match='explicit answer'):
+            app.questions.answer_for_dependency(sid, pending['id'])
+        cleared = (await app.app_bridge('dispatch', {
+            'action': 'question.dismiss', 'args': args}, sid))['result']
+        assert cleared['reminderDismissal']['origin'] == 'agent'
+        with pytest.raises(AppError, match='changed'):
+            await app.dispatch('question.dismiss', args)
+        with pytest.raises(AppError, match='Additional properties'):
+            await app.dispatch('question.dismiss', {**args, 'expectedRevision': cleared['revision'], 'decision': 'approve'})
+        assert len(runtime.sent) == 1
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('accept_before', [False, True])
+async def test_dismiss_reminder_late_acceptance_and_duplicate_receipts_remain_truthful(tmp_path, accept_before):
+    runtime = Runtime()
+    runtime.failure = TimeoutError('Lost acknowledgement')
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        q = await create_question(app, sid)
+        original = (await app.dispatch('question.answer', {
+            'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': 'Summary'}))['result']
+        args = {'sessionId': sid, 'id': q['id'], 'expectedRevision': original['revision'],
+                'inputId': original['delivery']['inputId']}
+        event = {'sessionId': sid, 'inputId': args['inputId'], 'delivery': 'accepted'}
+        if accept_before:
+            await app.on_runtime_event('runtime.delivery', event)
+        cleared = (await app.dispatch('question.dismiss', args, command_id='racing-dismiss'))['result']
+        await app.on_runtime_event('runtime.delivery', event)
+        saved = app.questions.store.get(sid, q['id'])
+        assert saved['delivery']['status'] == 'accepted'
+        assert saved['answer'] == original['answer']
+        assert saved['reminderDismissal'] == cleared['reminderDismissal']
+        assert (await app.dispatch('question.dismiss', args, command_id='racing-dismiss'))['result'] == saved
+        assert 'question:' + q['id'] not in {i['id'] for i in app.get_state()['attention']['items']}
+        assert len(runtime.sent) == 1
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('finish', ['timeout', 'startup', 'cancel'])
+async def test_dismissed_reminder_does_not_resurrect_after_late_send_finalizer(tmp_path, finish):
+    from amplifier_web.runtime import RuntimeStartupError
+    runtime = Runtime()
+    runtime.gate = asyncio.Event()
+    runtime.failure = RuntimeStartupError('Refused') if finish == 'startup' else TimeoutError('Lost acknowledgement')
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    task = None
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        q = await create_question(app, sid)
+        task = asyncio.create_task(app.dispatch('question.answer', {
+            'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': 'Summary'}))
+        for _ in range(100):
+            if runtime.sent:
+                break
+            await asyncio.sleep(.001)
+        assert runtime.sent
+        record = app.questions.store.get(sid, q['id'])
+        args = {'sessionId': sid, 'id': q['id'], 'expectedRevision': record['revision'],
+                'inputId': record['delivery']['inputId']}
+        with pytest.raises(AppError):
+            await app.dispatch('question.dismiss', args)
+        # A prior uncertain observation can coexist with a still-outstanding RPC.
+        record['delivery']['status'] = 'unknown'
+        app.questions.store.put(record)
+        cleared = (await app.dispatch('question.dismiss', args))['result']
+        if finish == 'cancel':
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            runtime.gate.set()
+            await task
+        saved = app.questions.store.get(sid, q['id'])
+        assert saved['reminderDismissal'] == cleared['reminderDismissal']
+        assert saved['delivery']['status'] == ('rejected' if finish == 'startup' else 'unknown')
+        assert 'question:' + q['id'] not in {i['id'] for i in app.get_state()['attention']['items']}
+        assert len(runtime.sent) == 1
+    finally:
+        runtime.gate.set()
+        if task and not task.done():
+            await task
+        await app.close()
+
+
+async def test_dismissed_uncertain_history_is_bounded_and_warm_projection_does_not_scan_store(tmp_path, monkeypatch):
+    runtime = Runtime()
+    runtime.failure = TimeoutError('Unconfirmed')
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        cleared_ids = set()
+        for index in range(15):
+            q = await create_question(app, sid, prompt=f'Old question {index}')
+            saved = (await app.dispatch('question.answer', {
+                'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': 'Saved'}))['result']
+            await app.dispatch('question.dismiss', {
+                'sessionId': sid, 'id': q['id'], 'expectedRevision': saved['revision'],
+                'inputId': saved['delivery']['inputId']})
+            cleared_ids.add(q['id'])
+        active = await create_question(app, sid)
+        unanswered = await create_question(app, sid)
+        await app.dispatch('question.answer', {
+            'sessionId': sid, 'id': active['id'], 'expectedRevision': 1, 'text': 'Not reviewed'})
+        assert len(app._session(sid)['questions']) == 10
+        history = (await app.dispatch('question.list', {'sessionId': sid}))['result']
+        assert history['total'] == 17
+        assert cleared_ids <= {q['id'] for q in history['items']}
+        assert {active['id'], unanswered['id']} <= {q['id'] for q in app._session(sid)['questions']}
+        app.questions.sync()  # Rebuild the cache once after changed records.
+        monkeypatch.setattr(app.questions.store, 'all', lambda *args: pytest.fail('Warm publication scanned question history'))
+        app.questions.sync()
+        app.questions.sync()
+        assert len(app._session(sid)['questions']) == 10
+    finally:
+        await app.close()
+
+
 @pytest.mark.parametrize('event', ['runtime.delivery', 'runtime.status', 'check'])
 async def test_late_question_acceptance_reconciles_without_resend(tmp_path, event):
     runtime = Runtime()
@@ -254,11 +482,12 @@ async def test_late_question_acceptance_reconciles_without_resend(tmp_path, even
         await app.close()
 
 
-@pytest.mark.parametrize('finish', ['timeout', 'cancel'])
+@pytest.mark.parametrize('finish', ['timeout', 'cancel', 'startup'])
 async def test_question_acceptance_wins_racing_send_finalizer(tmp_path, finish):
+    from amplifier_web.runtime import RuntimeStartupError
     runtime = Runtime()
     runtime.gate = asyncio.Event()
-    runtime.failure = TimeoutError('Late timeout')
+    runtime.failure = RuntimeStartupError('Late startup refusal') if finish == 'startup' else TimeoutError('Late timeout')
     app = AppService(tmp_path, runtime, workspace=tmp_path)
     task = None
     try:
@@ -603,6 +832,98 @@ async def test_definite_admission_rejection_preserves_answer_without_replay(tmp_
         retry = await app.dispatch('question.answer', args, command_id='rejected-delivery')
         assert retry['duplicate'] and retry['result']['delivery']['status'] == 'rejected'
         assert len(runtime.sent) == 1
+    finally:
+        await app.close()
+
+
+async def test_startup_dependency_rejection_preserves_answer_without_replay(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    from amplifier_web import runtime_profiles
+    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.update_diagnostics import CommandFailure
+
+    # Exercise the production preparation -> startup error -> _send receipt ->
+    # question finalizer, not a synthetic post-producer AppError alone.
+    facts = {'exitCode': 1, 'probe': {'ok': False, 'stage': 'prepare',
+        'errorType': 'RuntimeDependencyError', 'reason': 'dependency-unavailable',
+        'arbitrary': 'private-dependency-fixture'}}
+    prepare = AsyncMock(side_effect=CommandFailure(facts))
+    monkeypatch.setattr('amplifier_web.updates.active_release', lambda _: {'current': 'a' * 32})
+    monkeypatch.setattr(runtime_profiles, 'ensure', prepare)
+    runtime = RuntimeManager(retention={'prewarm_on_select': False})
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        q = await create_question(app, sid)
+        await app.dispatch('view.update', {'patch': {'draft': 'Keep my independent draft'}})
+        args = {'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': 'Summary'}
+        saved = (await app.dispatch('question.answer', args, command_id='startup-answer'))['result']
+        input_id = 'question:' + q['id'] + ':answer'
+        assert saved['status'] == 'answered' and saved['revision'] == 2
+        assert saved['delivery']['inputId'] == input_id
+        assert saved['delivery']['status'] == 'rejected'
+        assert saved['delivery']['message'].count('RuntimeDependencyError:') == 1
+        assert app._session()['messages'][0]['delivery']['status'] == 'failed'
+        assert app.state['view']['draft'] == 'Keep my independent draft'
+        assert 'private-dependency-fixture' not in json.dumps(app.get_state())
+        duplicate = await app.dispatch('question.answer', args, command_id='startup-answer')
+        assert duplicate['duplicate'] and duplicate['result'] == saved
+        with pytest.raises(AppError, match='already closed'):
+            await app.dispatch('question.answer', args, command_id='another-startup-answer')
+        assert prepare.await_count == 1 and not runtime.workers
+    finally:
+        await app.close()
+    restored_runtime = RuntimeManager(retention={'prewarm_on_select': False})
+    restored = AppService(tmp_path, restored_runtime, workspace=tmp_path)
+    try:
+        duplicate = await restored.dispatch('question.answer', args, command_id='startup-answer')
+        assert duplicate['duplicate'] and duplicate['result'] == saved
+        assert len([m for m in restored._session(sid)['messages'] if m.get('inputId') == input_id]) == 1
+        assert prepare.await_count == 1 and not restored_runtime.workers
+    finally:
+        await restored.close()
+
+
+@pytest.mark.parametrize('change', [
+    'valid', 'wrong-input', 'wrong-session', 'missing-input', 'missing-session',
+    'unknown', 'accepted', 'missing-delivery', 'list', 'string', 'none',
+    'extra-field', 'wrong-code', 'not-app-error',
+])
+async def test_startup_non_delivery_requires_exact_bound_receipt(tmp_path, monkeypatch, change):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    calls = []
+    async def send(session, text, input_id, *args, **kwargs):
+        calls.append(input_id)
+        receipt = {'delivery': 'failed', 'inputId': input_id, 'sessionId': session['id']}
+        if change == 'wrong-input':
+            receipt['inputId'] += ':other'
+        elif change == 'wrong-session':
+            receipt['sessionId'] += ':other'
+        elif change.startswith('missing-'):
+            receipt.pop({'missing-input': 'inputId', 'missing-session': 'sessionId',
+                         'missing-delivery': 'delivery'}[change])
+        elif change in {'unknown', 'accepted'}:
+            receipt['delivery'] = change
+        elif change == 'extra-field':
+            receipt['unvalidated'] = True
+        elif change in {'list', 'string', 'none'}:
+            receipt = {'list': [receipt], 'string': json.dumps(receipt), 'none': None}[change]
+        if change == 'not-app-error':
+            raise RuntimeError('Startup-like text is not delivery evidence')
+        raise AppError('Startup refusal', 503,
+                       code='other' if change == 'wrong-code' else 'worker_startup_failed',
+                       receipt=receipt)
+    monkeypatch.setattr(app, '_send', send)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        q = await create_question(app, sid)
+        result = (await app.dispatch('question.answer', {
+            'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': 'Summary'}))['result']
+        assert result['delivery']['status'] == ('rejected' if change == 'valid' else 'unknown')
+        assert result['status'] == 'answered'
+        assert calls == [result['delivery']['inputId']]
     finally:
         await app.close()
 

@@ -37,6 +37,7 @@ class VoiceVisualDelivery:
             self.capture = None
             return request
         retained = False
+        tool_call_id = None
         for message in request.messages:
             if message.role == "tool" and message.name == "app_control" and isinstance(message.content, str):
                 try:
@@ -48,6 +49,7 @@ class VoiceVisualDelivery:
                             value = value["output"]
                     if value == capture["receipt"]:
                         retained = True
+                        tool_call_id = message.tool_call_id
                 except ValueError:
                     pass
         if not retained:
@@ -68,7 +70,9 @@ class VoiceVisualDelivery:
                 blocks.append({"type": "text", "text": "Vision support could not be confirmed for the selected model; no image evidence was delivered. Do not claim to see the screenshot."})
         except Exception:  # noqa: BLE001 — provider boundary must fail closed on bridge errors
             blocks.append({"type": "text", "text": "The requested screen snapshot is stale or unavailable. No image was delivered; do not infer current screen contents."})
-        message = Message(role="user", content=blocks, metadata={"ephemeral": True, "voiceVisualObservation": capture["id"], "visualRead": capture["read"]})
+        message = Message(role="user", content=blocks, metadata={
+            "ephemeral": True, "voiceVisualObservation": capture["id"], "visualRead": capture["read"],
+            "contextAnchorToolCalls": [tool_call_id] if tool_call_id else []})
         return request.model_copy(update={"messages": [*request.messages, message]})
 
     async def revalidate(self, request):
@@ -88,6 +92,6 @@ class VoiceVisualDelivery:
         return request.model_copy(update={"messages": messages})
 
     def commit(self, request):
-        # SurfaceDelivery consumes only its own final observation message.
+        # SurfaceDelivery consumes only its own uniquely marked observation.
         messages = [m for m in request.messages if not (m.metadata or {}).get("voiceVisualObservation")]
         self.surfaces.commit(request.model_copy(update={"messages": messages}))

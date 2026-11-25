@@ -1,7 +1,7 @@
 """Commissioning authority for placement, backed by the existing handoff owner."""
 from .task_binding import continuation_epoch
 
-READS = {'worktree.inspect', 'worktree.list', 'worktree.status'}
+READS = {'worktree.inspect', 'worktree.list', 'worktree.status', 'worktree.check'}
 WRITES = {'worktree.create', 'worktree.attach', 'worktree.handoff'}
 
 

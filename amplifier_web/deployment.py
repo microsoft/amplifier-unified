@@ -20,7 +20,9 @@ DEFAULT_SERVER = {
     "bind": ["127.0.0.1"],
     "port": 8941,
     "public_origins": [],
+    "linked_instances": False,
     "session_ttl_seconds": 604800,
+    "host_pam": None,
     "tls": {"method": "none", "cert": "", "key": ""},
     "runtime": DEFAULT_RETENTION,
     "debug": {"profiling": False},
@@ -141,8 +143,12 @@ def validate_server(value: dict) -> dict:
         raise ValueError("bind must contain valid IP addresses or IDNA hostnames.") from exc
     if type(config["port"]) is not int or not 1 <= config["port"] <= 65535:
         raise ValueError("port must be an integer from 1 through 65535.")
+    if type(config["linked_instances"]) is not bool:
+        raise ValueError("linked_instances must be true or false.")
     if type(config["session_ttl_seconds"]) is not int or config["session_ttl_seconds"] <= 0:
         raise ValueError("session_ttl_seconds must be a positive integer.")
+    from .host_pam import validate as validate_host_pam
+    config["host_pam"] = validate_host_pam(config["host_pam"])
     origins = config["public_origins"]
     if not isinstance(origins, list):
         raise ValueError("public_origins must be a list.")

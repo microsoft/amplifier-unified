@@ -16,6 +16,7 @@ import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {readComposerDraft,clearComposer} from './composer-test-helpers.mjs';
 import {delegateStreamDiagnostics} from './delegate-stream-diagnostics.mjs';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
+import {settledAppearance,updateAppearance} from './settings-fixture.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const output=process.env.AMPLIFIER_TEST_OUTPUT_DIR||join(root,'test-results');
@@ -29,6 +30,7 @@ const viewports=mobileOnly?[['mobile',mobile]]:[['desktop',desktop],['mobile',mo
 const navigationEntries=[];
 const layoutChecks=[],apiFailures=[],transitionChecks=[];
 const appearanceScopeChecks=[];
+const readingAnchorChecks=[];
 const diagnostics=delegateStreamDiagnostics();
 const lookupEvents=[],lookupRequests=new Map();
 const nodeEvidence=node=>node?{
@@ -130,22 +132,8 @@ async function checkAsideAppearanceScope(page,work,viewport,setWorkerPhase) {
     const receipt=await page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
     assert.equal(receipt.accepted,true,action);return receipt.result;
   };
-  const priorTheme=await page.evaluate(()=>window.amplifier.getState().theme);
+  const priorAppearance=await settledAppearance(page);
   const priorPresentation=await page.evaluate(()=>window.amplifier.getShellState().effectiveComposition);
-  const present=async composition=>{
-    const applied=await page.evaluate(async composition=>{
-      const shell=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
-      const prepared=await window.amplifier.dispatch('shell.changes.prepare',{
-        clientId,expectedRevision:shell.revision,composition});
-      if(!prepared.accepted)throw Error('Appearance-scope presentation prepare failed');
-      const receipt=await window.amplifier.dispatch('shell.changes.apply',{
-        clientId,expectedRevision:shell.revision,changeId:prepared.result.id});
-      if(!receipt.accepted)throw Error('Appearance-scope presentation apply failed');
-      if(!Number.isInteger(receipt.result.revision))throw Error('Appearance-scope apply omitted its revision');
-      return receipt.result.revision;
-    },composition);
-    await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState().revision)).toBe(applied);
-  };
   // This is the production DelegateStreamStatus <aside>, not injected markup.
   const status=work.getByRole('complementary',{name:'Review status',exact:true});
   await expect(status).toBeVisible();
@@ -165,11 +153,11 @@ async function checkAsideAppearanceScope(page,work,viewport,setWorkerPhase) {
   assert.ok(builtins.some(row=>row.id==='builtin:digital-rain'),'The affected built-in must be exercised');
   for(const entry of builtins){
     const theme=await action('theme.read',{id:entry.id});
-    await action('theme.apply',{name:theme.name,css:theme.css});
+    await updateAppearance(page,{appearanceId:entry.id});
     await expect.poll(()=>page.locator('#amp-one > style').evaluateAll((nodes,css)=>
       nodes.some(node=>node.textContent===css),theme.css)).toBe(true);
     for(const scheme of ['light','dark']){
-      await present({...priorPresentation,presentation:{...priorPresentation.presentation,scheme}});
+      await updateAppearance(page,{scheme});
       await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',scheme);
       await status.scrollIntoViewIfNeeded();
       const details=status.getByRole('button',{name:'Review delegation details',exact:true});
@@ -196,11 +184,16 @@ async function checkAsideAppearanceScope(page,work,viewport,setWorkerPhase) {
           control:{width:control.width,height:control.height,outline:focus.outlineStyle,
             outlineWidth:parseFloat(focus.outlineWidth)}};
       });
-      // The outer navigation surface owns the accent. The host deliberately
-      // resets the inner rail's shadow, including on narrow screens.
+      // Digital Rain now supplies a Reference delta, not an inset full-panel
+      // skin. Keep positive scoped navigation paint identity beside the aside.
       const navigationShadow=await page.locator('[data-part="navigation"]')
         .evaluate(el=>getComputedStyle(el).boxShadow);
-      appearanceScopeChecks.push({theme:entry.id,scheme,viewport,navigationShadow,...measured});
+      const navigationPaint=await page.locator('.a-nav-rail').evaluate(el=>{
+        const css=getComputedStyle(el),root=getComputedStyle(document.getElementById('amp-one'));
+        return {paddingTop:css.paddingTop,background:css.backgroundColor,soft:root.getPropertyValue('--a-soft').trim(),
+          shadow:css.boxShadow};
+      });
+      appearanceScopeChecks.push({theme:entry.id,scheme,viewport,navigationShadow,navigationPaint,...measured});
       writeFileSync(artifact('delegate-aside-appearance-scope.json'),JSON.stringify(appearanceScopeChecks,null,2));
       assert.equal(measured.shadow,'none','Navigation accent must not paint the worker status aside');
       assert.match(measured.background,/rgba\(0, 0, 0, 0\)|transparent/,'Status keeps its native unboxed surface');
@@ -216,18 +209,23 @@ async function checkAsideAppearanceScope(page,work,viewport,setWorkerPhase) {
       assert.notEqual(measured.control.outline,'none');assert.ok(measured.control.outlineWidth>0);
       assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),selected);
       assert.equal(await readComposerDraft(editor),probeDraft,'Each appearance preserves nonempty draft text');
-      if(entry.id==='builtin:digital-rain')
-        assert.match(navigationShadow,/inset/,'The actual navigation retains its inset accent');
+      if(entry.id==='builtin:digital-rain'){
+        assert.equal(navigationPaint.paddingTop,'12px','The actual rail consumes Digital Rain navigation padding');
+        assert.notEqual(navigationPaint.background,'rgba(0, 0, 0, 0)','Navigation paints its own opaque surface, not the transparent status aside');
+      }
       if(entry.id==='builtin:digital-rain'&&scheme==='dark'&&viewport!=='small')
         await page.screenshot({path:artifact(`delegate-aside-digital-rain-${viewport}.png`)});
     }
   }
-  // Restore the exact composition, not a merge that leaves temporary keys.
-  await present(priorPresentation);
-  await action('theme.apply',{name:priorTheme.name,css:priorTheme.css});
-  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().theme)).toEqual(priorTheme);
+  // Profile restoration must not rewrite the independent component composition.
+  await updateAppearance(page,{...priorAppearance.effective,accent:priorAppearance.effective.accent??null});
+  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().appearance.effective)).toEqual(priorAppearance.effective);
   await expect.poll(()=>page.locator('#amp-one > style').evaluateAll((nodes,css)=>
-    nodes.some(node=>node.textContent===css),priorTheme.css)).toBe(true);
+    nodes.some(node=>node.textContent===css),priorAppearance.theme.css)).toBe(true);
+  const restored=await settledAppearance(page);
+  assert.equal(restored.activeScope,priorAppearance.activeScope,'Appearance checks never switch profile source');
+  assert.deepEqual(restored.shared.values,priorAppearance.shared.values);
+  assert.deepEqual(restored.local.values,priorAppearance.local.values);
   assert.deepEqual(await page.evaluate(()=>window.amplifier.getShellState().effectiveComposition),priorPresentation);
   assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),selected);
   assert.equal(await readComposerDraft(editor),probeDraft,'Restoration preserves the nonempty draft');
@@ -268,28 +266,160 @@ async function checkLatest(page,work,label) {
 }
 async function checkReadingAnchor(page,operation) {
   const button=operation.locator(':scope > button');
+  const trace=await button.evaluateHandle(trigger=>{
+    const pane=trigger.closest('[data-part="messages"]'),rows=[],frames=new Set();
+    const describe=el=>el?{tag:el.tagName,id:el.id,role:el.getAttribute('role'),
+      name:el.getAttribute('aria-label'),nodeId:el.closest('[data-node-id]')?.dataset.nodeId}:null;
+    const rect=el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};
+    const savedPosition=()=>{
+      try{
+        const row=JSON.parse(sessionStorage.getItem('amplifier.chat-reading.v1')||'{}')[pane.dataset.sessionId];
+        return row?{messageId:row.messageId,offset:row.offset,top:row.top,submittedId:row.submittedId}:null;
+      }catch{return {unavailable:true}}
+    };
+    const record=(phase,event,detail={})=>{
+      if(rows.length>=160)return;
+      const top=pane.getBoundingClientRect().top;
+      rows.push({phase,at:performance.now(),type:event?.type,trusted:event?.isTrusted,
+        target:describe(event?.target),active:describe(document.activeElement),
+        deltaY:event?.deltaY,scrollTop:pane.scrollTop,scrollHeight:pane.scrollHeight,
+        clientHeight:pane.clientHeight,pane:rect(pane),button:rect(trigger),
+        padding:getComputedStyle(pane).padding,inspector:!!document.querySelector('#work-step-inspector'),savedPosition:savedPosition(),...detail,
+        messages:[...pane.querySelectorAll('[data-message-id]')].slice(0,4).map(row=>({
+          id:row.dataset.messageId,offset:row.getBoundingClientRect().top-top}))});
+    };
+    const sampleFrames=(remaining=8)=>{
+      const id=requestAnimationFrame(()=>{frames.delete(id);record('after-click-frame-'+(9-remaining));if(remaining>1)sampleFrames(remaining-1)});
+      frames.add(id);
+    };
+    const event=e=>{record('event',e);if(e.type==='click'&&(e.target===trigger||trigger.contains(e.target)))sampleFrames()};
+    const types=['scroll','focusin','pointerdown','click','wheel','keydown','input'];
+    // Intercept only this pane instance; delegate unchanged to the browser's
+    // native accessor. A later native scroll with no write record is distinct
+    // from a scheduled application write. Never change the prototype or goal.
+    const ownScrollTop=Object.getOwnPropertyDescriptor(pane,'scrollTop');
+    let owner=pane,scrollTop;
+    while(owner&&!scrollTop){scrollTop=Object.getOwnPropertyDescriptor(owner,'scrollTop');owner=Object.getPrototypeOf(owner)}
+    if(!scrollTop?.get||!scrollTop?.set)throw Error('Native scrollTop accessor unavailable');
+    Object.defineProperty(pane,'scrollTop',{configurable:true,enumerable:scrollTop.enumerable,
+      get(){return scrollTop.get.call(this)},
+      set(value){
+        const stack=new Error('Observed scrollTop write').stack?.slice(0,1600);
+        record('scrollTop-write-before',null,{value,stack});
+        scrollTop.set.call(this,value);
+        record('scrollTop-write-after',null,{value});
+      }});
+    for(const type of types)document.addEventListener(type,event,{capture:true,passive:true});
+    record('installed');
+    return {record,finish(){
+      if(ownScrollTop)Object.defineProperty(pane,'scrollTop',ownScrollTop);else delete pane.scrollTop;
+      for(const type of types)document.removeEventListener(type,event,true);
+      for(const id of frames)cancelAnimationFrame(id);return rows;
+    }};
+  });
+  try{
+  const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
+  const originalDraft=await readComposerDraft(composer);
+  const draft='Keep this private draft through step inspection';
+  await composer.fill(draft);await expect(composer).toHaveDraft(draft);
+  const retained=await page.evaluateHandle(()=>({
+    pane:document.querySelector('[data-part="messages"]'),
+    composer:document.querySelector('[role="textbox"][contenteditable="true"]'),
+    messages:[...document.querySelectorAll('[data-message-id]')],
+  }));
+  const identity=()=>page.evaluate(()=>{
+    const s=window.amplifier.getState();
+    return {session:s.selectedSessionId,workspace:s.selectedWorkspaceId,canvas:s.canvas?.id,
+      version:s.canvas?.selectedVersion,open:s.canvas?.open};
+  });
+  const beforeIdentity=await identity();
+  await trace.evaluate(t=>t.record('before-scroll-into-view'));
   await button.scrollIntoViewIfNeeded();
+  await trace.evaluate(t=>t.record('after-scroll-into-view'));
   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   const pane=page.locator('[data-part="messages"]');
-  const anchor=await pane.evaluate(el=>{
+  const capture=()=>pane.evaluate(el=>{
     const top=el.getBoundingClientRect().top;
     const row=[...el.querySelectorAll('[data-message-id]')].find(row=>row.getBoundingClientRect().bottom>top);
     return row?{id:row.dataset.messageId,offset:row.getBoundingClientRect().top-top}:null;
   });
-  assert.ok(anchor,'Reading-position check needs an actual message anchor');
-  const offset=()=>pane.evaluate((el,id)=>{
-    const row=[...el.querySelectorAll('[data-message-id]')].find(row=>row.dataset.messageId===id);
-    return row?row.getBoundingClientRect().top-el.getBoundingClientRect().top:null;
-  },anchor.id);
-  await button.click();
-  await expect.poll(async()=>Math.abs((await offset())-anchor.offset)).toBeLessThanOrEqual(1);
-  await button.click();
-  await expect.poll(async()=>Math.abs((await offset())-anchor.offset)).toBeLessThanOrEqual(1);
+  const checkPosition=async(anchor,phase)=>{
+    assert.ok(anchor,'Reading-position check needs an actual message anchor');
+    const evidence={phase,viewport:page.viewportSize(),anchor,samples:[]};readingAnchorChecks.push(evidence);
+    // Docking changes responsive padding. At either scroll limit the exact
+    // prior offset may be physically unreachable; require the closest one.
+    try{await expect.poll(async()=>{
+     const measured=await pane.evaluate((el,{id,offset})=>{
+      const row=[...el.querySelectorAll('[data-message-id]')].find(row=>row.dataset.messageId===id);
+      if(!row)return {missing:true};
+      const delta=row.getBoundingClientRect().top-el.getBoundingClientRect().top-offset;
+      const target=Math.min(el.scrollHeight-el.clientHeight,Math.max(0,el.scrollTop+delta));
+      const top=el.getBoundingClientRect().top,first=[...el.querySelectorAll('[data-message-id]')].find(row=>row.getBoundingClientRect().bottom>top);
+      return {delta,target,scrollTop:el.scrollTop,scrollHeight:el.scrollHeight,clientHeight:el.clientHeight,paneWidth:el.clientWidth,first:first?{id:first.dataset.messageId,offset:first.getBoundingClientRect().top-top}:null,padding:getComputedStyle(el).padding,error:Math.abs(el.scrollTop-target)};
+     },anchor);
+     evidence.samples.push(measured);return measured.missing?Infinity:measured.error;
+    }).toBeLessThanOrEqual(1)}
+    finally{writeFileSync(artifact('delegate-work-stream-reading-anchors.json'),JSON.stringify(readingAnchorChecks,null,2))}
+  };
+  const inspect=async anchor=>{
+    await trace.evaluate(t=>t.record('before-inspector-click'));
+    await button.click();
+    await trace.evaluate(t=>t.record('after-inspector-click'));
+    const inspector=page.locator('#work-step-inspector');
+    await expect(inspector).toBeVisible();
+    await checkPosition(anchor,'open');
+    await inspector.getByRole('button',{name:'Close step details'}).click();
+    await expect(button).toBeFocused();
+    await checkPosition(anchor,'close');
+  };
+  await inspect(await capture());
+  // Deliberately read inside the scroll range as well as at its edge.
+  await pane.evaluate(el=>{el.scrollTop=Math.min(el.scrollHeight-el.clientHeight-32,Math.max(32,el.scrollTop))});
+  await expect.poll(()=>pane.evaluate(el=>Math.min(el.scrollTop,el.scrollHeight-el.clientHeight-el.scrollTop))).toBeGreaterThan(1);
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  const anchor=await capture();
+  await inspect(anchor);
   const viewport=page.viewportSize();
   await page.setViewportSize({...viewport,width:viewport.width+12});
-  await expect.poll(async()=>Math.abs((await offset())-anchor.offset)).toBeLessThanOrEqual(1);
+  await checkPosition(anchor,'resize-wider');
   await page.setViewportSize(viewport);
-  await expect.poll(async()=>Math.abs((await offset())-anchor.offset)).toBeLessThanOrEqual(1);
+  await checkPosition(anchor,'resize-return');
+  // A docked inspector leaves the transcript available for real newer input.
+  // Modal narrow panes deliberately make it inert; their round trips above
+  // remain covered without forcing input through the modal boundary.
+  if(viewport.width>900){
+    await button.click();
+    const inspector=page.locator('#work-step-inspector');
+    await expect(inspector).toBeVisible();await expect(inspector).not.toHaveAttribute('aria-modal','true');
+    const beforeScroll=await pane.evaluate(el=>el.scrollTop);
+    const box=await pane.boundingBox();
+    await page.mouse.move(box.x+box.width/2,box.y+box.height/2);
+    await page.mouse.wheel(0,120);
+    await expect.poll(()=>pane.evaluate(el=>el.scrollTop)).toBeGreaterThan(beforeScroll+40);
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    const latest=await capture();assert.notDeepEqual(latest,anchor);
+    await inspector.getByRole('button',{name:'Close step details',exact:true}).click();
+    await checkPosition(latest,'close-after-newer-wheel');
+    await expect(button).toBeFocused();
+  }
+  assert.deepEqual(await identity(),beforeIdentity,'Inspection preserves chat and retained Canvas selection');
+  assert.ok(await retained.evaluate(saved=>!!saved.pane&&!!saved.composer&&saved.messages.length>0
+    &&saved.pane===document.querySelector('[data-part="messages"]')
+    &&saved.composer===document.querySelector('[role="textbox"][contenteditable="true"]')
+    &&saved.messages.length===document.querySelectorAll('[data-message-id]').length
+    &&saved.messages.every((node,index)=>node.isConnected&&node===document.querySelectorAll('[data-message-id]')[index])),
+    'Exact messages and composer remain mounted in order');
+  await expect(composer).toHaveDraft(draft);
+  await retained.dispose();
+  await clearComposer(composer);if(originalDraft)await composer.fill(originalDraft);
+  await expect(composer).toHaveDraft(originalDraft);
+  }finally{
+    await diagnostics.attempt('anchor event trace',async()=>{
+      const rows=await trace.evaluate(t=>t.finish());
+      writeFileSync(artifact('delegate-work-stream-anchor-events-'+page.viewportSize().width+'.json'),JSON.stringify(rows,null,2));
+    });
+    await diagnostics.attempt('anchor trace handle disposal',()=>trace.dispose());
+  }
 }
 async function enterStreamConversation(page,expectedSessionId,stage) {
   // Keep the shared Home-to-chat setup and desktop pinned preference intact.
@@ -320,6 +450,29 @@ async function enterStreamConversation(page,expectedSessionId,stage) {
 // Word ranges detect the one-letter-per-line regression that an element box
 // inside the viewport cannot detect. Hit tests also reject floating overlays.
 function measureOwner(element,probe) {
+  if(probe?.negative) {
+    // Oracle self-tests must not publish their artificial geometry across a
+    // browser-task boundary: the application's reading observer must never
+    // capture the deliberately broken width as a real reading position.
+    const before=measureOwner(element),style=element.getAttribute('style');
+    let cover,negative;
+    try {
+      if(probe.negative==='width'){
+        element.style.maxWidth='8px';element.style.overflowWrap='anywhere';
+      }else if(probe.negative==='cover'){
+        const rect=element.getBoundingClientRect();cover=document.createElement('div');
+        cover.id='readability-negative-cover';
+        Object.assign(cover.style,{position:'fixed',left:rect.left+'px',top:rect.top+'px',
+          width:rect.width+'px',height:rect.height+'px',zIndex:'2147483647',background:'white'});
+        document.body.append(cover);
+      }else throw Error('Unknown readability negative control');
+      negative=measureOwner(element);
+    }finally{
+      if(style===null)element.removeAttribute('style');else element.setAttribute('style',style);
+      cover?.remove();
+    }
+    return {before,negative,restored:measureOwner(element)};
+  }
   if(probe) {
     // Preserve the existing recenter, then sample in that same browser task.
     // Two bounded animation frames expose movement; they do NOT prove settlement.
@@ -536,10 +689,13 @@ try {
     for (const operation of operations)
       await expect(operation.locator(':scope > button')).toHaveAttribute('aria-expanded', 'false');
     await operations[0].locator(':scope > button').click();
-    await expect(operations[0]).toContainText('CHILD READ RESULT');
+    const inspector=page.locator('#work-step-inspector');
+    await expect(inspector).toContainText('CHILD READ RESULT');
+    await expect(operations[0].locator(':scope > button')).toHaveAttribute('aria-expanded','true');
     for (const operation of operations.slice(1))
       await expect(operation.locator(':scope > button')).toHaveAttribute('aria-expanded', 'false');
-    await operations[0].locator(':scope > button').click();
+    await inspector.getByRole('button',{name:'Close step details'}).click();
+    await expect(operations[0].locator(':scope > button')).toBeFocused();
     await toggle.click();
     await expect(rows[0]).toBeHidden();
     await toggle.click();
@@ -570,35 +726,36 @@ try {
       await expect.poll(async()=> (await owner.evaluate(measureOwner)).problems).toEqual([]);
       // Negative controls: the same oracle must reject both the old narrow
       // column symptom and text covered by another UI element.
-      const style=await owner.getAttribute('style');
-      restoredOwnerStyle=style;
-      await owner.evaluate(element=>{element.style.maxWidth='8px';element.style.overflowWrap='anywhere'});
-      const split=await owner.evaluate(measureOwner);
+      const preservedGeometry=value=>({owner:value.owner,button:value.button,pane:value.pane,
+        jumpContainer:value.jumpContainer,jumpControl:value.jumpControl,viewport:value.viewport});
+      const widthControl=await owner.evaluate(measureOwner,{negative:'width'});
+      const split=widthControl.negative;
+      assert.deepEqual(widthControl.before.problems,[],'Width negative begins with readable owner words');
       assert.ok(split.problems.some(value=>value.startsWith('split word:')),'Readability check must detect split owner words');
-      await owner.evaluate((element,style)=>style===null?element.removeAttribute('style'):element.setAttribute('style',style),style);
-      await recordOwnerDiagnostics('width-restored-and-recentered',{recenter:true,frames:true});
+      assert.deepEqual(preservedGeometry(widthControl.restored),preservedGeometry(widthControl.before),
+        'Atomic width control restores exact geometry, styles and pane reading position');
+      assert.deepEqual(widthControl.restored.problems,[]);
+      writeFileSync(artifact('delegate-work-stream-negative-controls.json'),JSON.stringify({widthControl},null,2));
+      await recordOwnerDiagnostics('width-restored-atomically',{frames:true});
       await expect.poll(async()=>{
         lastOwnerMeasurement=await owner.evaluate(measureOwner);
         return lastOwnerMeasurement.problems;
       }).toEqual([]);
-      await owner.evaluate(element=>{
-        const rect=element.getBoundingClientRect(),cover=document.createElement('div');
-        cover.id='readability-negative-cover';
-        Object.assign(cover.style,{position:'fixed',left:rect.left+'px',top:rect.top+'px',width:rect.width+'px',height:rect.height+'px',zIndex:'2147483647',background:'white'});
-        document.body.append(cover);
-      });
-      const covered=await owner.evaluate(measureOwner);
+      const coverControl=await owner.evaluate(measureOwner,{negative:'cover'});
+      const covered=coverControl.negative;
+      assert.deepEqual(coverControl.before.problems,[],'Cover negative begins with readable owner words');
       assert.ok(covered.problems.some(value=>value.startsWith('covered word:')),'Readability check must detect obscured owner text');
-      await page.locator('#readability-negative-cover').evaluate(element=>element.remove());
-      // Restore the inspected position after the artificial reflow/overlay.
-      // The app may have applied its reading anchor while this control ran.
-      await recordOwnerDiagnostics('cover-removed-and-recentered',{recenter:true,frames:true});
+      assert.deepEqual(preservedGeometry(coverControl.restored),preservedGeometry(coverControl.before),
+        'Atomic cover control restores exact geometry, styles and pane reading position');
+      assert.deepEqual(coverControl.restored.problems,[]);
+      await expect(page.locator('#readability-negative-cover')).toHaveCount(0);
+      await recordOwnerDiagnostics('cover-removed-atomically',{frames:true});
       await expect.poll(async()=>{
         lastOwnerMeasurement=await owner.evaluate(measureOwner);
         return lastOwnerMeasurement.problems;
       }).toEqual([]);
       saveOwnerDiagnostics();
-      writeFileSync(artifact('delegate-work-stream-negative-controls.json'),JSON.stringify({split,covered},null,2));
+      writeFileSync(artifact('delegate-work-stream-negative-controls.json'),JSON.stringify({split,covered,widthControl,coverControl},null,2));
       await page.screenshot({path:artifact('delegate-work-stream-mobile-owner.png')});
     }
     writeFileSync(artifact(`delegate-work-stream-${name}-readability.json`),JSON.stringify(readability,null,2));

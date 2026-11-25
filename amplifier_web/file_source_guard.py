@@ -25,15 +25,11 @@ _KNOWN = {
 }
 _MISSING = object()
 _LIMIT = 512
-_GUIDANCE = (' Before changing or deleting existing files with this tool, read them '
-             'with read_file in this worker. If file_source_stale or file_source_unread '
-             'is returned, read the file again and reconsider the change. New files '
-             'and move destinations must be absent. Builds and verified generated-output '
-             'imports use their source/build checks; they do not require reading every '
-             'generated file into model context. Preserve local changes and verify '
-             'inputs and output hashes through the established build workflow. '
-             'Do not bypass an actual source conflict with a shell command, build '
-             'or another writer.')
+_GUIDANCE = (' Read existing files with read_file in this worker before changing or deleting them. '
+             'On file_source_unread or file_source_stale, reread and reassess. New files and move '
+             'destinations must be absent. For builds and verified imports, preserve local changes '
+             'and check source and output hashes instead of reading every generated file. Never '
+             'bypass a conflict with a shell, build or other writer.')
 
 
 class SourceConflict(Exception):
@@ -183,6 +179,10 @@ class FileSourceGuard:
                 tool = invocation()
                 if targets != self._targets(tool, kind, arguments):
                     raise SourceConflict('file_source_stale', 'The file path changed. Read it again before editing.')
+                # Approval may have waited before this file lock. Recheck the
+                # exact call against current policy after the existing checks.
+                if approval := self.coordinator.get_capability('web.tool_approval.scope'):
+                    approval.check_current(arguments)
                 if kind == 'read':
                     path = next(iter(targets))
                     if path.is_dir():
@@ -265,7 +265,15 @@ async def install_file_source_guard(coordinator, directory=None):
     for name, tool in list((coordinator.get('tools') or {}).items()):
         kind = _KNOWN.get((type(tool).__module__, type(tool).__name__))
         if kind:
-            await coordinator.mount('tools', GuardedFileTool(tool, guard, kind), name=name)
+            wrapped = GuardedFileTool(tool, guard, kind)
         elif (type(tool).__module__, type(tool).__name__) in IMAGES:
-            await coordinator.mount('tools', PolicyImageTool(tool, coordinator), name=name)
+            wrapped = PolicyImageTool(tool, coordinator)
+        else:
+            continue
+        from .host.media import registration_coordinator
+        registration = registration_coordinator(coordinator)
+        if registration is coordinator:
+            await coordinator.mount('tools', wrapped, name=name)
+        else:
+            await registration.mount_adapter('tools', wrapped, previous=tool, name=name)
     coordinator.register_capability('web.file_source_guard', guard)

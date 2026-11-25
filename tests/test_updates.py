@@ -24,7 +24,10 @@ async def app(tmp_path,monkeypatch,repo):
     import yaml
     settings = amplifier_home()/'settings.yaml'
     settings.parent.mkdir(parents=True, exist_ok=True)
-    settings.write_text(yaml.safe_dump({'web_bundles':{'excluded':list(DEFAULT_BEHAVIORS)}}))
+    settings.write_text(yaml.safe_dump({
+        'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)},
+        'config': {'providers': [{'module': 'provider-anthropic',
+                                 'config': {'default_model': 'fixture-model'}}]}}))
     async def check():return {"id":"application","label":"Amplifier Unified","status":"current"}
     monkeypatch.setattr(app_updates,"check",check)
     original=updates.process
@@ -64,9 +67,21 @@ async def prepare(app,repo):
 
 async def test_stage_activate_and_rollback_preserve_original_cache(app,repo):
     manager,root=await prepare(app,repo)
+    from amplifier_web.session_files import amplifier_home
+    shared = amplifier_home()
+    (shared/'keys.env').write_text('FIXTURE_KEY=synthetic-private-value\n')
+    (shared/'routing').mkdir()
+    (shared/'routing/fixture.yaml').write_text('name: fixture\n')
+    (shared/'projects').mkdir(exist_ok=True)
+    (shared/'projects/keep').write_text('history stays at its owner')
+    inputs = {name: (shared/name).read_bytes()
+              for name in ('settings.yaml','keys.env','routing/fixture.yaml')}
     async def validate(stage,release):
         assert git(stage/'foundation/cache/repository','rev-parse','HEAD')==repo[2]
         assert git(root,'rev-parse','HEAD')==repo[1]
+        assert {p.name for p in (stage/'shared-config').iterdir()}=={'settings.yaml','keys.env','routing'}
+        assert {name: (stage/'shared-config'/name).read_bytes() for name in inputs}==inputs
+        assert not (stage/'config').exists() and not (stage/'routing').exists()  # tests/test_update_stage_config.py
     manager.validate=validate
     manager.diagnostics.begin('ecosystem', components=['repo'])
     failure=manager.diagnostics.record('ecosystem-validation','failed',errorType='ValueError')
@@ -95,6 +110,10 @@ async def test_stage_activate_and_rollback_preserve_original_cache(app,repo):
     await manager.rollback()
     assert active_release(app.data_dir)['current'] is None
     assert foundation_home(app.data_dir)==app.data_dir/'foundation'
+    # The text names the box that a person sees, and the restore did switch its setting off.
+    assert app.state['updates']['detail']==('Amplifier went back to the earlier components. "Keep Amplifier up to date" '
+        'is now off, so that the same update is not installed again by itself.')
+    assert app.state['settings']['updates']['autoInstall'] is False
 
 async def test_failed_validation_does_not_activate_or_close_sessions(app,repo):
     manager,root=await prepare(app,repo)

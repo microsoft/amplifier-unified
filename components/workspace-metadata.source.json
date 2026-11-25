@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "source": {
+    "schema": 1,
+    "component": "workspace-metadata",
+    "repository": "bkrabach/amplifier-platform-workspaces",
+    "revision": "feb7cd41f1094510e8ddcf898bde901636ffb913",
+    "subdirectory": ".",
+    "tree": "b12d41b9fd51fa578852ba60ae0e1d4044274d18",
+    "version": "0.2.0",
+    "tag": "workspace-metadata-v0.2.0",
+    "sourceFiles": {
+      "CODE_OF_CONDUCT.md": "9d45a586fce701502d173a7c10c71c8bd4f23e23d5a4a06e9d00eb57a9c11205",
+      "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "MANIFEST.in": "86af977ce224f77a92c70e167b31d4229b8566d5f2ac7ace5d8a100e43955134",
+      "PROVENANCE.json": "634ab8bd86795f470a297d0d45a277510550525648e825a72afb87fe796d51c3",
+      "README.md": "2055302e12b5833deaaa52834727bfe1d22c8e5079a75772a39e555cc10e0532",
+      "SECURITY.md": "b02bf4e236e9335b27298a77688c751d18ca7e6052873d0d3d29eda37d0a72fa",
+      "SUPPORT.md": "bc29be057576bc9576acb59335d95fe6dfef948c1c056e7ad5758cf97e9caa68",
+      "amplifier_workspace_metadata/__init__.py": "5aca3f7a894ba8fdc4e90178965cda2085dfd7b38d2c2e4b2a8fee6b5afbc918",
+      "amplifier_workspace_metadata/locations.py": "ee0c8d859106fdfcc31d0fba38182b1814686336b8e73572a55c56106bab87eb",
+      "amplifier_workspace_metadata/registrations.py": "06624bd964a087d9f84c2b926173f6a04566801069ed44f8b4133137abe24ac4",
+      "pyproject.toml": "e75cff6822f663333dfb18309dad240ad5e54eec5d084b46cc11e96b2578c36c",
+      "tests/test_local_location.py": "6bd0345bff61a1b2f37530b1959f2d35a6600c67cb76ef278bd335862c5b2a8b",
+      "tests/test_registration_metadata.py": "124fbc91ef55063a3c142961883c4fbeaa9c1b6cf997a6c332bd9e24321bc019"
+    },
+    "artifacts": {
+      "amplifier_workspace_metadata-0.2.0-py3-none-any.whl": {
+        "sha256": "bf20539e75d9dcc05f2f00b55bad1695b91280dc867e0a2cbc23fe85924cc0f5",
+        "bytes": 9871
+      },
+      "amplifier_workspace_metadata-0.2.0.tar.gz": {
+        "sha256": "ef81b6b4f6ea3f803f1a088c81f2f23b36b354aa687859a3419acf344294a04b",
+        "bytes": 17700
+      }
+    }
+  },
+  "artifact": {
+    "url": "https://github.com/bkrabach/amplifier-platform-workspaces/releases/download/workspace-metadata-v0.2.0/amplifier_workspace_metadata-0.2.0-py3-none-any.whl",
+    "sha256": "bf20539e75d9dcc05f2f00b55bad1695b91280dc867e0a2cbc23fe85924cc0f5",
+    "bytes": 9871
+  },
+  "sourceReceiptSha256": "9b7c96108dc4c05bfc2852640f815c89735ff580b1a05669b6b683984be25f8a",
+  "runtimeRequirements": [],
+  "files": {
+    "amplifier_workspace_metadata/__init__.py": "5aca3f7a894ba8fdc4e90178965cda2085dfd7b38d2c2e4b2a8fee6b5afbc918",
+    "amplifier_workspace_metadata/locations.py": "ee0c8d859106fdfcc31d0fba38182b1814686336b8e73572a55c56106bab87eb",
+    "amplifier_workspace_metadata/registrations.py": "06624bd964a087d9f84c2b926173f6a04566801069ed44f8b4133137abe24ac4",
+    "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  }
+}

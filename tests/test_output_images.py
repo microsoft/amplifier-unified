@@ -121,6 +121,52 @@ async def test_exact_model_catalog_advertises_vision_when_provider_metadata_does
     assert not await catalog.supports(request.model_copy(update={'model':'visual'}),provider)
 
 
+@pytest.mark.parametrize("full_scope", [{}, {"all_models": True}])
+async def test_saved_model_image_support_uses_provider_inventory_once_per_selection(full_scope):
+    from amplifier_web.image_capabilities import ImageCapabilities
+
+    calls = []
+    class Provider:
+        def get_info(self):
+            return SimpleNamespace(capabilities=["vision"], defaults={})
+
+        def get_model_list_info(self):
+            return {"source": "provider-api", "version": 1, "filters_keyword": "filters",
+                    "unfiltered": full_scope, "override": "replace"}
+
+        async def list_models(self, **kwargs):
+            calls.append(kwargs)
+            if kwargs != {"filters": full_scope}:
+                return [{"id": "recommended", "capabilities": ["vision"]}]
+            return [{"id": "pinned", "capabilities": ["vision"]},
+                    {"id": "text", "capabilities": []}]
+
+    catalog, provider = ImageCapabilities(), Provider()
+    for model, expected in (("pinned", True), ("pinned", True), ("text", False), ("absent", False)):
+        assert await catalog.supports(ChatRequest(model=model, messages=[]), provider) is expected
+    assert calls == [{"filters": full_scope}] * 3
+
+
+@pytest.mark.parametrize("metadata", [None, {"version": 2}])
+async def test_invalid_or_new_catalog_metadata_keeps_default_image_model(metadata):
+    from amplifier_web.image_capabilities import ImageCapabilities
+
+    calls = []
+    class Provider:
+        def get_info(self):
+            return {}
+
+        def get_model_list_info(self):
+            return metadata
+
+        def list_models(self, **kwargs):
+            calls.append(kwargs)
+            return [{"id": "visual", "capabilities": ["vision"]}]
+
+    assert await ImageCapabilities().supports(ChatRequest(model="visual", messages=[]), Provider())
+    assert calls == [{}]
+
+
 @pytest.mark.parametrize('serialization', ['direct', 'model_dump', 'observed_loop_envelope', 'kernel_hooks', 'live_loop_hooks'])
 async def test_selected_provider_keeps_typed_images_and_selection_on_every_boundary(saved,serialization):
     from amplifier_core import ProviderInfo, HookRegistry, HookResult
@@ -143,7 +189,7 @@ async def test_selected_provider_keeps_typed_images_and_selection_on_every_bound
             # one ULP. It must not make an exact saved-image receipt unusable.
             result['state']['createdAt']=1789888171.4219217
         return result
-    await install_app_access(coordinator,bridge)
+    await install_app_access(coordinator,bridge, execution_role='root')
     arguments={'operation':'dispatch','args':{'action':'outputs.image','args':{'id':row['id'],'sha256':row['sha256']}}}
     tool_result=await tools['app_control'].execute(arguments)
     assert 'state' not in tool_result.output

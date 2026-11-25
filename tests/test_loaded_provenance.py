@@ -1,6 +1,7 @@
 """Optional file provenance cannot become a worker readiness dependency."""
 import asyncio
 import json
+import os
 import sys
 import threading
 from types import ModuleType, SimpleNamespace
@@ -43,7 +44,7 @@ def test_mount_snapshot_only_reads_bounded_in_memory_identities(tmp_path, monkey
 async def test_worker_ready_does_not_wait_for_slow_provenance_hashing(tmp_path, monkeypatch):
     events, entered, release = [], threading.Event(), threading.Event()
     runtime = SimpleNamespace(session_id='ready-before-hashing')
-    coordinator = SimpleNamespace(get=lambda name: {} if name in {'providers', 'tools'} else None,
+    coordinator = SimpleNamespace(session_state={}, get=lambda name: {} if name in {'providers', 'tools'} else None,
                                   register_capability=Mock(), get_capability=lambda name: None)
 
     async def execute(_):
@@ -55,7 +56,7 @@ async def test_worker_ready_does_not_wait_for_slow_provenance_hashing(tmp_path, 
     monkeypatch.setattr('amplifier_web.host.config.app_home', lambda: tmp_path / 'home')
     monkeypatch.setattr('amplifier_web.worker_diagnostics.StartupCapture', Mock)
     monkeypatch.setattr('amplifier_web.host.session.prepare_manager', AsyncMock(return_value=(session, runtime, {})))
-    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args: None)
+    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args, **kwargs: None)
     monkeypatch.setattr('amplifier_web.history_revision.recover_pending', lambda *args: None)
     def make_controls(session_arg, runtime_arg, telemetry, *, preserve_configuration, tool_invocation):
         assert session_arg is session
@@ -64,7 +65,8 @@ async def test_worker_ready_does_not_wait_for_slow_provenance_hashing(tmp_path, 
         assert tool_invocation == worker.tool_invocation
         return controls
     monkeypatch.setattr('amplifier_web.runtime_controls.RuntimeControls', make_controls)
-    monkeypatch.setattr('amplifier_web.app_guidance.install_app_access', AsyncMock())
+    install_access = AsyncMock()
+    monkeypatch.setattr('amplifier_web.app_guidance.install_app_access', install_access)
     monkeypatch.setattr('amplifier_web.host.naming.LiveSessionNaming', lambda *args: None)
     monkeypatch.setattr('amplifier_web.shared_state.configuration_stamp', lambda *args, **kwargs: ())
     monkeypatch.setattr('amplifier_web.support_diagnostics.runtime_versions', lambda: {})
@@ -80,18 +82,25 @@ async def test_worker_ready_does_not_wait_for_slow_provenance_hashing(tmp_path, 
     # Exercise the production timeout path without spending six seconds in a test.
     monkeypatch.setattr(loaded_provenance, 'MAX_SECONDS', .05)
     worker = runtime_worker.Worker()
-    worker.shared_store = worker.shared_handle = SimpleNamespace()
+    worker.shared_store = worker.shared_handle = SimpleNamespace(owner={
+        'hostname': 'fixture-host', 'app': 'amplifier-unified', 'pid': os.getpid(),
+        'acquisition_id': 'fixture-acquisition'})
     worker.shared_store_stamp = lambda *args: ()
     worker.activation_gate = ActivationGate()
     worker.preparation_progress = AsyncMock()
     worker.install_collaboration_checkpoint = Mock()
     worker.history_stamp = lambda: ()
     worker.ownership.register = AsyncMock()
+    # The lightweight provenance coordinator has no native tool mounts.
+    # Desktop sponsorship is outside this readiness/explicit-role probe.
+    monkeypatch.setattr(worker.computer_episodes, 'install', Mock())
     try:
         await asyncio.wait_for(worker.start({'id': runtime.session_id, 'workspace': str(tmp_path)},
                                            raise_errors=True, recover_bundle=False), 1)
         assert any(event.get('type') == 'runtime.ready' for event in events)
         worker.ownership.register.assert_awaited_once()
+        assert install_access.await_args.args[0] is coordinator
+        assert install_access.await_args.kwargs == {'execution_role': 'root'}
         assert not entered.is_set(), 'readiness must not even schedule provenance file hashing'
         assert all(row['fileStatus'] == 'unknown' for row in worker.provenance_mount['modules'])
         assert not any('currentFileSha256' in row for row in worker.provenance_mount['modules'])

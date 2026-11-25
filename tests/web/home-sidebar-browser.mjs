@@ -92,11 +92,11 @@ try{
  report.checks.push('Six unlabeled native tick stops work with pointer and keyboard, 14d is canonical; saved 1y remains truthful through reload and arrows choose 90d/All');
  const inspectFooter=async(name)=>{
   await options.click();await expect(menu).toBeVisible();
-  for(const label of ['Automation','Activity','Settings','Send feedback','What the agent sees'])await expect(menu.getByRole('button',{name:new RegExp('^'+label)})).toBeVisible();
+  for(const label of ['Automations','Activity','Settings','Send feedback','What agents see'])await expect(menu.getByRole('button',{name:new RegExp('^'+label+'(?: \\d+ unread items)?$')})).toBeVisible();
   const box=await menu.boundingBox(),footerBox=await sidebar.locator('.a-work-footer').boundingBox();
   assert.ok(box.y>=0&&box.y+box.height<=footerBox.y+footerBox.height&&box.x>=0);
   assert.ok(await menu.evaluate(node=>{const r=node.getBoundingClientRect();return node.contains(document.elementFromPoint(r.left+r.width/2,r.top+10))}));
-  assert.ok(await menu.getByRole('button',{name:'What the agent sees',exact:true}).evaluate(node=>{const r=node.getBoundingClientRect();return node.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))}));
+  assert.ok(await menu.getByRole('button',{name:'What agents see',exact:true}).evaluate(node=>{const r=node.getBoundingClientRect();return node.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))}));
   await page.screenshot({path:join(output,name+'.png')});
   await page.keyboard.press('Escape');await expect(menu).toHaveCount(0);await expect(options).toBeFocused();
  };
@@ -181,12 +181,35 @@ try{
  // Both views use the same chat row and respect the existing path preference.
  const completed=before.state.sessions.find(row=>row.nativeIdentity==='alpha-198');
  const chatRow=()=>sidebar.locator(`.a-nav-chat[data-session-id="${completed.id}"]`).first();
- const rowStyle=()=>chatRow().evaluate(node=>({
-  height:node.getBoundingClientRect().height,
-  location:getComputedStyle(node.querySelector('.a-nav-chat-workspace')).display,
-  text:node.querySelector('.a-nav-chat-workspace').textContent,
-  status:node.querySelector('.a-navigation-status').dataset.kind
- }));
+ assert.ok(before.state.attention.sessions[completed.id],'The unchanged fixture response is unread');
+ report.rowSettlements=[];
+ const rowStyle=async()=>{
+  let sample;const observations=[];
+  try{
+   await expect.poll(async()=>{
+    sample=await chatRow().evaluate(node=>{
+     const snapshot=window.amplifier.getShellState().snapshots.chats;
+     const resource=node.closest('[data-status-group]')?'workStatusUnread':'recentNavigation';
+     const page=snapshot[resource],row=page?.items?.find(row=>row.id===node.dataset.sessionId);
+     const activity=snapshot.navigationActivityById?.[node.dataset.sessionId]||row?.activity;
+     return {height:node.getBoundingClientRect().height,
+      location:getComputedStyle(node.querySelector('.a-nav-chat-workspace')).display,
+      text:node.querySelector('.a-nav-chat-workspace').textContent,
+      status:node.querySelector('.a-navigation-status').dataset.kind,
+      resource,covered:snapshot.navigationResources?.includes(resource)===true,
+      pending:!!snapshot.navigationResourcePending?.[resource],retained:!!snapshot.navigationResourceRetained?.[resource],
+      currentKind:activity?.kind,member:!!row};
+    });
+    if(observations.length<20)observations.push(sample);
+    // An empty pending map from the previous demand is not current row coverage.
+    // The known unread fixture must be freshly projected and rendered, not
+    // accepted from the temporary "Updating status" reading copy.
+    return sample.covered&&!sample.pending&&!sample.retained&&sample.member
+     &&sample.currentKind==='unread'&&sample.status==='unread';
+   },{message:'Current unread row coverage and badge settle together',timeout:15000}).toBe(true);
+  }finally{report.rowSettlements.push(observations)}
+  const {height,location,text,status}=sample;return {height,location,text,status};
+ };
  const workspaceName=before.state.workspaces.find(row=>row.id===completed.workspaceId).name;
  const statusStyle=await rowStyle();assert.equal(statusStyle.location,'block');
  assert.equal(statusStyle.text,workspaceName);assert.equal(statusStyle.height,54);

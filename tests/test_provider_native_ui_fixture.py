@@ -1,12 +1,15 @@
 """Subprocess checks for the browser fixture's isolated metadata boundary."""
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import types
 import venv
 
+import filelock
 import pytest
 import yaml
 
@@ -68,7 +71,9 @@ else:
         raise AssertionError('Direct spawn must not reach the helper')
     if operation == 'changed-helper':
         helper.write_text('raise SystemExit("changed helper must not run")')
-    subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=environment, check=True)
+    flags = {'creationflags-nonzero': 1, 'creationflags-bool': False, 'creationflags-string': '0'}
+    options = {'creationflags': flags[operation]} if operation in flags else {}
+    subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=environment, check=True, **options)
 '''
 METADATA = '''
 def catalog():
@@ -80,6 +85,86 @@ def catalog():
 
 
 @pytest.fixture
+def synthetic_provider(monkeypatch):
+    spec = importlib.util.spec_from_file_location('native_fixture_metadata', FIXTURE)
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    module = types.ModuleType('amplifier_module_provider_native_fixture')
+    exec(compile(fixture.PROVIDER, str(FIXTURE) + ':PROVIDER', 'exec'), module.__dict__)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    return module.NativeFixtureProvider
+
+
+async def test_synthetic_provider_models_and_defaults_use_canonical_probe(synthetic_provider):
+    from amplifier_web.provider_probe import query
+    result = await query({'action': 'providers.models', 'module': 'provider-native-fixture',
+                          'config': {'default_model': 'native-model', 'reasoning_effort': 'high'}})
+    assert result['models'] == [{'id': 'native-model', 'display_name': 'Native model'}]
+    assert result['modelsSupported'] is True
+    assert result['modelsProvenance'] == 'simulated'
+    assert result['modelListInfo'] == {'version': 1, 'source': 'simulated'}
+    assert result['supports'] == {'test': False}
+    assert result['info']['defaults'] == {'model': 'native-model', 'reasoning_effort': 'high'}
+    assert result['configSchema']['fields'] == [{
+        'id': 'reasoning_effort', 'field_type': 'choice',
+        'choices': ['low', 'high', 'xhigh'], 'required': False}]
+
+
+async def test_synthetic_catalog_does_not_claim_real_provider_test(synthetic_provider):
+    from amplifier_web.provider_probe import query
+    from amplifier_web.probe_diagnostics import HostProbeFailure
+    with pytest.raises(HostProbeFailure) as caught:
+        await query({'action': 'providers.test', 'module': 'provider-native-fixture', 'config': {}})
+    assert caught.value.code == 'not-verifiable'
+
+
+async def test_metadata_provider_cannot_complete(synthetic_provider):
+    with pytest.raises(RuntimeError, match='Metadata-only provider must not execute inference'):
+        await synthetic_provider().complete(None)
+
+
+@pytest.fixture
+def presentation_owner(tmp_path):
+    import amplifier_web
+    from amplifier_web.deployment import DEFAULT_SERVER
+    from amplifier_web.instance_branding import InstanceBranding
+    spec = importlib.util.spec_from_file_location('native_fixture_presentation', FIXTURE)
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    return fixture, Path(amplifier_web.__file__).parent, InstanceBranding(tmp_path, DEFAULT_SERVER)
+
+
+def test_presentation_proof_binds_templates_producer_and_exact_generated_bytes(presentation_owner, tmp_path):
+    fixture, application, branding = presentation_owner
+    before = list(tmp_path.rglob('*'))
+    first = fixture.presentation_proof(application, branding)
+    accented = fixture.presentation_proof(application, branding, size=192, accent='abcdef')
+    assert first['document']['inputSha256'] == fixture.file_identity(application / 'static/index.html')['sha256']
+    assert first['document']['sha256'] == hashlib.sha256(
+        branding.document((application / 'static/index.html').read_text()).encode()).hexdigest()
+    assert first['document'] == accented['document']
+    assert first['producer'] == fixture.file_identity(application / 'instance_branding.py')
+    assert first['icon']['markSha256'] == accented['icon']['markSha256']
+    assert first['icon']['sha256'] != accented['icon']['sha256']
+    assert accented['icon']['sha256'] == hashlib.sha256(branding.icon(192, 'abcdef')).hexdigest()
+    manifest = json.loads((application / 'static/manifest.webmanifest').read_text())
+    assert accented['manifest']['sha256'] == hashlib.sha256(
+        json.dumps(branding.manifest(manifest, 'abcdef')).encode()).hexdigest()
+    assert first == fixture.presentation_proof(application, branding)
+    assert list(tmp_path.rglob('*')) == before, 'Expected-byte reads must not write listener settings'
+
+
+@pytest.mark.parametrize('options', [
+    {'size': 0}, {'size': 193}, {'size': True}, {'size': '192'},
+    {'accent': ''}, {'accent': 'ABCDEF'}, {'accent': 'abcdef&v=other'}, {'accent': ['abcdef']},
+])
+def test_presentation_proof_rejects_unbounded_or_ambiguous_inputs(presentation_owner, options):
+    fixture, application, branding = presentation_owner
+    with pytest.raises(ValueError):
+        fixture.presentation_proof(application, branding, **options)
+
+
+@pytest.fixture
 def isolated_catalog(tmp_path):
     if sys.platform != 'linux':
         pytest.skip('The native browser fixture requires Linux process identity')
@@ -87,9 +172,12 @@ def isolated_catalog(tmp_path):
     venv.EnvBuilder(with_pip=False, symlinks=True).create(prefix)
     python = prefix / 'bin/python'
     site = prefix / f'lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages'
-    # Only the parent's account caller imports YAML; do not expose the prepared
-    # environment's unrelated decision entrypoints to this isolated catalog.
-    (site / 'yaml').symlink_to(Path(yaml.__file__).parent, target_is_directory=True)
+    # The account caller's source import closure includes YAML and session_files'
+    # filelock. Expose only these packages, not the prepared environment's
+    # unrelated decision entrypoints or its entire site-packages.
+    for dependency in (yaml, filelock):
+        (site / dependency.__name__).symlink_to(
+            Path(dependency.__file__).parent, target_is_directory=True)
     metadata = site / 'catalog_fixture-1.0.dist-info'
     metadata.mkdir()
     (metadata / 'METADATA').write_text('Metadata-Version: 2.1\nName: catalog-fixture\nVersion: 1.0\n')
@@ -169,7 +257,10 @@ def test_isolated_catalog_matches_installed_editable_baseline(isolated_catalog):
     assert 'OPENAI_API_KEY' not in catalogs[0]['environmentNames']
 
 
-@pytest.mark.parametrize('operation', ['credentials', 'pythonpath', 'extra-argument', 'other-program', 'direct-bootstrap', 'direct-posix-bootstrap'])
+@pytest.mark.parametrize('operation', [
+    'credentials', 'pythonpath', 'extra-argument', 'other-program', 'direct-bootstrap',
+    'direct-posix-bootstrap', 'creationflags-nonzero', 'creationflags-bool', 'creationflags-string',
+])
 def test_catalog_exception_does_not_admit_other_launches(isolated_catalog, operation):
     run, root, _ = isolated_catalog
     result = run(operation)

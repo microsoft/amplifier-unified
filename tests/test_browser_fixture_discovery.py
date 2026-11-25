@@ -33,6 +33,7 @@ async def test_synthetic_discovery_uses_production_owners_without_preparation(
     monkeypatch.setattr(probe_process, 'spawn', spawn)
     original_defaults = draft_defaults.resolve_defaults
     original_probe = SetupManager.probe
+    original_routing = SetupManager.ensure_routing_catalog
     runtime = RuntimeManager()
 
     with configured_browser.synthetic_discovery():
@@ -57,6 +58,11 @@ async def test_synthetic_discovery_uses_production_owners_without_preparation(
             schema = await manager.perform('providers.schema',
                                            {'module': 'provider-fixture', 'workspace': path})
             assert schema['providerMetadata']['configSchema'] == {'fields': []}
+            # AI connections mounts routing.list as well as provider discovery.
+            # Retain real local catalog semantics without loading Foundation.
+            routing = await manager.perform('routing.list', {'workspace': path})
+            assert routing == {'matrices': [], 'active': 'balanced', 'roles': [],
+                               'routingCatalogError': None}
 
             # Retain the real configured roster and shared catalog, including
             # the catalog=True branch of the original defaults owner.
@@ -76,6 +82,7 @@ async def test_synthetic_discovery_uses_production_owners_without_preparation(
 
     assert draft_defaults.resolve_defaults is original_defaults
     assert SetupManager.probe is original_probe
+    assert SetupManager.ensure_routing_catalog is original_routing
     command.assert_not_called()
     spawn.assert_not_called()
     assert runtime.workers == {} and runtime._preparations == {}
@@ -85,11 +92,13 @@ async def test_synthetic_discovery_uses_production_owners_without_preparation(
 def test_synthetic_discovery_restores_after_failure(configured_browser):
     original_defaults = draft_defaults.resolve_defaults
     original_probe = SetupManager.probe
+    original_routing = SetupManager.ensure_routing_catalog
     with pytest.raises(RuntimeError, match='fixture failed'):
         with configured_browser.synthetic_discovery():
             raise RuntimeError('fixture failed')
     assert draft_defaults.resolve_defaults is original_defaults
     assert SetupManager.probe is original_probe
+    assert SetupManager.ensure_routing_catalog is original_routing
 
 
 @pytest.mark.parametrize('action,args', [

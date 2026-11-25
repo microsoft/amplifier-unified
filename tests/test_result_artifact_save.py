@@ -160,9 +160,11 @@ async def test_child_cannot_borrow_root_save_policy(app, tmp_path, writable):
 async def test_exact_historical_response_and_changed_provenance(app, tmp_path, writable):
     source, peer, _, args = await setup(app, tmp_path)
     declaration = (await declare(app, peer, args))['result']
-    request = app.collaboration.receipt(args['requestId'])
-    request.update(responseRevision=2, response={'responseRevision': 2, 'references': [], 'artifacts': []})
-    app.collaboration.save(args['requestId'], request)
+    # Replace through the actual revision owner so the old declaration is
+    # archived transactionally, rather than overwriting the request by hand.
+    await agent_action(app, peer, 'coordination.reply', {
+        **args, 'expectedResponseRevision': 1, 'text': 'Corrected report',
+        'references': []}, 'artifact-correction')
     result = await save(app, source, args)
     assert result['status'] == 'saved' and (tmp_path / 'saved.bin').read_bytes() == b'Original exact bytes'
     record = app.outputs.store.read(declaration['artifacts'][0]['outputId'])

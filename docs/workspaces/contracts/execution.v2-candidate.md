@@ -238,29 +238,31 @@ mutations require root authority; a child cannot relocate its enclosing task.
 
 ### Cooperative resource reservations — 2026-10-13
 
-Explicit reservations extend the existing resource lifecycle owner. Inventory
-observations remain observations; they never acquire or release a reservation.
-An exact resource key has either one exclusive holder or explicitly shared
-holders. Admission is atomic across workspace registrations in the same app
-data home. Separate app installations and resources reached under different
-keys are outside that guarantee. A reservation neither provisions infrastructure
-nor fences arbitrary shell programs, external services or filesystem writers.
+**Retired — 2026-11-12.** This heading remains the stable historical promise
+anchor. User direction supersedes the former matching-key admission, sharing,
+reconciliation, pagination and count-limit promises: remove the unnecessary
+cooperative claim mechanism rather than adding TTLs or user release chores.
+Arbitrary keys never fenced shell programs, ports or external writers.
 
-The host binds an agent reservation to its actual root/child principal. An agent
-may release or mark uncertain only its own reservation; a user may explicitly
-reconcile any retained reservation. Peer messaging grants no resource control.
-Stop, disconnect, expiry and workspace removal never imply teardown or silently
-release a held resource. Uncertain reservations continue to block new holders,
-including shared holders, until explicitly reconciled. Release relinquishes a
-claim with evidence and does not claim physical teardown.
+`workspace.resources.reservations/reserve/release/uncertain` are unsupported,
+not compatibility no-ops or synthetic release successes. The claim engine and
+its two execution quota fields are removed. Coordination context, recap,
+startup and new admission never consult old claims. Legacy held, uncertain and
+malformed claim rows and command receipts remain inert and unchanged; retirement
+does not establish physical absence or rewrite unknown historical effects.
+Existing host command receipt recovery remains authoritative, never permission
+to recreate an old claim.
 
-Stable command IDs retain their exact results across restart, including release
-and later reacquisition. Retries cannot resurrect an old reservation. Updates
-require the observed revision. Admission uses global Advanced execution limits,
-defaulting to 0 (no count ceiling) both per root (including its children) and
-per app data home. Explicit positive limits gate new acquisitions; existing held or uncertain claims remain
-readable and releasable at the limit. Reads are paginated, passive and do not
-load or resume conversations. Shared actions serve both clients and agents.
+The existing ledger path also owns real task-storage allocations and mixed
+command receipts. It is not deleted, renamed or destructively migrated.
+Disk-policy decoding ignores only the two retired quota keys without rewriting
+the file or resetting other positive limits. New payloads reject those keys;
+ordinary revision/CAS and unknown-field validation remain intact.
+
+Real allocation/native leases, runner CPU/memory/disk/count admission, managed
+inventory, external-resource accountability and exact-owner cleanup guards keep
+their existing contracts. Future resource handling belongs to the automatic
+physical owners, not another arbitrary-key registry.
 
 ### Coherent commissioned-task operation — 2026-10-13
 
@@ -597,6 +599,15 @@ provider-enforced maxima. Settled receipts replace their allowances; missing
 outcomes remain unknown. Limits cannot promise an exact spend cap. Already
 running effects may finish. Admission is serialized before provider effects.
 
+Model admission uses current explicit conversation and assignment limits with
+current execution receipts. A saved prior refusal is diagnostic evidence, not
+another policy or a veto on task continuation, peer input or yielding. A fresh
+eligible attempt rechecks those current owners regardless of input origin; it
+does not replay an admitted call, free unknown reservations, reset consumption,
+resume a deliberately paused/stopped task, or start terminal work after restart.
+A current nonrenewable refusal ends that attempt rather than spinning or
+re-notifying until policy changes.
+
 The host-wide model waiting policy defaults to no queue-count or wait-time
 ceiling (`maxWaitingCalls=0`, `waitTimeoutSeconds=0`). Positive values are optional
 operator limits. Waiting uses the existing admission queue and resumes on capacity
@@ -679,6 +690,18 @@ notifications have no lifetime count ceiling: continued work retains the origina
 request and operation identities. Each payload and result view remains bounded;
 `coordination.result` returns the latest 32 declarations without discarding older
 command receipts. This does not relax queue pressure, Stop or task budgets.
+
+The request's existing response is the canonical mutable declaration. A new reply
+command points to that response by request and operation identity; public reads
+derive its full result. Replacing the response freezes its previous revision in
+the previous reply command in the same transaction. Terminal sealing and restart
+rejection update only the current request response, not a second mutable copy.
+Notification snapshots and distinct host terminal outcomes remain separate facts.
+Existing full reply copies remain readable without startup migration; a current
+copy is read through its request's response and archived when replaced. This
+does not delete historical rows or retained artifacts. Older readers do not resolve
+new reply pointers: downgrading requires a matching-reader backup, not an assumption
+that an older app can interpret newly written command results.
 
 Existing current-protocol version-two waits stopped solely by the former automatic
 notification ceiling may recover through ordinary admission. Recovery requires the
@@ -780,9 +803,13 @@ recently admitted pending sender the next turn using durable admission order,
 with oldest pending input breaking ties. Sender selection considers the complete
 pending set; only a bounded FIFO batch of that sender’s receipts is loaded.
 Raising a limit resumes saved backpressured returns through the same guarded
-inbox without replaying accepted or unknown operations. New queued instructions
-expire after a caller-selected duration (default and maximum one day);
+inbox without replaying accepted or unknown operations. New ordinary queued
+instructions and automatic returns have no implicit expiry. An explicit
+`expiresInSeconds` chooses a deadline of up to one day;
 expiration remains an inspectable failed dependency without executing the input.
+Historical deadlines stay effective without renewal or removal. Human resume
+inputs and handoffs retain their one-day default (or a shorter explicit deadline), and
+member resume input cannot outlive the originating handoff.
 Accepted substantive inputs are never silently coalesced or dropped. Informational
 notices still do not start execution; unsupported safe-boundary delivery remains
 an adapter limitation rather than cancellation and resend. Host-retained causal
@@ -828,8 +855,7 @@ output and environment, and never provision, replay, stop or reassign resources.
 Each owner uses an indexed task-scoped page; inspecting one task must not load
 other tasks or all retained history. Browser and agents use the same read action;
 agents may inspect only their host-bound task, while users may select a workspace
-task. Cooperative reservations remain separately labelled, with no inferred link
-between a user-chosen key and a physical resource.
+task. No user-chosen claim key is inferred to own a physical resource.
 
 The initial managed inventory did not allocate dedicated scratch folders,
 databases or browser profiles; the owned-storage addition below supplies those
@@ -887,7 +913,7 @@ tools only; it does not certify custom tools, shell, browser or database access.
 
 Global execution settings accept zero for all work counts: outstanding task chats
 per source, environments per chat, pending checks per chat and installation,
-retained resources and cooperative reservations per chat and installation. Each
+retained resources per chat and installation. Each
 defaults to zero (no count ceiling), as do local and registered target backend
 running/retained instance counts. Queue wait also defaults to zero.
 Saved positive operator values are preserved. Wait zero means until Stop or

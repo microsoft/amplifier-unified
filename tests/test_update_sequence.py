@@ -15,6 +15,13 @@ class Runtime:
 
 @pytest.fixture
 async def manager(tmp_path, monkeypatch):
+    from amplifier_web.host.config import amplifier_home, write_private
+    # The shared home is not below the app home. On Windows the writer needs the folder that owns the path.
+    write_private(amplifier_home() / 'settings.yaml', json.dumps({
+        'config': {'providers': [{'module': 'provider-anthropic',
+                                 'config': {'default_model': 'fixture-model'}}]}}), owned_root=amplifier_home())
+    # The product names its data folder as the app home before it builds the service (cli.py).
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path/'app'))
     service = AppService(tmp_path/'app', Runtime(), workspace=tmp_path)
     manager = UpdateManager(service)
     service.update_manager = manager
@@ -110,6 +117,128 @@ async def test_completed_sequence_has_no_repeated_background_check(manager,monke
     async def check(**kwargs):pytest.fail('completed sequence should wait for the configured interval')
     monkeypatch.setattr(manager,'check',check)
     await manager.tick()
+
+
+@pytest.mark.parametrize('fresh',[False,True])
+async def test_public_check_does_not_offer_retained_preparation_as_retry(manager,monkeypatch,fresh):
+    from amplifier_web import update_partial
+    calls=[]
+    async def inventory(**kwargs):return [source(manager,'included')]
+    async def remote(*args,**kwargs):return 'b'*40+' refs/heads/main'
+    def retained(m,rows,*,retry_retained):
+        calls.append(retry_retained)
+    monkeypatch.setattr(manager,'inventory_sources',inventory)
+    monkeypatch.setattr(updates,'process',remote)
+    monkeypatch.setattr(update_partial,'retained_after_check',retained)
+    await manager.check(fresh=fresh)
+    # Availability projection and the health owner's retry-action read both
+    # inspect retention. Neither read grants deliberate preparation retry.
+    assert calls==[False,False]
+
+
+@pytest.mark.parametrize('case', ['changed', 'same', 'malformed'])
+async def test_configuration_only_change_is_an_ordinary_included_update(manager, monkeypatch, case):
+    from amplifier_web import runtime_environment, runtime_profiles, runtime_policy_reconciliation
+    from amplifier_web.host.config import read_config
+    from amplifier_web.builtin_behaviors import CONTEXT_INTELLIGENCE_BEHAVIOR_URI
+    home = manager.home
+    generation = 'c' * 32
+    receipt = home / 'updates/releases' / generation
+    receipt.mkdir(parents=True)
+    (manager.directory / 'active.json').write_text(json.dumps({'current': generation}))
+    config = read_config(home, home=home, global_only=True)
+    key = runtime_profiles.configuration_key(config.settings, home, receipt)
+    (receipt / 'profiles-qualified.json').write_text(json.dumps({
+        'profiles': ['work'], 'configuration': None if case == 'malformed' else key}))
+    from amplifier_web.host.config import amplifier_home, write_private
+    write_private(amplifier_home() / 'settings.yaml', json.dumps({
+        'config': config.settings['config'],
+        **({'web_bundles': {'excluded': [CONTEXT_INTELLIGENCE_BEHAVIOR_URI]}} if case != 'same' else {})}))
+    monkeypatch.setattr(runtime_environment, 'locked_sources', lambda *args: {})
+    monkeypatch.setattr(runtime_policy_reconciliation, 'pending', lambda *args: None)
+    # The existing full inventory/graph is an explicit empty seam here: this
+    # test isolates a configuration candidate, not installed-source discovery.
+    async def inventory(**kwargs):
+        rows = runtime_environment.inventory(home, installed={}, graph=[])
+        selection = update_sequence.app_selection(home)
+        for row in rows:
+            row.update(updateTier='included', appSelection=selection['witness'])
+        return rows
+    monkeypatch.setattr(manager, 'inventory_sources', inventory)
+    before = (receipt / 'profiles-qualified.json').read_bytes()
+    await manager.check()
+    u = manager.service.state['updates']
+    assert u['error'] is None
+    assert u['available'] == (1 if case == 'changed' else 0)
+    assert bool(manager.inventory) == (case == 'changed')
+    if case == 'changed':
+        row = manager.inventory[0]
+        assert row['kind'] == 'runtime environment' and row['current'] == key
+        assert row['latest'] != key and row['eligible']
+        assert u['sequence']['stage'] == 'included'
+        first = row['latest']
+        await manager.check(fresh=True)
+        assert manager.inventory[0]['latest'] == first  # no effect/retry from Check
+    assert (receipt / 'profiles-qualified.json').read_bytes() == before
+
+
+@pytest.mark.parametrize('case', ['same', 'changed', 'committed', 'rollback'])
+async def test_waiting_configuration_candidate_rechecks_selection_before_pointer_commit(manager, monkeypatch, case):
+    from amplifier_web.host.config import amplifier_home, write_private
+    from amplifier_web import update_health, __version__
+    from unittest.mock import AsyncMock
+    home = manager.home
+    target, previous = 'd' * 32, 'e' * 32
+    stage = manager.directory / 'releases' / target
+    (stage / 'shared-config').mkdir(parents=True)
+    settings = json.loads((amplifier_home() / 'settings.yaml').read_text())
+    (stage / 'shared-config/settings.yaml').write_text(json.dumps(settings))
+    witness = update_sequence.app_selection(home)['witness']
+    (stage / 'validated.json').write_text(json.dumps({
+        'hostVersion': __version__, 'generationSchema': 1, 'workerProtocol': 1,
+        'appSelection': witness}))
+    if case != 'same':
+        write_private(amplifier_home() / 'settings.yaml', json.dumps({**settings, 'routing': {'enabled': True}}))
+    pointer = {'current': target if case == 'committed' else previous, 'previous': target}
+    write_private(manager.directory / 'active.json', json.dumps(pointer))
+    before = (manager.directory / 'active.json').read_bytes()
+    manager.service.state['updates'].update(pendingRelease=target)
+    manager.diagnostics.begin('ecosystem', target)
+    promoted = []
+    monkeypatch.setattr(manager.service.runtime, 'promote_generation',
+                        lambda value, **kwargs: promoted.append(value), raising=False)
+    monkeypatch.setattr(update_health, 'refresh', AsyncMock())
+    monkeypatch.setattr(manager, 'retire_storage', AsyncMock())
+    await manager._activate(rollback=case == 'rollback')
+    if case == 'changed':
+        assert (manager.directory / 'active.json').read_bytes() == before
+        assert promoted == []
+        assert manager.service.state['updates']['phase'] == 'checked'
+        assert manager.service.state['updates']['pendingRelease'] is None
+        assert (stage / 'validated.json').is_file()
+        retired = [row for row in manager.diagnostics.state['events']
+                   if row.get('phase') == 'ecosystem-selection-retired']
+        assert len(retired) == 1 and retired[0]['status'] == 'succeeded'
+        assert not manager.diagnostics.state.get('activeFailures')
+        write_private(amplifier_home() / 'settings.yaml', json.dumps(settings))
+        manager.service.state['settings']['updates'].update(autoCheck=False, autoInstall=False)
+        await manager.tick()
+        assert promoted == []
+        async def inventory(**kwargs): return []
+        monkeypatch.setattr(manager, 'inventory_sources', inventory)
+        await manager.check()
+        assert manager.service.state['updates']['error'] is None
+        assert manager.service.state['updates']['sequence']['stage'] == 'complete'
+        # Check no longer replays the retired B candidate or creates repair debt
+        # for restored A. Graph evidence here remains an explicit health seam.
+        assert update_health.current(manager.service.state['updates'],
+            {'generation': previous, 'startedAt': 1, 'packages': set(), 'components': set()})['status'] == 'current'
+        assert retired[0] in manager.diagnostics.state['events']
+    else:
+        assert promoted == [target]
+        assert updates.active_release(home)['current'] == target
+        if case == 'committed':
+            assert (manager.directory / 'active.json').read_bytes() == before
 
 
 @pytest.mark.parametrize('action', ['app', 'install'])
@@ -210,7 +339,7 @@ async def test_missing_source_staging_verifies_exact_checked_revision(tmp_path,m
         await update_sequence.stage_missing(None,destination,row)
 
 
-@pytest.mark.parametrize('case', ['pin', 'exact', 'transport', 'interrupted'])
+@pytest.mark.parametrize('case', ['pin', 'exact', 'transport', 'command', 'interrupted'])
 @pytest.mark.parametrize('wake', ['check', 'timer'])
 async def test_checked_source_failure_retry_disposition_survives_checks_and_restart(manager, monkeypatch, case, wake):
     """Real check/install/tick/receipts; only remote I/O and costly qualification
@@ -233,6 +362,9 @@ async def test_checked_source_failure_retry_disposition_survives_checks_and_rest
     monkeypatch.setattr(updates, 'process', remote)
     monkeypatch.setattr(updates, 'foundation_home', lambda home: home/'absent')
     monkeypatch.setattr(session_files, 'amplifier_home', lambda: manager.home/'absent-shared')
+    from amplifier_web.host.config import amplifier_home, write_private
+    write_private(manager.home/'absent-shared/settings.yaml',
+                  (amplifier_home()/'settings.yaml').read_text())
     async def build(*args):
         return {'mode': 'worker', 'reason': 'fixture', 'activation': 'per-worker'}
     monkeypatch.setattr(update_plan, 'build', build)
@@ -240,6 +372,9 @@ async def test_checked_source_failure_retry_disposition_survives_checks_and_rest
     async def preflight():
         if case == 'transport':
             raise TimeoutError('private endpoint must not enter diagnostics')
+        if case == 'command':
+            from amplifier_web.update_diagnostics import CommandFailure
+            raise CommandFailure({'exitCode':1,'stderrBytes':10611})
         if case == 'interrupted':
             raise asyncio.CancelledError()
         selected = {'url': row['url'], 'ref': 'main', 'revision': 'a'*40,
@@ -267,7 +402,7 @@ async def test_checked_source_failure_retry_disposition_survives_checks_and_rest
     assert not updates.active_release(manager.home)
     diagnostic = manager.diagnostics.state
     failure = copy.deepcopy(diagnostic['lastFailure'])
-    mode = 'inspect' if case == 'interrupted' else 'backoff' if case == 'transport' else 'changed-inputs'
+    mode = 'inspect' if case == 'interrupted' else 'changed-inputs'
     assert diagnostic['batch']['retry']['mode'] == mode
     if case in {'pin', 'exact'}:
         assert failure['package'] == 'amplifier-foundation'
@@ -293,7 +428,12 @@ async def test_checked_source_failure_retry_disposition_survives_checks_and_rest
         with pytest.raises(ValueError, match='not replayed'):
             await manager.install()
         return
-    manager.diagnostics.state['batch']['retry']['retryAt'] = 0
+    # Legacy saved deadlines/counters confer no new preparation authority.
+    if case in {'transport','command'}:
+        manager.diagnostics.state['batch']['retry'].update(mode='backoff',retryAt=0,attempts=100)
+        await manager.publish()
+        manager.diagnostics = UpdateDiagnostics(manager)
+    first_candidates=set((manager.directory/'releases').iterdir())
     if case == 'transport' and wake == 'timer':
         settings = manager.service.state['settings']['updates']
         sequence = manager.service.state['updates']['sequence']
@@ -308,11 +448,12 @@ async def test_checked_source_failure_retry_disposition_survives_checks_and_rest
         sequence.pop('manualHandoff')
     if wake == 'check':
         await manager.check()
-    await manager.tick()
-    assert len(calls) == (2 if case == 'transport' else 1)
-    if case == 'transport':
-        assert manager.diagnostics.state['batch']['retry']['attempts'] == 2
-        return
+    for _ in range(10):
+        # Advance beyond any legacy retry delay, including after public Check.
+        monkeypatch.setattr(time,'time',lambda:10**12)
+        await manager.tick()
+    assert len(calls) == 1
+    assert set((manager.directory/'releases').iterdir())==first_candidates
     # Unrelated publication/credential settings do not change the source graph.
     manager.service.state['configurationRevision'] = manager.service.state.get('configurationRevision', 0) + 1
     await manager.check()
@@ -393,6 +534,8 @@ async def test_qualification_configuration_repair_rechecks_same_sources(manager,
         'config':{'value':'${UNIFIED_MISSING_FIXTURE_VALUE}'}}]}}
     if repair=='bundle-key-file':
         settings={}
+    settings.setdefault('config', {})['providers'] = [
+        {'module': 'provider-anthropic', 'config': {'default_model': 'fixture-model'}}]
     def save():host_config.write_private(shared/'settings.yaml',yaml.safe_dump(settings))
     save()
     row={**source(manager, 'included'),'kind':'runtime dependency','package':'amplifier-foundation'}
@@ -452,7 +595,7 @@ async def test_qualification_configuration_repair_rechecks_same_sources(manager,
     await manager.check();await manager.tick()
     assert len(attempts)==2 and len(prepared)==1
     assert prepared[0]==[] if repair=='override-disabled' else prepared[0][0]['config']['value']=='repaired'
-    assert manager.diagnostics.state['batch']['retry']['mode']=='backoff'
+    assert manager.diagnostics.state['batch']['retry']['mode']=='changed-inputs'
     assert first in manager.diagnostics.state['events']
     assert not updates.active_release(manager.home)
 
@@ -469,7 +612,9 @@ async def test_active_profile_repair_rechecks_same_registered_candidates(manager
     shared=manager.home/'shared';shared.mkdir()
     monkeypatch.setattr(host_config,'amplifier_home',lambda:shared)
     monkeypatch.setattr(session_files,'amplifier_home',lambda:shared)
-    settings={'bundle':{'active':'unsupported','added':{'unsupported':'fixture:unsupported'}}}
+    settings={'bundle':{'active':'unsupported','added':{'unsupported':'fixture:unsupported'}},
+              'config': {'providers': [{'module': 'provider-anthropic',
+                                       'config': {'default_model': 'fixture-model'}}]}}
     def save():host_config.write_private(shared/'settings.yaml',yaml.safe_dump(settings))
     save()
     row={**source(manager, 'included'),'kind':'runtime dependency','package':'amplifier-foundation'}

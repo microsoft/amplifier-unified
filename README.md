@@ -1,318 +1,212 @@
 # Amplifier Unified
 
-Amplifier Unified is a local, authenticated workspace for Amplifier. It provides a web app for chat, voice, and work with your configured Amplifier bundles and tools.
+Amplifier Unified is a local workspace for working with AI. Chat or talk with an
+assistant, give it tasks, and follow its work across conversations, tools, and
+shared visual surfaces. It uses your configured Amplifier bundles and model accounts.
 
-## Writing messages
+Explore the [Amplifier Unified website](https://unified.amplifier.ms/) for examples and getting started.
 
-The chat input formats Markdown as you type: `**bold**`, `_emphasis_`,
-`~~strikethrough~~`, headings with `# `, and lists with `* ` or `1. `.
-Type three backticks, optionally a language such as `python`, then **Enter**
-or **Space** to open a code block. **Enter inside code inserts a newline and
-keeps the line's indentation; it never sends.** Use **Alt+Enter** to leave the
-block, or the Send button to send it. Undo restores the typed fence.
+## Install
 
-Outside literal blocks, press **Enter** to send, or **Shift+Enter**
-or **Ctrl+Enter** to continue writing. In a list, these continue the list;
-**Backspace** at the beginning of an empty item returns to a paragraph.
-Undo and redo work as usual. Pasted images remain attachments, and pasted text
-longer than 10,000 characters becomes a **Pasted text** attachment.
+Choose your computer: [macOS or Linux](#macos-and-linux), or
+[Windows 11 (preview)](#windows-11-preview).
 
-Select text to use the compact formatting controls: link, bold, italic, inline
-code, strikethrough, headings, lists, task lists, ordinary block quotes and code
-blocks. **Alt+F10** focuses these controls; **Escape** returns to the selection.
-Right-click still opens the browser's copy, paste and spelling menu. The app does
-not replace those native controls.
+### macOS and Linux
 
-The composer reuses CommonMark and the reader's GitHub Flavored Markdown (GFM)
-grammar. Tables, task lists, strikethrough and safe links have rich representations.
-Where the rich representation would change GFM meaning, it keeps editable
-**Markdown source** instead. Reference definitions, footnotes, alerts, math,
-front matter, raw HTML and CRLF input use this literal representation.
-Markdown source is not a rendered preview: its punctuation remains visible.
-Rich editing may normalize equivalent Markdown delimiters and spacing.
-GitHub website features such as mentions, issue references and emoji shortcodes
-remain notation, with no GitHub account lookup. Diagram fences remain literal
-code in the editor. Images are inert references; raw HTML never executes.
+The installer supports **macOS and Linux**, including **Windows through WSL with
+systemd**.
 
-Reply adds a saved quotation inside the composer without sending or moving your
-reading position. Add several messages, or select text and choose **Quote
-selection** beside the selected text. Formatted passages, simple lists, links
-and literal code retain exact source spans. Selections that cannot be mapped
-exactly (such as transformed entities or complex blocks) show an explanation
-without adding a quote or opening a source editor.
-Write before, between and after quotes. Quote controls move or remove only that
-quote; commentary and attachments stay. Long quotes expand to show their full
-text. Quotes are immutable historical references, not new instructions.
-Quote drafts have a larger viewport-bounded writing area; source and move/remove
-controls remain reachable while scrolling within a quote.
-
-This first increment quotes supported saved messages in the current chat only.
-It rejects oversized or ambiguous selections instead of silently expanding or
-truncating them. Corrections to a sent quoted message use a new reply; ordinary
-plain-message editing is unchanged.
-
-### Choose settings before resuming a chat
-
-The conversation's model and bundle controls save **Next message** choices
-without starting its worker. You can read history, browse saved artifacts and
-rename the chat while preparation is unavailable. Saved choices are not a claim
-that the runtime has applied them. The next genuine input validates the selected
-bundle, provider, model and effort before delivery; a failed check keeps the
-choices and does not silently substitute another model. Active work and unresolved
-configuration operations keep their existing guards. Automatic prewarming is not enabled.
-
-### Collapse interim replies (experimental)
-
-In **Settings → Appearance**, enable **Collapse interim replies** to move earlier
-assistant updates into the existing work details after a confirmed final response.
-It is off by default and applies to this browser. Expand the disclosure to read,
-copy, or reply to those messages; exports retain the complete conversation.
-The explicit option also collapses these groups at the Everything detail level,
-but preserves details you opened manually. Active, interrupted, or unqualified
-older turns remain visible. Turning the option off restores normal placement.
-
-## Set up Unified on your computer
-
-On a fresh **Ubuntu or Debian** computer (including WSL), first install the
-download prerequisites together:
+You need Git, curl, and CA certificates. On Ubuntu or Debian, install them with:
 
 ```sh
 sudo apt-get update && sudo apt-get install -y curl git ca-certificates
 ```
 
-On **macOS**, install Apple's command line tools if Git is not already available:
-`xcode-select --install`. Other Linux distributions need curl, Git, and CA
-certificates from their package manager.
-
-Then, for macOS and Linux (including WSL with systemd), paste this into your terminal:
+On macOS, run `xcode-select --install` if Git is not already available. Then run
+the installer as your normal user, without sudo:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/microsoft/amplifier-unified/main/scripts/install.sh | bash
 ```
 
-The installer finds or installs uv and Python, verifies the latest stable release,
-installs Unified, starts its per-user service, and opens your browser. Git and curl
-must be available. Existing Amplifier CLI configuration, accounts, and history are
-kept. Run the Amplifier installer as your normal user, without sudo. You do not
-need to install uv or Python yourself, reopen your terminal, or reboot.
+It finds or installs uv and Python, installs the latest stable release, starts
+Amplifier Unified as a per-user service, and opens your browser. Existing Amplifier
+configuration, accounts, and history are preserved. For manual installation, see
+the [platform and recovery instructions](docs/DEPLOYMENT.md#manual-installation).
 
-For more detail, add `-s -- --verbose` after `bash`. Use `--version 0.20.101`
-for a specific stable release or `--no-open` to print the address without opening
-a browser. Installation logs are private and their location is printed.
+### Windows 11 (preview)
 
-In the web app, connect an AI account if needed. You can finish setup with an
-assistant alongside Settings, or go straight to a new chat. Component preparation
-continues there with expandable details; errors remain visible for review.
+This is a preview. The setup file is not signed yet, so your browser asks you to
+confirm the download. You do not need WSL, Python, Git or a terminal. The steps
+below describe Microsoft Edge.
 
-To manage prerequisites and package installation yourself, use the instructions
-below with [uv](https://docs.astral.sh/uv/). Select Python **3.13** explicitly,
-as the installer does. A newer system Python can lack prebuilt dependency wheels
-and trigger compiler errors; you do not need to remove or downgrade it.
-`uv` can download the requested Python into its own managed installation.
+1. Download the setup file:
+   [AmplifierUnifiedSetup-windows-x64.exe](https://github.com/microsoft/amplifier-unified/releases/latest/download/AmplifierUnifiedSetup-windows-x64.exe).
+2. Microsoft Edge holds the download and says that the file "isn't commonly
+   downloaded". In the Downloads list, point at the file and select
+   **More actions (…)**, then **Keep**. Edge then shows "Publisher: Unknown".
+   Select the small arrow next to **Delete**, then **Keep anyway**.
+3. Open the file: select **Open file** in the Downloads list, or double-click
+   the file in your Downloads folder. Do not use "Run as administrator". Select
+   **OK** to install. Setup takes about 3 minutes. Select **OK** when it has
+   finished.
+4. Amplifier starts. The first start can take a few minutes. Amplifier shows one
+   message; select **OK**. Windows then shows a "Security Warning" that asks
+   whether to install a certificate named "Amplifier Unified (this PC only)".
+   Select **Yes**. Windows preselects **No**, so do not only press Enter.
+   Amplifier uses this certificate only for the connection between your browser
+   and Amplifier on this PC. Amplifier then opens in your browser.
+5. Connect an AI account in the app. If Microsoft Edge offers to save your key
+   as a password, select **Not now**.
 
-**Native Windows is not yet supported.** The Bash installer is for macOS,
-Linux and WSL, not PowerShell. Package installation alone does not establish
-native sign-in, worker readiness or safe background startup.
-The [conditional foreground trial runbook](docs/design/native-windows-installation.md#conditional-foreground-trial-runbook)
-describes an isolated PowerShell trial **without WSL**, but awaits an exact
-qualified, browser-activated candidate from the Windows trial owner. It is not
-a command to run the current public release. The native installer, default
-background launcher and Task Scheduler path remain unqualified.
-For the zero-developer-tool-prerequisite work, see the
-[explicit Windows bootstrap prototype](docs/design/native-windows-installation.md#zero-prerequisite-bootstrap-prototype).
-It uses a reviewed candidate manifest and private portable tools, not a claim
-that the public Windows installer is enabled.
+Your first message takes longer than later ones (about a minute in our test).
+Amplifier shows "Preparing chat…" during that time.
+
+To open Amplifier later, use the Start menu: **Amplifier Unified**.
+
+In these cases, setup or the first start does not finish. A message says what
+to do:
+
+- Setup says: "This Windows sign-in runs every program as administrator."
+  Sign in to Windows with a standard account, or turn User Account Control
+  on, and then run setup again.
+- Setup says that the path of the Amplifier folder "is too long for Windows"
+  (the limit is 59 characters). Use a Windows account with a shorter name.
+- In step 4, Amplifier says that "this PC's security settings do not let it
+  finish setting up its private connection to your browser". If your
+  organization manages this PC, ask its IT support to trust the certificate
+  file named in the message for your account.
+
+Limits of this preview:
+
+- **PC:** Windows 11 with an Intel or AMD processor. ARM processors are not
+  supported yet.
+- **Account:** Amplifier installs for your own Windows account only. It does not
+  need administrator rights.
+- **Folder:** Amplifier installs into `%LOCALAPPDATA%\Amplifier` and keeps your
+  chats, settings and accounts there. What a chat writes outside that folder
+  depends on the AI connection:
+  - **OpenAI API:** after a chat in our tests on a PC, we looked for a file
+    or folder with "amplifier" in its name. We looked directly in the usual
+    places of the Windows account, such as the profile folder, AppData,
+    Documents and the Desktop. Outside the folder, we found only one that
+    Amplifier made: the Start-menu entry from setup. We did not look inside
+    other folders there or on the rest of the disk.
+  - **Anthropic API:** up to version 0.106.2, a chat writes one small file
+    outside the folder: `%USERPROFILE%\.amplifier\rate-limit-state.json`. We
+    saw this in a test on a PC. From version 0.106.3 on, Amplifier writes
+    that file inside the folder instead. We tested a new installation of
+    version 0.106.3 on a PC with one chat and one "Send test message" check
+    of the connection. Both wrote the file inside the folder. The folder
+    `%USERPROFILE%\.amplifier` did not appear. A file that an earlier
+    version wrote stays where it is. Later versions do not use it, and
+    uninstall does not remove it. You can delete it.
+  - **GitHub Copilot Subscription:** its component makes two folders,
+    `%USERPROFILE%\.amplifier-provider-github-copilot` and
+    `%LOCALAPPDATA%\amplifier-provider-github-copilot`. We read this in its
+    source code. We have not tested it on a PC.
+  - **ChatGPT Subscription**, **Google Gemini API** and
+    **OpenAI Compatible API:** we have not tested this.
+- **Uninstall:** open **Settings > Apps > Installed apps**, find
+  **Amplifier Unified (unsigned preview)**, select **More options (…)**, then
+  **Uninstall**, then **Uninstall** again. Amplifier first asks: "Do you also
+  want to delete your chats, settings and saved accounts?"
+  - **No** uninstalls Amplifier and keeps the folder. Your chats, settings and
+    accounts stay there, together with the program files (1.4 GB to 1.9 GB in
+    our tests).
+  - **Yes** leads to a second question: "Delete everything that Amplifier keeps
+    in this folder?" **Yes** there uninstalls Amplifier and deletes your chats,
+    settings, saved accounts and stored keys, the files that Amplifier or you
+    saved in its workspace folder, and the program files. This cannot be
+    undone. **No** there changes nothing.
+  - **Cancel** changes nothing. Amplifier stays installed.
+
+  These are the results of an uninstall that finishes. If Amplifier finds that
+  it is working on a chat, it asks before it stops that work. An uninstall
+  stops Amplifier and removes it from the Start menu and the Apps list. If
+  Windows asks whether to delete a certificate, select **Yes** each time.
+
+  After a delete, Amplifier says "Amplifier is uninstalled." When you close
+  that message, it starts to remove its last program files and then the
+  folder. A file or folder directly in the Amplifier folder whose name
+  Amplifier does not use stays, and then the folder stays too. If that last
+  step does not finish, the folder stays, and some program files can stay in
+  it.
+
+  An uninstall can stop before its end. If Amplifier then shows a message,
+  the message says what happened and what to do next. If it says that
+  Amplifier "could not begin to delete its folder", that uninstall deleted
+  nothing in the folder. If it says that Amplifier "could not finish its
+  removal from this PC", or that some of your chats, settings or saved
+  accounts "could not be deleted", a part of the folder can already be
+  deleted: do not open Amplifier, and uninstall again. At that next uninstall,
+  the first question can be another one: "The removal of Amplifier from this
+  PC did not finish." **Yes** there leads to the second question above, and
+  **No** changes nothing.
+
+  Amplifier can also ask only "Uninstall Amplifier?" with **Yes** and **No**,
+  for example in an installation from an earlier setup file. There, **Yes**
+  uninstalls and leaves the folder, and **No** changes nothing.
+
+The [native Windows design and status](docs/design/native-windows-installation.md)
+records what is tested.
+
+## Start a conversation
+
+1. Sign in to Amplifier Unified in the browser and connect a model account if needed.
+2. Choose a workspace and start a chat. You can finish setup with an assistant
+   or use **Settings**.
+3. Describe the outcome you want. Review progress and results in the conversation.
+
+The first message can take a few minutes while Amplifier Unified prepares its runtime.
+On macOS and Linux, you can reopen the workspace at
+[http://127.0.0.1:8941](http://127.0.0.1:8941). On Windows 11, open
+**Amplifier Unified** from the Start menu.
+
+Use **Enter** to send and **Shift+Enter** for a new line. You can format messages
+with Markdown and attach files or images. In a code block, Enter inserts a line;
+use the Send button to submit the message.
+
+## Use Amplifier Unified your way
+
+- **Settings:** choose models, bundles, and capabilities. [Settings guide](docs/SETTINGS.md).
+- **Updates:** open **Settings → Updates** to check for a release or configure automatic checks. [Update guide](docs/UPDATES.md).
+- **Another device:** configure a trusted HTTPS address for LAN or Tailscale access. [Deployment guide](docs/DEPLOYMENT.md).
+- **An app window:** use your browser's install option, Safari's **Add to Dock**, or **Add to Home Screen**. Amplifier Unified must remain running at the same address.
+- **Recovery:** use the [reset guide](docs/RESET.md) to repair an installation while preserving your data.
+
+## Develop Amplifier Unified
+
+See [development setup and contribution guidance](CONTRIBUTING.md) to work from
+source. Published packages include the web client; only frontend development
+requires Node.js and npm. Browser client source is maintained in
+[amplifier-client-web](https://github.com/microsoft/amplifier-client-web).
+
+For integrations, see [Amplifier Unified as an ACP backend](docs/architecture/unified-acp-backend.md)
+and the [architecture guide](docs/architecture/README.md).
+
+
+<!-- ecosystem-map:start -->
+## Where this fits
+
+A complete AI workspace with its own web host, selected browser client, and configurable Amplifier execution.
+
+Roles: Experience, Conversation. Supports: Agent Instance, Tool, Connection.
+
+![Ecosystem roles and component relationships](docs/ecosystem-map.svg)
+
+[Product website](https://unified.amplifier.ms/) · [Ecosystem map](https://microsoft.github.io/amplifier-constellation/projects/amplifier-unified/) · [Open the map](docs/ecosystem-map.svg) · [Map guide](https://github.com/microsoft/amplifier-constellation/blob/main/docs/ecosystem-maps.md)
 
 <details>
-<summary><strong>Linux</strong></summary>
+<summary>The five shared building blocks</summary>
 
-Install Unified, then set it up as a background service:
-
-```sh
-uv tool install --python 3.13 git+https://github.com/microsoft/amplifier-unified@v0.20.101
-amplifier-unified
-```
-
-Open [http://127.0.0.1:8941](http://127.0.0.1:8941) and sign in with the
-account that runs Unified.
+[![Experience, Conversation, Agent Instance, Connection and Tool](https://raw.githubusercontent.com/microsoft/amplifier-constellation/main/site/assets/art/building-blocks.png)](https://microsoft.github.io/amplifier-constellation/)
 
 </details>
 
-<details>
-<summary><strong>Windows with WSL</strong></summary>
-
-Use a Linux distribution in WSL with systemd enabled. In the WSL distribution,
-add this to `/etc/wsl.conf`:
-
-```ini
-[boot]
-systemd=true
-```
-
-From Windows PowerShell, restart WSL:
-
-```powershell
-wsl --shutdown
-```
-
-Open WSL again, then install Unified and set it up as a background service:
-
-```sh
-uv tool install --python 3.13 git+https://github.com/microsoft/amplifier-unified@v0.20.101
-amplifier-unified
-```
-
-Open [http://127.0.0.1:8941](http://127.0.0.1:8941) in your Windows browser
-and sign in with the account that runs Unified.
-
-</details>
-
-<details>
-<summary><strong>macOS</strong></summary>
-
-Install Unified, then set it up as a background service:
-
-```sh
-uv tool install --python 3.13 git+https://github.com/microsoft/amplifier-unified@v0.20.101
-amplifier-unified
-```
-
-Open [http://127.0.0.1:8941](http://127.0.0.1:8941) and sign in with the
-account that runs Unified.
-
-</details>
-
-The first launch sets up and starts your background service, waits until it responds,
-and opens your browser. Later launches reuse it. To run only in the current
-terminal, use `amplifier-unified serve`. Package installation alone does not
-register a service. On macOS, the background activity notification confirms
-registration; the launcher separately checks that the app responds.
-
-The first message can take a few minutes while Unified prepares its runtime.
-
-Published wheels and source archives (`.tar.gz` release assets) include the built
-web client. Installing either format needs no Node.js, npm or frontend download;
-Python and runtime dependencies are still resolved normally. A raw Git checkout
-is a development source tree: rebuilding or changing its client requires Node.js
-and npm. See the [development setup](CONTRIBUTING.md#development-setup) and
-[web client ownership guide](components/README.md). Client source and tests are
-maintained in [amplifier-client-web](https://github.com/microsoft/amplifier-client-web);
-Unified selects and packages a tested component with its host.
-
-After installation, open **Settings → Updates** to check for and install updates,
-review any failed checks, or choose the automatic check interval. See the
-[update guide](docs/UPDATES.md) for active-work handling and recovery details.
-
-For opt-in, read-only local observations shared with CLI tools, see the
-[status emitter guide](docs/status-emitter.md). Publication is disabled by default.
-
-## Default capabilities
-
-Ordinary conversations compose Unified shell, image generation, Computer Use,
-full Context Intelligence, and Model Routing over the selected root bundle.
-Existing explicit capability lists gain the latter four unless opted out;
-chosen source revisions and list order are retained. Saved snapshot bundles
-are complete plans and do not gain these additions.
-
-Use **Settings → Configured bundles** to disable or remove a default. A retained
-routing-matrix setting does not re-enable a disabled routing behavior. The
-Context Intelligence opt-out removes its analysis/navigation capabilities;
-Unified's existing local capture hook remains.
-
-New Computer Use access is read-only. It targets the **host computer**, not the
-browser's shared screen. Explicit module configuration can enable writes with
-`overrides.tool-computer-use.config.read_only: false`; existing explicit access
-settings remain authoritative. Child sessions cannot widen a parent's desktop
-restrictions.
-
-Context Intelligence forwarding requires explicit destination configuration;
-ambient server credentials alone do not enable it. Explicit routing matrices,
-agent provider choices, and per-delegation model pins take precedence over
-default role routing. When only automatically added routing has no candidate,
-the child inherits the conversation's selected provider, model, and effort
-(retaining that snapshot on resume). If there is no selected model to inherit,
-the delegation fails visibly. Explicit matrices, including an explicitly chosen
-`balanced` matrix or a user-authored override, remain strict, as do unavailable
-provider/model pins and resolver errors. A saved explicit app-behavior list is
-treated as explicit routing when its original intent is ambiguous.
-An effective-plan edit containing `hooks` also makes routing explicit, even if
-the hook values are unchanged. A custom child orchestrator that cannot apply the
-inherited selection fails visibly rather than substituting another model.
-
-For ordinary roots already including the upstream logging behavior, its ambient
-URL/key placeholders alone no longer opt into forwarding; configure a destination
-or explicit scoped legacy URL/key settings. An explicit empty destination map
-still disables forwarding. A named agent's explicit provider/model pin also
-outranks a call's role-based default; pass explicit `provider_preferences` to
-override that pin. Snapshot roots retain their saved composition and prior
-routing lifecycle rather than adopting this ordinary-root policy.
-
-## Create a dedicated desktop or mobile app
-
-You can add Unified to a desktop or mobile device as its own app-like window or home-screen icon. This does not install or move the Unified service; it opens the same workspace more directly.
-
-After opening Unified in a browser:
-
-- **Chrome or Edge:** use the install icon in the address bar or the browser's install menu.
-- **Safari on macOS:** choose **File → Add to Dock**.
-- **Safari on iPhone or iPad:** choose **Share → Add to Home Screen**.
-
-This works on desktop and mobile platforms supported by your browser. Unified must keep running at the same address.
-
-## Access Unified over your LAN or Tailscale
-
-<details>
-<summary><strong>Set up access from another device</strong></summary>
-
-Unified listens only on `127.0.0.1:8941` by default. To use it from another
-device, configure trusted HTTPS with the exact address you will use:
-
-```sh
-amplifier-unified config set public_origins '["https://your-host.tailnet.ts.net:8941"]'
-amplifier-unified setup-tls
-amplifier-unified config set bind '["100.64.0.10", "127.0.0.1"]'
-amplifier-unified doctor
-```
-
-Replace the example origin and Tailscale IP with your host's real addresses. Before opening the remote address, export Unified's public CA on the host, verify its fingerprint with `amplifier-unified setup-tls status`, and trust that CA on each device. Do not disable certificate checks.
-
-For the complete setup—including certificate transfer and trust, reverse-proxy limits, and Linux service management—see the [deployment guide](docs/DEPLOYMENT.md).
-
-</details>
-
-<details>
-<summary><strong>Repair a broken installation</strong></summary>
-
-First, get the latest recovery command:
-
-```sh
-uv tool install --force --python 3.13 git+https://github.com/microsoft/amplifier-unified@main
-```
-
-Then preview the repair or run it:
-
-```sh
-amplifier-unified reset --dry-run
-amplifier-unified reset
-```
-
-Reset reinstalls Unified while keeping your chats, settings, sign-ins, and files.
-It handles stopping and restarting the app, then runs the installation and service
-checks for you. Allow a few minutes. Public releases do not require GitHub sign-in.
-Use `reset --anonymous` if personal Git configuration or organization sign-in
-policy prevents public downloads. [More recovery options](docs/RESET.md).
-
-</details>
+<!-- ecosystem-map:end -->
 
 ## Contributing
-
-Review the [repository privacy guidance](CONTRIBUTING.md) before publishing
-examples, diagnostics or screenshots.
-
-The [AHP/ACP architecture design packet](docs/architecture/README.md) describes
-the proposed protocol boundaries, client-local state, bounded history discovery
-and repository decomposition. It includes ratified vision/contracts and parallel
-implementation lanes; it is not a claim about current release capabilities.
 
 > [!NOTE]
 > This project is not currently accepting external contributions, but we're actively working toward opening this up. We value community input and look forward to collaborating in the future. For now, feel free to fork and experiment!

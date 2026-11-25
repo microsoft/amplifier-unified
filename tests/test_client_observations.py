@@ -96,11 +96,7 @@ async def test_205_approvals_in_one_chat_are_all_retrievable(observation_host):
     row['approvals'] = [{'id': str(i)} for i in range(205)]
     rows = await traverse(client, '/api/attention', {'limit': '200'})
     assert len(rows) == len({r['id'] for r in rows}) == 205
-    legacy = await (await client.get('/api/companion')).json()
-    assert legacy['attentionCount'] == 205 and legacy['itemsTruncated']
-    rest = await (await client.get('/api/companion', params={'itemsCursor': legacy['itemsNextCursor']})).json()
-    assert len(rest['items']) == 5 and not rest['itemsTruncated']
-    assert (await client.get('/api/companion?offset=200')).status == 400
+
 
 
 async def test_lifecycle_and_delegate_semantics_shared_with_navigation(observation_host):
@@ -125,8 +121,7 @@ async def test_lifecycle_and_delegate_semantics_shared_with_navigation(observati
     assert [r['id'] for r in delegate] == ['s4']
     assert activity(rows[0])['kind'] == 'idle'
     assert activity(rows[1])['label'] == 'Preparing'
-    legacy = await (await client.get('/api/companion')).json()
-    assert legacy['workingCount'] == 1
+
 
 
 async def test_cursors_preserve_snapshots_and_reject_changed_query_and_malformed_parameters(observation_host):
@@ -620,12 +615,42 @@ async def test_agent_creation_classification_is_shared_with_navigation(observati
     assert {row['id']: row['agentCreated'] for row in sessions} == {'s0': False, 's1': True, 's2': False}
     notices = await traverse(client, '/api/attention', {})
     assert all(row['agentCreated'] == (row['target']['sessionId'] == 's1') for row in notices)
-    response = await client.get('/api/companion')
-    assert response.status == 200
-    adapter = await response.json()
-    assert next(row for row in adapter['sessions'] if row['id'] == 's1')['agentCreated']
-    assert all(row['agentCreated'] == (row['sessionId'] == 's1') for row in adapter['items'])
     rows[1].pop('collaboration')
     service.projections.invalidate()
     changed = await traverse(client, '/api/sessions', {'view': 'observation'})
     assert not any(row['agentCreated'] for row in changed)
+
+
+@pytest.mark.parametrize('count', [8, 230])
+async def test_session_observation_prepares_live_rows_once_and_observes_next_poll_edits(observation_host, monkeypatch, count):
+    from amplifier_web import history_directory
+    app, client = observation_host
+    service = app['service']
+    catalog(service, count)
+    rows = service.state['sessions']
+    prepared = []
+    original = history_directory._scalars
+
+    def scalar(row, *args, **kwargs):
+        prepared.append(row['id'])
+        return original(row, *args, **kwargs)
+
+    monkeypatch.setattr(history_directory, '_scalars', scalar)
+    first = await client.get('/api/sessions?view=observation&activity=active-or-pinned&limit=50')
+    assert first.status == 200
+    before = await first.json()
+    assert prepared == [row['id'] for row in rows]
+    assert len(before['items']) == min(count, 50)
+    assert all(not row['activity']['execution'] for row in before['items'])
+
+    # No publication/revision bump: another request must still see fresh facts.
+    rows[0].update(title='Changed between polls', status='working')
+    prepared.clear()
+    second = await client.get('/api/sessions?view=observation&activity=active-or-pinned&limit=50')
+    assert second.status == 200
+    after = await second.json()
+    assert prepared == [row['id'] for row in rows]
+    changed = next(row for row in after['items'] if row['id'] == 's0')
+    assert changed['title'] == 'Changed between polls' and changed['activity']['execution']
+    assert after['revision'] != before['revision']
+    assert service.directory._read_frame.get() is None

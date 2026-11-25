@@ -65,6 +65,16 @@ try {
  const panel=page.locator('#workspace-canvas'),overview=page.getByRole('region',{name:'Chat overview',exact:true});
  const overviewTab=panel.getByRole('tab',{name:'Chat overview',exact:true}),editableTab=panel.getByRole('tab',{name:'Editable artifact',exact:true});
  const toggle=page.locator('#canvas-toggle');
+ const navigation=async value=>{
+  const menu=panel.locator('.a-canvas-more');
+  if(!await menu.evaluate(el=>el.open))await menu.locator('summary').click();
+  await menu.getByRole('combobox',{name:'Canvas navigation',exact:true}).selectOption(value);
+  await expect(panel).toHaveAttribute('data-navigation-preference',value);
+  await page.keyboard.press('Escape');
+  await toggle.focus();
+  if(value!=='auto')await expect(panel).toHaveAttribute('data-navigation',value);
+ };
+ await navigation('tabs');
  const manifest={id:'example.dirty-editor',label:'Unsaved editor',version:'1.0.0',apiVersion:'1.0',profile:'trusted-native-renderer-v1',stateSchema:'canvas-view-v1',resourceKinds:['markdown'],capabilities:['canvas.resource.read','canvas.view.update']};
  // The edit deliberately lives only in React state, exercising the public dirty contract.
  const source='export default ({React})=>function Editor({host}){const [text,setText]=React.useState("");const [mount]=React.useState(()=>crypto.randomUUID());return React.createElement("label",null,"Unsaved renderer edit",React.createElement("input",{"data-mount":mount,value:text,onChange:event=>{setText(event.target.value);host.setDirty(true)}}))}';
@@ -86,9 +96,9 @@ try {
  await primary.fill('PRIMARY UNSAVED EDIT');
  await expect.poll(()=>dirtyHeld).toBe(true);
  const overtaken=page.waitForRequest(request=>isAction(request)&&unwrap(request.postDataJSON()).action==='session.select',{timeout:250}).then(()=>true,()=>false);
- const navigation=action('session.select',{id:otherSession}).then(()=>({accepted:true}),error=>({error:error.message}));
+ const pendingNavigation=action('session.select',{id:otherSession}).then(()=>({accepted:true}),error=>({error:error.message}));
  try{assert.equal(await overtaken,false,'Navigation must wait for the preceding dirty declaration')}finally{releaseDirty()}
- const blockedNavigation=await navigation;assert.match(blockedNavigation.error,/viewer edit/);
+ const blockedNavigation=await pendingNavigation;assert.match(blockedNavigation.error,/viewer edit/);
  report.expectedRejections.push({name:'delayed session.select',...blockedNavigation});
  report.checks.push({name:'delayed dirty declaration precedes navigation',status:'passed'});
  await page.unroute('**/api/actions',holdDirty);
@@ -114,6 +124,26 @@ try {
  const details=page.getByRole('region',{name:'Canvas details',exact:true});
  const closeDetails=()=>details.getByRole('button',{name:'Close canvas details',exact:true});
  const controlsHost=await panel.locator('[data-part="canvas-view-controls"]').elementHandle();
+ // Real unsaved React state and canonical dirty/lease identities distinguish
+ // navigation changes from a replacement editor with the same saved source.
+ await panel.getByRole('button',{name:'Canvas details',exact:true}).click();
+ await expect(details).toBeHidden();
+ for(const value of ['compact','tabs','auto']){
+  await navigation(value);await retained();
+  await capture('dirty-navigation-'+value);
+ }
+ await action('view.update',{patch:{canvasFocused:true}});
+ await primary.focus();
+ await expect(panel).toHaveAttribute('data-navigation','tabs');await retained();
+ await page.setViewportSize({width:1500,height:570});
+ await expect(panel).toHaveAttribute('data-navigation','compact');await retained();
+ await page.setViewportSize({width:1500,height:1050});
+ await expect(panel).toHaveAttribute('data-navigation','tabs');await retained();
+ await action('view.update',{patch:{canvasFocused:false}});
+ await navigation('tabs');await retained();
+ await panel.getByRole('button',{name:'Canvas details',exact:true}).click();
+ await expect(details).toBeVisible();
+ report.checks.push({name:'Tabs/Compact/Auto wide-short-wide changes preserve unsaved React input, mount token, dirty flag and exact lease',status:'passed',mount,before});
  await action('view.update',{patch:{canvasWidth:800}});
  await expect(panel.locator('.a-canvas-content')).toHaveAttribute('data-details-overlay','false');
  assert.equal(await details.locator('.a-canvas-inspector-head').evaluate(el=>getComputedStyle(el).position),'static','Wide inspector header keeps its original non-sticky layout');
@@ -225,7 +255,13 @@ try {
  }
  await capture('dirty-restored-same-document');
  await expect(toggle).toHaveAccessibleName('Hide canvas');
- await panel.getByRole('button',{name:'Close canvas panel',exact:true}).click();
+ // Hiding Canvas is the header visibility action; closing the document is a
+ // different, dirty-guarded operation exercised below.
+ const [hideResponse]=await Promise.all([page.waitForResponse(response=>isAction(response.request())&&
+  unwrap(response.request().postDataJSON()).action==='canvas.visibility'&&
+  unwrap(response.request().postDataJSON()).args.open===false),toggle.click()]);
+ const hideReceipt=await hideResponse.json();assert.equal(hideReceipt.accepted,true);
+ report.checks.push({name:'Header Hide uses canvas.visibility, not dirty-document close',status:'passed',receipt:hideReceipt});
  await expect(primary).toBeHidden();
  await expect(primary).toHaveCount(1);assert.equal(await primary.getAttribute('data-mount'),mount);
  await expect(toggle).toHaveAccessibleName('Open canvas');await toggle.click();await retained();

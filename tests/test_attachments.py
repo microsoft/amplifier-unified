@@ -15,11 +15,55 @@ from amplifier_web.server import create_app
 from amplifier_web.service import AppError, AppService
 from test_service import Runtime
 
-PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=')
+PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgaGAAAAEEAIFw9selAAAAAElFTkSuQmCC')
 
 
 def upload(home, name='tiny.png', data=PNG):
     return attachments.save(home, name, base64.b64encode(data).decode())
+
+
+async def test_composer_checkpoints_inline_content_and_exact_upload_issuance(tmp_path, monkeypatch):
+    from amplifier_core.message_models import ChatRequest, Message
+    from amplifier_web.host.media import NAMESPACE, RequestOnlyRegistry
+
+    pixels = PNG
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    row = upload(tmp_path, data=pixels)
+    command = SimpleNamespace(id='my-input', text='Review', attachments=[row])
+    transcript_path = tmp_path / 'transcript.jsonl'
+    issuance = tmp_path / 'media-upload-issuance.json'
+    canonical = []
+
+    async def append(message):
+        canonical.append(message)
+
+    async def checkpoint():
+        transcript_path.write_text(''.join(json.dumps(row) + '\n' for row in canonical))
+    registry = RequestOnlyRegistry(issuance)
+    capabilities = {'web.media.composer': object(), 'session.durable_checkpoint': checkpoint,
+                    'web.media.request_only': registry,
+                    NAMESPACE: SimpleNamespace(enabled=True)}
+    coordinator = SimpleNamespace(get_capability=capabilities.get)
+    ctx = attachments.MediaAttachmentContext(SimpleNamespace(add_message=append), coordinator)
+    content = attachments.encode(command, coordinator)
+    with pytest.raises(ValueError, match='does not belong'):
+        await ctx.add_message({'role': 'user', 'content': content,
+                               'metadata': {'amplifier_input': {'id': 'not-mine'}}})
+    assert not canonical
+    await ctx.add_message({'role': 'user', 'content': content,
+                           'metadata': {'amplifier_input': {'id': command.id}}})
+    assert NAMESPACE not in canonical[0]['metadata']
+    encoded = base64.b64encode(pixels).decode()
+    assert encoded in transcript_path.read_text() and encoded not in issuance.read_text()
+    # Reload owns exact content/input hashes, not blanket permission for images.
+    reopened = RequestOnlyRegistry(issuance)
+    request = ChatRequest(messages=[Message(**row) for row in canonical])
+    assert reopened.bind(request)
+    index = next(i for i, block in enumerate(request.messages[0].content) if block.type == 'image')
+    assert reopened.validate(request, message_index=0, block_index=index, purpose='transport')
+    request.messages[0].content[index].source['data'] = 'changed'
+    assert not reopened.validate(request, message_index=0, block_index=index, purpose='transport')
+    reopened.release(request)
 
 
 def test_private_storage_sniffs_content_and_bounds_data(tmp_path):
@@ -102,8 +146,93 @@ def test_encoder_reads_authoritative_metadata_and_limits_inline_text(tmp_path, m
     assert 'appropriate tool' in content[-1]['text']
     path, _ = attachments.file_path(tmp_path, rows[0]['id'])
     path.write_bytes(b'changed')
-    with pytest.raises(ValueError, match='unavailable'):
-        attachments.encode(SimpleNamespace(text='Review', attachments=[rows[0]]))
+    content = attachments.encode(SimpleNamespace(text='Review', attachments=[rows[0]]))
+    assert content[0]['text'] == 'Review'
+    assert 'Attachment 1 unavailable' in content[1]['text']
+    assert not any(item['type'] == 'image' for item in content)
+
+
+def test_image_snapshot_failure_uses_closed_notice_and_keeps_other_attachments(tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    bad, good = upload(tmp_path, 'bad.png'), upload(tmp_path, 'good.png')
+    bad_path, _ = attachments.file_path(tmp_path, bad['id'])
+    original = attachments._image_bytes
+    secret = 'data:image/png;base64,' + base64.b64encode(PNG).decode()
+    def read(path, row, policy=None):
+        if path == bad_path:
+            raise OSError(secret)
+        return original(path, row, policy)
+    monkeypatch.setattr(attachments, '_image_bytes', read)
+    content = attachments.encode(SimpleNamespace(text='Keep user text', attachments=[bad, good]))
+    assert content[0]['text'] == 'Keep user text'
+    assert secret not in json.dumps(content)
+    assert any('Image unavailable: bad.png' in block.get('text', '') for block in content)
+    assert len([block for block in content if block['type'] == 'image']) == 1
+
+
+@pytest.mark.parametrize('limit', [None, 1])
+def test_composer_decoder_safety_refusal_keeps_text(tmp_path, monkeypatch, limit):
+    from io import BytesIO
+    from PIL import Image
+    source = BytesIO()
+    Image.new('RGB', (2, 2), 'green').save(source, format='PNG')
+    row = upload(tmp_path, data=source.getvalue())
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    monkeypatch.setattr(Image, 'MAX_IMAGE_PIXELS', limit)
+    content = attachments.encode(SimpleNamespace(text='Keep user text', attachments=[row]))
+    assert content[0]['text'] == 'Keep user text'
+    assert any('Image unavailable:' in block.get('text', '') for block in content)
+    assert not any(block['type'] == 'image' for block in content)
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+@pytest.mark.parametrize('policy', [
+    {'retention': 'drop'}, {'retention': 'request-only'}, {'max_bytes': 1},
+    {'max_pixels': 1},
+])
+def test_composer_uses_active_store_policy_even_without_ready_consumer(tmp_path, monkeypatch, enabled, policy):
+    from io import BytesIO
+    from PIL import Image
+    from amplifier_foundation.session.media import MediaPolicy
+    from amplifier_web.host.media import NAMESPACE, RequestOnlyRegistry
+
+    buffer = BytesIO()
+    Image.new('RGB', (2, 2), 'blue').save(buffer, format='PNG')
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    image = upload(tmp_path, data=buffer.getvalue())
+    note = upload(tmp_path, 'notes.txt', b'Keep attached text')
+    registry = RequestOnlyRegistry(tmp_path / 'issuance.json')
+    store = SimpleNamespace(policy=MediaPolicy(**policy))
+    capabilities = {'web.media.store': store, 'web.media.composer': store,
+                    'web.media.request_only': registry,
+                    NAMESPACE: SimpleNamespace(enabled=enabled)}
+    coordinator = SimpleNamespace(get_capability=capabilities.get)
+    command = SimpleNamespace(id='policy-input', text='Keep user text', attachments=[image, note])
+    content = attachments.encode(command, coordinator)
+    assert content[0]['text'] == 'Keep user text'
+    assert 'Keep attached text' in json.dumps(content)
+    assert any('Image unavailable:' in block.get('text', '') for block in content)
+    assert not any(block['type'] == 'image' for block in content)
+    assert not (tmp_path / 'issuance.json').exists()
+
+
+@pytest.mark.parametrize('decoder_limit,admitted', [(None, True), (1, False)])
+def test_composer_reuses_foundation_finite_decoder_policy(tmp_path, monkeypatch, decoder_limit, admitted):
+    from io import BytesIO
+    from PIL import Image
+    from amplifier_foundation.session.media import MediaPolicy
+
+    source = BytesIO()
+    Image.new('RGB', (2, 2), 'blue').save(source, format='PNG')
+    row = upload(tmp_path, data=source.getvalue())
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    monkeypatch.setattr(Image, 'MAX_IMAGE_PIXELS', decoder_limit)
+    store = SimpleNamespace(policy=MediaPolicy(max_pixels=4))
+    coordinator = SimpleNamespace(get_capability={'web.media.store': store}.get)
+    content = attachments.encode(SimpleNamespace(text='Review', attachments=[row]), coordinator)
+    # A finite host bound can supply decoder safety; it cannot weaken Pillow's.
+    assert any(block['type'] == 'image' for block in content) is admitted
+    assert Image.MAX_IMAGE_PIXELS == decoder_limit
 
 
 async def test_draft_attachment_send_is_durable_and_private(tmp_path):
@@ -139,7 +268,9 @@ async def test_draft_attachment_send_is_durable_and_private(tmp_path):
 
 async def test_runtime_routes_only_matching_message_attachments():
     runtime = RuntimeManager()
-    async def start(*args): pass
+    async def start(*args, guard=None):
+        if guard:
+            guard()
     async def request(*args, **kwargs): return kwargs
     runtime.start, runtime._request = start, request
     result = await runtime.send({'id': 'session', 'messages': [
@@ -167,9 +298,13 @@ def test_real_core_loop_live_receives_multimodal_message():
     python = os.environ.get('UNIFIED_RUNTIME_PYTHON')
     if not python:
         pytest.skip('Set UNIFIED_RUNTIME_PYTHON for real Core/loop-live multimodal verification')
-    result = subprocess.run([python, str(Path(__file__).parent / 'fixtures/attachments_runtime_probe.py')], capture_output=True, text=True, timeout=30)
+    # Reuse the maintained real-consumer construction/checkpoint fixture.
+    result = subprocess.run([
+        python, '-m', 'pytest', '-q', '-o', 'addopts=',
+        'tests/test_tool_image_consumer_join.py::test_live_composer_checkpoints_inline_upload_before_transport',
+    ], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert '"image_received": true' in result.stdout
+    assert '1 passed' in result.stdout
 
 
 def test_pasted_text_metadata_and_content_survive_reload(tmp_path):

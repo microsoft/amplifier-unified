@@ -9,6 +9,7 @@ dependencies = [
   "amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@main",
   "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@main#subdirectory=modules/context-managed",
   "amplifier-module-tool-transcript @ git+https://github.com/microsoft/amplifier-bundle-context-managed@main#subdirectory=modules/tool-transcript",
+  "amplifier-module-provider-openai-chatgpt @ git+https://github.com/microsoft/amplifier-module-provider-openai-chatgpt@b6473e56a3f73a297cc139fd5414baec1722bc8c",
   "amplifier-module-provider-openai @ git+https://github.com/microsoft/amplifier-module-provider-openai@main",
   "amplifier-module-provider-anthropic @ git+https://github.com/microsoft/amplifier-module-provider-anthropic@main",
 ]

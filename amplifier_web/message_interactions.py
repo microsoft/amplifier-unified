@@ -141,7 +141,7 @@ def command(service, action, args, *, origin="ui"):
     if 'selection' in args and not args.get('snapshotOnly'):
         raise AppError('A passage requires snapshotOnly; no whole-message fallback was used.')
     if action == 'message.reveal':
-        from .workspace_canvas import select_session_workspace
+        from .workspace_selection import select_session_workspace
         select_session_workspace(service.state, session)
         service.state['selectedSessionId'] = session['id']
         service.state['view']['workSurface'] = 'chat'
@@ -419,8 +419,10 @@ def quoted_text(text, quote):
             + '\n\nNew message:\n' + text)
 
 
-def annotate(session, row):
-    return {**row, **session.get('messageAnnotations', {}).get(row.get('id'), {})}
+def annotate(session, row, *, status_source=None):
+    from .input_status import annotate as input_annotation
+    result = {**row, **session.get('messageAnnotations', {}).get(row.get('id'), {})}
+    return input_annotation(status_source if status_source is not None else session, result)
 
 
 def fork_annotations(source, target, target_id=None):
@@ -500,10 +502,23 @@ def reaction_status(service, args):
 
 def reaction_context(session):
     """Bounded passive metadata, not input admission or native history edits."""
+    from collections import deque
+    from .input_status import PREFIX
     annotations = session.get('messageAnnotations', {})
-    recent = session.get('messageReactionOrder', [])
-    identities = ([identity for identity, value in annotations.items()
-                   if value.get('reactions') and identity not in recent] + list(recent))[-32:]
+    recent = [identity for identity in session.get('messageReactionOrder', [])
+              if isinstance(identity, str) and not identity.startswith(PREFIX)][-32:]
+    recent_set = set(recent)
+    identities = deque(maxlen=32)
+    annotation_count = 0
+    # Explicit context reads retain legacy unordered reactions without a new
+    # index. Input-status receipts are not reaction messages or omitted ones.
+    for identity, value in annotations.items():
+        if not isinstance(identity, str) or identity.startswith(PREFIX):
+            continue
+        annotation_count += 1
+        if isinstance(value, dict) and value.get('reactions') and identity not in recent_set:
+            identities.append(identity)
+    identities.extend(recent)
     # Do not hydrate a cold transcript merely to enrich a reaction notice.
     visible = {row['id']: row for row in dict.get(session, 'messages', [])[-100:]
                if isinstance(row, dict) and row.get('id') in identities}
@@ -514,7 +529,7 @@ def reaction_context(session):
         items.append({'messageId': identity, 'reactions': selected,
                       **({'role': row.get('role'), 'excerpt': str(row.get('text', ''))[:160]} if row else {})})
     return {'sessionId': session['id'], 'revision': session.get('messageAnnotationRevision', 0),
-            'items': items, 'bounded': True, 'omittedMessageCount': max(0, len(annotations) - len(identities))}
+            'items': items, 'bounded': True, 'omittedMessageCount': max(0, annotation_count - len(identities))}
 
 
 def install_routes(app):

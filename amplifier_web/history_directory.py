@@ -32,7 +32,7 @@ FIELDS = {
     'description', 'bundle', 'workspace', 'workspaceId', 'workspaceAvailable',
     'workingDirectory', 'executionRevision', 'executionHost', 'executionHandoffId', 'assignmentId', 'interruptionRevision',
     'createdAt', 'updatedAt', 'recentActivityAt', 'navigationActivityAt',
-    'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
+    'activityPresentation', 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'externalAgent', 'parentId', 'nativeParentId',
     'nativeRevision', 'turnCount', 'shared', 'historyManaged', 'historyLoaded',
     'historyLoading', 'sharedHistoryTotal', 'displayMessageCount', 'sessionKind', 'sessionPurpose', 'location', 'nativeAvailable',
     'historyReadOnlyReason', 'status', 'configurationBusy', 'configurationPending', 'fileAccessPending',
@@ -51,6 +51,8 @@ def _membership(values):
 
 
 def initialize(db):
+    from .client_presentation import initialize as presentation_initialize
+    presentation_initialize(db)
     from .state_records import initialize as initialize_records
     initialize_records(db)
     columns = ','.join(f'{name} ' + ('REAL' if name in {'created', 'recent'} else
@@ -285,7 +287,7 @@ class HistoryDirectory:
     @property
     def observation_revision(self):
         from .history_directory_observations import revision
-        return revision(self, self._frozen_state if self.snapshot else self.service._state)
+        return self.read_frame(revision, self, self._frozen_state if self.snapshot else self.service._state)
 
     @property
     def navigation_revision(self):

@@ -111,8 +111,14 @@ async def main(home):
     async def read_graph(*args): return copy.deepcopy(graph)
     app_updates.components.read_graph = read_graph
     async def installed_target():
-        return '/synthetic/uv', '/synthetic/launcher', home/'synthetic/python', {'version':app_updates.__version__, 'source':app_updates.SOURCE}
+        # Do not let the runner's real sys.prefix select generation promotion:
+        # this fixture models the replacement installer below, not a real install.
+        prefix = home/'synthetic'
+        return '/synthetic/uv', '/synthetic/launcher', prefix/'bin/python', {
+            'version':app_updates.__version__, 'source':app_updates.SOURCE,
+            'installation':str(prefix)}
     app_updates.installed_target = installed_target
+    app_updates.git_environment = lambda: {'GIT_TERMINAL_PROMPT':'0'}
     real_which = app_updates.shutil.which
     app_updates.shutil.which = lambda name: '/synthetic/uv' if name=='uv' else real_which(name)
     async def process(*args, **kwargs):
@@ -144,8 +150,15 @@ async def main(home):
             feature.fail=data['featureFail'];feature.entered.clear();feature.release.clear()
         if data.get('featureRelease'): feature.release.set()
         if data.get('featureConfirm'):
+            pending = copy.deepcopy(service.state['updates']['pendingRestart'])
+            assert feature.installed and feature.extras == ['native-desktop']
+            old_health={**manager.running_identity,'ok':True,'app':'amplifier-unified','dataIdentity':data_identity(manager.home)}
+            assert not await manager.confirm_readiness(old_health)
+            assert service.state['updates']['pendingRestart'] == pending
             manager.running_identity['instanceId']='synthetic-new-host'
             health={**manager.running_identity,'ok':True,'app':'amplifier-unified','dataIdentity':data_identity(manager.home)}
+            assert not await manager.confirm_readiness({**health,'dataIdentity':'another-installation'})
+            assert service.state['updates']['pendingRestart'] == pending
             assert await manager.confirm_readiness(health)
         native.mode = data.get('native', native.mode)
         runtime.mode = data.get('worker', runtime.mode)

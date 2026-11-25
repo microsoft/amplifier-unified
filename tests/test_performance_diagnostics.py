@@ -83,6 +83,72 @@ def test_bounded_detached_timings_on_errors(monkeypatch):
     assert len(diagnostics.operations) == len(diagnostics.counters) == 64
 
 
+@pytest.mark.parametrize('size', [1, 10000])
+def test_serialization_shape_never_resolves_or_copies_bodies(monkeypatch, size):
+    from amplifier_web import cold_display
+
+    class Unreadable(dict):
+        def get(self, *args):
+            pytest.fail('Custom mapping read')
+        __getitem__ = __iter__ = items = values = get
+
+    class CustomList(list):
+        def __len__(self):
+            pytest.fail('Custom length')
+        __iter__ = __len__
+
+    class Body:
+        def __deepcopy__(self, memo):
+            pytest.fail('Body copy')
+        def __repr__(self):
+            pytest.fail('Body inspection')
+
+    monkeypatch.setattr(cold_display, 'load', lambda *args: pytest.fail('Cold hydration'))
+    body = [Body()] * size
+    resident = Unreadable(messages=body, execution={'nodes': body, 'retiredUsageNodes': []}, workers=body)
+    cold = cold_display.ColdRecord({'_coldFields': {
+        'messages': {'$resource': 'private-reference'}, 'execution': {'$resource': 'private-reference'}}}, None)
+    owners = Unreadable(resident=resident, cold=cold,
+        custom={'messages': CustomList(), 'execution': Unreadable(), 'workers': ()}, missing={})
+    clock = [0.0]
+    monkeypatch.setattr('amplifier_web.performance_diagnostics.time.monotonic', lambda: clock[0])
+    diagnostics = PerformanceDiagnostics()
+    with diagnostics.measure('state.serialize', synchronous=True,
+                             serialization=(False, owners, {'resident', 'cold', 'custom', 'missing'})):
+        body.clear()  # The observation is entry shape, not a borrowed graph.
+        clock[0] = .2
+    row = diagnostics.snapshot()['slowOperations'][0]
+    assert row['scope'] == 'explicit' and row['owners'] == 4
+    assert (row['messages'], row['messageOwners'], row['messageColdOwners'], row['messageUnavailableOwners']) == (size, 1, 1, 2)
+    assert (row['nodes'], row['nodeOwners'], row['nodeColdOwners'], row['nodeUnavailableOwners']) == (size, 1, 1, 2)
+    assert (row['retiredReceipts'], row['receiptOwners'], row['receiptColdOwners'], row['receiptUnavailableOwners']) == (0, 1, 1, 2)
+    assert (row['workers'], row['workerOwners'], row['workerColdOwners'], row['workerUnavailableOwners']) == (size, 1, 0, 3)
+    assert 'private' not in json.dumps(row)
+    row['nodes'] = -1
+    assert diagnostics.snapshot()['slowOperations'][0]['nodes'] == size
+
+
+@pytest.mark.parametrize('failure', [ValueError, asyncio.CancelledError])
+def test_serialization_shape_keeps_existing_failure_and_ring_bounds(monkeypatch, failure):
+    clock = [0.0]
+    monkeypatch.setattr('amplifier_web.performance_diagnostics.time.monotonic', lambda: clock[0])
+    diagnostics = PerformanceDiagnostics()
+    for _ in range(65):
+        error = failure('private failure')
+        with pytest.raises(failure) as caught:
+            with diagnostics.measure('state.serialize', synchronous=True, serialization=(True, {}, set())):
+                clock[0] += .2
+                raise error
+        assert caught.value is error
+    snapshot = diagnostics.snapshot()
+    assert snapshot['operations']['state.serialize']['count'] == 65
+    assert len(snapshot['slowOperations']) == 60
+    assert all(row['scope'] == 'full' and row['owners'] == 0 and row['messages'] == 0
+               and row['messageUnavailableOwners'] == 0 and 'threadCpuMs' in row
+               for row in snapshot['slowOperations'])
+    assert 'private' not in json.dumps(snapshot)
+
+
 def test_projection_failure_evidence_is_bounded_numeric_and_detached():
     diagnostics = PerformanceDiagnostics()
     for number in range(40):

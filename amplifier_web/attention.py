@@ -47,7 +47,9 @@ def session_item_at(session, read, position):
         if question['status'] == 'pending':
             return item('question:' + question['id'], 'Answer requested' if question['required'] else 'Optional question',
                         question['prompt'], question['revision'])
-        if (question.get('delivery') or {}).get('status') in {'unknown', 'rejected'}:
+        from .questions import reminder_dismissed
+        if ((question.get('delivery') or {}).get('status') in {'unknown', 'rejected'}
+                and not reminder_dismissed(question)):
             return item('question:' + question['id'], 'Answer saved; delivery needs attention',
                         question['prompt'], question['delivery'])
         return None

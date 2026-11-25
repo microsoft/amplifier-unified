@@ -22,6 +22,8 @@ async def app(tmp_path, monkeypatch):
     runtime.workers = {sid: {'process': SimpleNamespace(pid=100, returncode=None), 'started_at': 12.5}}
     runtime.collaboration_input = AsyncMock(return_value={'accepted': True})
     runtime.handoff_boundary = AsyncMock(return_value={'ready': False})
+    runtime.handoff_boundary.side_effect = lambda *args, **kwargs: (
+        {'cancelled': True} if kwargs.get('cancel') else runtime.handoff_boundary.return_value)
     yield service
     await service.close()
 

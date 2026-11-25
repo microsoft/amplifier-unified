@@ -204,7 +204,11 @@ async def test_pending_workers_and_runtime_exit_keep_outcomes_truthful(tmp_path,
         await app.on_runtime_event('runtime.status', {'sessionId': sid, 'status': 'idle'})
         now[0] += 60; await app.schedules.tick()
         next_run = app.schedules.store.runs(sid)[0]
-        await app.on_runtime_event('runtime.ended', {'sessionId': sid, 'status': 'stopped'})
+        with monkeypatch.context() as patch:
+            patch.setattr(app, 'runtime', SimpleNamespace(workers={sid: {'runtimeOwnerId': 'current-owner'}}))
+            await app.on_runtime_event('runtime.ended', {
+                'sessionId': sid, 'status': 'stopped', 'runtimeOwnerId': 'current-owner',
+            })
         assert app.schedules.store.run(sid, next_run['id'])['phase'] == 'unknown'
         assert app.schedules.store.get(sid, record['id'])['status'] == 'needs_review'
     finally: await app.close()
@@ -227,6 +231,7 @@ async def test_manual_result_in_mixed_monitor_generation_still_notifies(tmp_path
 
 
 async def test_monitor_delegated_followup_can_report_before_idle_and_stays_quiet(tmp_path, monkeypatch):
+    from amplifier_web.runtime import normalize_event
     app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
     try:
         await schedule(app, sid, now[0])
@@ -240,7 +245,7 @@ async def test_monitor_delegated_followup_can_report_before_idle_and_stays_quiet
         await app.app_bridge('dispatch', {'action': 'schedule.report', 'id': 'followup-report', 'args': {'runId': run['id'], 'expectedRevision': run['revision'], 'outcome': 'unchanged', 'detail': 'Worker reports no change.'}}, sid)
         await app.on_runtime_event('assistant.message', {**scope, 'inputId': 'worker-report', 'text': 'No change from delegated report.'})
         await app.on_runtime_event('runtime.generation', {**scope, 'event': 'generation.finished', 'input_ids': ['worker-report'], 'active_job_ids': []})
-        await app.on_runtime_event('runtime.status', {'sessionId': sid, 'status': 'idle'})
+        await app.on_runtime_event(*normalize_event({'type': 'session.idle'}, sid))
         final = app.schedules.store.run(sid, run['id'])
         assert final['phase'] == 'completed' and not final['notificationDecision']['notify']
         assert final['notificationDecision']['source'] == 'agent_report'
@@ -272,3 +277,29 @@ async def test_execution_folder_revision_binds_preview_activation_and_due_admiss
         assert run['phase'] == 'skipped' and run['executionRevision'] == 1
         assert app.schedules.store.get(sid, record['id'])['status'] == 'needs_review'
     finally: await app.close()
+
+
+async def test_due_monitor_waits_through_safe_update_and_runs_once(tmp_path, monkeypatch):
+    from amplifier_web import update_drain
+    from amplifier_web.update_restart import target
+    from amplifier_web.updates import UpdateManager
+    app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
+    try:
+        await schedule(app, sid, now[0])
+        manager = app.update_manager = UpdateManager(app)
+        state = app.state['updates']
+        state.update(phase='app-staged', pendingApp={'revision': 'a'*40,
+                     'generation': 'b'*32, 'attemptId': 'schedule-test'})
+        state['application']['canInstall'] = True
+        await app.dispatch('updates.safeResume', target(manager), origin='ui', include_state=False)
+        now[0] += 61
+        for phase in ('waiting', 'replacing', 'releasing'):
+            state['drain']['phase'] = phase
+            await app.schedules.tick()
+            assert update_drain.held(app) and not app.schedules.store.runs(sid) and not runtime.inputs
+        state['drain']['phase'] = 'released'
+        await app.schedules.tick()
+        await app.schedules.tick()
+        assert len(runtime.inputs) == len(app.schedules.store.runs(sid)) == 1
+    finally:
+        await app.close()

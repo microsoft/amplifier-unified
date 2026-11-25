@@ -122,6 +122,9 @@ async def test_manager_check_uses_cached_registry_route_and_reports_failure(work
     service.update_manager = manager
     row = core(worker)
     row['updateTier'] = 'included'
+    # The real inventory stamps every row with the checked app selection.
+    from amplifier_web.update_sequence import app_selection
+    row['appSelection'] = app_selection(manager.home)['witness']
     monkeypatch.setattr(manager, 'inventory_sources', AsyncMock(side_effect=lambda **kwargs: [dict(row)]))
     index = AsyncMock(return_value='2.0.3')
     monkeypatch.setattr(manager.check_cache, 'index', index)
@@ -131,11 +134,13 @@ async def test_manager_check_uses_cached_registry_route_and_reports_failure(work
         checked = next(item for item in manager.inventory if item.get('package') == registry.CORE)
         assert checked['status'] == 'update' and checked['latest'] == '2.0.3'
         index.assert_awaited_once_with(registry.CORE)
-        index.side_effect = ValueError('private failure')
+        # A unique marker: saved release notes are part of this state and can
+        # contain ordinary words such as "private failure".
+        index.side_effect = ValueError('MARKER-registry-error-7c1e')
         await manager.check(tier='included')
         assert manager.inventory[0]['status'] == 'check_failed'
         assert service.state['updates']['phase'] == 'error'
-        assert 'private failure' not in json.dumps(service.state['updates'])
+        assert 'MARKER-registry-error-7c1e' not in json.dumps(service.state['updates'])
     finally:
         await service.close()
 

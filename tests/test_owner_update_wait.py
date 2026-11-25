@@ -8,7 +8,8 @@ admitted, and the objective/progress it receives, not another provider turn.
 import asyncio
 import copy
 import json
-from types import SimpleNamespace
+from contextlib import contextmanager
+from types import MethodType, SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -37,7 +38,7 @@ class OwnerRuntime(Runtime):
 
     def __init__(self):
         super().__init__()
-        self.workers = {}
+        self.workers, self._preparations = {}, {}
         self.native = {}
         self.controllers = {}
         self.hooks = {}
@@ -67,7 +68,18 @@ class OwnerRuntime(Runtime):
         worker.controls = controller
         worker.runtime = controller.runtime
         worker.runtime.inbox = asyncio.Queue()
-        worker.parked = True
+        from amplifier_foundation.session.activation import ActivationGate
+        worker.shared_handle = object()
+        worker.activation_gate = ActivationGate()
+        worker.activation = worker.activation_gate.activate()
+        worker.checkpoint_entered, worker.checkpoint_release = asyncio.Event(), asyncio.Event()
+        worker.checkpoint_release.set()
+        async def checkpoint(_status='completed'):
+            worker.activation_gate.check_current()
+            worker.checkpoint_entered.set()
+            await worker.checkpoint_release.wait()
+            controller.persist(task_only=True)
+        coordinator.register_capability('live.checkpoint', checkpoint)
         self.native[sid] = worker
         self.controllers[sid] = controller
         self.hooks[sid] = hooks
@@ -78,6 +90,23 @@ class OwnerRuntime(Runtime):
         if guard:
             guard()
         return await self.controllers[sid].perform(operation, args)
+
+    @contextmanager
+    def stopped_boundary(self, session):
+        assert session['id'] not in self.workers
+        yield
+
+    def has_pending_operations(self):
+        return bool(self._preparations)
+
+    async def retire_idle(self, sid, owner_id, *, guard):
+        if guard():
+            return False
+        assert self.workers[sid]['runtimeOwnerId'] == owner_id
+        if not await self.native[sid].checkpoint_idle():
+            return False
+        self.workers.pop(sid)
+        return True
 
     async def handoff_boundary(self, sid, boundary_id, cancel=False, *, update=False, receipt=None):
         self.boundary_calls.append((sid, boundary_id, cancel, update))
@@ -175,7 +204,6 @@ class UpdateWait:
                                     command_id='pause:' + sid, include_state=False)
         else:
             self.runtime.native[sid].runtime.generation = {'id': 'original-generation:' + sid}
-            self.runtime.native[sid].parked = False
             self.app._session(sid).update(
                 status='working', collaborationGeneration={
                     'id': 'original-generation:' + sid, 'inputIds': ['original:' + sid], 'terminal': False})
@@ -222,7 +250,7 @@ class UpdateWait:
     def controller(self):
         return self.runtime.controllers[self.sid]
 
-    async def yield_turn(self, *, park=True):
+    async def yield_turn(self, *, hold_checkpoint=False):
         worker = self.runtime.native[self.sid]
         before = worker.session.coordinator.session_state['goal']
         await self.runtime.hooks[self.sid]['orchestrator:goal_progress'](
@@ -233,7 +261,9 @@ class UpdateWait:
         after = worker.session.coordinator.session_state['goal']
         assert after == before and after is not before
         worker.runtime.generation = None
-        worker.parked = park
+        if hold_checkpoint:
+            worker.checkpoint_entered.clear()
+            worker.checkpoint_release.clear()
         session = self.app._session(self.sid)
         session['collaborationGeneration']['terminal'] = True
         await self.app.on_runtime_event('runtime.status', {'sessionId': self.sid, 'status': 'idle'})
@@ -290,6 +320,9 @@ class UpdateWait:
                 for result in results:
                     if isinstance(result, Exception):
                         raise result
+                # An all-done gather can complete synchronously; let the host's
+                # registered discard callbacks remove those observed tasks.
+                await asyncio.sleep(0)
 
     async def finish(self):
         await drain.finish(self.manager, 'installed')
@@ -371,6 +404,48 @@ async def waiting(tmp_path, monkeypatch, request):
         await harness.close()
 
 
+async def test_busy_command_enrollment_installs_original_marker_before_observe_only(waiting):
+    h = waiting
+    worker = h.runtime.native[h.sid]
+    async with worker.command_lock:
+        response = await asyncio.wait_for(h.wait(), 2)
+        assert response['accepted'] and h.row['waitingFor'] == ['command']
+        marker = worker._handoff_boundary
+        assert marker['id'] == h.row['boundaryId']
+        await drain.observe_waiters(h.manager)
+        assert h.row.get('unknown') is not True and worker._handoff_boundary is marker
+    await h.yield_turn()
+    assert await drain.prepare(h.manager, h.release)
+    assert h.row['ready'] and worker._handoff_boundary is marker
+    assert h.row['yieldedGoal']['turns_used'] == 3
+    assert not h.runtime.admitted
+
+
+async def test_wait_for_update_checks_optional_task_identity_before_native_enrollment(waiting):
+    h = waiting
+    task = h.controller.tasks.record()
+    before_task = copy.deepcopy(task)
+    before_updates = copy.deepcopy(h.app.state['updates'])
+    worker = h.runtime.native[h.sid]
+    before_boundary = getattr(worker, '_handoff_boundary', None)
+    wrong = {**h.wait_args, 'expectedTaskId': 'another-responsibility'}
+    with pytest.raises(AppError, match='task.*replaced|task.*identity'):
+        await h.wait(args=wrong, command='wrong-task-wait')
+    assert h.controller.tasks.record() == before_task
+    assert h.app.state['updates'] == before_updates
+    assert not h.runtime.boundary_calls
+    assert getattr(worker, '_handoff_boundary', None) is before_boundary
+    assert h.app.db.execute('SELECT 1 FROM commands WHERE id=?', ('wrong-task-wait',)).fetchone() is None
+    valid = {**h.wait_args, 'expectedTaskId': task['id']}
+    receipt = await h.wait(args=valid, command='exact-task-wait')
+    assert receipt['accepted']
+    assert len(h.runtime.boundary_calls) == 1
+    assert h.row['taskBinding']['taskId'] == task['id']
+    duplicate = await h.wait(args=valid, command='exact-task-wait')
+    assert duplicate['duplicate'] is True
+    assert len(h.runtime.boundary_calls) == 1
+
+
 async def test_owner_wait_yields_restores_and_continues_exactly_once_without_resuming_paused_predecessor(waiting):
     h = waiting
     paused = await h.new_task('Previously paused objective', paused=True)
@@ -397,11 +472,13 @@ async def test_owner_wait_yields_restores_and_continues_exactly_once_without_res
     h.app._session(independent)['status'] = 'idle'  # Synthetic transport settlement.
 
     # An idle host status without a positive native checkpoint is insufficient.
-    await h.yield_turn(park=False)
-    assert not await drain.prepare(h.manager, h.release)
-    assert 'checkpoint' in h.row['waitingFor']
-    h.runtime.native[h.sid].parked = True
-    assert await drain.prepare(h.manager, h.release)
+    await h.yield_turn(hold_checkpoint=True)
+    worker = h.runtime.native[h.sid]
+    preparation = asyncio.create_task(drain.prepare(h.manager, h.release))
+    await asyncio.wait_for(worker.checkpoint_entered.wait(), 2)
+    assert not preparation.done() and not h.runtime.admitted and not h.row['ready']
+    worker.checkpoint_release.set()
+    assert await asyncio.wait_for(preparation, 3)
     assert h.row['ready']
     yielded = copy.deepcopy(h.row)
     h.replace()
@@ -452,24 +529,30 @@ async def test_owner_wait_yields_restores_and_continues_exactly_once_without_res
     assert saved_task['objective'] == OBJECTIVE
 
 
-async def test_original_admitted_child_return_waits_for_adoption_and_is_the_only_owner_input(waiting):
+@pytest.mark.parametrize('host_requested', [False, True])
+async def test_original_admitted_child_return_waits_for_adoption_and_is_the_only_owner_input(waiting, monkeypatch, host_requested):
+    from amplifier_web import app_updates, safe_update
     h = waiting
     created = await h.commission_child()
     source_task = copy.deepcopy(h.controller.tasks.record())
     original = created['initialInputId']
     returned = created['subscription']['continuationId']
     creation = h.app.collaboration.receipt(created['requestId'])
-    assert h.app.collaboration.creation_guard(creation, for_reply=True) is None
+    assert h.app.collaboration.creation_guard(creation) is None
 
-    await h.wait()
+    if host_requested:
+        await h.app.dispatch('updates.safeResume', h.wait_args['target'], include_state=False)
+        await safe_update.enroll(h.manager)
+    else:
+        await h.wait()
     for key in ('id', 'revision', 'continuationEpoch'):
         assert h.controller.tasks.record()[key] == source_task[key]
-    assert h.app.collaboration.creation_guard(creation, for_reply=True) is None
-    assert h.app.collaboration.guard(h.app.collaboration.receipt(original), for_reply=True) is None
+    assert h.app.collaboration.creation_guard(creation) is None
+    assert h.app.collaboration.guard(h.app.collaboration.receipt(original)) is None
     request = await h.report_child(created)
     assert request['subscription']['lastClaimedRevision'] == 1
     assert h.app.collaboration.receipt(returned)['delivery'] == 'queued'
-    assert drain.owner_waiting(h.app, h.sid) and not drain.held(h.app)
+    assert drain.owner_waiting(h.app, h.sid) and bool(drain.held(h.app)) == host_requested
     assert h.app.collaboration.pending_continuation(h.sid) is None
     await h.app.collaboration.drain(h.sid)
     await h.settle()
@@ -485,8 +568,12 @@ async def test_original_admitted_child_return_waits_for_adoption_and_is_the_only
     assert h.app.collaboration.receipt(returned)['delivery'] == 'queued'
     assert not h.runtime.peer_admitted and not h.runtime.admitted
     await h.confirm()
+    if host_requested:
+        monkeypatch.setattr(app_updates.components, 'updates', AsyncMock(return_value=[]))
+        assert await safe_update.check_host(h.manager)
+        safe_update.included_result(h.manager, [])
     assert h.app.collaboration.creation_guard(
-        h.app.collaboration.receipt(created['requestId']), for_reply=True) is None
+        h.app.collaboration.receipt(created['requestId'])) is None
     await h.finish()
     assert [row['inputId'] for row in h.runtime.admitted] == [returned]
     resumed = h.runtime.admitted[0]
@@ -523,9 +610,9 @@ async def test_update_wait_does_not_relax_original_child_return_authority(waitin
     await h.yield_turn()
     await h.change_task(changed)
     creation = h.app.collaboration.receipt(created['requestId'])
-    assert h.app.collaboration.creation_guard(creation, for_reply=True)
+    assert h.app.collaboration.creation_guard(creation)
     assert h.app.collaboration.guard(
-        h.app.collaboration.receipt(created['initialInputId']), for_reply=True)
+        h.app.collaboration.receipt(created['initialInputId']))
     # Its original admitted generation can retain evidence, not revive its owner.
     await h.report_child(created)
     assert not h.runtime.admitted
@@ -542,7 +629,7 @@ async def test_update_wait_does_not_relax_original_child_return_authority(waitin
     assert len(returns) <= 1
     assert all(row['delivery'] == 'suppressed' for row in returns)
     assert h.app.collaboration.creation_guard(
-        h.app.collaboration.receipt(created['requestId']), for_reply=True)
+        h.app.collaboration.receipt(created['requestId']))
 
 
 @pytest.mark.parametrize('waiting', ['full'], indirect=True)
@@ -636,14 +723,12 @@ async def test_unknown_native_enrollment_is_retained_and_never_replayed(waiting)
 async def supersede_wait_with_human_input(h):
     worker = h.runtime.native[h.sid]
     worker.runtime.generation = None
-    worker.parked = True
     h.app._session(h.sid).update(status='idle')
     h.app._session(h.sid)['collaborationGeneration']['terminal'] = True
-    await h.app.dispatch('conversation.send', {'sessionId': h.sid, 'text': 'New direction',
-        'allowNextTurn': True}, command_id='fresh-human', include_state=False)
+    await h.app.dispatch('conversation.send', {'sessionId': h.sid, 'text': 'New direction'},
+        command_id='fresh-human', include_state=False)
     await h.settle()
     worker.runtime.generation = {'id': 'replacement-generation:' + h.sid}
-    worker.parked = False
     await generation(h.app, h.app._session(h.sid), worker.runtime.generation['id'], ['fresh-human'])
 
 
@@ -695,12 +780,18 @@ async def test_changed_update_waits_for_native_checkpoint_before_releasing_its_g
     await drain.observe_waiters(h.manager)
     assert not h.runtime.admitted and not any(call[2] for call in h.runtime.boundary_calls)
     assert h.sid in h.app.state['updates']['drain']['workers']
-    await h.yield_turn(park=False)
-    await drain.observe_waiters(h.manager)
+    worker = h.runtime.native[h.sid]
+    async def observe_settlement():
+        await h.yield_turn(hold_checkpoint=True)
+        await drain.observe_waiters(h.manager)
+    observation = asyncio.create_task(observe_settlement())
+    await asyncio.wait_for(worker.checkpoint_entered.wait(), 2)
+    assert not observation.done()
     assert not h.runtime.admitted and not any(call[2] for call in h.runtime.boundary_calls)
-    h.runtime.native[h.sid].parked = True
+    worker.checkpoint_release.set()
+    await asyncio.wait_for(observation, 3)
     await drain.observe_waiters(h.manager)
-    await h.settle()
+    await asyncio.wait_for(h.settle(), 3)
     assert len(h.runtime.admitted) == 1
 
 
@@ -870,6 +961,120 @@ async def test_withdrawn_update_needs_positive_boundary_cancellation(waiting, ac
     with pytest.raises((TimeoutError, RuntimeError)):
         await drain.observe_waiters(h.manager)
     assert h.row == original
+    assert not h.runtime.admitted and not h.receipts('updates.app')
+
+
+def delayed_native_cancellation(h, monkeypatch):
+    """Use the real retained-reply owner; hold only its transport acknowledgement."""
+    from amplifier_web.runtime import RuntimeManager
+    entered, release = asyncio.Event(), asyncio.Event()
+    requests = []
+    native = h.runtime.handoff_boundary
+
+    async def request(sid, operation, *, guard, **args):
+        assert operation == 'handoff.boundary' and args['cancel'] is True
+        guard()
+        requests.append((sid, copy.deepcopy(args)))
+        result = await native(sid, args['request_id'], cancel=True, receipt=args['receipt'])
+        entered.set()
+        await release.wait()
+        return result
+
+    h.runtime.workers[h.sid]['process'] = SimpleNamespace(returncode=None)
+    monkeypatch.setattr(h.runtime, 'boundary_reply_timeout', .01, raising=False)
+    monkeypatch.setattr(h.runtime, '_request', request, raising=False)
+    monkeypatch.setattr(h.runtime, 'handoff_boundary', MethodType(RuntimeManager.handoff_boundary, h.runtime))
+    return entered, release, requests
+
+
+@pytest.mark.parametrize('already_suppressed', [False, True])
+async def test_pending_cancel_holds_ready_update_until_exact_late_ack(waiting, monkeypatch, already_suppressed):
+    h = waiting
+    await h.ready()
+    await h.change_task('completed')
+    if already_suppressed:
+        h.row['suppressed'] = drain.continuation_guard(h.app, {'updateYield': h.row}, authority_only=True)
+        drain.save_wait(h.app, h.row, 'suppressed')
+    original = copy.deepcopy(h.row)
+    receipt = copy.deepcopy(drain.wait_receipt(h.app, h.sid, original['commandId']))
+    entered, release, requests = delayed_native_cancellation(h, monkeypatch)
+    worker = h.runtime.workers[h.sid]
+    try:
+        assert await drain.prepare(h.manager, h.release) is False
+        assert entered.is_set() and len(requests) == 1
+        pending = worker['boundary_waits'][original['boundaryId']]['task']
+        assert not pending.done()
+        assert h.runtime.native[h.sid]._handoff_boundary is None
+        assert h.row == original and h.row['ready'] is True
+        assert drain.wait_receipt(h.app, h.sid, original['commandId']) == receipt
+        assert h.app.state['updates']['drain']['phase'] == 'waiting'
+        assert await drain.prepare(h.manager, h.release) is False
+        assert len(requests) == 1 and not pending.cancelled()
+        assert not h.runtime.admitted and not h.receipts('updates.app')
+        release.set()
+        assert await asyncio.wait_for(asyncio.shield(pending), 5) == {'cancelled': True}
+        assert await drain.prepare(h.manager, h.release)
+        assert h.sid not in h.app.state['updates']['drain']['workers']
+        assert h.app.state['updates']['drain']['phase'] == 'released'
+        saved = drain.wait_receipt(h.app, h.sid, original['commandId'])['receipt']
+        assert saved['status'] == 'suppressed' and saved['boundary']['boundaryId'] == original['boundaryId']
+        assert saved['boundary']['owner'] == original['owner']
+        assert h.controller.tasks.record()['status'] == 'completed'
+        assert len(requests) == 1 and not worker['boundary_waits']
+        assert not h.runtime.admitted and not h.runtime.sent and not h.receipts('updates.app')
+    finally:
+        release.set()
+        await asyncio.gather(*(row['task'] for row in worker.get('boundary_waits', {}).values()), return_exceptions=True)
+
+
+@pytest.mark.parametrize('replacement', ['row', 'owner'])
+async def test_pending_cancel_cannot_settle_replaced_waiter(waiting, monkeypatch, replacement):
+    h = waiting
+    await h.ready()
+    await h.change_task('completed')
+    original = h.row
+    receipt = copy.deepcopy(drain.wait_receipt(h.app, h.sid, original['commandId']))
+    entered, release, requests = delayed_native_cancellation(h, monkeypatch)
+    worker = h.runtime.workers[h.sid]
+    observing = asyncio.create_task(drain.observe_waiters(h.manager))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        if replacement == 'row':
+            current = {**copy.deepcopy(original), 'boundaryId': 'replacement-boundary'}
+            h.app.state['updates']['drain']['workers'][h.sid] = current
+        else:
+            current = original
+            h.runtime.workers[h.sid] = {'runtimeOwnerId': 'replacement-owner',
+                                       'process': SimpleNamespace(returncode=None)}
+        before = copy.deepcopy(current)
+        assert await asyncio.wait_for(observing, 5) is (None if replacement == 'row' else False)
+        assert h.row is current and h.row == before
+        assert drain.wait_receipt(h.app, h.sid, original['commandId']) == receipt
+        assert h.app.state['updates']['drain']['phase'] == 'waiting'
+        release.set()
+        await asyncio.gather(*(row['task'] for row in worker['boundary_waits'].values()))
+        assert h.row == before and len(requests) == 1
+        assert drain.wait_receipt(h.app, h.sid, original['commandId']) == receipt
+        assert not h.runtime.admitted and not h.receipts('updates.app')
+    finally:
+        release.set()
+        await asyncio.gather(observing, *(row['task'] for row in worker.get('boundary_waits', {}).values()), return_exceptions=True)
+
+
+@pytest.mark.parametrize('reply', [
+    {'ready': False, 'waitingFor': ['boundary-reply']},
+    {'ready': True, 'waitingFor': ['boundary-reply'], 'requestPending': True},
+    {'ready': False, 'waitingFor': ['boundary-reply'], 'requestPending': True, 'unknown': True},
+])
+async def test_malformed_pending_cancel_is_not_a_cancellation_ack(waiting, monkeypatch, reply):
+    h = waiting
+    await h.ready()
+    await h.change_task('completed')
+    original = copy.deepcopy(h.row)
+    monkeypatch.setattr(h.runtime, 'handoff_boundary', AsyncMock(return_value=reply))
+    with pytest.raises(RuntimeError, match='did not confirm cancellation'):
+        await drain.prepare(h.manager, h.release)
+    assert h.row == original and h.app.state['updates']['drain']['phase'] == 'waiting'
     assert not h.runtime.admitted and not h.receipts('updates.app')
 
 
@@ -1217,11 +1422,10 @@ async def test_unknown_boundary_does_not_hold_a_new_human_generation(waiting):
     # Finish the original synthetic transport before admitting fresh human input;
     # a held steering attempt is not a new accepted generation.
     h.runtime.native[h.sid].runtime.generation = None
-    h.runtime.native[h.sid].parked = True
     h.app._session(h.sid).update(status='idle')
     h.app._session(h.sid)['collaborationGeneration']['terminal'] = True
-    await h.app.dispatch('conversation.send', {'sessionId': h.sid, 'text': 'New direction',
-        'allowNextTurn': True}, command_id='fresh-human', include_state=False)
+    await h.app.dispatch('conversation.send', {'sessionId': h.sid, 'text': 'New direction'},
+        command_id='fresh-human', include_state=False)
     await h.settle()
     assert not drain.owner_waiting(h.app, h.sid)
     await drain.observe_waiters(h.manager)
@@ -1270,7 +1474,8 @@ async def test_stop_supersedes_lost_owner_wait_without_claiming_checkpoint_or_re
     assert not h.runtime.admitted
 
 
-async def test_idle_configuration_refresh_preserves_update_checkpoint_and_continuation(waiting):
+@pytest.mark.parametrize('barrier', ['none', 'refused', 'unknown', 'operation', 'fence', 'busy'])
+async def test_idle_configuration_refresh_preserves_update_checkpoint_and_continuation(waiting, barrier):
     h = waiting
     session = h.app._session(h.sid)
     session.update(configurationPending=True, configurationPendingRevision=7)
@@ -1283,10 +1488,32 @@ async def test_idle_configuration_refresh_preserves_update_checkpoint_and_contin
     assert h.runtime.workers[h.sid]['runtimeOwnerId'] == owner
     assert session['configurationPending'] and not session.get('configurationBusy')
 
-    assert await drain.prepare(h.manager, h.release)
+    retire = h.runtime.retire_idle
+    if barrier == 'refused':
+        h.runtime.retire_idle = AsyncMock(return_value=False)
+    elif barrier == 'unknown':
+        h.runtime.retire_idle = AsyncMock(side_effect=TimeoutError('Retirement acknowledgement unknown'))
+    elif barrier == 'operation':
+        session['pendingConfiguration'] = {'operationId':'held-operation', 'phase':'error'}
+    elif barrier == 'fence':
+        session['configurationOperationFence'] = 'held-operation'
+    elif barrier == 'busy':
+        session['configurationBusy'] = True
+    if barrier != 'none':
+        if barrier == 'unknown':
+            with pytest.raises(TimeoutError):
+                await drain.prepare(h.manager, h.release)
+        else:
+            assert not await drain.prepare(h.manager, h.release)
+        assert h.runtime.workers[h.sid]['runtimeOwnerId'] == owner
+        assert not h.runtime.stopped and not h.runtime.admitted
+        return
+    from amplifier_web.update_blockers import assess
+    assert await drain.prepare(h.manager, h.release), (h.row['waitingFor'], h.row.get('ready'),
+                                                      assess(h.app))
     assert h.row['ready'] and not h.row.get('suppressed')
-    await h.app.refresh_configuration(h.sid)
-    assert not h.runtime.stopped, 'Refresh must not invalidate an already ready update wait'
+    assert h.sid not in h.runtime.workers
+    assert session['configurationPending']  # Retirement is not configuration adoption.
     h.replace()
     await h.reconnect(successor=True)
     await h.app.refresh_configuration(h.sid)  # The successor has no old runtime to retire.
@@ -1308,9 +1535,8 @@ async def test_update_wait_does_not_block_superseding_configuration_refresh(wait
     session = h.app._session(h.sid)
     session.update(configurationPending=True, configurationPendingRevision=7)
     await h.wait()
-    # Park without an idle event so this test controls refresh admission order.
+    # Settle without an idle event to control refresh admission order.
     h.runtime.native[h.sid].runtime.generation = None
-    h.runtime.native[h.sid].parked = True
     session.update(status='idle')
     session['collaborationGeneration']['terminal'] = True
     if superseded == 'configuration':
@@ -1338,7 +1564,6 @@ async def test_predecessor_block_is_not_an_update_wait_and_remains_blocked(waiti
         'reason': 'Yield for the authorized app update'}, command_id='old-block', include_state=False)
     worker = h.runtime.native[h.sid]
     worker.runtime.generation = None
-    worker.parked = True
     h.app._session(h.sid).update(status='idle')
     h.app._session(h.sid)['collaborationGeneration']['terminal'] = True
     assert not await h.controller.tasks.continuation_allowed()
@@ -1424,3 +1649,132 @@ async def test_update_yield_distinguishes_fresh_admission_from_child_result(wait
     assert (h.controller.coordinator.session_state['goal'] is before) is fresh
     assert ('yieldedGoal' in native._handoff_boundary) is not fresh
     assert runtime.accepted.visits <= 5  # Constant old-history work plus the one new input.
+
+
+async def test_safe_update_holds_two_active_tasks_and_new_input_through_component_retry(waiting, monkeypatch):
+    from amplifier_web.safe_update import enroll
+    from amplifier_web.update_health import browser_view
+    from amplifier_web import updates
+    from test_update_sequence import source
+
+    h = waiting
+    first = h.sid
+    second = await h.new_task('Second active rollout task')
+    await h.app.dispatch('session.create', {'title': 'Queued during rollout'})
+    queued = h.app._session()['id']
+    args = h.wait_args['target']
+    with pytest.raises(AppError):
+        await h.app.dispatch('updates.safeResume', {**args, 'attemptId': 'stale'}, include_state=False)
+    result = await h.app.dispatch('updates.safeResume', args, origin='ui', command_id='safe-click', include_state=False)
+    assert result['accepted'] and drain.held(h.app)
+    assert (await h.app.dispatch('updates.safeResume', args, command_id='safe-click', include_state=False))['duplicate']
+    await h.app.dispatch('conversation.send', {'text': 'Run after update', 'sessionId': queued},
+                         command_id='queued-human', include_state=False)
+    assert h.app._session(queued)['messages'][-1]['delivery']['status'] == 'queued_for_update'
+    assert not h.runtime.sent
+    await enroll(h.manager)
+    await enroll(h.manager)
+    assert len(h.runtime.boundary_calls) == 2
+    for sid in [first, second]:
+        h.sid = sid
+        await h.yield_turn()
+    assert await drain.prepare(h.manager, h.release)
+    assert all(r['ready'] and r['yieldedGoal'] for r in h.app.state['updates']['drain']['workers'].values())
+    h.replace()
+    await h.reconnect(successor=True)
+    await h.confirm()
+    state = h.app.state['updates']
+    assert browser_view(state)['safeUpdateStatus']['appReady']
+    await h.finish()
+    assert drain.held(h.app) and not h.runtime.admitted and not h.runtime.sent
+
+    # Spark-2 needed a second same-app restart for two host packages. Exercise
+    # stage and readiness decisions, simulating only the installer and listener.
+    from amplifier_web import app_updates, safe_update
+    changes = [{'name': name, 'latest': '2.0.0'} for name in ('amplifier-a', 'amplifier-b')]
+    monkeypatch.setattr(app_updates.components, 'updates', AsyncMock(return_value=changes))
+    after = {**h.release, 'attemptId': 'e' * 32, 'generation': 'f' * 32,
+             'safeUpdateAttempt': h.release['attemptId']}
+    async def stage(manager):
+        manager.diagnostics.begin('application', after['revision'], after['attemptId'])
+        await manager.publish(pendingApp=after, phase='app-staged')
+    monkeypatch.setattr(app_updates, 'stage', stage)
+    await h.manager.check(tier='included', fresh=True)
+    assert state['pendingApp'] == after
+    await h.finish()
+    assert drain.held(h.app) and not h.runtime.admitted and not h.runtime.sent
+    with pytest.raises(ValueError):
+        safe_update.require_host_graph(state['drain'], [])
+    h.release = after
+    assert await drain.prepare(h.manager, after)
+    h.replace()
+    await h.reconnect(successor=True)
+    await h.confirm()
+    state = h.app.state['updates']
+    monkeypatch.setattr(app_updates.components, 'installed_graph',
+                        lambda: [{'name': row['name'], 'version': row['latest']} for row in changes])
+    await h.finish()
+    assert not h.runtime.admitted and not h.runtime.sent
+
+    revision = 'b' * 40
+    current = 'a' * 40
+    failing = True
+    async def inventory(**kwargs):
+        return [source(h.manager, 'included', current), source(h.manager, 'other')]
+    async def remote(*args, **kwargs):
+        if failing:
+            raise TimeoutError('Included component unavailable')
+        return revision + ' refs/heads/main'
+    monkeypatch.setattr(h.manager, 'inventory_sources', inventory)
+    monkeypatch.setattr(updates, 'process', remote)
+    await h.manager.check(tier='included', fresh=True)
+    await h.finish()
+    assert not state['drain']['componentsReady'] and not h.runtime.admitted and not h.runtime.sent
+    failing = False
+    await h.manager.check(tier='included', fresh=True)
+    assert state['drain']['requiredSources']['included'] == revision
+    await h.finish()
+    assert not h.runtime.admitted
+    # Recheck the verified installed revision, leaving an optional update available.
+    current = revision
+    await h.manager.check(tier='included', fresh=True)
+    assert state['drain']['componentsReady'] and state['sequence']['nextStage'] == 'other'
+    assert state['available'] == 0  # Optional discovery is deferred until work can resume.
+    await h.finish()
+    await h.app.collaboration.drain(first)
+    await h.settle()
+    assert sorted(x['sessionId'] for x in h.runtime.admitted) == sorted([first, second])
+    assert h.runtime.sent == [(queued, 'Run after update', 'queued-human')]
+    await h.finish()
+    assert state['drain']['phase'] == 'released' and len(h.runtime.admitted) == 2 and len(h.runtime.sent) == 1
+
+
+@pytest.mark.parametrize('refused', [False, True])
+async def test_safe_update_withdrawal_restores_queued_work_on_original_host(waiting, monkeypatch, refused):
+    from amplifier_web.safe_update import enroll
+    h = waiting
+    await h.app.dispatch('updates.safeResume', h.wait_args['target'], include_state=False)
+    await enroll(h.manager)
+    await h.yield_turn()
+    await h.app.dispatch('session.create', {'title': 'Unrelated input'})
+    sid = h.app._session()['id']
+    await h.app.dispatch('conversation.send', {'sessionId': sid, 'text': 'Retained input'},
+                         command_id='retained-input', include_state=False)
+    if refused:
+        from amplifier_web import app_updates, windows_service
+        with monkeypatch.context() as patch:
+            patch.setattr(app_updates, 'sys', SimpleNamespace(platform='win32'))
+            patch.setattr(windows_service, 'update_owner', lambda home: None)
+            await app_updates._activate(h.manager)
+        assert h.app.state['updates']['pendingApp'] == h.release
+    else:
+        h.app.state['updates']['pendingApp'] = None
+    await drain.observe_waiters(h.manager)
+    await h.settle()
+    state = h.app.state['updates']['drain']
+    assert state['result'] == 'withdrawn' and state['phase'] == 'released'
+    assert h.runtime.sent == [(sid, 'Retained input', 'retained-input')]
+    assert len(h.runtime.admitted) == 1
+    await drain.observe_waiters(h.manager)
+    await h.settle()
+    assert len(h.runtime.admitted) == len(h.runtime.sent) == 1

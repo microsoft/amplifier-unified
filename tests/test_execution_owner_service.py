@@ -125,6 +125,15 @@ async def test_admitted_stop_observes_canonical_terminal_state(attached, outcome
         # Hold admission so the response waiter sees both retained observations.
         await finish(app, sid)
     elif outcome == 'stale-error':
+        earlier = {'interruptionRevision': app._session(sid)['interruptionRevision'] - 1, 'inputId': 'input'}
+        await app.on_runtime_event('runtime.error', {
+            'sessionId': sid, 'event': 'stop.failed', 'stopBoundary': earlier,
+            'error': 'An older Stop could not be confirmed',
+        })
+        await app.on_runtime_event('runtime.status', {
+            'sessionId': sid, 'status': 'stopped', 'stopBoundary': {
+                'interruptionRevision': app._session(sid)['interruptionRevision'], 'inputId': 'older-input'},
+        })
         await app.on_runtime_event('runtime.error', {
             'sessionId': sid, 'error': 'Stale failure must be ignored',
             'terminalFailure': {'generationId': 'not-current'},
@@ -144,9 +153,13 @@ async def test_admitted_stop_observes_canonical_terminal_state(attached, outcome
     assert runtime.stops == [sid]  # No retry of an admitted Stop.
     assert not runtime.send_cancelled
     assert receipt(app, 'input')['delivery'] == 'accepted'
+    if runtime.stop_error:
+        assert app._session(sid)['lastInterruption']['outcome'] == 'unconfirmed'
+        assert 'failure' not in receipt(app, 'input')
 
 
-@pytest.mark.parametrize('detach', ['ask', 'release', 'release-then-error'])
+@pytest.mark.parametrize('detach', ['ask', 'release', 'release-then-error',
+                                   'disconnect', 'disconnect-then-error'])
 async def test_observer_detaches_before_send_ack_without_cancelling_admission(attached, detach):
     app, owner, runtime, sid, prompt = attached
     task = await prompt()
@@ -158,6 +171,8 @@ async def test_observer_detaches_before_send_ack_without_cancelling_admission(at
         await app.on_runtime_event('approval.requested', {
             'sessionId': sid, 'id': 'approval', 'options': ['allow', 'deny'],
         })
+    elif detach.startswith('disconnect'):
+        await owner.disconnect()
     else:
         await owner.release(sid)
     await bounded(row['delivery'].failed)
@@ -171,7 +186,7 @@ async def test_observer_detaches_before_send_ack_without_cancelling_admission(at
     if detach == 'ask':
         assert next(a for a in app._session(sid)['approvals'] if a['id'] == 'approval')['status'] == 'pending'
 
-    if detach == 'release-then-error':
+    if detach in {'release-then-error', 'disconnect-then-error'}:
         runtime.send_error = RuntimeError('Late send acknowledgment failed')
     runtime.send_ack.set()
     # Observe completion without retrieving its exception: the adapter must

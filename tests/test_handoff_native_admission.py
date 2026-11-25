@@ -58,7 +58,19 @@ async def test_actual_native_turn_completes_handoff_without_self_wait(app, tmp_p
     native.coordinator.register_capability('live.runtime', live)
     native_worker.session, native_worker.runtime = native, live
     native_worker.controls = SimpleNamespace(persist=Mock())
-    native_worker.parked = False
+    from amplifier_foundation.session.activation import ActivationGate
+    native_worker.shared_handle = retained = object()
+    native_worker.activation_gate = ActivationGate()
+    native_worker.activation = native_worker.activation_gate.activate()
+    live.capture_activation = native_worker.activation_gate.current
+    native.coordinator.register_capability('live.activation', native_worker.activation_gate)
+    async def save_context(_status='completed'):
+        native_worker.activation_gate.check_current()
+        checkpoint.write_text(json.dumps(await native.coordinator.get('context').get_messages(), default=str))
+    native.coordinator.register_capability('live.checkpoint', save_context)
+    # Keep settlement deterministic until assertions about the pending move.
+    # A response alone cannot discard an outstanding native reply.
+    native_worker.bridges['fixture-settlement'] = asyncio.get_running_loop().create_future()
 
     async def boundary(_sid, identity, **kwargs):
         from amplifier_web.handoff_drain import finish
@@ -107,10 +119,15 @@ async def test_actual_native_turn_completes_handoff_without_self_wait(app, tmp_p
     telemetry.instrument_provider(sid, provider)
     await native.coordinator.mount('providers', provider, name='fixture')
     await native.coordinator.mount('tools', move, name='move')
-    task = asyncio.create_task(native.execute(''))
+    token = native_worker.activation_gate.bind(native_worker.activation)
+    try:
+        task = asyncio.create_task(native.execute(''))
+    finally:
+        native_worker.activation_gate.reset(token)
     try:
         await live.wait_for(lambda event: event['type'] == 'session.ready', 2)
-        await live.submit(Input('user', 'Move to the dedicated checkout and finish this turn.', id='native-original'))
+        await live.submit(Input('user', 'Move to the dedicated checkout and finish this turn.',
+                                id='native-original', activation=native_worker.activation))
         # On the unfixed host the completed move tool is followed by a cancelled
         # provider admission and this actual native generation never finishes.
         try:
@@ -127,8 +144,7 @@ async def test_actual_native_turn_completes_handoff_without_self_wait(app, tmp_p
         with pytest.raises(AppError, match='new input must wait'):
             await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'Do not admit before checkout settlement'}, command_id='later-input')
         assert list(live.accepted) == ['native-original']
-        checkpoint.write_text(json.dumps(messages))
-        native_worker.parked = True
+        native_worker.bridges.pop('fixture-settlement').set_result(None)
         await settle(app)
         await asyncio.gather(*list(app.tasks))
         receipt = app.worktrees.read(sid, move.receipt['id'])
@@ -138,6 +154,8 @@ async def test_actual_native_turn_completes_handoff_without_self_wait(app, tmp_p
         app.runtime.quiesce_for_handoff.assert_awaited_once()
         app.runtime.collaboration_input.assert_awaited_once()
         assert move.receipt['id'] in checkpoint.read_text()
+        assert native_worker.shared_handle is retained
+        native_worker.activation_gate.check(native_worker.activation)
         assert provider.calls == 2 and move.calls == 1
     finally:
         if not live.closed:

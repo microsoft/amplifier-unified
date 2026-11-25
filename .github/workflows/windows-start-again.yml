@@ -1,0 +1,91 @@
+name: Windows start again
+# The product's own launcher on a Windows runner: entries, first start, an AI
+# account configured without a key, the product's keep-folder uninstall (its
+# function, with its one question answered No: uninstall and keep the folder),
+# entries again, second start.
+# Task Scheduler, the host that the task starts and the
+# runtime preparation are real. Required: the second start succeeds on the same
+# port with the same data and without a new preparation.
+# Not a setup file run or a clean ordinary account. No certificate question,
+# browser, chat, model request, sign-out or sign-in.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/windows-start-again.yml
+      - tests/fixtures/windows_start_again_native.py
+      - amplifier_web/windows_installation.py
+      - amplifier_web/windows_consumer.py
+      - amplifier_web/windows_consumer_shell.py
+      - amplifier_web/windows_service.py
+      - amplifier_web/installation_runtime.py
+      # Names the preparation folder that check 8 watches.
+      - amplifier_web/runtime_environment.py
+      - amplifier_web/windows_files.py
+      - scripts/release.py
+      - tests/fixtures/windows_launcher_refresh_native.py
+      - tests/fixtures/manual_app_handoff_native.py
+      - pyproject.toml
+      - uv.lock
+permissions:
+  contents: read
+jobs:
+  windows-start-again:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+      UV_NO_BUILD_PACKAGE: amplifier-core
+      UV_PYTHON_DOWNLOADS: never
+      UV_LINK_MODE: copy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        timeout-minutes: 2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        timeout-minutes: 3
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        timeout-minutes: 2
+      - name: Prepare the candidate launcher in setup's private layout
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          python -I -B tests/fixtures/windows_start_again_native.py prepare
+          if ($LASTEXITCODE -ne 0) { throw 'Preparation failed; inspect preparation.json.' }
+      - name: Start, configure, uninstall and start again
+        timeout-minutes: 25
+        shell: pwsh
+        run: |
+          & "$env:START_AGAIN_PYTHON" -I -B tests/fixtures/windows_start_again_native.py run
+          if ($LASTEXITCODE -ne 0) { throw 'The case failed; inspect result.json and task-attempt.json.' }
+      - name: Remove only this case's task, entries and folder
+        if: always()
+        timeout-minutes: 4
+        shell: pwsh
+        run: |
+          python -I -B tests/fixtures/windows_start_again_native.py cleanup
+          if ($LASTEXITCODE -ne 0) { throw 'Cleanup failed; the folder was retained.' }
+      - name: Print the bounded result
+        if: always()
+        timeout-minutes: 1
+        shell: pwsh
+        run: |
+          foreach ($name in @('preparation.json', 'task-attempt.json', 'result.json', 'cleanup.json')) {
+            $file = Join-Path "$env:RUNNER_TEMP/start-again-evidence" $name
+            if (Test-Path $file) { Write-Output $name; Get-Content -Raw $file }
+          }
+      - name: Retain only bounded evidence
+        if: always()
+        timeout-minutes: 2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-start-again
+          path: ${{ runner.temp }}/start-again-evidence/
+          if-no-files-found: warn
+          retention-days: 7

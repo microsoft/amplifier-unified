@@ -35,13 +35,13 @@ def resolved(composition):
     return instances
 
 
-def snapshot(shell, client, instance):
+def snapshot(shell, client, instance, *, identity=None):
     service = shell.service
     state = service.state
     manifest = shell.manifest(instance['package'], validated=False)
     caps = set(manifest['capabilities'])
     session = next((row for row in state['sessions'] if row['id'] == state.get('selectedSessionId')), None)
-    composition = client['preview']['composition'] if client.get('preview') else client['composition']
+    composition = shell.effective_composition(client, identity)
     result = {'revision': state['revision'], 'compositionRevision': client['revision'], 'slot': instance['slot'],
               'view': copy.deepcopy(client['views'].get(instance['id'], {}).get('view', {}))}
     if 'shell.read' in caps:
@@ -99,7 +99,7 @@ async def command(shell, client, instance, args, origin, command_id):
         except ValidationError as exc:
             raise AppError('Invalid presentation patch: ' + exc.message)
         composition = client['preview']['composition'] if client.get('preview') else client['composition']
-        composition = {**composition, 'presentation': {**composition['presentation'], **values['patch']}}
+        composition = {**composition, 'presentation': copy.deepcopy(values['patch'])}
         target = {'clientId': args['clientId'], 'expectedRevision': client['revision']}
         prepared = await shell.dispatch('shell.changes.prepare', {**target, 'composition': composition}, origin, None)
         return await shell.dispatch('shell.changes.apply', {**target, 'changeId': prepared['result']['id']}, origin, None)

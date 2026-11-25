@@ -358,13 +358,22 @@ async def test_busy_admission_preserves_browser_draft_attachments_and_history(tm
 
 async def test_shared_agent_control_state_and_stale_revisions(service):
     before = service.get_state()
-    await service.app_bridge("dispatch", {"action": "view.update", "args": {"patch": {"scheme": "dark", "panel": "appearance"}}, "expectedRevision": before["revision"]}, before["selectedSessionId"])
-    assert service.get_state()["view"]["scheme"] == "dark"
+    await service.app_bridge("dispatch", {"action": "view.update", "args": {"patch": {"panel": "appearance"}}, "expectedRevision": before["revision"]}, before["selectedSessionId"])
+    assert service.get_state()["view"]["panel"] == "appearance"
     with pytest.raises(AppError, match="app changed"):
-        await service.dispatch("view.update", {"patch": {"scheme": "light"}}, expected_revision=before["revision"])
+        await service.dispatch("view.update", {"patch": {"panel": None}}, expected_revision=before["revision"])
+    current = service.appearance.shared()
+    await service.app_bridge("dispatch", {"action": "appearance.preferences.update", "args": {
+        "scope": "shared", "expectedRevision": current["revision"], "patch": {"scheme": "dark"}}}, before["selectedSessionId"])
+    with pytest.raises(AppError, match="changed"):
+        await service.app_bridge("dispatch", {"action": "appearance.preferences.update", "args": {
+            "scope": "shared", "expectedRevision": current["revision"], "patch": {"scheme": "light"}}}, before["selectedSessionId"])
     snapshot = service.get_state()
-    snapshot["view"]["scheme"] = "corrupted"
-    assert service.get_state()["view"]["scheme"] == "dark"
+    snapshot["view"]["panel"] = "corrupted"
+    assert service.get_state()["view"]["panel"] == "appearance"
+    preferences = service.appearance.read()
+    preferences["effective"]["scheme"] = "corrupted"
+    assert service.appearance.read()["effective"]["scheme"] == "dark"
 
 
 async def test_voice_pins_session_and_end_does_not_stop_work(service):
@@ -380,32 +389,96 @@ async def test_voice_pins_session_and_end_does_not_stop_work(service):
     assert not service.runtime.stopped
 
 
+class DeliveredFirstRuntime(Runtime):
+    """As the real runtime does: send returns when the worker has the input; the turn ends later."""
+    async def send(self, session, text, input_id, emit):
+        self.sent.append((session["id"], text, input_id))
+        self.emit = emit
+        return {"accepted": True}
+
+
+async def test_voice_delegation_delivered_before_its_turn_ends_is_not_a_runtime_error(tmp_path):
+    # A voice delegation has no user bubble with a delivery: that lives in the command receipt.
+    # Reading it from a missing bubble raised KeyError('delivery'), which became a
+    # runtime.error; the waiting call then told the caller that the request had failed.
+    runtime = DeliveredFirstRuntime()
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    await app.dispatch("session.create", {})
+    sid = app.get_state()["selectedSessionId"]
+    await app.voice_delegate("Voice request", "voice:call:item", session_id=sid)
+    await asyncio.gather(*app.tasks)
+    session = app._session(sid)
+    assert session["status"] == "working" and not session.get("error")
+    assert not [row for row in session.get("runtimeEvents", []) if row["type"] == "runtime.error"]
+    receipt = json.loads(app.db.execute("SELECT receipt FROM commands WHERE id=?", ("voice:call:item",)).fetchone()[0])
+    assert receipt["delivery"] == "accepted"
+    waiting = asyncio.create_task(app.wait_for_response(sid, "voice:call:item", timeout=2))
+    await asyncio.sleep(0)
+    assert not waiting.done()
+    await runtime.emit("runtime.generation", {"sessionId": sid, "event": "generation.finished",
+        "generation_id": "voice-generation", "input_ids": ["voice:call:item"], "text": "Done",
+        "active_job_ids": [], "disposition": "manager_turn_finished"})
+    assert (await waiting)["text"] == "Done"
+    await app.close()
+
+
 async def test_skin_roundtrip_and_external_assets_rejected(service):
+    from copy import deepcopy
+    import base64
+    from amplifier_web import appearance_packages
     css = '#amp-one {color: #4338f4; background: #e8eeff;}'
-    await service.dispatch("theme.apply", {"name": "Custom violet", "css": css}, origin="agent")
-    exported = await service.dispatch("theme.export", {})
-    assert exported["effects"][0]["content"] == css
+    before = deepcopy(service.appearance.shared())
+    saved = (await service.dispatch("theme.save", {"name": "Custom violet", "css": css}, origin="agent"))["result"]
+    exported = await service.dispatch("theme.export", {"id": saved["id"]})
+    raw = base64.b64decode(exported["result"]["base64"])
+    package = appearance_packages.load(raw)
+    assert package.css == css and package.manifest["formatVersion"] == 2
+    assert package.manifest["base"] == "reference-v1"
+    assert exported["effects"][0]["content"] == {"base64": exported["result"]["base64"]}
+    imported = (await service.dispatch("theme.import", {"packageBase64": exported["result"]["base64"]}))["result"]
+    assert imported["id"] == saved["id"]
     for bad in ['@import "https://example.com/a.css";', '#amp-one {background:url("https://example.com/x")}']:
         with pytest.raises(AppError):
             validate_theme(bad)
-    assert service.get_state()["theme"]["css"] == css
+        with pytest.raises(AppError):
+            await service.dispatch("theme.save", {"name": "Unsafe", "css": bad})
+    assert service.appearance.shared() == before
+    assert (await service.dispatch("theme.read", {"id": saved["id"]}))["result"]["css"] == css
 
 
 async def test_saved_skin_survives_changed_defaults_until_explicit_reset(tmp_path, monkeypatch):
+    from copy import deepcopy
+    from amplifier_web import appearance_preferences
     saved = {"name": "Saved studio skin", "css": "/* Private palette */ #amp-one {--a-accent: #765432;}"}
+    retired = {"name": "Retired inert skin", "css": "#amp-one {--a-accent: #abcdef;}"}
     app = AppService(tmp_path, Runtime(), workspace=tmp_path)
-    await app.dispatch("theme.apply", saved, origin="agent")
+    # Retired bytes stay inert; only explicit new-generation edits select.
+    app._state["theme"] = deepcopy(retired)
+    app._save()
+    row = (await app.dispatch("theme.save", saved, origin="agent"))["result"]
+    await app.dispatch("appearance.preferences.update", {"scope": "shared", "expectedRevision": 0,
+        "patch": {"appearanceId": row["id"], "accent": "#765432", "scheme": "dark"}}, origin="agent")
+    before = deepcopy(app.appearance.shared())
+    owner = app.appearance.owner
+    old_bytes = app.db.execute("SELECT value FROM shell_records WHERE kind='preferences' AND id='shared-reference-v2'").fetchone()[0]
     await app.close()
 
-    replacement = "#amp-one {--a-accent: #123456;}"
-    monkeypatch.setattr(AppService, "default_theme", lambda self: replacement)
+    replacement = deepcopy(appearance_preferences.DEFAULTS)
+    replacement.update(appearanceId="builtin:graphite", scheme="light")
+    monkeypatch.setattr(appearance_preferences, "DEFAULTS", replacement)
     restored = AppService(tmp_path, Runtime(), workspace=tmp_path)
     try:
-        assert restored.get_state()["theme"] == saved
-        exported = await restored.dispatch("theme.export", {}, origin="agent")
-        assert exported["effects"][0]["content"] == saved["css"]
-        await restored.dispatch("theme.reset", {}, origin="ui")
-        assert restored.get_state()["theme"] == {"name": "Amplifier Unified", "css": replacement}
+        assert restored.get_state()["theme"] == retired
+        assert restored.appearance.shared() == before and restored.appearance.owner == owner
+        assert restored.db.execute("SELECT value FROM shell_records WHERE kind='preferences' AND id='shared-reference-v2'").fetchone()[0] == old_bytes
+        assert restored.appearance.read()["effective"]["appearanceId"] == row["id"]
+        assert (await restored.dispatch("theme.read", {"id": row["id"]}))["result"]["css"] == saved["css"]
+        await restored.dispatch("appearance.preferences.update", {"scope": "shared",
+            "expectedRevision": before["revision"], "patch": {"accent": None}}, origin="ui")
+        expected = {key: value for key, value in before["values"].items() if key != "accent"}
+        assert restored.appearance.shared()["values"] == expected
+        assert restored.appearance.read()["theme"]["css"] == saved["css"]
+        assert restored.get_state()["theme"] == retired, "Reset never rewrites retired state"
     finally:
         await restored.close()
 
@@ -535,15 +608,33 @@ async def test_attention_read_persists_and_errors_route_to_their_page(tmp_path):
     await restored.close()
 
 
-async def test_successful_session_start_clears_persisted_error_and_attention(service):
+@pytest.mark.parametrize('startup', [True, False], ids=['startup-failure', 'request-failure'])
+async def test_successful_session_start_clears_only_startup_error_and_attention(service, startup):
     sid=service.get_state()['selectedSessionId']
-    await service.on_runtime_event('runtime.error',{'sessionId':sid,'error':'ValueError: contextTokens must be a positive integer'})
+    error = 'ValueError: contextTokens must be a positive integer'
+    await service.on_runtime_event('runtime.error', {
+        'sessionId': sid, 'error': error,
+        **({'errorType': 'RuntimeStartupError', 'phase': 'worker_startup'} if startup else {}),
+    })
+    failure = dict(service._session(sid)['failure'])
+    assert (failure['category'] == 'worker_startup') is startup
     assert service.get_state()['attention']['unread']==1
     await service.on_runtime_event('runtime.status',{'sessionId':sid,'status':'ready','phase':'ready'})
-    assert 'error' not in service.get_state()['sessions'][0]
-    assert service.get_state()['attention']['unread']==0
+    if startup:
+        assert 'error' not in service.get_state()['sessions'][0]
+        assert 'failure' not in service._session(sid)
+    else:
+        # Readiness is not recovery of an unresolved model request.
+        assert service.get_state()['sessions'][0]['error'] == error
+        assert service._session(sid)['failure'] == failure
+    assert service.get_state()['attention']['unread'] == (0 if startup else 1)
     await service.on_runtime_event('runtime.status',{'sessionId':sid,'status':'idle'})
-    assert 'error' not in service.get_state()['sessions'][0]
+    if startup:
+        assert 'error' not in service.get_state()['sessions'][0]
+    else:
+        assert service.get_state()['sessions'][0]['error'] == error
+        assert service._session(sid)['failure'] == failure
+    assert service.get_state()['attention']['unread'] == (0 if startup else 1)
 
 
 @pytest.mark.parametrize('status',['starting','idle','stopping','stopped'])
@@ -680,7 +771,10 @@ async def test_failed_direct_send_settles_activity_without_replay_or_lost_input(
         message = next(row for row in session['messages'] if row.get('inputId') == 'failed-start')
         assert message['text'] == request['text']
         assert message['delivery']['status'] == 'failed'
-        assert session['execution']['turns'][-1]['phase'] == 'error'
+        # Startup failed before the actual owner admitted a generation. Saving
+        # the failed input is not evidence that a turn ever began.
+        assert not session.get('execution', {}).get('turns')
+        assert not session.get('collaborationGeneration')
         assert not UpdateManager(app).busy()
         duplicate = await app.dispatch('conversation.send', request, command_id='failed-start')
         assert duplicate['duplicate'] is True
@@ -724,24 +818,81 @@ async def test_restart_and_rewarming_cannot_turn_unconfirmed_work_into_success(t
         assert current['execution']['turns'][0]['phase'] == 'interrupted'
         assert current['error'] and current['failure']['category'] == 'execution_interrupted'
         assert not restored.runtime.sent
+        # An unidentifiable start is evidence, not canonical admission.
         await restored.on_runtime_event('runtime.generation', {'sessionId': sid, 'event': 'generation.started'})
+        assert current['error'] and current['failure']['category'] == 'execution_interrupted'
+        assert not current.get('collaborationGeneration')
+        assert current['execution']['turns'][0]['phase'] == 'interrupted'
+        await restored.on_runtime_event('runtime.generation', {
+            'sessionId': sid, 'rootSessionId': sid, 'event': 'generation.started',
+            'generation_id': 'fresh-after-restart',
+            'interruptionRevision': current.get('interruptionRevision', 0),
+        })
+        assert current['collaborationGeneration']['id'] == 'fresh-after-restart'
+        assert current['collaborationGeneration']['terminal'] is False
         assert 'error' not in current
+        assert 'failure' not in current
+        assert current['execution']['turns'][0]['phase'] == 'interrupted'
+        assert not restored.runtime.sent  # New admission never replays unfinished input.
     finally:
         await restored.close()
 
 
 async def test_worker_exit_only_marks_unfinished_root_work(service):
+    import time
     from amplifier_web.execution import ensure_turn
+    from amplifier_web.input_status import PREFIX
     session = service._session()
     sid = session['id']
     await service.on_runtime_event('runtime.ended', {'sessionId': sid})
     assert 'error' not in session
+    tree = ensure_turn(session, 'unbound')
+    unbound = tree['turns'][-1]
+    await service.on_runtime_event('runtime.ended', {
+        'sessionId': sid, 'runtimeOwnerId': 'owned-process'})
+    assert unbound['phase'] == 'running' and 'runtimeOwnerId' not in unbound
+    assert 'error' not in session
+
     ensure_turn(session, 'unfinished')
-    await service.on_runtime_event('runtime.ended', {'sessionId': sid, 'backgroundOnly': True})
-    assert session['execution']['turns'][0]['phase'] == 'running'
-    await service.on_runtime_event('runtime.ended', {'sessionId': sid})
-    assert session['execution']['turns'][0]['phase'] == 'interrupted'
+    turn = tree['turns'][-1]
+    observed = time.time()
+    epoch = session.get('interruptionRevision', 0)
+    await service.on_runtime_event('runtime.generation', {
+        'sessionId': sid, 'rootSessionId': sid, 'event': 'generation.started',
+        'initial_input_id': 'unfinished', 'generation_id': 'owned-generation',
+        'observedAt': observed, 'runtimeOwnerId': 'owned-process',
+        'interruptionRevision': epoch})
+    assert turn['runtimeOwnerId'] == 'owned-process'
+    assert turn['generationId'] == 'owned-generation'
+    annotation = session['messageAnnotations'][PREFIX + 'unfinished']
+    assert annotation['_generationStartedAt'] == observed
+    assert annotation['inputStatus']['basis'] == 'generation_started'
+    assert annotation['inputStatus']['phase'] == 'working'
+    ending = {'sessionId': sid, 'rootSessionId': sid,
+              'runtimeOwnerId': 'owned-process', 'status': 'interrupted'}
+    for payload in (
+        {**ending, 'backgroundOnly': True},
+        {**ending, 'sessionId': 'child'},
+        {key: value for key, value in ending.items() if key != 'runtimeOwnerId'},
+        {**ending, 'runtimeOwnerId': 'replacement-process'},
+    ):
+        await service.on_runtime_event('runtime.ended', payload)
+        assert turn['phase'] == unbound['phase'] == 'running'
+        assert not turn.get('endedAt') and not unbound.get('endedAt')
+        assert 'error' not in session
+
+    await service.on_runtime_event('runtime.ended', ending)
+    assert turn['phase'] == 'interrupted' and turn['endedAt'] >= observed
+    assert unbound['phase'] == 'running' and not unbound.get('endedAt')
+    assert session['messageAnnotations'][PREFIX + 'unfinished']['inputStatus']['phase'] == 'unknown'
     assert session['failure']['category'] == 'execution_interrupted'
+    ended = turn['endedAt']
+    ensure_turn(session, 'next-input')
+    next_turn = tree['turns'][-1]
+    await service.on_runtime_event('runtime.ended', ending)
+    assert next_turn['phase'] == 'running' and not next_turn.get('endedAt')
+    assert 'runtimeOwnerId' not in next_turn
+    assert turn['phase'] == 'interrupted' and turn['endedAt'] == ended
 
 
 @pytest.mark.parametrize('later_turn', [False, True])
@@ -771,3 +922,190 @@ async def test_manager_failure_corrects_earlier_idle_receipt_for_only_its_input(
         await service.on_runtime_event('runtime.error', {'sessionId': sid, 'error': 'Manager turn failed'})
         assert session['status'] == 'error'
         assert session['failure']['countFailure']['httpStatus'] == 500
+
+
+async def _as_client(service, client, action, args=None):
+    with service.clients.bind(client):
+        return await service.dispatch(action, args)
+
+
+def _setup_step(service, client):
+    with service.clients.bind(client):
+        return service.browser_state()['view'].get('setupJourney')
+
+
+def _saved_setup_step(service):
+    """The shared view as the next host process reads it. A close saves everything, so read it before."""
+    row = service.db.execute("SELECT value FROM state_records WHERE kind='global' AND id='view'").fetchone()
+    return json.loads(row[0])['value'].get('setupJourney')
+
+
+def _as_an_earlier_version_saved_it(service):
+    # An earlier version changed only a tab's own view: the saved shared view kept the first step.
+    service._state['view']['setupJourney'] = 'welcome'
+    service._save_changes(globals={'view'})
+    assert _saved_setup_step(service) == 'welcome'
+
+
+class _RuntimeThatDoesNotStart(Runtime):
+    async def send(self, session, text, input_id, emit, **options):
+        from amplifier_web.runtime import RuntimeStartupError
+        raise RuntimeStartupError('Amplifier did not send your message.')
+
+
+class _RuntimeOfAChatInUseElsewhere(Runtime):
+    async def send(self, session, text, input_id, emit, **options):
+        from amplifier_web.runtime import SessionInUseError
+        raise SessionInUseError({'app': 'amplifier-cli', 'host': 'test-host', 'pid': 123})
+
+
+async def test_first_use_starts_every_new_browser_tab_at_the_first_setup_step(tmp_path):
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        service.clients.attach('tab-one')
+        assert _setup_step(service, 'tab-one') == 'welcome'
+        # The client writes this by itself when it opens the AI connections.
+        await _as_client(service, 'tab-one', 'view.update', {'patch': {'setupJourney': 'connect'}})
+        # Work that is not a person's chat does not end first use.
+        await _as_client(service, 'tab-one', 'session.create', {'title': 'Not selected', 'select': False})
+        await _as_client(service, 'tab-one', 'session.create', {'purpose': 'terminal-tool'})
+        assert _saved_setup_step(service) == 'welcome'
+        service.clients.attach('tab-two')
+        assert _setup_step(service, 'tab-two') == 'welcome'
+        assert _setup_step(service, 'tab-one') == 'connect'
+    finally:
+        await service.close()
+
+
+@pytest.mark.parametrize('step_of_first_tab', ['welcome', 'connect'])
+async def test_new_browser_tab_after_a_first_chat_does_not_start_at_the_first_setup_step(tmp_path, step_of_first_tab):
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        service.clients.attach('tab-one')
+        if step_of_first_tab != 'welcome':
+            await _as_client(service, 'tab-one', 'view.update', {'patch': {'setupJourney': step_of_first_tab}})
+        await _as_client(service, 'tab-one', 'session.create', {'title': 'First chat'})
+        assert _saved_setup_step(service) == 'done'
+        # Only a tab that is still at the first step is moved by its own chat.
+        assert _setup_step(service, 'tab-one') == {'welcome': 'done', 'connect': 'connect'}[step_of_first_tab]
+        service.clients.attach('tab-two')
+        assert _setup_step(service, 'tab-two') == 'done'
+    finally:
+        await service.close()
+    # A start of the app opens a new tab.
+    restored = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        restored.clients.attach('tab-after-start')
+        assert _setup_step(restored, 'tab-after-start') == 'done'
+    finally:
+        await restored.close()
+
+
+async def test_a_first_chat_with_no_browser_tab_attached_ends_first_use(tmp_path):
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await service.dispatch('session.create', {'title': 'First chat'})
+        assert _saved_setup_step(service) == 'done'
+        service.clients.attach('tab-one')
+        assert _setup_step(service, 'tab-one') == 'done'
+    finally:
+        await service.close()
+
+
+async def test_new_browser_tab_after_a_finished_setup_does_not_start_at_the_first_setup_step(tmp_path):
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        service.clients.attach('tab-one')
+        await _as_client(service, 'tab-one', 'view.update', {'patch': {'setupJourney': 'connect'}})
+        assert _saved_setup_step(service) == 'welcome'
+        await _as_client(service, 'tab-one', 'view.update', {'patch': {'panel': None, 'setupJourney': 'done'}})
+        assert _saved_setup_step(service) == 'done'
+        service.clients.attach('tab-two')
+        assert _setup_step(service, 'tab-two') == 'done'
+    finally:
+        await service.close()
+
+
+async def test_a_persons_message_ends_first_use_on_an_installation_of_an_earlier_version(tmp_path):
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        service.clients.attach('tab-one')
+        await _as_client(service, 'tab-one', 'session.create', {'title': 'Made by an earlier version'})
+        chat = service.clients.records['tab-one']['selectedSessionId']
+        _as_an_earlier_version_saved_it(service)
+        service.clients.attach('tab-two')
+        assert _setup_step(service, 'tab-two') == 'welcome'
+        # Opening a chat does not change the shared setup step.
+        await _as_client(service, 'tab-two', 'session.select', {'id': chat})
+        assert _saved_setup_step(service) == 'welcome'
+        # A message that no person sent does not change it either.
+        await service.dispatch('conversation.send', {'sessionId': chat, 'text': 'From the chat itself'},
+                               origin='agent', caller_session_id=chat)
+        assert _saved_setup_step(service) == 'welcome'
+        service.clients.attach('tab-three')
+        assert _setup_step(service, 'tab-three') == 'welcome'
+        sent = await _as_client(service, 'tab-one', 'conversation.send', {'sessionId': chat, 'text': 'Go on'})
+        assert sent['accepted']
+        assert _saved_setup_step(service) == 'done'
+        service.clients.attach('tab-four')
+        assert _setup_step(service, 'tab-four') == 'done'
+    finally:
+        await service.close()
+
+
+async def test_a_persons_message_whose_delivery_fails_still_ends_first_use(tmp_path):
+    service = AppService(tmp_path, _RuntimeThatDoesNotStart(), workspace=tmp_path)
+    try:
+        service.clients.attach('tab-one')
+        await _as_client(service, 'tab-one', 'session.create', {'title': 'Made by an earlier version'})
+        chat = service.clients.records['tab-one']['selectedSessionId']
+        _as_an_earlier_version_saved_it(service)
+        with pytest.raises(AppError) as failure:
+            await _as_client(service, 'tab-one', 'conversation.send', {'sessionId': chat, 'text': 'Kept, not delivered'})
+        assert failure.value.code == 'worker_startup_failed'
+        message = next(row for row in service._session(chat)['messages'] if row.get('text') == 'Kept, not delivered')
+        assert message['delivery']['status'] == 'failed'
+        # The person used the app: the message is saved in the chat. First use is over.
+        assert _saved_setup_step(service) == 'done'
+        service.clients.attach('tab-two')
+        assert _setup_step(service, 'tab-two') == 'done'
+    finally:
+        await service.close()
+
+
+async def test_a_persons_message_that_is_refused_because_the_chat_is_in_use_still_ends_first_use(tmp_path):
+    service = AppService(tmp_path, _RuntimeOfAChatInUseElsewhere(), workspace=tmp_path)
+    try:
+        service.clients.attach('tab-one')
+        await _as_client(service, 'tab-one', 'session.create', {'title': 'Made by an earlier version'})
+        chat = service.clients.records['tab-one']['selectedSessionId']
+        _as_an_earlier_version_saved_it(service)
+        await _as_client(service, 'tab-one', 'view.update', {'patch': {'draft': 'Keep this draft'}})
+        with pytest.raises(AppError, match='conversation is in use') as refusal:
+            await _as_client(service, 'tab-one', 'conversation.send', {'sessionId': chat, 'text': 'Keep this draft'})
+        assert refusal.value.status == 409 and refusal.value.code == 'session_busy'
+        # A refusal at once: the host removed the attempted message again. The tab's draft is unchanged.
+        assert service._session(chat)['messages'] == []
+        assert service.clients.records['tab-one']['drafts'][chat] == 'Keep this draft'
+        # The chat exists and a person used it: first use is over.
+        assert _saved_setup_step(service) == 'done'
+        service.clients.attach('tab-two')
+        assert _setup_step(service, 'tab-two') == 'done'
+    finally:
+        await service.close()
+
+
+async def test_a_message_to_internal_work_does_not_end_first_use(tmp_path):
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        service.clients.attach('tab-one')
+        created = await _as_client(service, 'tab-one', 'session.create', {'purpose': 'terminal-tool'})
+        internal = created['sessionId']
+        assert service._session(internal)['sessionKind'] == 'internal'
+        sent = await _as_client(service, 'tab-one', 'conversation.send', {'sessionId': internal, 'text': 'Run it'})
+        assert sent['accepted']
+        assert _saved_setup_step(service) == 'welcome'
+        service.clients.attach('tab-two')
+        assert _setup_step(service, 'tab-two') == 'welcome'
+    finally:
+        await service.close()

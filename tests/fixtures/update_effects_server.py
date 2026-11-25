@@ -9,6 +9,7 @@ import json
 import os
 import signal
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 from aiohttp import web
@@ -22,6 +23,17 @@ async def serve():
         service = app['service']
         manager = service.update_manager
         session = service._session()
+        runtime = service.runtime
+        # Current application gate observes global activity as well as the
+        # individual hold. These are synthetic observers, not real workers.
+        runtime.workers = {}
+        runtime._preparations = {}
+        runtime.has_pending_operations = lambda: False
+        @contextmanager
+        def stopped_boundary(_session):
+            assert not runtime.workers and not runtime._preparations
+            yield
+        runtime.stopped_boundary = stopped_boundary
         # A declared running-chat prerequisite exercises the real blocker projection.
         # No provider or worker actually runs in this UI-only effect fixture.
         session['status'] = 'working'
@@ -71,7 +83,7 @@ async def serve():
                     available = {**application, 'latest': '99.0.1', 'revision': 'c'*40}
                 elif mode == 'offline':
                     available = {'status': 'check_failed'}
-                elif mode in {'management-hold', 'unobservable-hold', 'operation-hold', 'hold-clear'}:
+                elif mode in {'management-hold', 'unobservable-hold', 'mounted-worker-hold', 'hold-clear'}:
                     # Synthetic predicate inputs, real gate/public projection.
                     if manager.service.management.lock.locked():
                         manager.service.management.lock.release()
@@ -79,12 +91,16 @@ async def serve():
                                    pendingConfiguration={'phase': 'error', 'recoveryRequired': True,
                                                          'error': 'PRIVATE_HOLD_SENTINEL'})
                     service.runtime.has_pending_operations = lambda: False
+                    runtime.workers.clear()
                     if mode == 'management-hold':
                         await service.management.lock.acquire()
                     elif mode == 'unobservable-hold':
                         service.runtime.has_pending_operations = None
-                    elif mode == 'operation-hold':
+                    elif mode == 'mounted-worker-hold':
+                        # A historical operation ID alone no longer blocks an
+                        # app update. Model actual unquiesced runtime ownership.
                         session['pendingConfiguration']['operationId'] = 'PRIVATE_OPERATION_SENTINEL'
+                        runtime.workers[session['id']] = object()
                     else:
                         session.update(status='working', configurationBusy=False, pendingConfiguration={})
                     await manager.publish()

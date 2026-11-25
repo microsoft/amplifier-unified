@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import importlib.metadata
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -26,21 +29,26 @@ def require_session_api():
 
     activation_module = 'amplifier_foundation.session.activation'
     transcript_module = 'amplifier_foundation.session.transcript_guard'
+    store_module = 'amplifier_foundation.session.shared_state'
     message = ('This conversation setup needs an included-component update. '
                'Open Settings > Updates and install the included updates, then retry. '
                'The saved runtime and conversation have not been changed.')
     try:
         activation = import_module(activation_module)
         transcript = import_module(transcript_module)
+        shared_state = import_module(store_module)
     except ModuleNotFoundError as error:
         if error.name not in {'amplifier_foundation', 'amplifier_foundation.session',
-                              activation_module, transcript_module}:
+                              activation_module, transcript_module, store_module}:
             raise
         raise RuntimeDependencyError(message) from error
     gate = getattr(activation, 'ActivationGate', None)
     guard = getattr(transcript, 'NativeTranscriptGuard', None)
     conflict = getattr(transcript, 'NativeTranscriptConflict', None)
-    if not (isinstance(gate, type) and isinstance(guard, type) and isinstance(conflict, type)):
+    store = getattr(shared_state, 'SharedSessionStore', None)
+    if not (isinstance(gate, type) and isinstance(guard, type) and isinstance(conflict, type)
+            and isinstance(store, type)
+            and inspect.iscoroutinefunction(getattr(store, 'acquire_async', None))):
         raise RuntimeDependencyError(message)
 
 
@@ -75,7 +83,8 @@ def _installed_checkout_environment(root, env):
     lookup = {key: value for key, value in env.items() if not key.startswith('GIT_CONFIG_')}
     result = subprocess.run(
         ['git', '--no-optional-locks', 'config', '--no-includes', '--get', 'core.autocrlf'],
-        cwd=root, env=lookup, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+        cwd=root, env=lookup, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10,
+        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if result.returncode == 1 and not result.stdout:
         return env  # Unset remains Git's default, not an invented Windows policy.
     if result.returncode != 0:
@@ -99,7 +108,8 @@ def _installed_checkout_dirty(root, env):
         result = subprocess.run(
             ['git', '--no-optional-locks', 'diff', '--quiet', '--no-ext-diff',
              '--no-textconv', *(['--cached'] if cached else []), '--'],
-            cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+            cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         if result.returncode == 1:
             return True
         if result.returncode != 0:
@@ -112,43 +122,92 @@ def _cache_subdirectory(path, root):
     return path.relative_to(root).as_posix()
 
 
+def _installed_checkout_status(root, env):
+    command = ['git', '--no-optional-locks', 'status', '--porcelain=v2', '-z',
+               '--branch', '--untracked-files=no']
+    options = {'cwd': root, 'env': env, 'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)}
+    try:
+        status = subprocess.check_output([*command, '--no-ahead-behind'], **options)
+    except subprocess.CalledProcessError as error:
+        if error.returncode != 129:
+            raise
+        # Git 2.15/2.16 support no-optional-locks and porcelain v2, but lack
+        # this switch. Their upstream count is irrelevant to the witness.
+        status = subprocess.check_output(command, **options)
+
+    # With -z, a rename's second pathname is an arbitrary standalone record.
+    # Only leading header records can supply the object ID.
+    revision = None
+    pos = 0
+    while status.startswith(b'# ', pos):
+        end = status.index(b'\0', pos)
+        if status.startswith(b'# branch.oid ', pos):
+            oid = status[pos + len(b'# branch.oid '):end]
+            if (revision is not None or not oid.strip(b'0')
+                    or not re.fullmatch(rb'[0-9a-f]{40}(?:[0-9a-f]{24})?', oid)):
+                raise ValueError('Installed checkout has no valid HEAD commit')
+            revision = oid.decode('ascii')
+        pos = end + 1
+    if revision is None:
+        raise ValueError('Installed checkout has no HEAD commit')
+    return revision, pos < len(status)
+
+
+def _installed_root(root, git_env):
+    """Read one fresh checkout witness with the existing local Git policy."""
+    data = json.loads((root / '.amplifier_cache_meta.json').read_text())
+    checkout_env = _installed_checkout_environment(root, git_env)
+    revision, dirty = _installed_checkout_status(root, checkout_env)
+    if dirty and checkout_env is not git_env:
+        dirty = _installed_checkout_dirty(root, checkout_env)
+    tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=root, env=checkout_env,
+        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).split(b'\0')
+    tree = hashlib.sha256()
+    for raw in sorted(item for item in tracked if item):
+        file = root / raw.decode()
+        tree.update(raw + b'\0')
+        tree.update(file.read_bytes() if file.is_file() and not file.is_symlink() else b'<non-regular>')
+    return {'url': data['git_url'], 'ref': data.get('ref') or 'HEAD',
+            'revision': revision, 'dirty': bool(dirty), 'trackedContentSha256': tree.hexdigest()}
+
+
 def installed_graph(project):
     """Read complete PEP 610 provenance, including Foundation's editable caches."""
     paths = list((Path(project) / '.venv').glob('lib/python*/site-packages'))
     paths += [Path(project) / '.venv/Lib/site-packages']
-    rows = []
+    rows, links = [], []
     roots = {}  # One fresh evidence snapshot per real checkout, per call.
     git_env = _installed_git_environment()
-    for dist in importlib.metadata.distributions(path=[str(path) for path in paths if path.is_dir()]):
-        row = {'name': environments.package_name(dist.metadata['Name']), 'version': dist.version}
-        direct = json.loads(dist.read_text('direct_url.json') or '{}')
-        if direct:
-            row['directUrl'] = direct
-            parsed = urlsplit(direct.get('url', ''))
-            if parsed.scheme == 'file' and direct.get('dir_info') is not None:
-                path = _file_url_path(parsed).resolve()
-                row['path'] = str(path)
-                for parent in (path, *path.parents):
-                    meta = parent / '.amplifier_cache_meta.json'
-                    if meta.is_file() and (parent / '.git').exists():
-                        if parent not in roots:
-                            data = json.loads(meta.read_text())
-                            checkout_env = _installed_checkout_environment(parent, git_env)
-                            revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=parent, env=checkout_env, text=True).strip()
-                            dirty = subprocess.check_output(['git', '--no-optional-locks', 'status', '--porcelain', '--untracked-files=no'], cwd=parent, env=checkout_env, text=True).strip()
-                            if dirty and checkout_env is not git_env:
-                                dirty = _installed_checkout_dirty(parent, checkout_env)
-                            tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=parent, env=checkout_env).split(b'\0')
-                            tree = hashlib.sha256()
-                            for raw in sorted(item for item in tracked if item):
-                                file = parent / raw.decode()
-                                tree.update(raw + b'\0')
-                                tree.update(file.read_bytes() if file.is_file() and not file.is_symlink() else b'<non-regular>')
-                            roots[parent] = {'url': data['git_url'], 'ref': data.get('ref') or 'HEAD',
-                                             'revision': revision, 'dirty': bool(dirty), 'trackedContentSha256': tree.hexdigest()}
-                        row['cacheSource'] = {**roots[parent], 'subdirectory': _cache_subdirectory(path, parent)}
-                        break
-        rows.append(row)
+    readers = ThreadPoolExecutor(max_workers=2)
+    try:
+        try:
+            for dist in importlib.metadata.distributions(path=[str(path) for path in paths if path.is_dir()]):
+                row = {'name': environments.package_name(dist.metadata['Name']), 'version': dist.version}
+                direct = json.loads(dist.read_text('direct_url.json') or '{}')
+                if direct:
+                    row['directUrl'] = direct
+                    parsed = urlsplit(direct.get('url', ''))
+                    if parsed.scheme == 'file' and direct.get('dir_info') is not None:
+                        path = _file_url_path(parsed).resolve()
+                        row['path'] = str(path)
+                        for parent in (path, *path.parents):
+                            meta = parent / '.amplifier_cache_meta.json'
+                            if meta.is_file() and (parent / '.git').exists():
+                                if parent not in roots:
+                                    roots[parent] = readers.submit(_installed_root, parent, git_env)
+                                links.append((row, parent, path))
+                                break
+                rows.append(row)
+        except Exception:
+            # Earlier checkout errors retain precedence over later metadata errors.
+            for future in roots.values():
+                future.result()
+            raise
+        for row, root, path in links:
+            row['cacheSource'] = {**roots[root].result(), 'subdirectory': _cache_subdirectory(path, root)}
+    finally:
+        # Never leave started reads running after this synchronous call exits.
+        readers.shutdown(wait=True, cancel_futures=True)
     names = [row['name'] for row in rows]
     if len(names) != len(set(names)):
         raise ValueError('The worker contains ambiguous duplicate installed distributions.')
@@ -374,8 +433,12 @@ def _local_directory_identity(row):
     return row
 
 
-async def freeze(manager, generation, project):
-    """Freeze the post-probe graph into a distinct project and verify its install."""
+async def freeze(manager, generation, project, *, baseline_manifest=None):
+    """Reproduce the prepared graph; keep inherited baseline policy separate.
+
+    Fresh component updates use packaged baseline policy. Lazy profiles pass
+    their parent's policy rather than claiming adoption of newer declarations.
+    """
     from .updates import process
     receipt = environments.receipt_directory(manager.home, generation)
     if (receipt / 'runtime.lock').exists():
@@ -427,9 +490,14 @@ async def freeze(manager, generation, project):
         policies[name] = policy
     from .runtime_source_policy import qualify_cache_policies
     policies = await qualify_cache_policies(policies, checked, process)
+    baseline_manifest = environments.declared_manifest() if baseline_manifest is None else baseline_manifest
+    from .runtime_source_policy import qualify_app_policies
+    policies = await qualify_app_policies(policies, checked, project, baseline_manifest, process)
     if not graph:
         raise ValueError('The prepared worker has no installed distribution evidence.')
-    content = frozen_manifest(environments.declared_manifest(), graph)
+    # Qualification reproduces the prepared policy, not newer app declarations.
+    # A lazy profile can start from an older generation after an app update.
+    content = frozen_manifest((Path(project) / 'pyproject.toml').read_bytes(), graph)
     # Share only a fully qualified immutable graph with the same Python/OS
     # contract. Active environments are never uv-synced or repaired in place.
     # Generation receipts retain separate ref policy and rollback identity.
@@ -489,7 +557,7 @@ async def freeze(manager, generation, project):
             manager.diagnostics.record('ecosystem-runtime-reuse', 'succeeded')
     from .deployment import write_private
     write_private(receipt / 'runtime-project.json', json.dumps({'project': final.name}), owned_root=manager.home)
-    receipt.joinpath('runtime-base.toml').write_bytes(environments.declared_manifest())
+    receipt.joinpath('runtime-base.toml').write_bytes(baseline_manifest)
     shutil.copy2(final / 'pyproject.toml', receipt / 'runtime.toml')
     shutil.copy2(final / 'uv.lock', receipt / 'runtime.lock')
     receipt.joinpath('runtime-sources.json').write_text(json.dumps(policies, indent=2) + '\n')
@@ -508,11 +576,18 @@ async def freeze(manager, generation, project):
     return final
 
 
-def verify_recorded(project, receipt, *, allow_additions=False):
-    evidence = Path(receipt) / 'runtime-installed.json'
-    if not evidence.exists():
-        return
-    expected = json.loads(evidence.read_text())
+def verify_recorded(project, receipt, *, allow_additions=False, expected=None):
+    """Compare the installed packages with a recorded list.
+
+    A caller that has read and validated the record passes it as `expected`.
+    The comparison then uses exactly that list: a record that disappears after
+    the caller's read cannot turn the comparison into a silent pass.
+    """
+    if expected is None:
+        evidence = Path(receipt) / 'runtime-installed.json'
+        if not evidence.exists():
+            return
+        expected = json.loads(evidence.read_text())
     actual = installed_graph(project)
     if allow_additions:
         names = {row['name'] for row in expected}
@@ -522,7 +597,7 @@ def verify_recorded(project, receipt, *, allow_additions=False):
         raise ValueError('The worker graph changed after qualification; its recorded generation was preserved.')
 
 
-def active_install_overrides(home, current_override=None):
+def active_install_overrides(home, current_override=None, *, on_verified=None):
     """Use a recorded generation's ordinary installer policy, never refresh.
 
     An explicit user override remains authoritative. Legacy generations have no
@@ -541,5 +616,8 @@ def active_install_overrides(home, current_override=None):
     if (project / 'uv.lock').read_bytes() != (receipt / 'runtime.lock').read_bytes():
         raise ValueError('The recorded worker installation policy changed; its generation was preserved.')
     verify_install_overrides(project, target)
-    verify_recorded(project, receipt, allow_additions=True)
+    expected = json.loads((receipt / 'runtime-installed.json').read_text())
+    verify_recorded(project, receipt, allow_additions=True, expected=expected)
+    if on_verified is not None:
+        on_verified(project, receipt, expected)
     return target

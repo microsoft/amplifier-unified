@@ -13,19 +13,19 @@ EXPECTED = {
     "tests.test_goal_peer_continuation": {
         "test_eligibility_is_read_only_and_preserves_exact_goal_state",
         "test_irrelevant_queues_cannot_hide_qualified_continuation",
-        "test_host_capacity_denial_is_read_only",
         "test_finite_generic_goal_without_peer_capability_is_unchanged",
-    } | variants("test_qualified_peer_precedes_automatic_goal_turn", ["no-goal", "active-goal"])
+    } | variants("test_host_capacity_denial_is_read_only", ["exhausted", "unknown"])
+    | variants("test_qualified_peer_precedes_automatic_goal_turn", ["no-goal", "active-goal"])
     | variants("test_ineligible_receipts_do_not_gain_yield_authority", [
         "paused", "blocked", "completed", "revised", "stop", "owner", "unknown",
         "submitting", "notify", "unqualified", "ordinary", "foreign",
     ]) | variants("test_host_readiness_requires_actual_root_and_generation", [
         "binding0", "binding1", "binding2", "binding3",
     ]) | variants("test_yield_rechecks_after_awaited_real_bridge", [
-        "pause", "revision", "goal-replaced", "progress", "cap", "capacity",
+        "pause", "revision", "goal-replaced", "progress", "cap", "capacity-policy", "past-denial",
         "stop", "activation", "error",
     ]) | variants("test_goal_denials_do_not_probe_or_yield", [
-        "cap", "capacity", "terminal-event", "foreign-event",
+        "cap", "terminal-event", "foreign-event",
     ]),
     "tests.test_task_goal_runtime": variants("test_task_goal_creation_uses_shared_runtime_defaults", [
         f"{timing}-{loop}" for timing in ["before-execution", "during-execution"]

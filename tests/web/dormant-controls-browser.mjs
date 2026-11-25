@@ -1,7 +1,7 @@
 // Real rendered controls over HTTP, with conversation startup forbidden.
 import './composer-test-helpers.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
-import {showComposerOption} from './composer-options-helpers.mjs';
+import {composerOptionsPanel,showComposerOption} from './composer-options-helpers.mjs';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
@@ -36,7 +36,7 @@ try{
  assert.deepEqual((await inspect()).runtimeCalls,[]);
  await api('/fixture/state',{status:'starting'});
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
- await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toBeVisible();
+ await expect(composerOptionsPanel(page)).toBeVisible();
  await showComposerOption(page,'bundle');
  const bundles=page.getByRole('combobox',{name:'Registered root bundles',exact:true});
  await expect(bundles).toBeEnabled();
@@ -50,10 +50,12 @@ try{
  // Cached choices remain selectable; explicitly choose their connection.
  await showComposerOption(page,'provider');
  await page.locator('#chat-provider').selectOption('one');
- await expect.poll(async()=>(await inspect()).session.pendingModelSelection?.instance).toBe('one');
+ // Connection choice is local until a complete model selection is committed.
+ await expect(page.locator('#chat-provider')).toHaveValue('one');
  await showComposerOption(page,'model');
  await expect(page.locator('#chat-model')).toBeEnabled();
  await page.locator('#chat-model').selectOption('second');
+ await expect.poll(async()=>(await inspect()).session.pendingModelSelection?.instance).toBe('one');
  await expect.poll(async()=>(await inspect()).session.pendingModelSelection?.model).toBe('second');
  // The combined dialog shares acknowledged revisions across its controls.
  // Keep it open for model -> bundle -> effort; no reload/reopen may repair it.
@@ -66,7 +68,7 @@ try{
  await expect.poll(async()=>(await inspect()).session.pendingModelSelection).toEqual({instance:'one',model:'second',effort:'high'});
  // A held metadata resolver cannot hold rename, settings saves, or artifacts.
  await showComposerOption(page,'model');
- await page.getByRole('button',{name:'Refresh models',exact:true}).click();
+ await page.getByRole('button',{name:'Refresh this connection',exact:true}).click();
  await expect.poll(async()=>(await inspect()).resolverCalls).toBeGreaterThan(0);
  const act=(name,args)=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[name,args]);
  await act('session.rename',{id:meta.id,title:'Manual retained name'});
@@ -95,14 +97,15 @@ try{
  // Narrow-screen keyboard controls remain usable after resolver failure.
  // Compact Options is the same retained menu across widths, not a new mobile
  // component. Close restored presentation before testing a fresh keyboard open.
- const optionsMenu=page.getByRole('dialog',{name:'Chat options',exact:true});
+ const optionsMenu=composerOptionsPanel(page);
  if(await optionsMenu.isVisible())await optionsMenu.getByRole('button',{name:'Close chat options',exact:true}).click();
  await expect(optionsMenu).toHaveCount(0);
  await page.setViewportSize({width:390,height:844});
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).focus();
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).press('Enter');
- await expect(page.getByRole('dialog',{name:'Chat options'})).toBeVisible();
- await page.getByRole('dialog',{name:'Chat options',exact:true}).getByRole('button',{name:'Choose agent bundle',exact:true}).press('Enter');
+ await expect(optionsMenu).toBeVisible();
+ // Open the same Advanced disclosure with the keyboard, not the retired page.
+ await optionsMenu.locator('summary').filter({hasText:/^Advanced$/}).press('Enter');
  await expect(page.locator('#composer-options-bundle')).toBeEnabled();
  await page.locator('#composer-options-bundle').focus();await page.locator('#composer-options-bundle').press('w');await page.locator('#composer-options-bundle').press('Enter');
  await expect.poll(async()=>{const value=(await inspect()).session;return value.pendingBundleSelection?.bundle||value.bundle}).toBe('work');

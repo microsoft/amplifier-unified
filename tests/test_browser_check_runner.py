@@ -38,8 +38,28 @@ def current_layout_commands(source):
 
 def coverage_plan():
     plan = current_plan()
+    # Validate the new independent client mode before comparing the unchanged
+    # historical inventory. Its exact owner is checked separately below.
+    retained_ids = retained_update_recovery_browser_addition(plan['scenarios'])
+    appearance_ids = appearance_lifecycle_browser_addition(plan['scenarios'])
+    responsive_ids = sidebar_responsive_browser_addition(plan['scenarios'])
+    notices_ids = shared_notices_motion_browser_addition(plan['scenarios'])
+    preview_ids = attachment_preview_browser_addition(plan['scenarios'])
+    approval_ids = external_approval_browser_addition(plan['scenarios'])
+    multiparty_ids = external_multiparty_browser_addition(plan['scenarios'])
+    shared_room_ids = shared_room_browser_addition(plan['scenarios'])
+    repair_ids = installation_repair_browser_addition(plan['scenarios'])
+    layout_ids = layout_return_browser_additions(plan['scenarios'])
+    pass2_ids = layout_pass2_browser_additions(plan['scenarios'])
+    changelog_ids = changelog_days_browser_addition(plan['scenarios'])
+    activity_ids = retained_activity_browser_addition(plan['scenarios'])
+    context_ids = context_degradation_browser_addition(plan['scenarios'])
+    later_ids = (update_configuration_hold_browser_addition(plan['scenarios'])
+                      | browser_additions_after_update_configuration_hold(plan['scenarios']))
     rows = []
     for row in plan['scenarios']:
+        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | preview_ids | approval_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids | changelog_ids | activity_ids | context_ids | later_ids:
+            continue
         row = {**row, 'command': [coverage_paths(part) for part in row['command']]}
         row.pop('cwd', None)
         if row['id'] == 'configuration-recovery-components':
@@ -59,9 +79,27 @@ def source_test(path):
         return host
     selection = json.loads((ROOT / 'components/web-client.source.json').read_text())
     client = ROOT / '.build/web-client'
-    if not client.exists():
+    if not client.exists() and selection['delivery']['type'] == 'directory':
         client = ROOT / selection['delivery']['path']
     return client / 'tests' / name
+
+
+def test_repository_registry_is_prepared_before_coverage_and_dependency_installs():
+    workflow = yaml.safe_load((ROOT / '.github/workflows/browser-checks.yml').read_text())
+    steps = workflow['jobs']['browser']['steps']
+    prepare = next(i for i, step in enumerate(steps)
+                   if step.get('name') == 'Prepare selected client source for host checks')
+    initialize = next(i for i, step in enumerate(steps)
+                      if step.get('name') == 'Record intended coverage before dependency setup')
+    node = next(i for i, step in enumerate(steps)
+                if step.get('uses', '').startswith('actions/setup-node@'))
+    python = next(i for i, step in enumerate(steps)
+                  if step.get('uses', '').startswith('actions/setup-python@'))
+    installs = [i for i, step in enumerate(steps)
+                if 'uv sync --locked' in step.get('run', '') or 'npm ci --prefix' in step.get('run', '')]
+    assert python < node < prepare < initialize < min(installs)
+    assert 'python scripts/web_client_build.py prepare' in steps[prepare]['run']
+    assert '--plan tests/web/browser-checks.json' in steps[initialize]['run']
 
 
 def execute(tmp_path, rows, **kwargs):
@@ -285,13 +323,21 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     resume_addition = question_resume_browser_addition(rows, set())
     navigation_ids = agent_navigation_browser_additions(rows, set())
     sidebar_ids = sidebar_controls_browser_addition(rows, set())
+    client_addition_ids = input_status_and_action_spacing_browser_additions(rows, set())
+    lifecycle_additions = [
+        {'id': 'session-health-request-failure',
+         'command': ['node', 'tests/session-health-browser.mjs', '--request-failure']},
+        {'id': 'session-health-completed-runtime-fault',
+         'command': ['node', 'tests/session-health-browser.mjs', '--completed-runtime-fault']},
+    ]
+    lifecycle_ids = {row['id'] for row in lifecycle_additions}
+    assert [row for row in rows if row['id'] in lifecycle_ids] == lifecycle_additions
     historical_rows = [row for row in rows
-                       if row['id'] not in navigation_ids | sidebar_ids
+                       if row['id'] not in navigation_ids | sidebar_ids | client_addition_ids | lifecycle_ids
                        and not (canvas_additions | breadbin_addition | question_fade_addition | context_addition | immediate_addition | delivery_addition | waiting_addition | resume_addition).intersection(row['command'])]
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
     additions = {
-        "action-spacing": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/action-spacing"},
         "state-stream": {},
         "client-traffic": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/client-traffic"},
         "assignment-adoption": {},
@@ -380,9 +426,9 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in historical_rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(historical_rows) == 133
+    assert len(original) == 65 and len(historical_rows) == 132
     # Preserve the preceding total after validating all exact additive owners.
-    assert len([row for row in rows if row['id'] not in navigation_ids | sidebar_ids | {'context-inspector-layout', 'delivery-warning', 'legacy-outbox-notice', 'delivery-reconciliation', 'delivery-new-chat', 'navigation-waiting', 'canvas-versions', 'question-resume'}]) == 139
+    assert len([row for row in rows if row['id'] not in navigation_ids | sidebar_ids | client_addition_ids | lifecycle_ids | {'context-inspector-layout', 'delivery-warning', 'legacy-outbox-notice', 'delivery-reconciliation', 'delivery-new-chat', 'navigation-waiting', 'canvas-versions', 'question-resume'}]) == 138
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -485,11 +531,15 @@ def test_workflow_keeps_independent_artifacts_and_one_full_python_owner():
     steps = browser['jobs']['browser']['steps']
     assert any('browser_check_runner.py' in step.get('run', '') for step in steps)
     uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02']
-    assert len(uploads) == 2
+    assert len(uploads) == 3
     by_name = {step['with']['name']: step for step in uploads}
     diagnostics_name = 'extended-browser-evidence-${{ github.run_attempt }}'
     static_name = 'browser-static-${{ steps.build-source.outputs.revision }}-${{ github.run_attempt }}'
-    assert set(by_name) == {diagnostics_name, static_name}
+    captured_name = 'captured-frontend-build-${{ github.sha }}-${{ github.run_attempt }}'
+    assert set(by_name) == {diagnostics_name, static_name, captured_name}
+    assert by_name[captured_name]['if'] == "${{ inputs.captured_message_delivery && steps.frontend-build.outcome == 'success' }}"
+    assert by_name[captured_name]['with']['path'] == '${{ runner.temp }}/captured-frontend-build/'
+    assert by_name[captured_name]['with']['if-no-files-found'] == 'error'
     diagnostics, static = by_name[diagnostics_name], by_name[static_name]
     assert diagnostics['if'] == 'always()'
     assert diagnostics['with'] == {
@@ -604,6 +654,145 @@ def breadbin_browser_addition(rows, readiness_scripts):
     }], f'{script}: expected one ordinary source owner and its exact environment'
     assert script not in readiness_scripts, f'{script}: duplicate readiness owner'
     return {script}
+
+
+def appearance_lifecycle_browser_addition(rows, readiness_scripts=()):
+    """Validate the exact new client owner before frozen-baseline subtraction."""
+    script = 'tests/appearance-lifecycle-browser.mjs'
+    expected = {
+        'id': 'appearance-lifecycle', 'command': ['node', script],
+        'env': {'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python',
+                'AMPLIFIER_UNIFIED_ROOT': '{root}',
+                'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/appearance-lifecycle'},
+        'cwd': '.build/web-client',
+    }
+    owners = [row for row in rows if row['id'] == expected['id'] or script in row['command']]
+    assert owners == [expected], f'{script}: expected one exact selected-client owner'
+    assert script not in readiness_scripts, f'{script}: duplicate readiness owner'
+    return {expected['id']}
+
+
+def sidebar_responsive_browser_addition(rows, readiness_scripts=()):
+    """Validate both sidebar modes before subtracting only the new mode."""
+    script = 'tests/sidebar-controls-browser.mjs'
+    ordinary = {
+        'id': 'sidebar-controls', 'command': ['node', script],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/sidebar-controls'},
+        'cwd': '.build/web-client',
+    }
+    responsive = {
+        'id': 'sidebar-responsive', 'command': ['node', script],
+        'env': {'AMPLIFIER_SIDEBAR_RESPONSIVE': '1',
+                'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/sidebar-responsive'},
+        'cwd': '.build/web-client',
+    }
+    owners = [row for row in rows
+              if row['id'] in {'sidebar-controls', 'sidebar-responsive'}
+              or script in row['command']
+              or 'AMPLIFIER_SIDEBAR_RESPONSIVE' in row.get('env', {})]
+    assert sorted(owners, key=lambda row: row['id']) == [ordinary, responsive], \
+        'sidebar-controls/sidebar-responsive: expected exact ordinary and responsive selected-client owners'
+    assert script not in readiness_scripts, 'sidebar-controls/sidebar-responsive: duplicate readiness owner'
+    return {responsive['id']}
+
+
+def test_sidebar_responsive_is_composed_once_without_replacing_ordinary_controls():
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    client_path = source_test('tests/sidebar-controls-browser.mjs').with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    name = 'sidebar-responsive'
+    assert not any(row['id'] == name or 'AMPLIFIER_SIDEBAR_RESPONSIVE' in row.get('env', {})
+                   for row in host['scenarios'])
+    assert host['scenarioOrder'].count(name) == 1
+    index = host['scenarioOrder'].index(name)
+    assert host['scenarioOrder'][index - 1:index + 2] == [
+        'sidebar-controls', name, 'new-chat-recovery']
+    plan = current_plan()
+    assert sidebar_responsive_browser_addition(plan['scenarios']) == {name}
+    for identity in ('sidebar-controls', name):
+        selected, = [row for row in client['scenarios'] if row['id'] == identity]
+        assert [row for row in plan['scenarios'] if row['id'] == identity] == [
+            {**selected, 'cwd': '.build/web-client'}]
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+
+
+@pytest.mark.parametrize('fault', [
+    'missing', 'duplicate', 'identical-duplicate', 'renamed', 'command',
+    'extra-argument', 'missing-mode', 'wrong-mode', 'environment',
+    'wrong-artifacts', 'extra-environment', 'cwd', 'missing-cwd',
+    'readiness', 'ordinary-missing', 'ordinary-mode',
+])
+def test_sidebar_responsive_addition_rejects_changed_or_duplicate_owner(fault):
+    rows = current_plan()['scenarios']
+    assert sidebar_responsive_browser_addition(rows) == {'sidebar-responsive'}
+    owner = next(row for row in rows if row['id'] == 'sidebar-responsive')
+    ordinary = next(row for row in rows if row['id'] == 'sidebar-controls')
+    readiness = set()
+    if fault == 'missing':
+        rows.remove(owner)
+    elif fault == 'duplicate':
+        rows.append({**owner, 'id': 'sidebar-responsive-duplicate'})
+    elif fault == 'identical-duplicate':
+        rows.append(json.loads(json.dumps(owner)))
+    elif fault == 'renamed':
+        owner['id'] += '-renamed'
+    elif fault == 'command':
+        owner['command'][1] = 'tests/home-sidebar-browser.mjs'
+    elif fault == 'extra-argument':
+        owner['command'].append('--extra')
+    elif fault == 'missing-mode':
+        del owner['env']['AMPLIFIER_SIDEBAR_RESPONSIVE']
+    elif fault == 'wrong-mode':
+        owner['env']['AMPLIFIER_SIDEBAR_RESPONSIVE'] = '0'
+    elif fault == 'environment':
+        owner.pop('env')
+    elif fault == 'wrong-artifacts':
+        owner['env']['AMPLIFIER_TEST_ARTIFACTS'] = ordinary['env']['AMPLIFIER_TEST_ARTIFACTS']
+    elif fault == 'extra-environment':
+        owner['env']['UNEXPECTED'] = 'extra'
+    elif fault == 'cwd':
+        owner['cwd'] = 'tests/web'
+    elif fault == 'missing-cwd':
+        owner.pop('cwd')
+    elif fault == 'readiness':
+        readiness.add(owner['command'][1])
+    elif fault == 'ordinary-missing':
+        rows.remove(ordinary)
+    else:
+        ordinary['env']['AMPLIFIER_SIDEBAR_RESPONSIVE'] = '1'
+    with pytest.raises(AssertionError, match='sidebar-responsive'):
+        sidebar_responsive_browser_addition(rows, readiness)
+
+
+@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'command', 'artifacts', 'root', 'cwd', 'readiness'])
+def test_appearance_lifecycle_addition_rejects_missing_duplicate_or_changed_owner(fault):
+    rows = [{
+        'id': 'appearance-lifecycle', 'command': ['node', 'tests/appearance-lifecycle-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python',
+                'AMPLIFIER_UNIFIED_ROOT': '{root}',
+                'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/appearance-lifecycle'},
+        'cwd': '.build/web-client',
+    }]
+    assert appearance_lifecycle_browser_addition(rows) == {'appearance-lifecycle'}
+    owner = rows[0]
+    readiness = set()
+    if fault == 'missing':
+        rows.clear()
+    elif fault == 'duplicate':
+        rows.append({**owner, 'id': 'duplicate'})
+    elif fault == 'command':
+        owner['command'].append('--different-mode')
+    elif fault == 'artifacts':
+        owner['env']['AMPLIFIER_TEST_ARTIFACTS'] += '-wrong'
+    elif fault == 'root':
+        del owner['env']['AMPLIFIER_UNIFIED_ROOT']
+    elif fault == 'cwd':
+        owner.pop('cwd')
+    elif fault == 'readiness':
+        readiness.add('tests/appearance-lifecycle-browser.mjs')
+    with pytest.raises(AssertionError):
+        appearance_lifecycle_browser_addition(rows, readiness)
 
 
 @pytest.mark.parametrize('fault', ['missing', 'duplicate', 'different-command',
@@ -860,36 +1049,760 @@ def test_question_fade_browser_addition_rejects_missing_duplicate_or_wrong_envir
         question_fade_browser_addition(rows, readiness_scripts)
 
 
-def sidebar_controls_browser_addition(rows, readiness_scripts, *, current=False):
+def selected_client_browser_addition(rows, readiness_scripts, identity, *, current=False):
     """Validate the selected client's additive journey before freezing prior owners."""
-    script = 'tests/sidebar-controls-browser.mjs'
+    if current and identity == 'sidebar-controls':
+        responsive_ids = sidebar_responsive_browser_addition(rows, readiness_scripts)
+        rows = [row for row in rows if row['id'] not in responsive_ids]
+    script = f'tests/{identity}-browser.mjs'
     expected = {
-        'id': 'sidebar-controls', 'command': ['node', script],
-        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/sidebar-controls'},
+        'id': identity, 'command': ['node', script],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': f'{{root}}/output/browser-checks/{identity}'},
     }
     if current:
         expected['cwd'] = '.build/web-client'
     owners = [row for row in rows
-              if row['id'] == 'sidebar-controls' or script in row['command']]
-    assert owners == [expected], 'sidebar-controls: expected one exact selected-client owner'
-    assert script not in readiness_scripts, 'sidebar-controls: duplicate readiness owner'
-    return {'sidebar-controls'}
+              if row['id'] == identity or script in row['command']]
+    assert owners == [expected], f'{identity}: expected one exact selected-client owner'
+    assert script not in readiness_scripts, f'{identity}: duplicate readiness owner'
+    return {identity}
 
 
+def sidebar_controls_browser_addition(rows, readiness_scripts, *, current=False):
+    return selected_client_browser_addition(rows, readiness_scripts, 'sidebar-controls', current=current)
+
+
+def action_spacing_browser_addition(rows, readiness_scripts, *, current=False):
+    return selected_client_browser_addition(rows, readiness_scripts, 'action-spacing', current=current)
+
+
+def shared_notices_motion_browser_addition(rows, readiness_scripts=()):
+    return selected_client_browser_addition(rows, readiness_scripts, 'shared-notices-motion', current=True)
+
+
+def shared_room_browser_addition(rows, readiness_scripts=()):
+    return selected_client_browser_addition(rows, readiness_scripts, 'shared-room', current=True)
+
+
+def changelog_days_browser_addition(rows, readiness_scripts=()):
+    """Validate the sole selected-client owner before excluding frozen coverage."""
+    script = 'tests/changelog-days-browser.mjs'
+    expected = {
+        'id': 'changelog-days', 'command': ['node', script],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/changelog-days'},
+        'cwd': '.build/web-client',
+    }
+    owners = [row for row in rows if row['id'] == expected['id']
+              or any(Path(part).name == Path(script).name for part in row['command'])]
+    assert owners == [expected], 'changelog-days: expected one exact selected-client owner'
+    assert script not in readiness_scripts, 'changelog-days: duplicate readiness owner'
+    return {expected['id']}
+
+
+def retained_activity_browser_addition(rows, readiness_scripts=()):
+    """Validate the exact selected-client badge journey before frozen exclusion."""
+    script = 'tests/retained-activity-browser.mjs'
+    expected = {
+        'id': 'retained-activity', 'command': ['node', script],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/retained-activity'},
+        'cwd': '.build/web-client',
+    }
+    owners = [row for row in rows if row['id'] == expected['id']
+              or any(Path(part).name == Path(script).name for part in row['command'])]
+    assert owners == [expected], 'retained-activity: expected one exact selected-client owner'
+    assert script not in readiness_scripts, 'retained-activity: duplicate readiness owner'
+    return {expected['id']}
+
+
+def context_degradation_browser_addition(rows, readiness_scripts=()):
+    """Validate the exact new client owner before historical subtraction."""
+    script = 'tests/context-degradation-browser.mjs'
+    expected = {
+        'id': 'context-degradation', 'command': ['node', script],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/context-degradation'},
+        'cwd': '.build/web-client',
+    }
+    owners = [row for row in rows if row['id'] == expected['id']
+              or any(Path(part).name == Path(script).name for part in row['command'])]
+    assert owners == [expected], 'context-degradation: expected one exact selected-client owner'
+    assert script not in readiness_scripts, 'context-degradation: duplicate readiness owner'
+    return {expected['id']}
+
+
+def linked_instances_browser_addition(rows, readiness_scripts=()):
+    """Validate the sole additive client owner before historical subtraction."""
+    script = 'tests/linked-instances-browser.mjs'
+    expected = {
+        'id': 'linked-instances', 'command': ['node', script],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/linked-instances'},
+        'cwd': '.build/web-client',
+    }
+    owners = [row for row in rows if row['id'] == expected['id']
+              or any(Path(part).name == Path(script).name for part in row['command'])]
+    assert owners == [expected], 'linked-instances: expected one exact selected-client owner'
+    assert not any(Path(part).name == Path(script).name for part in readiness_scripts), (
+        'linked-instances: duplicate readiness owner')
+    return {expected['id']}
+
+
+def test_linked_instances_has_one_client_owner_and_preserves_prior_order():
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    client_path = source_test('tests/linked-instances-browser.mjs').with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    expected = {
+        'id': 'linked-instances', 'command': ['node', 'tests/linked-instances-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/linked-instances'},
+    }
+    def owns(row):
+        return row['id'] == 'linked-instances' or any(
+            Path(part).name == 'linked-instances-browser.mjs' for part in row['command'])
+    assert not any(owns(row) for row in host['scenarios'])
+    assert [row for row in client['scenarios'] if owns(row)] == [expected]
+    plan, proof = runner.load_plan(ROOT, host_path)
+    assert linked_instances_browser_addition(plan['scenarios']) == {'linked-instances'}
+    assert [row for row in plan['scenarios'] if owns(row)] == [
+        {**expected, 'cwd': '.build/web-client'}]
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    index = host['scenarioOrder'].index('linked-instances')
+    assert host['scenarioOrder'][index - 1:index + 2] == [
+        'device-pairing', 'linked-instances', 'standard-ux-keyboard-reflow']
+    previous = [name for name in host['scenarioOrder'] if name != 'linked-instances']
+    assert len(previous) == len(set(previous)) == 179
+    assert hashlib.sha256(json.dumps(previous).encode()).hexdigest() == (
+        '162ea1e700375b94b7ef9123f738c5475451f8e93374b9d660dd2a425d1ad9c8')
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 180
+    assert 'linked-instances' not in {row['id'] for row in coverage_plan()['scenarios']}
+    assert proof['registrySha256'] == {'unified': runner.digest(host_path),
+                                      'client': runner.digest(client_path)}
+    assert (client_path.parent / 'linked-instances-browser.mjs').is_file()
+
+
+@pytest.mark.parametrize('fault', [
+    'missing', 'duplicate', 'renamed-duplicate', 'renamed', 'command', 'extra-argument',
+    'missing-env', 'wrong-artifacts', 'extra-env', 'cwd', 'missing-cwd',
+    'host-script-duplicate', 'readiness', 'host-readiness', 'prepared-readiness',
+])
+def test_linked_instances_rejects_mutated_owner_before_historical_exclusion(monkeypatch, fault):
+    # Independent literal fixture so malformed ownership cannot inherit a relaxed
+    # registry expectation. No browser or provider is executed by these guards.
+    owner = {
+        'id': 'linked-instances', 'command': ['node', 'tests/linked-instances-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/linked-instances'},
+        'cwd': '.build/web-client',
+    }
+    rows = [owner]
+    assert linked_instances_browser_addition(rows) == {'linked-instances'}
+    readiness = set()
+    if fault == 'missing': rows.remove(owner)
+    elif fault == 'duplicate': rows.append(json.loads(json.dumps(owner)))
+    elif fault == 'renamed-duplicate': rows.append({**owner, 'id': 'linked-copy'})
+    elif fault == 'renamed': owner['id'] += '-other'
+    elif fault == 'command': owner['command'] = ['node', 'tests/other.mjs']
+    elif fault == 'extra-argument': owner['command'].append('--skip')
+    elif fault == 'missing-env': owner.pop('env')
+    elif fault == 'wrong-artifacts': owner['env']['AMPLIFIER_TEST_ARTIFACTS'] += '-other'
+    elif fault == 'extra-env': owner['env']['UNEXPECTED'] = 'extra'
+    elif fault == 'cwd': owner['cwd'] = 'tests/web'
+    elif fault == 'missing-cwd': owner.pop('cwd')
+    elif fault == 'host-script-duplicate':
+        rows.append({'id': 'host-copy',
+                     'command': ['node', 'tests/web/linked-instances-browser.mjs']})
+    elif fault == 'readiness': readiness.add(owner['command'][1])
+    elif fault == 'host-readiness': readiness.add('tests/web/linked-instances-browser.mjs')
+    else: readiness.add('.build/web-client/tests/linked-instances-browser.mjs')
+    with pytest.raises(AssertionError, match='linked-instances'):
+        linked_instances_browser_addition(rows, readiness)
+    if not readiness:
+        plan = current_plan()
+        plan['scenarios'] = [row for row in plan['scenarios'] if row['id'] != 'linked-instances'] + rows
+        monkeypatch.setattr(sys.modules[__name__], 'current_plan', lambda: plan)
+        with pytest.raises(AssertionError, match='linked-instances'):
+            coverage_plan()
+
+
+@pytest.mark.parametrize('fault', ['omitted', 'duplicated'])
+def test_linked_instances_assembly_order_cannot_drop_or_repeat_owner(tmp_path, fault):
+    host, client, _ = owned_registry_fixture(tmp_path)
+    host_plan = json.loads(host.read_text())
+    client_plan = json.loads(client.read_text())
+    client_plan['scenarios'].append({
+        'id': 'linked-instances', 'command': ['node', 'tests/linked-instances-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/linked-instances'},
+    })
+    host_plan['scenarioOrder'].append('linked-instances')
+    client.write_text(json.dumps(client_plan))
+    host.write_text(json.dumps(host_plan))
+    plan, _ = runner.load_plan(tmp_path, host)
+    assert linked_instances_browser_addition(plan['scenarios']) == {'linked-instances'}
+    if fault == 'omitted': host_plan['scenarioOrder'].remove('linked-instances')
+    else: host_plan['scenarioOrder'].append('linked-instances')
+    host.write_text(json.dumps(host_plan))
+    with pytest.raises(ValueError, match='each owned scenario exactly once'):
+        runner.load_plan(tmp_path, host)
+
+
+def browser_additions_after_update_configuration_hold(rows, readiness_scripts=()):
+    # Validate newer owners before subtracting them from the frozen inventories.
+    name = 'last-reported-plan'
+    script = 'tests/web/last-reported-plan-browser.mjs'
+    owners = [row for row in rows if row['id'] == name
+              or any(Path(part).name == Path(script).name for part in row['command'])]
+    assert owners == [{'id': name, 'command': ['node', script],
+                       'env': {'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python'}}]
+    assert coverage_paths(script) not in readiness_scripts
+    return ({name} | model_change_history_browser_addition(rows, readiness_scripts)
+            | grouped_work_browser_addition(rows, readiness_scripts)
+            | transcript_suggestion_browser_addition(rows, readiness_scripts)
+            | linked_instances_browser_addition(rows, readiness_scripts))
+
+
+def grouped_work_browser_addition(rows, readiness_scripts=()):
+    name = 'grouped-work-inspector'
+    script = 'tests/web/grouped-work-inspector-browser.mjs'
+    owners = [row for row in rows if row['id'] == name or script in row['command']]
+    assert owners == [{'id': name, 'command': ['node', script],
+                       'env': {'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python',
+                               'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/' + name}}]
+    assert coverage_paths(script) not in readiness_scripts
+    return {name}
+
+
+def model_change_history_browser_addition(rows, readiness_scripts=()):
+    name = 'model-change-history'
+    script = 'tests/web/model-change-browser.mjs'
+    expected = {'id': name, 'command': ['node', script],
+                'env': {'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python',
+                        'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/model-change-history'}}
+    owners = [row for row in rows if row['id'] == name or
+              any(Path(part).name == Path(script).name for part in row['command'])]
+    assert owners == [expected]
+    assert coverage_paths(script) not in readiness_scripts
+    return {name}
+
+
+def test_model_change_history_has_one_native_browser_owner_in_provider_sequence():
+    host = json.loads((ROOT / 'tests/web/browser-checks.json').read_text())
+    plan = current_plan()
+    assert model_change_history_browser_addition(host['scenarios']) == model_change_history_browser_addition(plan['scenarios'])
+    order = [row['id'] for row in plan['scenarios']]
+    assert order == host['scenarioOrder']
+    index = order.index('model-change-history')
+    assert order[index - 1:index + 2] == ['provider-selection', 'model-change-history', 'provider-native']
+    assert (ROOT / 'tests/web/model-change-browser.mjs').is_file()
+
+
+def update_configuration_hold_browser_addition(rows, readiness_scripts=()):
+    """Require the exact host-owned update journey before historical exclusion."""
+    script = 'tests/web/update-configuration-hold-browser.mjs'
+    expected = {
+        'id': 'update-configuration-hold', 'command': ['node', script],
+        'env': {
+            'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python',
+            'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/update-configuration-hold',
+        },
+    }
+    owners = [row for row in rows if row['id'] == expected['id']
+              or any(Path(part).name == Path(script).name for part in row['command'])]
+    assert owners == [expected], 'update-configuration-hold: expected one exact host owner'
+    assert not any(Path(part).name == Path(script).name for part in readiness_scripts), (
+        'update-configuration-hold: duplicate readiness owner')
+    return {expected['id']}
+
+
+def test_update_configuration_hold_has_one_host_owner_and_preserves_prior_order():
+    host = json.loads((ROOT / 'tests/web/browser-checks.json').read_text())
+    plan = current_plan()
+    identities = update_configuration_hold_browser_addition(plan['scenarios'])
+    assert identities == update_configuration_hold_browser_addition(host['scenarios']) == {
+        'update-configuration-hold'}
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    assert host['scenarioOrder'].count('update-configuration-hold') == 1
+    index = host['scenarioOrder'].index('update-configuration-hold')
+    assert host['scenarioOrder'][index - 1:index + 2] == [
+        'update-restart', 'update-configuration-hold', 'update-effects']
+    # Exact order from 474dc80, before this sole new host scenario was added.
+    later = browser_additions_after_update_configuration_hold(plan['scenarios'])
+    previous = [name for name in host['scenarioOrder'] if name not in identities | later]
+    assert len(previous) == len(set(previous)) == 173
+    assert hashlib.sha256(json.dumps(previous).encode()).hexdigest() == (
+        '17d7f2322aa99c4b6bd51f78bd2a49f88c388ffd09e921278a75aec279acc602')
+    assert len(plan['scenarios']) == 173 + len(identities) + len(later)
+    assert (ROOT / 'tests/web/update-configuration-hold-browser.mjs').is_file()
+    assert not identities & {row['id'] for row in coverage_plan()['scenarios']}
+
+
+@pytest.mark.parametrize('fault', [
+    'missing', 'duplicate', 'identical-duplicate', 'renamed', 'command', 'extra-argument',
+    'environment', 'python', 'artifacts', 'extra-environment', 'cwd', 'client-copy',
+    'readiness', 'normalized-readiness',
+])
+def test_update_configuration_hold_rejects_mutated_owner_before_exclusion(monkeypatch, fault):
+    plan = current_plan()
+    rows = plan['scenarios']
+    owner = next(row for row in rows if row['id'] == 'update-configuration-hold')
+    readiness = set()
+    if fault == 'missing': rows.remove(owner)
+    elif fault == 'duplicate': rows.append({**owner, 'id': 'update-hold-duplicate'})
+    elif fault == 'identical-duplicate': rows.append(json.loads(json.dumps(owner)))
+    elif fault == 'renamed': owner['id'] += '-other'
+    elif fault == 'command': owner['command'] = ['node', 'tests/web/other.mjs']
+    elif fault == 'extra-argument': owner['command'].append('--skip')
+    elif fault == 'environment': owner.pop('env')
+    elif fault == 'python': owner['env']['AMPLIFIER_TEST_PYTHON'] = 'python'
+    elif fault == 'artifacts': owner['env']['AMPLIFIER_TEST_ARTIFACTS'] += '-other'
+    elif fault == 'extra-environment': owner['env']['UNEXPECTED'] = 'extra'
+    elif fault == 'cwd': owner['cwd'] = '.build/web-client'
+    elif fault == 'client-copy':
+        rows.append({'id': 'client-copy', 'cwd': '.build/web-client',
+                     'command': ['node', 'tests/update-configuration-hold-browser.mjs']})
+    elif fault == 'readiness': readiness.add(owner['command'][1])
+    else: readiness.add(coverage_paths(owner['command'][1]))
+    with pytest.raises(AssertionError, match='update-configuration-hold'):
+        update_configuration_hold_browser_addition(rows, readiness)
+    if not readiness:
+        monkeypatch.setattr(sys.modules[__name__], 'current_plan', lambda: plan)
+        with pytest.raises(AssertionError, match='update-configuration-hold'):
+            coverage_plan()
+
+
+def test_context_degradation_has_one_client_owner_and_preserves_prior_order():
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    plan, _ = runner.load_plan(ROOT, host_path)
+    assert context_degradation_browser_addition(plan['scenarios']) == {'context-degradation'}
+    assert not any(row['id'] == 'context-degradation' for row in host['scenarios'])
+    assert host['scenarioOrder'].count('context-degradation') == 1
+    index = host['scenarioOrder'].index('context-degradation')
+    assert host['scenarioOrder'][index - 1:index + 2] == [
+        'shared-notices-motion', 'context-degradation', 'input-status']
+    later_ids = (update_configuration_hold_browser_addition(plan['scenarios'])
+                      | browser_additions_after_update_configuration_hold(plan['scenarios']))
+    previous = [name for name in host['scenarioOrder']
+                if name not in {'context-degradation'} | later_ids]
+    assert len(previous) == len(set(previous)) == 172
+    assert hashlib.sha256(json.dumps(previous).encode()).hexdigest() == (
+        'fb68878eafdfb0410141ac5237253e6510be1f261d831db154106ee1eda378d1')
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    assert 'context-degradation' not in {row['id'] for row in coverage_plan()['scenarios']}
+
+
+@pytest.mark.parametrize('fault', [
+    'missing', 'duplicate', 'renamed', 'command', 'extra-argument', 'environment',
+    'cwd', 'host-copy', 'readiness',
+])
+def test_context_degradation_rejects_mutated_owner_before_exclusion(monkeypatch, fault):
+    plan = current_plan()
+    rows = plan['scenarios']
+    owner = next(row for row in rows if row['id'] == 'context-degradation')
+    readiness = set()
+    if fault == 'missing': rows.remove(owner)
+    elif fault == 'duplicate': rows.append(json.loads(json.dumps(owner)))
+    elif fault == 'renamed': owner['id'] += '-other'
+    elif fault == 'command': owner['command'] = ['node', 'tests/other.mjs']
+    elif fault == 'extra-argument': owner['command'].append('--skip')
+    elif fault == 'environment': owner['env']['AMPLIFIER_TEST_ARTIFACTS'] += '-other'
+    elif fault == 'cwd': owner['cwd'] = 'tests/web'
+    elif fault == 'host-copy':
+        rows.append({'id': 'host-copy', 'command': ['node', 'tests/web/context-degradation-browser.mjs']})
+    else: readiness.add(owner['command'][1])
+    with pytest.raises(AssertionError, match='context-degradation'):
+        context_degradation_browser_addition(rows, readiness)
+    if fault != 'readiness':
+        monkeypatch.setattr(sys.modules[__name__], 'current_plan', lambda: plan)
+        with pytest.raises(AssertionError, match='context-degradation'):
+            coverage_plan()
+
+
+def test_retained_activity_is_composed_once_and_preserves_all_prior_scenario_order():
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    client_path = source_test('tests/retained-activity-browser.mjs').with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    expected = {
+        'id': 'retained-activity', 'command': ['node', 'tests/retained-activity-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/retained-activity'},
+    }
+    def owns(row):
+        return row['id'] == 'retained-activity' or any(
+            Path(part).name == 'retained-activity-browser.mjs' for part in row['command'])
+    assert not any(owns(row) for row in host['scenarios'])
+    assert [row for row in client['scenarios'] if owns(row)] == [expected]
+    assert host['scenarioOrder'].count('retained-activity') == 1
+    index = host['scenarioOrder'].index('retained-activity')
+    assert host['scenarioOrder'][index - 1:index + 2] == [
+        'delivery-new-chat', 'retained-activity', 'canvas-media']
+    plan, proof = runner.load_plan(ROOT, host_path)
+    assert retained_activity_browser_addition(plan['scenarios']) == {'retained-activity'}
+    assert [row for row in plan['scenarios'] if owns(row)] == [{**expected, 'cwd': '.build/web-client'}]
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    # Independent accepted 1c963e70 order: adding one owner must neither move nor
+    # drop any of the 171 existing IDs, including the original changelog placement.
+    assert context_degradation_browser_addition(plan['scenarios']) == {'context-degradation'}
+    later_ids = (update_configuration_hold_browser_addition(plan['scenarios'])
+                      | browser_additions_after_update_configuration_hold(plan['scenarios']))
+    preceding_order = [name for name in host['scenarioOrder']
+                       if name not in {'retained-activity', 'context-degradation'} | later_ids]
+    assert len(preceding_order) == len(set(preceding_order)) == 171
+    assert hashlib.sha256(json.dumps(preceding_order).encode()).hexdigest() == 'a7038948908313656b5a9017c5677406b912c89ec911c7cb5e3b704edb80177e'
+    assert len([row for row in plan['scenarios']
+                if row['id'] not in {'context-degradation'} | later_ids]) == 172
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 173 + len(later_ids)
+    assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
+    assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
+    assert (client_path.parent / 'retained-activity-browser.mjs').is_file()
+    assert 'retained-activity' not in {row['id'] for row in coverage_plan()['scenarios']}
+
+
+@pytest.mark.parametrize('fault', [
+    'missing', 'duplicate', 'identical-duplicate', 'renamed', 'command', 'extra-argument',
+    'environment', 'wrong-artifacts', 'extra-environment', 'cwd', 'missing-cwd',
+    'host-script-duplicate', 'readiness',
+])
+def test_retained_activity_rejects_mutated_owner_before_historical_exclusion(monkeypatch, fault):
+    plan = current_plan()
+    rows = plan['scenarios']
+    assert retained_activity_browser_addition(rows) == {'retained-activity'}
+    owner = next(row for row in rows if row['id'] == 'retained-activity')
+    readiness = set()
+    if fault == 'missing': rows.remove(owner)
+    elif fault == 'duplicate': rows.append({**owner, 'id': 'retained-activity-duplicate'})
+    elif fault == 'identical-duplicate': rows.append(json.loads(json.dumps(owner)))
+    elif fault == 'renamed': owner['id'] += '-renamed'
+    elif fault == 'command': owner['command'] = ['node', 'tests/other-browser.mjs']
+    elif fault == 'extra-argument': owner['command'].append('--skip')
+    elif fault == 'environment': owner.pop('env')
+    elif fault == 'wrong-artifacts': owner['env']['AMPLIFIER_TEST_ARTIFACTS'] += '-other'
+    elif fault == 'extra-environment': owner['env']['UNEXPECTED'] = 'extra'
+    elif fault == 'cwd': owner['cwd'] = 'tests/web'
+    elif fault == 'missing-cwd': owner.pop('cwd')
+    elif fault == 'host-script-duplicate':
+        rows.append({'id': 'retained-activity-host-copy',
+                     'command': ['node', 'tests/web/retained-activity-browser.mjs']})
+    else: readiness.add(owner['command'][1])
+    with pytest.raises(AssertionError, match='retained-activity'):
+        retained_activity_browser_addition(rows, readiness)
+    if fault != 'readiness':
+        monkeypatch.setattr(sys.modules[__name__], 'current_plan', lambda: plan)
+        with pytest.raises(AssertionError, match='retained-activity'):
+            coverage_plan()
+
+
+@pytest.mark.parametrize('fault', ['omitted', 'duplicated'])
+def test_retained_activity_assembly_order_cannot_drop_or_repeat_owner(tmp_path, fault):
+    host, client, _ = owned_registry_fixture(tmp_path)
+    host_plan = json.loads(host.read_text())
+    client_plan = json.loads(client.read_text())
+    client_plan['scenarios'].append({
+        'id': 'retained-activity', 'command': ['node', 'tests/retained-activity-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/retained-activity'},
+    })
+    host_plan['scenarioOrder'].append('retained-activity')
+    client.write_text(json.dumps(client_plan))
+    host.write_text(json.dumps(host_plan))
+    plan, _ = runner.load_plan(tmp_path, host)
+    assert retained_activity_browser_addition(plan['scenarios']) == {'retained-activity'}
+    if fault == 'omitted': host_plan['scenarioOrder'].remove('retained-activity')
+    else: host_plan['scenarioOrder'].append('retained-activity')
+    host.write_text(json.dumps(host_plan))
+    with pytest.raises(ValueError, match='each owned scenario exactly once'):
+        runner.load_plan(tmp_path, host)
+
+
+def test_changelog_days_is_composed_once_from_selected_client_owner():
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    client_path = source_test('tests/changelog-days-browser.mjs').with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    expected = {
+        'id': 'changelog-days', 'command': ['node', 'tests/changelog-days-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/changelog-days'},
+    }
+    def owns(row):
+        return row['id'] == 'changelog-days' or any(
+            Path(part).name == 'changelog-days-browser.mjs' for part in row['command'])
+    assert not any(owns(row) for row in host['scenarios'])
+    assert [row for row in client['scenarios'] if owns(row)] == [expected]
+    assert host['scenarioOrder'].count('changelog-days') == 1
+    index = host['scenarioOrder'].index('changelog-days')
+    assert host['scenarioOrder'][index - 1:index + 2] == [
+        'semantic-settings', 'changelog-days', 'history-refresh']
+    plan, proof = runner.load_plan(ROOT, host_path)
+    assert changelog_days_browser_addition(plan['scenarios']) == {'changelog-days'}
+    assert [row for row in plan['scenarios'] if owns(row)] == [{**expected, 'cwd': '.build/web-client'}]
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
+    assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
+    assert (client_path.parent / 'changelog-days-browser.mjs').is_file()
+    assert 'changelog-days' not in {row['id'] for row in coverage_plan()['scenarios']}
+
+
+@pytest.mark.parametrize('fault', [
+    'missing', 'duplicate', 'renamed', 'command', 'extra-argument',
+    'environment', 'wrong-artifacts', 'extra-environment', 'cwd', 'missing-cwd',
+    'host-script-duplicate', 'readiness',
+])
+def test_changelog_days_rejects_mutated_owner_before_historical_exclusion(monkeypatch, fault):
+    plan = current_plan()
+    rows = plan['scenarios']
+    assert changelog_days_browser_addition(rows) == {'changelog-days'}
+    owner = next(row for row in rows if row['id'] == 'changelog-days')
+    readiness = set()
+    if fault == 'missing': rows.remove(owner)
+    elif fault == 'duplicate': rows.append(dict(owner))
+    elif fault == 'renamed': owner['id'] += '-renamed'
+    elif fault == 'command': owner['command'] = ['node', 'tests/other-browser.mjs']
+    elif fault == 'extra-argument': owner['command'].append('--skip')
+    elif fault == 'environment': owner.pop('env')
+    elif fault == 'wrong-artifacts': owner['env']['AMPLIFIER_TEST_ARTIFACTS'] += '-other'
+    elif fault == 'extra-environment': owner['env']['UNEXPECTED'] = 'extra'
+    elif fault == 'cwd': owner['cwd'] = 'tests/web'
+    elif fault == 'missing-cwd': owner.pop('cwd')
+    elif fault == 'host-script-duplicate':
+        rows.append({'id': 'changelog-days-host-copy',
+                     'command': ['node', 'tests/web/changelog-days-browser.mjs']})
+    else: readiness.add(owner['command'][1])
+    with pytest.raises(AssertionError, match='changelog-days'):
+        changelog_days_browser_addition(rows, readiness)
+    if fault != 'readiness':
+        monkeypatch.setattr(sys.modules[__name__], 'current_plan', lambda: plan)
+        with pytest.raises(AssertionError, match='changelog-days'):
+            coverage_plan()
+
+
+@pytest.mark.parametrize('fault', ['omitted', 'duplicated'])
+def test_changelog_days_assembly_order_cannot_drop_or_repeat_owner(tmp_path, fault):
+    host, client, _ = owned_registry_fixture(tmp_path)
+    host_plan = json.loads(host.read_text())
+    client_plan = json.loads(client.read_text())
+    client_plan['scenarios'].append({
+        'id': 'changelog-days', 'command': ['node', 'tests/changelog-days-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/changelog-days'},
+    })
+    host_plan['scenarioOrder'].append('changelog-days')
+    client.write_text(json.dumps(client_plan))
+    host.write_text(json.dumps(host_plan))
+    plan, _ = runner.load_plan(tmp_path, host)
+    assert changelog_days_browser_addition(plan['scenarios']) == {'changelog-days'}
+    if fault == 'omitted': host_plan['scenarioOrder'].remove('changelog-days')
+    else: host_plan['scenarioOrder'].append('changelog-days')
+    host.write_text(json.dumps(host_plan))
+    with pytest.raises(ValueError, match='each owned scenario exactly once'):
+        runner.load_plan(tmp_path, host)
+
+
+TRANSCRIPT_SUGGESTION_BROWSER_IDS = ('transcript-suggestion-mounted', 'transcript-suggestion-boot')
+
+
+def transcript_suggestion_browser_addition(rows, readiness_scripts=()):
+    identities = set()
+    for name in TRANSCRIPT_SUGGESTION_BROWSER_IDS:
+        identities.update(selected_client_browser_addition(rows, readiness_scripts, name, current=True))
+    return identities
+
+
+def test_transcript_suggestion_is_composed_once_without_reordering_prior_owners():
+    host = json.loads((ROOT / 'tests/web/browser-checks.json').read_text())
+    plan, proof = runner.load_plan(ROOT, ROOT / 'tests/web/browser-checks.json')
+    names = TRANSCRIPT_SUGGESTION_BROWSER_IDS
+    assert transcript_suggestion_browser_addition(plan['scenarios']) == set(names)
+    assert host['scenarioOrder'][-2:] == list(names)
+    client_path = source_test('tests/transcript-suggestion-boot-browser.mjs').with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    for name in names:
+        script = f'tests/{name}-browser.mjs'
+        expected = {'id': name, 'command': ['node', script],
+                    'env': {'AMPLIFIER_TEST_ARTIFACTS': f'{{root}}/output/browser-checks/{name}'}}
+        def owns(row):
+            return row['id'] == name or script in row['command']
+        assert host['scenarioOrder'].count(name) == 1
+        assert not any(owns(row) for row in host['scenarios'])
+        assert [row for row in client['scenarios'] if owns(row)] == [expected]
+        assert [row for row in plan['scenarios'] if owns(row)] == [{**expected, 'cwd': '.build/web-client'}]
+        assert (client_path.parent / Path(script).name).is_file()
+    assert not set(names) & {row['id'] for row in coverage_plan()['scenarios']}
+    assert proof['registrySha256'] == {
+        'unified': runner.digest(ROOT / 'tests/web/browser-checks.json'), 'client': runner.digest(client_path)}
+
+
+@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'renamed', 'command', 'environment', 'cwd', 'readiness'])
+@pytest.mark.parametrize('name', TRANSCRIPT_SUGGESTION_BROWSER_IDS)
+def test_transcript_suggestion_owner_is_validated_before_historical_exclusion(monkeypatch, fault, name):
+    plan = current_plan()
+    owner = next(row for row in plan['scenarios'] if row['id'] == name)
+    readiness = set()
+    if fault == 'missing': plan['scenarios'].remove(owner)
+    elif fault == 'duplicate': plan['scenarios'].append(dict(owner))
+    elif fault == 'renamed': owner['id'] += '-renamed'
+    elif fault == 'command': owner['command'] = [*owner['command'], '--skip']
+    elif fault == 'environment': owner['env'] = {}
+    elif fault == 'cwd': owner['cwd'] = 'tests/web'
+    else: readiness.add(owner['command'][1])
+    with pytest.raises(AssertionError, match=name):
+        transcript_suggestion_browser_addition(plan['scenarios'], readiness)
+    if fault != 'readiness':
+        monkeypatch.setattr(sys.modules[__name__], 'current_plan', lambda: plan)
+        with pytest.raises(AssertionError, match=name):
+            coverage_plan()
+
+
+def test_shared_room_is_composed_once_from_selected_client_owner():
+    name = 'shared-room'
+    expected = {'id': name, 'command': ['node', 'tests/shared-room-browser.mjs'],
+                'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/shared-room'}}
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    client_path = source_test('tests/shared-room-browser.mjs').with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    def owns(row):
+        return row['id'] == name or 'tests/shared-room-browser.mjs' in row['command']
+    assert not any(owns(row) for row in host['scenarios'])
+    assert [row for row in client['scenarios'] if owns(row)] == [expected]
+    assert host['scenarioOrder'].count(name) == 1
+    plan, proof = runner.load_plan(ROOT, host_path)
+    pass2_ids = layout_pass2_browser_additions(plan['scenarios'])
+    changelog_ids = changelog_days_browser_addition(plan['scenarios'])
+    activity_ids = retained_activity_browser_addition(plan['scenarios'])
+    suggestion_ids = transcript_suggestion_browser_addition(plan['scenarios'])
+    preceding_order = [identity for identity in host['scenarioOrder'] if identity not in pass2_ids | changelog_ids | activity_ids | suggestion_ids | {'external-approval', 'attachment-preview'}]
+    assert preceding_order[-2:] == ['external-multiparty', name]
+    assert shared_room_browser_addition(plan['scenarios']) == {name}
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    assert [row for row in plan['scenarios'] if owns(row)] == [{**expected, 'cwd': '.build/web-client'}]
+    assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
+    assert (client_path.parent / 'shared-room-browser.mjs').is_file()
+
+
+@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'host-cwd', 'readiness'])
+def test_shared_room_rejects_missing_duplicate_or_wrong_owner(fault):
+    rows = current_plan()['scenarios']
+    assert shared_room_browser_addition(rows) == {'shared-room'}
+    owner = next(row for row in rows if row['id'] == 'shared-room')
+    readiness = set()
+    if fault == 'missing':
+        rows.remove(owner)
+    elif fault == 'duplicate':
+        rows.append(dict(owner))
+    elif fault == 'host-cwd':
+        owner.pop('cwd')
+    else:
+        readiness.add(owner['command'][1])
+    with pytest.raises(AssertionError, match='shared-room'):
+        shared_room_browser_addition(rows, readiness)
+
+
+def external_multiparty_browser_addition(rows, readiness_scripts=()):
+    """Validate the new host journey before subtracting it from frozen counts."""
+    script = 'tests/web/external-multiparty-browser.mjs'
+    expected = {'id': 'external-multiparty', 'command': ['node', script],
+                'env': {'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python',
+                        'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/external-multiparty'}}
+    owners = [row for row in rows if row['id'] == expected['id']
+              or any(Path(part).name == Path(script).name for part in row['command'])]
+    assert owners == [expected], 'external-multiparty: expected one exact host owner'
+    assert coverage_paths(script) not in readiness_scripts, 'external-multiparty: duplicate readiness owner'
+    return {expected['id']}
+
+
+def test_external_multiparty_is_composed_once_from_host_owner():
+    host = json.loads((ROOT / 'tests/web/browser-checks.json').read_text())
+    client = json.loads(source_test('tests/input-status-browser.mjs').with_name('browser-checks.json').read_text())
+    name = 'external-multiparty'
+    assert external_multiparty_browser_addition(host['scenarios']) == {name}
+    assert host['scenarioOrder'].count(name) == 1
+    assert not any(row['id'] == name or any(Path(part).name == name + '-browser.mjs'
+                   for part in row['command']) for row in client['scenarios'])
+    plan = current_plan()
+    assert external_multiparty_browser_addition(plan['scenarios']) == {name}
+    owner = next(row for row in plan['scenarios'] if row['id'] == name)
+    assert (ROOT / owner['command'][1]).is_file()
+    assert (ROOT / 'tests/fixtures/external_multiparty_ui_server.py').is_file()
+    with pytest.raises(AssertionError, match='host owner'):
+        external_multiparty_browser_addition([{**owner, 'cwd': '.build/web-client'}])
+
+
+def test_shared_notices_motion_is_composed_once_from_selected_client_owner():
+    name = 'shared-notices-motion'
+    script = f'tests/{name}-browser.mjs'
+    expected = {'id': name, 'command': ['node', script],
+                'env': {'AMPLIFIER_TEST_ARTIFACTS': f'{{root}}/output/browser-checks/{name}'}}
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    client_path = source_test(script).with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    def owns(row):
+        return row['id'] == name or any(Path(part).name == Path(script).name for part in row['command'])
+    # Unified selects order only; command and environment remain client-owned.
+    assert [row for row in host['scenarios'] if owns(row)] == []
+    assert [row for row in client['scenarios'] if owns(row)] == [expected]
+    assert host['scenarioOrder'].count(name) == 1
+    plan, proof = runner.load_plan(ROOT, host_path)
+    context_ids = context_degradation_browser_addition(plan['scenarios'])
+    previous_order = [identity for identity in host['scenarioOrder'] if identity not in context_ids]
+    index = previous_order.index(name)
+    assert previous_order[index - 1:index + 2] == [
+        'message-delivery', name, 'input-status']
+    assert shared_notices_motion_browser_addition(plan['scenarios']) == {name}
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    assert [row for row in plan['scenarios'] if owns(row)] == [{**expected, 'cwd': '.build/web-client'}]
+    assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
+
+
+@pytest.mark.parametrize('fault', [
+    'missing', 'duplicate', 'identical-duplicate', 'renamed', 'command',
+    'extra-argument', 'environment', 'wrong-artifacts', 'extra-environment',
+    'cwd', 'missing-cwd', 'readiness',
+])
+def test_shared_notices_motion_rejects_changed_or_duplicate_owner(fault):
+    rows = current_plan()['scenarios']
+    # Prove the guard accepts the unmodified owner before each negative case.
+    assert shared_notices_motion_browser_addition(rows) == {'shared-notices-motion'}
+    owner = next(row for row in rows if row['id'] == 'shared-notices-motion')
+    readiness = set()
+    if fault == 'missing':
+        rows.remove(owner)
+    elif fault == 'duplicate':
+        rows.append({**owner, 'id': owner['id'] + '-duplicate'})
+    elif fault == 'identical-duplicate':
+        rows.append(json.loads(json.dumps(owner)))
+    elif fault == 'renamed':
+        owner['id'] += '-renamed'
+    elif fault == 'command':
+        owner['command'][1] = 'tests/home-sidebar-browser.mjs'
+    elif fault == 'extra-argument':
+        owner['command'].append('--extra')
+    elif fault == 'environment':
+        owner.pop('env')
+    elif fault == 'wrong-artifacts':
+        owner['env']['AMPLIFIER_TEST_ARTIFACTS'] = '{root}/output/browser-checks/home-sidebar'
+    elif fault == 'extra-environment':
+        owner['env']['UNEXPECTED'] = 'extra'
+    elif fault == 'cwd':
+        owner['cwd'] = 'tests/web'
+    elif fault == 'missing-cwd':
+        owner.pop('cwd')
+    else:
+        readiness.add(owner['command'][1])
+    with pytest.raises(AssertionError, match='shared-notices-motion'):
+        shared_notices_motion_browser_addition(rows, readiness)
+
+
+@pytest.mark.parametrize('identity', ['sidebar-controls', 'action-spacing'])
 @pytest.mark.parametrize('current', [False, True])
 @pytest.mark.parametrize('fault', [
     'missing', 'duplicate', 'identical-duplicate', 'renamed', 'command',
     'extra-argument', 'environment', 'wrong-artifacts', 'extra-environment',
     'cwd', 'readiness',
 ])
-def test_sidebar_controls_browser_owner_is_distinct_and_additive(current, fault):
+def test_sidebar_controls_browser_owner_is_distinct_and_additive(identity, current, fault):
     rows = (current_plan() if current else coverage_plan())['scenarios']
-    owner = next(row for row in rows if row['id'] == 'sidebar-controls')
+    assert selected_client_browser_addition(rows, set(), identity, current=current) == {identity}
+    owner = next(row for row in rows if row['id'] == identity)
     readiness = set()
     if fault == 'missing':
         rows.remove(owner)
     elif fault == 'duplicate':
-        rows.append({**owner, 'id': 'sidebar-controls-duplicate'})
+        rows.append({**owner, 'id': identity + '-duplicate'})
     elif fault == 'identical-duplicate':
         rows.append(json.loads(json.dumps(owner)))
     elif fault == 'renamed':
@@ -908,8 +1821,82 @@ def test_sidebar_controls_browser_owner_is_distinct_and_additive(current, fault)
         owner['cwd'] = 'tests/web'
     else:
         readiness.add(owner['command'][1])
-    with pytest.raises(AssertionError, match='sidebar-controls'):
-        sidebar_controls_browser_addition(rows, readiness, current=current)
+    with pytest.raises(AssertionError, match=identity):
+        selected_client_browser_addition(rows, readiness, identity, current=current)
+
+
+def input_status_and_action_spacing_browser_additions(rows, readiness_scripts, *, current=False):
+    """Validate both selected-client additions before excluding frozen coverage."""
+    return (selected_client_browser_addition(rows, readiness_scripts, 'input-status', current=current)
+            | action_spacing_browser_addition(rows, readiness_scripts, current=current))
+
+
+@pytest.mark.parametrize('current', [False, True])
+def test_input_status_and_action_spacing_guard_checks_both_owners_before_exclusion(current):
+    # Exercise the additive guard without claiming the old selected client
+    # already owns input-status. Actual selection/order/digests are checked below.
+    rows = [{'id': name, 'command': ['node', f'tests/{name}-browser.mjs'],
+             'env': {'AMPLIFIER_TEST_ARTIFACTS': f'{{root}}/output/browser-checks/{name}'},
+             **({'cwd': '.build/web-client'} if current else {})}
+            for name in ('input-status', 'action-spacing')]
+    assert input_status_and_action_spacing_browser_additions(
+        rows, set(), current=current) == {'input-status', 'action-spacing'}
+    for name in ('input-status', 'action-spacing'):
+        owner = next(row for row in rows if row['id'] == name)
+        with pytest.raises(AssertionError, match=name):
+            input_status_and_action_spacing_browser_additions(
+                [row for row in rows if row is not owner], set(), current=current)
+        with pytest.raises(AssertionError, match=name):
+            input_status_and_action_spacing_browser_additions(
+                rows + [owner], set(), current=current)
+        with pytest.raises(AssertionError, match=name):
+            input_status_and_action_spacing_browser_additions(
+                rows, {owner['command'][1]}, current=current)
+
+
+@pytest.mark.parametrize('name', ['input-status', 'action-spacing'])
+@pytest.mark.parametrize('current', [False, True])
+@pytest.mark.parametrize('fault', [
+    'missing', 'duplicate', 'identical-duplicate', 'renamed', 'command',
+    'extra-argument', 'environment', 'wrong-artifacts', 'extra-environment',
+    'cwd', 'missing-cwd', 'readiness',
+])
+def test_input_status_and_action_spacing_browser_owners_are_exact_and_additive(name, current, fault):
+    rows = (current_plan() if current else coverage_plan())['scenarios']
+    assert input_status_and_action_spacing_browser_additions(
+        rows, set(), current=current) == {'input-status', 'action-spacing'}
+    owner = next(row for row in rows if row['id'] == name)
+    readiness = set()
+    if fault == 'missing':
+        rows.remove(owner)
+    elif fault == 'duplicate':
+        rows.append({**owner, 'id': name + '-duplicate'})
+    elif fault == 'identical-duplicate':
+        rows.append(json.loads(json.dumps(owner)))
+    elif fault == 'renamed':
+        owner['id'] += '-renamed'
+    elif fault == 'command':
+        owner['command'][1] = 'tests/home-sidebar-browser.mjs'
+    elif fault == 'extra-argument':
+        owner['command'].append('--extra')
+    elif fault == 'environment':
+        owner.pop('env')
+    elif fault == 'wrong-artifacts':
+        owner['env']['AMPLIFIER_TEST_ARTIFACTS'] = '{root}/output/browser-checks/other'
+    elif fault == 'extra-environment':
+        owner['env']['UNEXPECTED'] = 'extra'
+    elif fault == 'cwd':
+        owner['cwd'] = 'tests/web'
+    elif fault == 'missing-cwd':
+        # Normalized historical rows must have no cwd; current rows require it.
+        if current:
+            owner.pop('cwd')
+        else:
+            owner['cwd'] = '.build/web-client'
+    else:
+        readiness.add(f'tests/{name}-browser.mjs')
+    with pytest.raises(AssertionError, match=name):
+        input_status_and_action_spacing_browser_additions(rows, readiness, current=current)
 
 
 def agent_navigation_browser_additions(rows, readiness_scripts, *, current=False):
@@ -983,7 +1970,8 @@ def test_agent_navigation_journeys_use_current_host_harness_not_client_or_legacy
     assert identities <= {row['id'] for row in host['scenarios']}
     assert identities <= set(host['scenarioOrder'])
     selection = json.loads((ROOT / 'components/web-client.source.json').read_text())
-    client = ROOT / selection['delivery']['path']
+    client = ROOT / (selection['delivery']['path'] if selection['delivery']['type'] == 'directory'
+                     else '.build/web-client')
     client_ids = {row['id'] for row in json.loads((client / 'tests/browser-checks.json').read_text())['scenarios']}
     assert not identities & client_ids
     for identity in identities:
@@ -1005,11 +1993,26 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
                 for line in current_layout_commands(step.get('run', '')).splitlines()]
     readiness_scripts = {match.group(1) for _, line in commands
                          if (match := re.search(r'node (tests/[^ ]+-browser\.mjs)', line))}
+    appearance_lifecycle_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    sidebar_responsive_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    shared_notices_motion_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    attachment_preview_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    external_approval_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    external_multiparty_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    shared_room_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    changelog_days_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    installation_repair_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    layout_pass2_browser_additions(current_plan()['scenarios'], readiness_scripts)
+    retained_activity_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    context_degradation_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    update_configuration_hold_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    browser_additions_after_update_configuration_hold(current_plan()['scenarios'], readiness_scripts)
     plan = coverage_plan()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], readiness_scripts)
     sidebar_ids = sidebar_controls_browser_addition(plan['scenarios'], readiness_scripts)
+    client_addition_ids = input_status_and_action_spacing_browser_additions(plan['scenarios'], readiness_scripts)
     extended_scripts = {row['command'][2 if row['command'][1] == '--test' else 1]
-                        for row in plan['scenarios'] if row['id'] not in navigation_ids | sidebar_ids}
+                        for row in plan['scenarios'] if row['id'] not in navigation_ids | sidebar_ids | client_addition_ids}
     source_only = {f'tests/{name}-browser.mjs' for name in (
         'interim-replies', 'draft-reload', 'draft-switch', 'activity-feedback',
         'conversation-navigation', 'workspace-shortcuts', 'inline-media-transition', 'execution-observability',
@@ -1121,12 +2124,9 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     waiting_addition = navigation_waiting_browser_addition(plan['scenarios'], readiness_scripts)
     delivery_addition = delivery_warning_browser_addition(plan['scenarios'], readiness_scripts)
     resume_addition = question_resume_browser_addition(plan['scenarios'], readiness_scripts)
-    spacing = 'tests/action-spacing-browser.mjs'
-    assert spacing in extended_scripts - readiness_scripts
-    assert sum(row['command'] == ['node', spacing] for row in plan['scenarios']) == 1
     # Freeze all three prior counts; validate each new owner before subtracting
     # the additions so missing or duplicated coverage cannot disappear.
-    previous_scripts = ((readiness_scripts | extended_scripts) - relocated_readiness.keys() - {state_stream, update_delivery, spacing}
+    previous_scripts = ((readiness_scripts | extended_scripts) - relocated_readiness.keys() - {state_stream, update_delivery}
                         - provider_additions - breadbin_addition - canvas_additions - question_fade_addition - context_addition - immediate_addition - delivery_addition - waiting_addition - resume_addition)
     assert len(previous_scripts - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder, approval, dormant, shared_work} - feature_additions - voice_additions) == 146
     assert len(previous_scripts - {shared_work, 'tests/delegate-work-stream-browser.mjs', 'tests/client-traffic-browser.mjs'} - voice_additions) == 164
@@ -1165,8 +2165,87 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert any(step.get('if') == 'always()' and step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
                and step.get('with', {}).get('path', '').splitlines() == [
                    '${{ runner.temp }}/test-environments',
-                   'output/coordination-runtime-readiness.json']
+                   'output/coordination-runtime-readiness.json',
+                   'output/mounted-child-boundaries.xml']
                for step in coordination['jobs']['contracts']['steps'])
+
+
+def test_captured_message_delivery_plan_is_fixed_without_changing_default():
+    import copy
+    plan = current_plan()
+    before = copy.deepcopy(plan)
+    focused = runner.captured_message_delivery_plan(plan)
+    assert plan == before
+    assert focused['scenarios'][0] == {
+        'id': 'message-delivery',
+        'command': ['node', 'tests/web/message-delivery-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/message-delivery'},
+    }
+    assert [row['id'] for row in focused['scenarios']] == [
+        'message-delivery', 'message-outbox', 'delivery-reconciliation', 'delivery-new-chat']
+    assert focused['scenarios'][1:] == [
+        next(row for row in plan['scenarios'] if row['id'] == identity)
+        for identity in ('message-outbox', 'delivery-reconciliation', 'delivery-new-chat')]
+    for mutation in ('missing', 'duplicate', 'command', 'environment', 'cwd'):
+        broken = {'schemaVersion': 1, 'scenarios': [copy.deepcopy(next(
+            row for row in plan['scenarios'] if row['id'] == 'message-delivery'))]}
+        if mutation == 'missing':
+            broken['scenarios'] = []
+        elif mutation == 'duplicate':
+            broken['scenarios'] *= 2
+        elif mutation == 'command':
+            broken['scenarios'][0]['command'] = ['node', 'tests/other.mjs']
+        elif mutation == 'environment':
+            broken['scenarios'][0]['env'] = {'UNEXPECTED': 'value'}
+        else:
+            broken['scenarios'][0]['cwd'] = '.build/web-client'
+        with pytest.raises(ValueError):
+            runner.captured_message_delivery_plan(broken)
+
+
+def test_captured_message_delivery_workflow_is_manual_fixed_and_retains_failures():
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    inputs = workflow['on']['workflow_dispatch']['inputs']
+    option = inputs['captured_message_delivery']
+    assert option['type'] == 'boolean' and option['default'] == 'false'
+    assert 'captured_message_delivery' not in workflow['on']['workflow_call']['inputs']
+    assert workflow['permissions'] == {'contents': 'read'}
+    job = workflow['jobs']['browser']
+    steps = job['steps']
+    mixed = next(step for step in steps if step.get('name') == 'Reject mixed captured delivery selections')
+    for name, value in inputs.items():
+        if name != 'captured_message_delivery' and value['type'] == 'boolean':
+            assert f'inputs.{name}' in mixed['if']
+    assert mixed['run'] == 'exit 1'
+    for name, other in workflow['jobs'].items():
+        if name != 'browser':
+            assert other['steps'][0] == {
+                'name': 'Reject mixed captured delivery selection',
+                'if': '${{ inputs.captured_message_delivery }}', 'run': 'exit 1'}
+    runs = [step for step in steps if 'python scripts/browser_check_runner.py --plan' in step.get('run', '')]
+    flag = "${{ inputs.captured_message_delivery && '--captured-message-delivery' || '' }}"
+    assert len(runs) == 2 and all(flag in step['run'] for step in runs)
+    assert '--budget-seconds 1500' in runs[1]['run']
+    full = next(step for step in steps if step.get('name') == 'Run full frontend units for unfiltered nightly/manual coverage')
+    assert '!inputs.captured_message_delivery' in full['if']
+    for identity in ('captured-host', 'captured-client'):
+        step = next(step for step in steps if step.get('id') == identity)
+        assert step['if'] == '${{ inputs.captured_message_delivery }}'
+        assert step['continue-on-error'] == 'true'
+        assert 'tee output/browser-checks/' in step['run'] and 'pipefail' in step['run']
+    final = next(step for step in steps if step.get('name') == 'Preserve failed captured delivery contracts')
+    assert 'always()' in final['if'] and "steps.captured-host.outcome != 'success'" in final['if']
+    assert "steps.captured-client.outcome != 'success'" in final['if'] and final['run'] == 'exit 1'
+    assert any(step.get('if') == 'always()' and 'upload-artifact@' in step.get('uses', '') for step in steps)
+    source = next(step for step in steps if step.get('name') == 'Bind captured delivery source before setup')
+    assert 'HEAD^{tree}' in source['run'] and 'selected-client.json' in source['run']
+    initialize = next(i for i, step in enumerate(steps) if '--initialize' in step.get('run', ''))
+    install = next(i for i, step in enumerate(steps) if 'uv sync --locked' in step.get('run', ''))
+    assert initialize < steps.index(source) < install
+    capture = next(step for step in steps if step.get('name') == 'Capture verified captured-delivery build output')
+    assert 'mv output/browser-checks "$RUNNER_TEMP/captured-delivery-evidence"' in capture['run']
+    assert 'trap ' in capture['run'] and '--destination "$RUNNER_TEMP/captured-frontend-build"' in capture['run']
+    assert 'gitignore' not in capture['run'] and 'info/exclude' not in capture['run']
 
 
 def test_attachment_focus_selects_exact_existing_owner_without_changing_plan():
@@ -1200,7 +2279,7 @@ def test_attachment_focus_workflow_retains_failures_and_default_coverage():
     assert 'attachment_consumption' not in workflow['on']['workflow_call']['inputs']
     job = workflow['jobs']['browser']
     assert job['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
-    runs = [step for step in job['steps'] if 'scripts/browser_check_runner.py' in step.get('run', '')]
+    runs = [step for step in job['steps'] if 'python scripts/browser_check_runner.py --plan' in step.get('run', '')]
     assert len(runs) == 2
     flag = "${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}"
     assert all(flag in step['run'] for step in runs)
@@ -1268,8 +2347,11 @@ def test_destination_history_manual_route_is_fixed_and_preserves_default_coverag
     assert '--budget-seconds 1200' in run
     for target in ('test_history_scope.py', 'test_auth.py', 'test_client_navigation.py',
                    'test_approachable_shell.py', 'test_automation_overview.py', 'test_schedules.py',
-                   'test_schedule_new_tasks.py', 'test_schedule_policy.py'):
+                   'test_schedule_new_tasks.py'):
         assert f'tests/{target}' in run
+    # Standalone policy tests qualify their own wheel in Scheduling package;
+    # this app lane exercises the selected delivery through host schedule tests.
+    assert 'components/scheduling/tests/test_policy_store.py' not in run
     assert 'tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage' in run
     assert 'tests/test_release_qualification.py' not in run
     for target in ('destination-history', 'destination-history-ui', 'api',
@@ -1303,568 +2385,6 @@ def test_attachment_experience_route_is_fixed_and_installs_the_exact_wheel():
                if step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02')
     assert "steps.installed-browser.outcome != 'success'" in json.dumps(job)
     assert "steps.intersections.outcome != 'success'" in json.dumps(job)
-
-
-# Independent literal identities: do not construct the positive TAP fixture from
-# the validator's allow-list, or a changed/missing identity could validate itself.
-APP004_EXPECTED_GROUPS = (
-    (
-        'chat reference metadata is a fixed bounded data shape',
-        'chat reference rejects action',
-        'chat reference rejects URL',
-        'chat reference rejects foreign source',
-        'chat reference rejects foreign message',
-        'chat reference rejects missing target',
-        'chat reference rejects wrong version',
-        'chat reference rejects invalid revision',
-        'chat reference rejects unbounded label',
-        'chat reference rejects control character',
-        'chat reference rejects missing availability',
-        'chat reference rejects duplicate, oversized and expanded envelopes',
-    ),
-    (
-        'copy uses an available message without another request',
-        'copy reads an explicitly addressed off-page chat without changing selection',
-        'missing scoped message reports failure instead of copying unrelated content',
-        'copy retains prose and appends only the host-supplied inert reference fallback',
-    ),
-    (
-        'held route stays blocked through exercise and drains once before unregistration',
-        'drain includes concurrent callbacks and waiting unroute joins a final protocol arrival',
-        'callback errors become an awaited failure, not ignored or retried',
-        'primary assertion survives successful release and cleanup',
-        'primary error is retained with callback and teardown errors as secondary',
-        'early-started action rejection stays observable until it is awaited',
-        'cleanup failure alone fails and cannot replace a prior primary failure',
-    ),
-)
-APP004_EXPECTED_NAMES = tuple(name for group in APP004_EXPECTED_GROUPS for name in group)
-ABSENT = object()
-
-
-def app004_tap():
-    return ('TAP version 13\n'
-            + ''.join(f'ok {index} - {name}\n' for index, name in enumerate(APP004_EXPECTED_NAMES, 1))
-            + '1..23\n# tests 23\n# suites 0\n# pass 23\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n')
-
-
-def app004_witness(token='fresh-fixture-token'):
-    # Synthetic validator input, NOT evidence of a browser/card/Node execution.
-    outcome = {
-        'qualificationToken': token, 'negativeReload': True,
-        'identityBoundary': {
-            'id': 'app004-same-document', 'attachmentAccepted': True, 'cardVisible': True,
-            'draftHeld': True, 'clickCompleted': True, 'attempted': True, 'verdict': 'failed',
-            'targetSessionId': 'fixture-target', 'selectedSessionId': 'fixture-target',
-            'before': {'document': 'before-document', 'timeOrigin': 1000, 'client': 'fixture-client'},
-            'after': {'document': 'after-document', 'timeOrigin': 2000, 'client': 'fixture-client'},
-        },
-        'primary': {'name': 'AssertionError', 'code': 'ERR_ASSERTION', 'boundary': 'app004-same-document'},
-        'browserErrors': [], 'secondary': [], 'fixtureExit': {'code': 0, 'signal': None},
-    }
-    routes = [
-        {'route': 'held-draft', 'phase': 'registered'},
-        {'route': 'held-draft', 'phase': 'started', 'id': 1},
-        {'route': 'held-draft', 'phase': 'gate-released'},
-        {'route': 'held-draft', 'phase': 'completed', 'id': 1},
-        {'route': 'held-draft', 'phase': 'drained'},
-        {'route': 'held-draft', 'phase': 'unregistered'},
-    ]
-    return outcome, routes
-
-
-def write_app004_witness(folder, token='fresh-fixture-token'):
-    folder.mkdir(parents=True, exist_ok=True)
-    outcome, routes = app004_witness(token)
-    (folder / 'outcome.json').write_text(json.dumps(outcome))
-    (folder / 'route-lifecycle.json').write_text(json.dumps(routes))
-    return outcome, routes
-
-
-def change_app004_field(value, path, replacement):
-    keys = path.split('.')
-    for key in keys[:-1]:
-        value = value[key]
-    if replacement is ABSENT:
-        value.pop(keys[-1])
-    else:
-        value[keys[-1]] = replacement
-
-
-def prepare_app004_verdict(tmp_path, identity='reload-negative'):
-    folder = tmp_path / 'qualification'
-    write_app004_witness(folder / 'negative')
-    row = {'id': identity, 'status': 'failed' if identity == 'reload-negative' else 'passed',
-           'reason': None, 'exitCode': 1 if identity == 'reload-negative' else 0,
-           'cleanup': {'remaining': [], 'terminated': 0}, 'executionToken': 'fresh-fixture-token',
-           'log': identity + '.log'}
-    (folder / row['log']).write_text(app004_tap() if identity == 'units' else 'synthetic assertion failure\n')
-    return row, folder
-
-
-def mock_app004_commands(monkeypatch, *, units_source=None, negative_source=None, timeout=2):
-    # Only descriptors are substituted. Real scheduler, ownership, deadlines and
-    # verdicts run against harmless Python children; this is not Node/Chromium QA.
-    initial = runner.initial_app004
-    outcome, routes = app004_witness()
-    if units_source is None:
-        units_source = (f'print({app004_tap()!r},end="");import os;'
-                        'print("# fixture-owner "+os.environ["AMPLIFIER_BROWSER_CHECK_OWNER"])')
-    if negative_source is None:
-        negative_source = (
-            'import json,os;from pathlib import Path;'
-            'token=os.environ["APP004_QUALIFICATION_TOKEN"];'
-            'assert token and token!="inherited-stale-token";'
-            'assert token==os.environ["AMPLIFIER_BROWSER_CHECK_OWNER"];'
-            'assert os.environ["CHAT_REFERENCE_NEGATIVE_RELOAD"]=="1";'
-            f'outcome=json.loads({json.dumps(outcome)!r});outcome["qualificationToken"]=token;'
-            'folder=Path(os.environ["CHAT_REFERENCE_EVIDENCE_DIR"]);folder.mkdir(parents=True,exist_ok=True);'
-            '(folder/"outcome.json").write_text(json.dumps(outcome));'
-            f'(folder/"route-lifecycle.json").write_text({json.dumps(routes)!r});'
-            'print("synthetic negative witness");raise SystemExit(1)'
-        )
-    def fixed(provenance):
-        report = initial(provenance)
-        for row, source in zip(report['checks'], (units_source, negative_source), strict=True):
-            row['command'] = [sys.executable, '-c', source]
-            row['timeoutSeconds'] = timeout
-        return report
-    monkeypatch.setattr(runner, 'initial_app004', fixed)
-
-
-def test_app004_fixed_commands_and_literal_twenty_three_identities():
-    provenance = {'revision': 'b' * 40}
-    report = runner.initial_app004(provenance)
-    assert report == {
-        'schemaVersion': 1, 'source': provenance, 'complete': False, 'passed': False,
-        'checks': [
-            {'id': 'units', 'status': 'unrun', 'reason': 'not_started', 'timeoutSeconds': 60,
-             'command': ['node', '--test', '--test-reporter=tap', 'tests/chat-reference.test.mjs',
-                         'tests/message-copy.test.mjs', '../../tests/web/chat-reference-harness.test.mjs'],
-             'cwd': '.build/web-client'},
-            {'id': 'reload-negative', 'status': 'unrun', 'reason': 'not_started', 'timeoutSeconds': 300,
-             'command': ['node', 'tests/web/chat-reference-browser.mjs']},
-        ],
-    }
-    assert tuple(map(len, APP004_EXPECTED_GROUPS)) == (12, 4, 7)
-    assert len(APP004_EXPECTED_NAMES) == len(set(APP004_EXPECTED_NAMES)) == 23
-    assert tuple(runner.APP004_UNIT_NAMES) == APP004_EXPECTED_NAMES
-    assert runner.APP004_BOUNDARY == 'app004-same-document'
-
-
-@pytest.mark.parametrize('corruption', [
-    'missing-case', 'duplicate-name', 'foreign-name', 'extra-case', 'wrong-tests', 'wrong-pass',
-    'failure', 'cancelled', 'skipped', 'todo', 'skip-directive', 'todo-directive',
-    'not-ok', 'bail-out', 'duplicate-summary', 'missing-summary',
-])
-def test_app004_units_requires_exact_unique_unskipped_tap(tmp_path, corruption):
-    log = tmp_path / 'units.log'
-    valid = app004_tap()
-    log.write_text(valid)
-    assert runner.app004_units(log) is None
-    first = f'ok 1 - {APP004_EXPECTED_NAMES[0]}'
-    mutations = {
-        'missing-case': valid.replace(first + '\n', ''),
-        'duplicate-name': valid.replace(APP004_EXPECTED_NAMES[-1], APP004_EXPECTED_NAMES[0]),
-        'foreign-name': valid.replace(APP004_EXPECTED_NAMES[-1], 'unrelated unit'),
-        'extra-case': valid + 'ok 24 - unrelated unit\n',
-        'wrong-tests': valid.replace('# tests 23', '# tests 22'),
-        'wrong-pass': valid.replace('# pass 23', '# pass 22'),
-        'failure': valid.replace('# fail 0', '# fail 1'),
-        'cancelled': valid.replace('# cancelled 0', '# cancelled 1'),
-        'skipped': valid.replace('# skipped 0', '# skipped 1'),
-        'todo': valid.replace('# todo 0', '# todo 1'),
-        'skip-directive': valid.replace(first, first + ' # SKIP unavailable'),
-        'todo-directive': valid.replace(first, first + ' # TODO later'),
-        'not-ok': valid + 'not ok 24 - unexpected failure\n',
-        'bail-out': valid + 'Bail out! stopped\n',
-        'duplicate-summary': valid + '# pass 23\n',
-        'missing-summary': valid.replace('# skipped 0\n', ''),
-    }
-    log.write_text(mutations[corruption])
-    with pytest.raises(ValueError):
-        runner.app004_units(log)
-
-
-@pytest.mark.parametrize('path,replacement', [
-    ('qualificationToken', 'stale-fixture-token'), ('qualificationToken', ABSENT),
-    ('negativeReload', False), ('negativeReload', 'true'),
-    ('identityBoundary', {}), ('identityBoundary.id', 'some-other-assertion'),
-    ('identityBoundary.verdict', 'passed'),
-    *((f'identityBoundary.{flag}', False) for flag in
-      ('attachmentAccepted', 'cardVisible', 'draftHeld', 'clickCompleted', 'attempted')),
-    ('identityBoundary.clickCompleted', 1),
-    ('identityBoundary.targetSessionId', ''), ('identityBoundary.targetSessionId', ABSENT),
-    ('identityBoundary.selectedSessionId', 'wrong-target'),
-    ('primary', {}), ('primary.name', 'Error'), ('primary.name', 'TimeoutError'),
-    ('primary.code', 'OTHER_ERROR'), ('primary.boundary', 'later-focus-assertion'),
-    ('primary.boundary', ABSENT), ('secondary', [{'name': 'Error', 'message': 'cleanup failed'}]),
-    ('browserErrors', ABSENT), ('browserErrors', ['uncaught browser error']),
-    ('fixtureExit', None), ('fixtureExit.code', 1), ('fixtureExit.code', False),
-    ('fixtureExit.signal', 'SIGTERM'),
-])
-def test_app004_negative_requires_fresh_exact_genuine_click_boundary(tmp_path, path, replacement):
-    outcome, _ = write_app004_witness(tmp_path)
-    assert runner.app004_negative(tmp_path, 'fresh-fixture-token') is None
-    change_app004_field(outcome, path, replacement)
-    (tmp_path / 'outcome.json').write_text(json.dumps(outcome))
-    with pytest.raises(ValueError):
-        runner.app004_negative(tmp_path, 'fresh-fixture-token')
-
-
-@pytest.mark.parametrize('path,replacement', [
-    *((f'identityBoundary.{side}.{key}', ABSENT)
-      for side in ('before', 'after') for key in ('document', 'timeOrigin', 'client')),
-    *((f'identityBoundary.{side}.timeOrigin', value)
-      for side in ('before', 'after') for value in (False, 0, -1, '2000')),
-    *((f'identityBoundary.{side}.{key}', '')
-      for side in ('before', 'after') for key in ('document', 'client')),
-    ('identityBoundary.after.document', 'before-document'),
-    ('identityBoundary.after.timeOrigin', 1000),
-    ('identityBoundary.after', {'document': 'before-document', 'timeOrigin': 1000, 'client': 'other-client'}),
-    ('identityBoundary.after.extra', 'not-a-marker'),
-    ('identityBoundary.before.timeOrigin', float('nan')),
-    ('identityBoundary.after.timeOrigin', float('inf')),
-])
-def test_app004_negative_requires_full_markers_and_both_reload_changes(tmp_path, path, replacement):
-    outcome, _ = write_app004_witness(tmp_path)
-    # A retained client alone does not invalidate a proven document reload.
-    assert outcome['identityBoundary']['before']['client'] == outcome['identityBoundary']['after']['client']
-    assert runner.app004_negative(tmp_path, 'fresh-fixture-token') is None
-    change_app004_field(outcome, path, replacement)
-    (tmp_path / 'outcome.json').write_text(json.dumps(outcome))
-    with pytest.raises(ValueError):
-        runner.app004_negative(tmp_path, 'fresh-fixture-token')
-
-
-@pytest.mark.parametrize('corruption', [
-    'empty', 'foreign-route', 'error', 'null-error', 'missing-completion', 'missing-drain',
-    'missing-unregister', 'duplicate-start', 'duplicate-completion', 'completion-before-start',
-    'wrong-id', 'boolean-id', 'missing-id', 'unknown-phase', 'reordered-phases',
-    'missing-register', 'missing-gate', 'oversized',
-])
-def test_app004_negative_rejects_failed_or_unfinished_routes(tmp_path, corruption):
-    _, routes = write_app004_witness(tmp_path)
-    assert runner.app004_negative(tmp_path, 'fresh-fixture-token') is None
-    if corruption == 'empty':
-        routes = []
-    elif corruption == 'foreign-route':
-        routes[1]['route'] = 'later-navigation'
-    elif corruption in ('error', 'null-error'):
-        routes[3]['error'] = 'Route is already handled!' if corruption == 'error' else None
-    elif corruption.startswith('missing-') and corruption != 'missing-id':
-        phase = {'missing-completion': 'completed', 'missing-drain': 'drained',
-                 'missing-unregister': 'unregistered', 'missing-register': 'registered',
-                 'missing-gate': 'gate-released'}[corruption]
-        routes = [row for row in routes if row['phase'] != phase]
-    elif corruption == 'duplicate-start':
-        routes.insert(2, dict(routes[1]))
-    elif corruption == 'duplicate-completion':
-        routes.insert(4, dict(routes[3]))
-    elif corruption == 'completion-before-start':
-        routes[1], routes[3] = routes[3], routes[1]
-    elif corruption == 'wrong-id':
-        routes[3]['id'] = 2
-    elif corruption == 'boolean-id':
-        routes[1]['id'] = True
-    elif corruption == 'missing-id':
-        del routes[1]['id']
-    elif corruption == 'unknown-phase':
-        routes[3]['phase'] = 'failed'
-    elif corruption == 'reordered-phases':
-        routes[2], routes[4] = routes[4], routes[2]
-    elif corruption == 'oversized':
-        routes *= 1667
-    (tmp_path / 'route-lifecycle.json').write_text(json.dumps(routes))
-    with pytest.raises(ValueError):
-        runner.app004_negative(tmp_path, 'fresh-fixture-token')
-
-
-@pytest.mark.parametrize('corruption', [
-    'missing-outcome', 'missing-routes', 'invalid-json', 'outcome-list', 'proof-list', 'primary-list',
-    'marker-list', 'routes-object', 'null-route', 'oversized-outcome', 'oversized-routes',
-    'missing-log', 'stale-token',
-])
-def test_app004_verdict_rejects_missing_or_malformed_evidence(tmp_path, corruption):
-    row, folder = prepare_app004_verdict(tmp_path)
-    control = dict(row)
-    runner.app004_verdict(control, folder)
-    assert control['status'] == 'passed' and control['verdict'] == 'expected_identity_failure'
-    negative = folder / 'negative'
-    outcome_path, routes_path = negative / 'outcome.json', negative / 'route-lifecycle.json'
-    outcome, routes = app004_witness()
-    if corruption == 'missing-outcome':
-        outcome_path.unlink()
-    elif corruption == 'missing-routes':
-        routes_path.unlink()
-    elif corruption == 'invalid-json':
-        outcome_path.write_text('{')
-    elif corruption in ('outcome-list', 'proof-list', 'primary-list', 'marker-list'):
-        if corruption == 'outcome-list':
-            outcome = []
-        else:
-            change_app004_field(outcome, {'proof-list': 'identityBoundary', 'primary-list': 'primary',
-                                         'marker-list': 'identityBoundary.before'}[corruption], [])
-        outcome_path.write_text(json.dumps(outcome))
-    elif corruption == 'routes-object':
-        routes_path.write_text('{}')
-    elif corruption == 'null-route':
-        routes[1] = None
-        routes_path.write_text(json.dumps(routes))
-    elif corruption in ('oversized-outcome', 'oversized-routes'):
-        path = outcome_path if corruption == 'oversized-outcome' else routes_path
-        # Whitespace keeps the JSON valid: rejection must be the size limit.
-        path.write_text(path.read_text() + ' ' * (1024 * 1024))
-    elif corruption == 'missing-log':
-        (folder / row['log']).unlink()
-    elif corruption == 'stale-token':
-        row['executionToken'] = 'different-run-token'
-    runner.app004_verdict(row, folder)
-    assert row['status'] == 'failed' and row['verdict'] == 'rejected'
-    assert row['verdictReason']
-    assert row['exitCode'] == 1 and row['reason'] is None
-    assert 'evidenceSha256' not in row
-
-
-@pytest.mark.parametrize('identity', ['units', 'reload-negative'])
-def test_app004_verdict_retains_raw_exit_and_hashes_exact_inputs(tmp_path, identity):
-    row, folder = prepare_app004_verdict(tmp_path, identity)
-    raw = {key: row[key] for key in ('exitCode', 'reason', 'cleanup', 'executionToken', 'log')}
-    runner.app004_verdict(row, folder)
-    assert row['status'] == 'passed'
-    assert row['verdict'] == ('exact_units' if identity == 'units' else 'expected_identity_failure')
-    assert {key: row[key] for key in raw} == raw
-    files = ([row['log']] if identity == 'units'
-             else [row['log'], 'negative/outcome.json', 'negative/route-lifecycle.json'])
-    assert row['evidenceSha256'] == {
-        name: hashlib.sha256((folder / name).read_bytes()).hexdigest() for name in files}
-
-
-@pytest.mark.parametrize('identity,field,value', [
-    *(('reload-negative', 'exitCode', code) for code in (0, 2, -15, None, True)),
-    *(('units', 'exitCode', code) for code in (1, 7, -15, None, False)),
-    *((identity, 'reason', reason) for identity in ('units', 'reload-negative')
-      for reason in ('timeout', 'cancelled', 'FileNotFoundError')),
-    *((identity, 'cleanup', cleanup) for identity in ('units', 'reload-negative')
-      for cleanup in ({'remaining': [], 'terminated': 1},
-                      {'remaining': [123], 'terminated': 0},
-                      {'remaining': ['unknown'], 'terminated': 0, 'error': 'PermissionError'})),
-])
-def test_app004_verdict_never_waives_raw_failure_or_unexpected_green(tmp_path, identity, field, value):
-    row, folder = prepare_app004_verdict(tmp_path, identity)
-    control = dict(row)
-    runner.app004_verdict(control, folder)
-    assert control['status'] == 'passed'
-    row[field] = value
-    raw = json.dumps({key: row[key] for key in ('exitCode', 'reason', 'cleanup')}, sort_keys=True)
-    runner.app004_verdict(row, folder)
-    assert row['status'] == 'failed' and row['verdict'] == 'rejected'
-    assert row['verdictReason']
-    assert json.dumps({key: row[key] for key in ('exitCode', 'reason', 'cleanup')}, sort_keys=True) == raw
-    assert 'evidenceSha256' not in row
-
-
-@pytest.mark.parametrize('enabled', [False, True])
-@pytest.mark.parametrize('normal_exit', [0, 7])
-def test_app004_scheduler_is_opt_in_and_never_waives_normal_failure(tmp_path, monkeypatch, enabled, normal_exit):
-    mock_app004_commands(monkeypatch)
-    monkeypatch.setenv('APP004_QUALIFICATION_TOKEN', 'inherited-stale-token')
-    rows = [scenario('normal', f'print("normal result");raise SystemExit({normal_exit})'),
-            scenario('independent', 'print("independent result")')]
-    code, report, output = execute(
-        tmp_path, rows, budget=30, **({'app004_qualification': True} if enabled else {}))
-    assert code == (1 if normal_exit else 0)
-    assert report['complete'] and report['passed'] is (normal_exit == 0)
-    assert [row['id'] for row in report['scenarios']] == ['normal', 'independent']
-    assert [row['command'] for row in report['scenarios']] == [row['command'] for row in rows]
-    assert [row['exitCode'] for row in report['scenarios']] == [normal_exit, 0]
-    assert [row['status'] for row in report['scenarios']] == ['failed' if normal_exit else 'passed', 'passed']
-    assert all(row['reason'] is None for row in report['scenarios'])
-    assert 'normal result' in (output / 'normal.log').read_text()
-    folder = output / 'app004-qualification'
-    if not enabled:
-        assert not folder.exists()
-        return
-    qualification = json.loads((folder / 'results.json').read_text())
-    assert qualification['source'] == report['source']
-    assert qualification['complete'] and qualification['passed']
-    assert qualification['normalPassed'] is (normal_exit == 0)
-    assert qualification['combinedPassed'] is (normal_exit == 0)
-    units, negative = qualification['checks']
-    assert [row['id'] for row in qualification['checks']] == ['units', 'reload-negative']
-    assert [row['exitCode'] for row in qualification['checks']] == [0, 1]
-    assert [row['verdict'] for row in qualification['checks']] == ['exact_units', 'expected_identity_failure']
-    assert units['executionToken'] != negative['executionToken']
-    assert all(row['executionToken'] != 'inherited-stale-token' for row in qualification['checks'])
-    assert '# fixture-owner ' + units['executionToken'] in (folder / units['log']).read_text()
-    assert json.loads((folder / 'negative/outcome.json').read_text())['qualificationToken'] == negative['executionToken']
-
-
-def test_app004_initial_and_running_receipts_are_durable_before_each_launch(tmp_path, monkeypatch):
-    mock_app004_commands(monkeypatch)
-    original = subprocess.Popen
-    snapshots = []
-    def launch(*args, **kwargs):
-        output = tmp_path / 'results'
-        snapshots.append((
-            json.loads((output / 'results.json').read_text()),
-            json.loads((output / 'app004-qualification/results.json').read_text()),
-            kwargs['env'][runner.OWNER_ENV],
-        ))
-        return original(*args, **kwargs)
-    monkeypatch.setattr(runner.subprocess, 'Popen', launch)
-    code, _, _ = execute(tmp_path, [scenario('normal', 'pass')], app004_qualification=True, budget=30)
-    assert code == 0 and len(snapshots) == 3
-    normal, initial, _ = snapshots[0]
-    assert normal['scenarios'][0]['status'] == 'running' and not normal['complete']
-    assert initial['source'] == normal['source']
-    assert not initial['complete'] and not initial['passed']
-    assert [(row['status'], row['reason']) for row in initial['checks']] == [('unrun', 'not_started')] * 2
-    assert [row['id'] for row in initial['checks']] == ['units', 'reload-negative']
-    for index, (_, qualification, token) in enumerate(snapshots[1:]):
-        completed_normal = snapshots[index + 1][0]
-        assert completed_normal['complete'] and completed_normal['passed']
-        assert qualification['checks'][index]['status'] == 'running'
-        assert qualification['checks'][index]['executionToken'] == token
-    assert snapshots[1][1]['checks'][1]['status'] == 'unrun'
-    assert snapshots[2][1]['checks'][0]['status'] == 'passed'
-
-
-@pytest.mark.parametrize('enabled', [False, True])
-def test_app004_cli_initialize_saves_unrun_without_launching_commands(tmp_path, monkeypatch, enabled):
-    (tmp_path / 'scripts').mkdir()
-    script = tmp_path / 'scripts/browser_check_runner.py'
-    shutil.copy(ROOT / 'scripts/browser_check_runner.py', script)
-    plan = tmp_path / 'plan.json'
-    plan.write_text(json.dumps({'schemaVersion': 1, 'scenarios': [scenario('normal', 'pass')]}))
-    monkeypatch.setattr(runner, '__file__', str(script))
-    def source(command, **kwargs):
-        assert kwargs['cwd'] == tmp_path
-        return {('git', 'rev-parse', 'HEAD'): b'a' * 40,
-                ('git', 'rev-parse', 'HEAD^{tree}'): b'b' * 40,
-                ('git', 'diff', '--binary', 'HEAD'): b''}[tuple(command)]
-    def forbidden(*args, **kwargs):
-        pytest.fail('Initialization must not launch any normal or qualification command')
-    monkeypatch.setattr(runner.subprocess, 'check_output', source)
-    monkeypatch.setattr(runner.subprocess, 'Popen', forbidden)
-    output = tmp_path / 'evidence'
-    monkeypatch.setattr(sys, 'argv', [str(script), '--plan', str(plan), '--output', str(output),
-                                    '--initialize', *(['--app004-qualification'] if enabled else [])])
-    assert runner.main() == 0
-    report = json.loads((output / 'results.json').read_text())
-    assert not report['complete'] and not report['passed']
-    assert report['scenarios'][0]['status'] == 'unrun'
-    assert report['scenarios'][0]['reason'] == 'not_started'
-    assert report['source']['planSha256'] == hashlib.sha256(plan.read_bytes()).hexdigest()
-    qualification_path = output / 'app004-qualification/results.json'
-    if enabled:
-        assert json.loads(qualification_path.read_text()) == runner.initial_app004(report['source'])
-    else:
-        assert not qualification_path.exists()
-
-
-@pytest.mark.parametrize('exhaust_after', ['normal', 'units'])
-def test_app004_extras_share_original_deadline_and_require_remaining_budget(tmp_path, monkeypatch, exhaust_after):
-    mock_app004_commands(monkeypatch)
-    original_clock, retire = runner.time.monotonic, runner.retire_group
-    offset, retired = [0], []
-    monkeypatch.setattr(runner.time, 'monotonic', lambda: original_clock() + offset[0])
-    def cleanup(*args):
-        result = retire(*args)
-        retired.append(args[1])
-        if len(retired) == (1 if exhaust_after == 'normal' else 2):
-            offset[0] += 9  # Less than either extra's two-second budget remains.
-        return result
-    monkeypatch.setattr(runner, 'retire_group', cleanup)
-    code, report, output = execute(tmp_path, [scenario('normal', 'pass')], app004_qualification=True, budget=10)
-    assert code == 1 and report['complete'] and report['passed']
-    qualification = json.loads((output / 'app004-qualification/results.json').read_text())
-    assert not qualification['complete'] and not qualification['passed']
-    assert [row['status'] for row in qualification['checks']] == (
-        ['unrun', 'unrun'] if exhaust_after == 'normal' else ['passed', 'unrun'])
-    for row in qualification['checks']:
-        if row['status'] == 'unrun':
-            assert row['reason'] == 'budget_exhausted'
-            assert 'executionToken' not in row and 'exitCode' not in row
-            assert not (output / 'app004-qualification' / (row['id'] + '.log')).exists()
-    assert len(retired) == (1 if exhaust_after == 'normal' else 2)
-
-
-@pytest.mark.parametrize('cancel_at', ['normal', 'units'])
-def test_app004_cancellation_reaps_current_and_keeps_extras_unrun(tmp_path, monkeypatch, cancel_at):
-    cancel = 'import os,signal,time;os.kill(os.getppid(),signal.SIGTERM);time.sleep(60)'
-    mock_app004_commands(monkeypatch, units_source=cancel if cancel_at == 'units' else None)
-    code, report, output = execute(
-        tmp_path, [scenario('normal', cancel if cancel_at == 'normal' else 'pass'), scenario('later', 'pass')],
-        app004_qualification=True, budget=30)
-    assert code == 1
-    qualification = json.loads((output / 'app004-qualification/results.json').read_text())
-    active = report['scenarios'][0] if cancel_at == 'normal' else qualification['checks'][0]
-    assert active['status'] == 'failed' and active['reason'] == 'cancelled'
-    assert active['cleanup']['remaining'] == []
-    assert not qualification['complete'] and not qualification['passed']
-    assert [row['status'] for row in qualification['checks']] == (
-        ['unrun', 'unrun'] if cancel_at == 'normal' else ['failed', 'unrun'])
-    if cancel_at == 'normal':
-        assert report['scenarios'][1]['status'] == 'unrun' and not report['complete']
-    else:
-        assert report['complete'] and report['passed']
-    assert qualification['checks'][1]['reason'] == 'cancelled'
-    assert not (output / 'app004-qualification/reload-negative.log').exists()
-
-
-@pytest.mark.parametrize('stage,remaining,terminated,reason', [
-    ('normal', [], 1, 'unsafe_normal_cleanup'),
-    ('normal', ['unknown'], 0, 'unsafe_cleanup'),
-    ('units', ['unknown'], 0, 'unsafe_cleanup'),
-])
-def test_app004_unsafe_cleanup_cannot_launch_remaining_extras(tmp_path, monkeypatch, stage, remaining, terminated, reason):
-    mock_app004_commands(monkeypatch)
-    retire, retired = runner.retire_group, []
-    def cleanup(*args):
-        actual = retire(*args)
-        assert actual == {'remaining': [], 'terminated': 0}
-        retired.append(args[1])
-        if len(retired) == (1 if stage == 'normal' else 2):
-            # Inject an uncertain cleanup receipt only after real child cleanup.
-            return {'remaining': remaining, 'terminated': terminated}
-        return actual
-    monkeypatch.setattr(runner, 'retire_group', cleanup)
-    code, report, output = execute(tmp_path, [scenario('normal', 'pass')], app004_qualification=True, budget=30)
-    assert code == 1
-    assert report['complete'] and report['passed'] is (stage == 'units')
-    qualification = json.loads((output / 'app004-qualification/results.json').read_text())
-    assert not qualification['complete'] and not qualification['passed']
-    assert [row['status'] for row in qualification['checks']] == (
-        ['unrun', 'unrun'] if stage == 'normal' else ['failed', 'unrun'])
-    for row in qualification['checks']:
-        if row['status'] == 'unrun':
-            assert row['reason'] == reason
-            assert not (output / 'app004-qualification' / (row['id'] + '.log')).exists()
-    assert len(retired) == (1 if stage == 'normal' else 2)
-
-
-@pytest.mark.parametrize('timeout_at', ['units', 'reload-negative'])
-def test_app004_extra_timeout_is_failure_not_expected_negative(tmp_path, monkeypatch, timeout_at):
-    slow = 'import time;time.sleep(60)'
-    mock_app004_commands(monkeypatch, units_source=slow if timeout_at == 'units' else None,
-                         negative_source=slow if timeout_at == 'reload-negative' else None)
-    initial = runner.initial_app004
-    def short(provenance):
-        report = initial(provenance)
-        next(row for row in report['checks'] if row['id'] == timeout_at)['timeoutSeconds'] = .15
-        return report
-    monkeypatch.setattr(runner, 'initial_app004', short)
-    code, report, output = execute(tmp_path, [scenario('normal', 'pass')], app004_qualification=True, budget=30)
-    assert code == 1 and report['complete'] and report['passed']
-    qualification = json.loads((output / 'app004-qualification/results.json').read_text())
-    assert qualification['complete'] and not qualification['passed']
-    row = next(row for row in qualification['checks'] if row['id'] == timeout_at)
-    assert row['status'] == 'failed' and row['reason'] == 'timeout'
-    assert row['verdict'] == 'rejected' and row['exitCode'] is None
-    assert row['cleanup']['remaining'] == []
-    other = next(row for row in qualification['checks'] if row['id'] != timeout_at)
-    assert other['status'] == 'passed'
 
 
 def bounded_execute(tmp_path, source, **kwargs):
@@ -1909,6 +2429,182 @@ def test_python_log_ring_retains_running_head_and_cursor_then_orders_tail(tmp_pa
     finally:
         log.close()
     assert path.read_bytes() == b'01234789AB'
+
+
+@pytest.mark.parametrize('ending', [
+    'delayed-eof', 'never-eof', 'overall-deadline', 'case-deadline',
+    'cancelled', 'read-error', 'cleanup-unknown', 'late-eof',
+])
+def test_capture_finalization_observes_pipe_after_leader_exit(tmp_path, monkeypatch, ending):
+    """A completed leader/empty census cannot substitute for read-side EOF."""
+    from types import SimpleNamespace
+    read_fd, write_fd = os.pipe()
+    pipe = os.fdopen(read_fd, 'rb', buffering=0)
+    clock = SimpleNamespace(now=100.0, sleeps=[], writer_open=True, cleanup=False)
+    reads = []
+    real_read = os.read
+    os.write(write_fd, b'leader done\n')
+
+    def read(fd, size):
+        if fd != read_fd:
+            return real_read(fd, size)
+        assert size <= 65536
+        assert len(reads) < 210, 'A busy drain must not avoid clock/deadline checks'
+        if ending == 'late-eof' and len(reads) >= 2 and clock.writer_open:
+            clock.now = 100.6  # Scheduling/I/O delay within the final drain quantum.
+            os.close(write_fd)
+            clock.writer_open = False
+        if ending == 'read-error' and clock.now >= 100.02:
+            raise OSError('synthetic pipe failure')
+        try:
+            value = real_read(fd, size)
+        except BlockingIOError:
+            reads.append(('would-block', clock.now))
+            raise
+        reads.append(('bytes' if value else 'eof', clock.now))
+        return value
+
+    def sleep(seconds):
+        assert 0 < seconds <= .01
+        clock.sleeps.append(seconds)
+        clock.now += seconds
+        assert clock.now <= 100.51, 'Never-EOF must not consume the whole scenario budget'
+        if ending == 'cancelled':
+            runner.signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+        if ending == 'delayed-eof' and clock.now >= 100.03 and clock.writer_open:
+            os.write(write_fd, b'late final bytes\n')
+            os.close(write_fd)
+            clock.writer_open = False
+
+    class CompletedLeader:
+        pid = 12345
+        returncode = 0
+        stdout = pipe
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout):
+            assert clock.cleanup
+            assert ending != 'cleanup-unknown', 'Unknown ownership must not wait on the leader'
+            return 0
+
+    def cleanup(*args, drain):
+        clock.cleanup = True
+        drain()  # The real pipe drains available bytes, then reports EAGAIN.
+        assert reads[-1][0] == 'would-block' and clock.writer_open
+        return {'remaining': ['unknown'] if ending == 'cleanup-unknown' else [], 'terminated': 0}
+
+    monkeypatch.setattr(runner, 'time', SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep))
+    monkeypatch.setattr(runner.os, 'read', read)
+    monkeypatch.setattr(runner, 'process_identities', lambda: {})
+    monkeypatch.setattr(runner.subprocess, 'Popen', lambda *args, **kwargs: CompletedLeader())
+    monkeypatch.setattr(runner, 'retire_group', cleanup)
+    budget = .02 if ending == 'overall-deadline' else 100
+    case_timeout = .02 if ending == 'case-deadline' else 100
+    try:
+        code, report, output = execute(tmp_path, [scenario('capture', 'not actually spawned')],
+                                       budget=budget, case_timeout=case_timeout, log_limit=1024)
+        row, = report['scenarios']
+        assert row['exitCode'] == 0
+        assert reads[0][0] == 'bytes' and any(kind == 'would-block' for kind, _ in reads)
+        if ending == 'delayed-eof':
+            assert row['logCapture']['eof'] and reads[-1][0] == 'eof'
+            assert (output / 'capture.log').read_bytes() == b'leader done\nlate final bytes\n'
+            assert code == 0
+            assert row['reason'] is None
+        elif ending == 'late-eof':
+            assert code == 1 and row['logCapture']['eof']
+            assert row['reason'] == 'log_capture_timeout'
+            assert row['logCapture']['settlement']['status'] == 'deadline'
+            assert not clock.sleeps
+        else:
+            assert code == 1 and not row['logCapture']['eof']
+            assert row['reason'] == {
+                'cancelled': 'cancelled', 'read-error': 'log_capture_failed',
+            }.get(ending, 'log_incomplete')
+        if ending in {'overall-deadline', 'case-deadline'}:
+            assert clock.now <= 100.02
+        if ending == 'cancelled':
+            assert len(clock.sleeps) == 1
+        if ending == 'read-error':
+            assert row['logCapture']['captureError'] == 'OSError'
+            assert len(clock.sleeps) == 2
+        if ending == 'never-eof':
+            assert .49 <= clock.now - 100 <= .5
+        if ending == 'cleanup-unknown':
+            assert not clock.sleeps and row['cleanup']['remaining'] == ['unknown']
+        assert pipe.closed
+    finally:
+        if clock.writer_open:
+            os.close(write_fd)
+        pipe.close()
+
+
+@pytest.mark.parametrize('ending', ['eof', 'flood', 'cancelled', 'expired', 'write-error'])
+def test_capture_settlement_keeps_read_quanta_and_absolute_deadline(tmp_path, monkeypatch, ending):
+    from types import SimpleNamespace
+    read_fd, write_fd = os.pipe()
+    pipe = os.fdopen(read_fd, 'rb', buffering=0)
+    capture = runner.BoundedLog(tmp_path / 'capture.log', 128)
+    capture.attach(pipe)
+    clock = SimpleNamespace(now=100.0, sleeps=0, cancelled=False)
+    calls = []
+    real_read = os.read
+
+    def read(fd, size):
+        if fd != read_fd:
+            return real_read(fd, size)
+        calls.append(clock.sleeps)
+        assert size == 65536 and len(calls) <= 12
+        # Every quantum is at most four reads, even with continuous output.
+        assert calls.count(clock.sleeps) <= 4
+        if ending == 'eof' and len(calls) == 7:
+            return b''
+        return b'x' * size
+
+    def sleep(seconds):
+        assert 0 < seconds <= .01
+        clock.now += seconds
+        clock.sleeps += 1
+        if ending == 'cancelled':
+            clock.cancelled = True
+
+    def fail_write(data):
+        raise OSError('synthetic disk failure')
+
+    monkeypatch.setattr(runner, 'time', SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep))
+    monkeypatch.setattr(runner.os, 'read', read)
+    if ending == 'write-error':
+        monkeypatch.setattr(capture.head, 'write', fail_write)
+    try:
+        capture.settle(100.0 if ending == 'expired' else 100.02, lambda: clock.cancelled)
+        count = len(calls)
+        capture.close(drain=False)
+        assert len(calls) == count  # No extra read after cancellation/deadline.
+        assert clock.now <= 100.02 and clock.sleeps <= 2
+        receipt = capture.receipt()
+        assert receipt['settlement']['status'] == {
+            'eof': 'eof', 'flood': 'deadline', 'cancelled': 'cancelled',
+            'expired': 'deadline', 'write-error': 'capture_error',
+        }[ending]
+        if ending == 'eof':
+            assert receipt['eof'] and len(calls) == 7
+            assert (tmp_path / 'capture.log').read_bytes() == b'x' * 128
+        elif ending == 'expired':
+            assert calls == [] and not receipt['eof']
+        elif ending == 'cancelled':
+            assert len(calls) == 4 and clock.sleeps == 1 and not receipt['eof']
+        elif ending == 'write-error':
+            assert len(calls) == 4 and clock.sleeps == 0
+            assert receipt['captureError'] == 'OSError' and receipt['bytesRetained'] is None
+        else:
+            assert not receipt['eof'] and receipt['truncated']
+    finally:
+        if not capture.head.stream.closed:
+            capture.close(drain=False)
+        os.close(write_fd)
+        pipe.close()
 
 
 def expire_after_progress(monkeypatch, marker):
@@ -3328,16 +4024,22 @@ def test_split_registry_initialization_preserves_order_and_binds_both_sources(tm
     assert not (tmp_path / '.build').exists(), 'Reading initial coverage must not prepare or execute the client'
 
 
-@pytest.mark.parametrize('fault', ['missing-client', 'duplicate-id', 'missing-order-id', 'duplicate-order-id', 'stale-prepared'])
+@pytest.mark.parametrize('fault', ['missing-client', 'duplicate-id', 'missing-order-id',
+                                  'extra-order-id', 'unknown-order-id', 'duplicate-order-id', 'stale-prepared'])
 def test_split_registry_never_falls_back_or_loses_coverage(tmp_path, fault):
     host, client, selection = owned_registry_fixture(tmp_path)
     if fault == 'missing-client':
         client.unlink()
     elif fault == 'duplicate-id':
         client.write_text(json.dumps({'schemaVersion': 1, 'scenarios': [scenario('host-case', 'pass')]}))
-    elif fault in {'missing-order-id', 'duplicate-order-id'}:
+    elif fault in {'missing-order-id', 'extra-order-id', 'unknown-order-id', 'duplicate-order-id'}:
         plan = json.loads(host.read_text())
-        plan['scenarioOrder'] = ['host-case'] if fault == 'missing-order-id' else ['host-case', 'host-case']
+        plan['scenarioOrder'] = {
+            'missing-order-id': ['host-case'],
+            'extra-order-id': ['client-case', 'host-case', 'extra-case'],
+            'unknown-order-id': ['client-case', 'extra-case'],
+            'duplicate-order-id': ['host-case', 'host-case'],
+        }[fault]
         host.write_text(json.dumps(plan))
     else:
         prepared = tmp_path / '.build/web-client'
@@ -3388,12 +4090,45 @@ def test_runner_executes_each_explicit_owner_cwd_without_changing_environment_ro
 
 
 def test_current_composed_registry_owns_every_executable_and_both_mixed_suites():
-    plan = current_plan()
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    plan, proof = runner.load_plan(ROOT, host_path)
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], set(), current=True)
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids]
-    assert len(preceding) == len({row['id'] for row in preceding}) == 148
-    assert len(plan['scenarios']) == 148 + len(navigation_ids)
-    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 15
+    client_addition_ids = input_status_and_action_spacing_browser_additions(plan['scenarios'], set(), current=True)
+    retained_ids = retained_update_recovery_browser_addition(plan['scenarios'])
+    appearance_ids = appearance_lifecycle_browser_addition(plan['scenarios'])
+    responsive_ids = sidebar_responsive_browser_addition(plan['scenarios'])
+    notices_ids = shared_notices_motion_browser_addition(plan['scenarios'])
+    preview_ids = attachment_preview_browser_addition(plan['scenarios'])
+    approval_ids = external_approval_browser_addition(plan['scenarios'])
+    multiparty_ids = external_multiparty_browser_addition(plan['scenarios'])
+    shared_room_ids = shared_room_browser_addition(plan['scenarios'])
+    repair_ids = installation_repair_browser_addition(plan['scenarios'])
+    layout_ids = layout_return_browser_additions(plan['scenarios'])
+    pass2_ids = layout_pass2_browser_additions(plan['scenarios'])
+    changelog_ids = changelog_days_browser_addition(plan['scenarios'])
+    activity_ids = retained_activity_browser_addition(plan['scenarios'])
+    context_ids = context_degradation_browser_addition(plan['scenarios'])
+    later_ids = (update_configuration_hold_browser_addition(plan['scenarios'])
+                      | browser_additions_after_update_configuration_hold(plan['scenarios']))
+    lifecycle_additions = [
+        {'id': 'session-health-request-failure',
+         'command': ['node', 'tests/web/session-health-browser.mjs', '--request-failure']},
+        {'id': 'session-health-completed-runtime-fault',
+         'command': ['node', 'tests/web/session-health-browser.mjs', '--completed-runtime-fault']},
+    ]
+    lifecycle_ids = {row['id'] for row in lifecycle_additions}
+    assert [row for row in plan['scenarios'] if row['id'] in lifecycle_ids] == lifecycle_additions
+    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | lifecycle_ids | preview_ids | approval_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids | changelog_ids | activity_ids | context_ids | later_ids]
+    assert len(preceding) == len({row['id'] for row in preceding}) == 147
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(preview_ids) + len(approval_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(later_ids)
+    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(preview_ids) + len(approval_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(later_ids)
+    assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
+    suggestion_ids = transcript_suggestion_browser_addition(plan['scenarios'])
+    linked_ids = linked_instances_browser_addition(plan['scenarios'])
+    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(preview_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(shared_room_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(suggestion_ids) + len(linked_ids)
+    client_path = source_test('tests/input-status-browser.mjs').with_name('browser-checks.json')
+    assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
+    assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
     sidebar_controls_browser_addition(plan['scenarios'], set(), current=True)
     for row in plan['scenarios']:
         for part in row['command']:
@@ -3403,6 +4138,444 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     assert mixed['cwd'] == '.build/web-client'
     assert mixed['command'] == ['node', '--test', 'tests/configuration-recovery.test.mjs',
                                 '../../tests/web/configuration-recovery-observer.test.mjs']
+
+
+LAYOUT_RETURN_IDS = ('composer-return', 'composer-return-mounted', 'shared-controls', 'conversation-error')
+
+
+def layout_return_browser_additions(rows, readiness_scripts=()):
+    """Require every new exact client owner before subtracting frozen coverage."""
+    identities = set()
+    for name in LAYOUT_RETURN_IDS:
+        identities |= selected_client_browser_addition(rows, readiness_scripts, name, current=True)
+    return identities
+
+
+def test_layout_return_assembly_retains_prior_order_and_binds_all_new_owners():
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    plan, proof = runner.load_plan(ROOT, host_path)
+    assert layout_return_browser_additions(plan['scenarios']) == set(LAYOUT_RETURN_IDS)
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    for name in LAYOUT_RETURN_IDS:
+        assert host['scenarioOrder'].count(name) == 1
+    assert host['scenarioOrder'][host['scenarioOrder'].index('composer-primary-action') + 1:
+                                 host['scenarioOrder'].index('surface-context')] == [
+        'composer-return', 'composer-return-mounted']
+    assert host['scenarioOrder'][host['scenarioOrder'].index('action-spacing') + 1] == 'shared-controls'
+    assert host['scenarioOrder'][host['scenarioOrder'].index('session-health') + 1] == 'conversation-error'
+    # Frozen prior inventory remains guarded by coverage_plan's exact owner checks
+    # and unchanged historical command/environment/ordering assertions.
+    assert not set(LAYOUT_RETURN_IDS) & {row['id'] for row in coverage_plan()['scenarios']}
+    assert proof['browserLayout'] == 'separate-owners'
+
+
+@pytest.mark.parametrize('name', LAYOUT_RETURN_IDS)
+@pytest.mark.parametrize('fault', ['omitted', 'duplicated'])
+def test_layout_return_assembly_order_cannot_drop_or_repeat_new_client_rows(tmp_path, name, fault):
+    host, client, _ = owned_registry_fixture(tmp_path)
+    host_plan = json.loads(host.read_text())
+    client_plan = json.loads(client.read_text())
+    client_plan['scenarios'].append(scenario(name, 'pass'))
+    host_plan['scenarioOrder'].append(name)
+    if fault == 'omitted': host_plan['scenarioOrder'].remove(name)
+    else: host_plan['scenarioOrder'].append(name)
+    host.write_text(json.dumps(host_plan))
+    client.write_text(json.dumps(client_plan))
+    with pytest.raises(ValueError, match='each owned scenario exactly once'):
+        runner.load_plan(tmp_path, host)
+
+
+@pytest.mark.parametrize('name', LAYOUT_RETURN_IDS)
+@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'renamed', 'command', 'environment', 'cwd', 'readiness'])
+def test_layout_return_addition_rejects_missing_or_mutated_owner(name, fault):
+    rows = current_plan()['scenarios']
+    owner = next(row for row in rows if row['id'] == name)
+    readiness = set()
+    if fault == 'missing': rows.remove(owner)
+    elif fault == 'duplicate': rows.append(dict(owner))
+    elif fault == 'renamed': owner['id'] += '-renamed'
+    elif fault == 'command': owner['command'] = [*owner['command'], '--skip']
+    elif fault == 'environment': owner['env'] = {}
+    elif fault == 'cwd': owner['cwd'] = 'tests/web'
+    else: readiness.add(owner['command'][1])
+    with pytest.raises(AssertionError, match=name):
+        layout_return_browser_additions(rows, readiness)
+
+
+LAYOUT_PASS2_BROWSER_IDS = (
+    'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus',
+)
+
+
+def layout_pass2_browser_additions(rows, readiness_scripts=()):
+    """Validate all four exact selected-client owners before historical exclusion."""
+    identities = set()
+    for name in LAYOUT_PASS2_BROWSER_IDS:
+        script = f'tests/{name}-browser.mjs'
+        expected = {
+            'id': name, 'command': ['node', script],
+            'env': {'AMPLIFIER_TEST_ARTIFACTS': f'{{root}}/output/browser-checks/{name}'},
+            'cwd': '.build/web-client',
+        }
+        if name == 'settings-action-spacing':
+            expected['env']['AMPLIFIER_TEST_APPEARANCES'] = '{root}/tests/fixtures/appearance-cases.json'
+        owners = [row for row in rows if row['id'] == name
+                  or any(Path(part).name == Path(script).name for part in row['command'])]
+        assert owners == [expected], f'{name}: expected one exact selected-client owner and environment'
+        assert script not in readiness_scripts, f'{name}: duplicate readiness owner'
+        identities.add(name)
+    return identities
+
+
+def layout_pass2_registry_rows():
+    # Independent literal positive fixtures, not rows generated by the guard.
+    # These describe registry composition only, never executed browser evidence.
+    return [
+        {'id': 'worktree-move', 'command': ['node', 'tests/worktree-move-browser.mjs'],
+         'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/worktree-move'},
+         'cwd': '.build/web-client'},
+        {'id': 'work-hierarchy', 'command': ['node', 'tests/work-hierarchy-browser.mjs'],
+         'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/work-hierarchy'},
+         'cwd': '.build/web-client'},
+        {'id': 'settings-action-spacing', 'command': ['node', 'tests/settings-action-spacing-browser.mjs'],
+         'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/settings-action-spacing',
+                 'AMPLIFIER_TEST_APPEARANCES': '{root}/tests/fixtures/appearance-cases.json'},
+         'cwd': '.build/web-client'},
+        {'id': 'settings-draft-focus', 'command': ['node', 'tests/settings-draft-focus-browser.mjs'],
+         'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/settings-draft-focus'},
+         'cwd': '.build/web-client'},
+    ]
+
+
+def test_layout_pass2_guard_requires_all_four_independent_fixture_owners():
+    rows = layout_pass2_registry_rows()
+    assert layout_pass2_browser_additions(rows) == {
+        'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'}
+    for owner in rows:
+        name = owner['id']
+        with pytest.raises(AssertionError, match=name):
+            layout_pass2_browser_additions([row for row in rows if row is not owner])
+        with pytest.raises(AssertionError, match=name):
+            layout_pass2_browser_additions(rows + [owner])
+        with pytest.raises(AssertionError, match=name):
+            layout_pass2_browser_additions(rows, {owner['command'][1]})
+
+
+@pytest.mark.parametrize('name', LAYOUT_PASS2_BROWSER_IDS)
+@pytest.mark.parametrize('fault', [
+    'missing', 'duplicate', 'identical-duplicate', 'renamed', 'command',
+    'extra-argument', 'environment', 'missing-environment', 'wrong-artifacts',
+    'extra-environment', 'unified-root', 'cwd', 'missing-cwd', 'readiness',
+    'host-script-duplicate',
+])
+def test_layout_pass2_addition_rejects_missing_or_mutated_owner_before_exclusion(monkeypatch, name, fault):
+    plan = current_plan()
+    rows = plan['scenarios']
+    assert layout_pass2_browser_additions(rows) == set(LAYOUT_PASS2_BROWSER_IDS)
+    owner = next(row for row in rows if row['id'] == name)
+    readiness = set()
+    if fault == 'missing':
+        rows.remove(owner)
+    elif fault == 'duplicate':
+        rows.append({**owner, 'id': name + '-duplicate'})
+    elif fault == 'identical-duplicate':
+        rows.append(json.loads(json.dumps(owner)))
+    elif fault == 'renamed':
+        owner['id'] += '-renamed'
+    elif fault == 'command':
+        owner['command'][1] = 'tests/home-sidebar-browser.mjs'
+    elif fault == 'extra-argument':
+        owner['command'].append('--skip')
+    elif fault == 'environment':
+        owner['env'] = {}
+    elif fault == 'missing-environment':
+        owner.pop('env')
+    elif fault == 'wrong-artifacts':
+        owner['env']['AMPLIFIER_TEST_ARTIFACTS'] = '{root}/output/browser-checks/other'
+    elif fault == 'extra-environment':
+        owner['env']['UNEXPECTED'] = 'extra'
+    elif fault == 'unified-root':
+        owner['env']['AMPLIFIER_UNIFIED_ROOT'] = '{root}'
+    elif fault == 'cwd':
+        owner['cwd'] = 'tests/web'
+    elif fault == 'missing-cwd':
+        owner.pop('cwd')
+    elif fault == 'readiness':
+        readiness.add(owner['command'][1])
+    else:
+        rows.append({'id': name + '-host-duplicate',
+                     'command': ['node', f'tests/web/{name}-browser.mjs']})
+    with pytest.raises(AssertionError, match=name):
+        layout_pass2_browser_additions(rows, readiness)
+    if fault != 'readiness':
+        # Exercise the historical reader itself: an IDs-only exclusion or an
+        # allow-missing guard must not hide a missing, duplicated or changed row.
+        monkeypatch.setattr(sys.modules[__name__], 'current_plan', lambda: plan)
+        with pytest.raises(AssertionError, match=name):
+            coverage_plan()
+
+
+@pytest.mark.parametrize('fault', ['missing-appearances', 'wrong-appearances'])
+def test_settings_action_spacing_requires_exact_appearance_fixture_before_exclusion(monkeypatch, fault):
+    plan = current_plan()
+    assert layout_pass2_browser_additions(plan['scenarios']) == set(LAYOUT_PASS2_BROWSER_IDS)
+    owner = next(row for row in plan['scenarios'] if row['id'] == 'settings-action-spacing')
+    if fault == 'missing-appearances':
+        owner['env'].pop('AMPLIFIER_TEST_APPEARANCES')
+    else:
+        owner['env']['AMPLIFIER_TEST_APPEARANCES'] = '{root}/components/web-client/tests/appearance-cases.json'
+    with pytest.raises(AssertionError, match='settings-action-spacing'):
+        layout_pass2_browser_additions(plan['scenarios'])
+    monkeypatch.setattr(sys.modules[__name__], 'current_plan', lambda: plan)
+    with pytest.raises(AssertionError, match='settings-action-spacing'):
+        coverage_plan()
+
+
+def test_layout_pass2_assembly_retains_prior_order_and_binds_all_four_selected_owners():
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    plan, proof = runner.load_plan(ROOT, host_path)
+    identities = layout_pass2_browser_additions(plan['scenarios'])
+    changelog_ids = changelog_days_browser_addition(plan['scenarios'])
+    activity_ids = retained_activity_browser_addition(plan['scenarios'])
+    context_ids = context_degradation_browser_addition(plan['scenarios'])
+    later_ids = (update_configuration_hold_browser_addition(plan['scenarios'])
+                      | browser_additions_after_update_configuration_hold(plan['scenarios']))
+    assert identities == {
+        'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'}
+    client_path = source_test('tests/worktree-move-browser.mjs').with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    expected = layout_pass2_registry_rows()
+    for owner in expected:
+        name = owner['id']
+        script = owner['command'][1]
+        def owns(row):
+            return row['id'] == name or any(Path(part).name == Path(script).name for part in row['command'])
+        assert not any(owns(row) for row in host['scenarios'])
+        assert [row for row in client['scenarios'] if owns(row)] == [
+            {key: value for key, value in owner.items() if key != 'cwd'}]
+        assert [row for row in plan['scenarios'] if owns(row)] == [owner]
+        assert host['scenarioOrder'].count(name) == 1
+        assert (client_path.parent / Path(script).name).is_file()
+    assert (ROOT / 'tests/fixtures/appearance-cases.json').is_file()
+    # Keep the 25 preceding canonical registry rows in their original order.
+    suggestion_ids = transcript_suggestion_browser_addition(plan['scenarios'])
+    linked_ids = linked_instances_browser_addition(plan['scenarios'])
+    preceding_client_ids = [row['id'] for row in client['scenarios'] if row['id'] not in identities | changelog_ids | activity_ids | context_ids | suggestion_ids | linked_ids | {'attachment-preview'}]
+    assert preceding_client_ids == [
+        'shared-controls', 'composer-return-mounted', 'composer-return', 'conversation-error',
+        'installation-repair', 'shared-room', 'shared-notices-motion', 'input-status',
+        'action-spacing', 'sidebar-responsive', 'sidebar-controls', 'new-chat-recovery',
+        'review-during-send', 'message-outbox', 'update-message-delivery', 'retained-update-recovery',
+        'delivery-warning', 'legacy-outbox-notice', 'delivery-reconciliation', 'delivery-new-chat',
+        'conversation-navigation', 'activity-feedback', 'chat-scroll-call-boundaries',
+        'history-refresh', 'appearance-lifecycle',
+    ]
+    assert len(preceding_client_ids) == 25
+    assert len(client['scenarios']) == 26 + len(identities) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(suggestion_ids) + len(linked_ids)
+    # Accepted f544781 host order includes worktree-move after assignment-adoption.
+    # The other three guarded owners are additive to these exact 165 identities.
+    new_ids = identities - {'worktree-move'}
+    assert new_ids == {'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'}
+    preceding_order = '''
+        agent-chat-navigation agent-chat-navigation-settings navigation-waiting
+        context-inspector context-inspector-layout adaptive-work home-sidebar shared-landing
+        focus-navigation diagram-navigation chat-shortcuts automation-hub peer-attribution
+        device-pairing standard-ux-keyboard-reflow approval-layout approval-lifecycle
+        standard-ux-connection-controls standard-ux-preferences standard-ux-privacy-effects
+        standard-ux-voice-settings smart-tool-updates update-restart update-effects
+        active-client-performance state-transport state-stream client-traffic demand
+        scoped-navigation navigation-details-context sidebar-reading selected-context
+        registry-validation empty-host appearance-lifecycle empty-host-fail-create
+        empty-host-lost-create new-chat cross-workspace-handoff chat-reference
+        draft-provider-refresh provider-selection provider-native immediate-direction
+        draft-discovery-recovery sidebar-controls sidebar-responsive new-chat-recovery
+        feedback feedback-followup composer-readiness dormant-controls composer-primary-action
+        composer-return composer-return-mounted surface-context desktop-readiness
+        memory-personalization publishing portability testing-settings settings installation-repair
+        configuration-recovery-components configuration-recovery settings-completeness settings-drafts
+        settings-collections settings-mobile workspace-starters theme-definitions appearance-startup
+        appearance-library ready review-during-send question-transcript-fade question-resume
+        execution-observability execution-inspection execution-actions delegate-work-stream
+        tool-details tool-previews canonical-work interim-replies tool-outcomes navigation
+        archive-feedback pin-retention pin-rapid-reorder workspace-shortcuts chat-title message-outbox
+        update-message-delivery retained-update-recovery attachment-consumption attachment-experience
+        message-delivery shared-notices-motion input-status action-spacing shared-controls
+        delivery-warning legacy-outbox-notice delivery-reconciliation delivery-new-chat
+        canvas-media inline-media-transition artifact-one-surface app-toolbar smart-tools
+        mcp-recovery mcp-clients shell-components mobile-navigation cache-usage bundle
+        markdown-composer multi-quote draft-switch draft-reload live-history conversation-navigation
+        destination-history live-clients ownership canvas-dirty canvas-versions canvas-refresh
+        canvas-refresh-catchup canvas-apps canvas-drawing session-health conversation-error
+        session-health-context-limit session-health-context-limit-active-worker
+        session-health-request-failure session-health-completed-runtime-fault session-health-module-failure
+        activity-feedback capacity request-cancellation coordination shared-work connectors
+        test-environments assignment-adoption worktree-move access-mode storage-cleanup-settings model-capacity-settings
+        compact-composer composer-panel-ownership peer-preview peer-preview-header peer-preview-focus
+        canvas-chrome canvas-close chat-scroll-call-boundaries semantic-settings history-refresh
+        voice-work-message external-multiparty shared-room
+    '''.split()
+    assert len(preceding_order) == len(set(preceding_order)) == 165
+    assert [name for name in host['scenarioOrder'] if name not in new_ids | changelog_ids | activity_ids | context_ids | later_ids | {'external-approval', 'attachment-preview'}] == preceding_order
+    # Preserve the prior spacing/hierarchy placements independently of where the
+    # newly validated draft-focus journey is inserted into the host order.
+    before_focus = [name for name in host['scenarioOrder'] if name not in changelog_ids | activity_ids | context_ids | later_ids | {'settings-draft-focus', 'external-approval', 'attachment-preview'}]
+    assert before_focus[before_focus.index('shared-controls') + 1:
+                        before_focus.index('delivery-warning')] == ['settings-action-spacing']
+    assert before_focus[-2:] == ['shared-room', 'work-hierarchy']
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    assert len(plan['scenarios']) == len(host['scenarioOrder']) == 165 + len(new_ids) + 2 + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(later_ids) == 170 + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(later_ids)
+    assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
+    assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
+    assert not identities & {row['id'] for row in coverage_plan()['scenarios']}
+
+
+@pytest.mark.parametrize('name', LAYOUT_PASS2_BROWSER_IDS)
+@pytest.mark.parametrize('fault', ['omitted', 'duplicated'])
+def test_layout_pass2_assembly_order_cannot_drop_or_repeat_new_client_rows(tmp_path, name, fault):
+    host, client, _ = owned_registry_fixture(tmp_path)
+    host_plan = json.loads(host.read_text())
+    client_plan = json.loads(client.read_text())
+    client_plan['scenarios'].extend(
+        {key: value for key, value in row.items() if key != 'cwd'}
+        for row in layout_pass2_registry_rows())
+    host_plan['scenarioOrder'].extend([
+        'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'])
+    host.write_text(json.dumps(host_plan))
+    client.write_text(json.dumps(client_plan))
+    plan, _ = runner.load_plan(tmp_path, host)
+    assert layout_pass2_browser_additions(plan['scenarios']) == {
+        'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'}
+    if fault == 'omitted':
+        host_plan['scenarioOrder'].remove(name)
+    else:
+        host_plan['scenarioOrder'].append(name)
+    host.write_text(json.dumps(host_plan))
+    with pytest.raises(ValueError, match='each owned scenario exactly once'):
+        runner.load_plan(tmp_path, host)
+
+
+def installation_repair_browser_addition(rows, readiness_scripts=()):
+    """Validate the accepted client owner before subtracting frozen inventories."""
+    script = 'tests/installation-repair-browser.mjs'
+    expected = {
+        'id': 'installation-repair',
+        'command': ['node', script],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/installation-repair'},
+        'cwd': '.build/web-client',
+    }
+    owners = [row for row in rows if row['id'] == expected['id']
+              or script in row['command']]
+    assert owners == [expected], 'installation-repair: expected one exact selected-client owner'
+    assert script not in readiness_scripts
+    return {expected['id']}
+
+
+def retained_update_recovery_browser_addition(rows):
+    """The retained-only mode is additive, not a second ordinary delivery run."""
+    expected = {
+        'id': 'retained-update-recovery',
+        'command': ['node', 'tests/update-message-delivery-browser.mjs', '--retained-recovery-only'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/retained-update-recovery'},
+        'cwd': '.build/web-client',
+    }
+    owners = [row for row in rows if row['id'] == expected['id']
+              or '--retained-recovery-only' in row['command']]
+    assert owners == [expected], 'retained-update-recovery: expected one exact selected-client mode'
+    return {expected['id']}
+
+
+def test_retained_update_recovery_is_composed_once_without_replacing_ordinary_delivery():
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    client_path = source_test('tests/update-message-delivery-browser.mjs').with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    name = 'retained-update-recovery'
+    assert not any(row['id'] == name or '--retained-recovery-only' in row['command']
+                   for row in host['scenarios'])
+    assert host['scenarioOrder'].count(name) == 1
+    index = host['scenarioOrder'].index(name)
+    assert host['scenarioOrder'][index - 1:index + 2] == [
+        'update-message-delivery', name, 'attachment-consumption']
+    plan, proof = runner.load_plan(ROOT, host_path)
+    retained_update_recovery_browser_addition(plan['scenarios'])
+    selected = next(row for row in client['scenarios'] if row['id'] == name)
+    assert next(row for row in plan['scenarios'] if row['id'] == name) == {
+        **selected, 'cwd': '.build/web-client'}
+    ordinary = next(row for row in plan['scenarios'] if row['id'] == 'update-message-delivery')
+    assert ordinary == {
+        'id': 'update-message-delivery', 'command': ['node', 'tests/update-message-delivery-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/update-message-delivery'},
+        'cwd': '.build/web-client'}
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
+
+
+@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'mode', 'artifacts', 'cwd'])
+def test_retained_update_recovery_rejects_changed_or_duplicate_mode(fault):
+    rows = current_plan()['scenarios']
+    owner = next(row for row in rows if row['id'] == 'retained-update-recovery')
+    if fault == 'missing':
+        rows.remove(owner)
+    elif fault == 'duplicate':
+        rows.append({**owner, 'id': 'other-retained-mode'})
+    elif fault == 'mode':
+        owner['command'] = owner['command'][:-1]
+    elif fault == 'artifacts':
+        owner['env'] = {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/update-message-delivery'}
+    else:
+        owner['cwd'] = 'tests/web'
+    with pytest.raises(AssertionError, match='retained-update-recovery'):
+        retained_update_recovery_browser_addition(rows)
+
+
+@pytest.mark.parametrize('name', ['input-status', 'action-spacing'])
+def test_input_status_and_action_spacing_are_composed_once_from_selected_client_owners(name):
+    script = f'tests/{name}-browser.mjs'
+    expected = {'id': name, 'command': ['node', script],
+                'env': {'AMPLIFIER_TEST_ARTIFACTS': f'{{root}}/output/browser-checks/{name}'}}
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    client_path = source_test(script).with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    def owns(row):
+        return row['id'] == name or any(Path(part).name == Path(script).name for part in row['command'])
+    assert [row for row in host['scenarios'] if owns(row)] == []
+    assert [row for row in client['scenarios'] if owns(row)] == [expected]
+    assert host['scenarioOrder'].count(name) == 1
+    plan, proof = runner.load_plan(ROOT, host_path)
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    assert [row for row in plan['scenarios'] if owns(row)] == [{**expected, 'cwd': '.build/web-client'}]
+    assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
+
+
+@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'renamed', 'command', 'environment', 'cwd', 'readiness'])
+def test_changelog_days_is_validated_before_historical_coverage_exclusion(monkeypatch, fault):
+    plan = current_plan()
+    assert changelog_days_browser_addition(plan['scenarios']) == {'changelog-days'}
+    owner = next(row for row in plan['scenarios'] if row['id'] == 'changelog-days')
+    readiness = set()
+    if fault == 'missing':
+        plan['scenarios'].remove(owner)
+    elif fault == 'duplicate':
+        plan['scenarios'].append({**owner})
+    elif fault == 'renamed':
+        owner['id'] = 'renamed-changelog'
+    elif fault == 'command':
+        owner['command'].append('--unexpected')
+    elif fault == 'environment':
+        owner['env'] = {}
+    elif fault == 'cwd':
+        owner['cwd'] = 'tests/web'
+    else:
+        readiness.add('tests/changelog-days-browser.mjs')
+    with pytest.raises(AssertionError, match='changelog-days'):
+        changelog_days_browser_addition(plan['scenarios'], readiness)
+    if fault != 'readiness':
+        monkeypatch.setattr(sys.modules[__name__], 'current_plan', lambda: plan)
+        with pytest.raises(AssertionError, match='changelog-days'):
+            coverage_plan()
 
 
 def test_legacy_outbox_notice_is_composed_once_from_selected_client_owner():
@@ -3428,3 +4601,38 @@ def test_legacy_outbox_notice_is_composed_once_from_selected_client_owner():
     assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
     assert [row for row in plan['scenarios'] if owns(row)] == [{**expected, 'cwd': '.build/web-client'}]
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
+
+
+def external_approval_browser_addition(rows, readiness_scripts=()):
+    script = 'tests/web/external-approval-browser.mjs'
+    expected = {'id': 'external-approval', 'command': ['node', script],
+                'env': {'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python',
+                        'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/external-approval'}}
+    owners = [row for row in rows if row['id'] == expected['id']
+              or any(Path(part).name == Path(script).name for part in row['command'])]
+    assert owners == [expected], 'external-approval: expected one exact host owner'
+    assert coverage_paths(script) not in readiness_scripts, 'external-approval: duplicate readiness owner'
+    return {expected['id']}
+
+
+def test_external_approval_journey_has_one_host_owner():
+    plan = current_plan()
+    assert external_approval_browser_addition(plan['scenarios']) == {'external-approval'}
+    owner = next(row for row in plan['scenarios'] if row['id'] == 'external-approval')
+    assert (ROOT / owner['command'][1]).is_file()
+    with pytest.raises(AssertionError, match='host owner'):
+        external_approval_browser_addition([{**owner, 'cwd': '.build/web-client'}])
+
+
+def attachment_preview_browser_addition(rows, readiness_scripts=()):
+    # Accepted client #71 is inherited by the current approval-card successor.
+    # Keep its browser coverage in the composed delivery, without copying it.
+    script = 'tests/attachment-preview-browser.mjs'
+    expected = {'id': 'attachment-preview', 'command': ['node', script],
+                'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/attachment-preview'},
+                'cwd': '.build/web-client'}
+    owners = [row for row in rows if row['id'] == expected['id']
+              or any(Path(part).name == Path(script).name for part in row['command'])]
+    assert owners == [expected], 'attachment-preview: expected one exact client owner'
+    assert coverage_paths(script) not in readiness_scripts, 'attachment-preview: duplicate readiness owner'
+    return {expected['id']}

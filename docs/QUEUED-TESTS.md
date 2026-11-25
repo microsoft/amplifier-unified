@@ -12,8 +12,8 @@ UNKNOWN owners are not migrated by this default.
 `workspace.tests.submit` queues bounded checks per root conversation. The global
 **Settings → Testing & resources → Advanced execution limits** controls both the
 total pending queue and **Maximum pending checks per chat**. All work count limits
-default to 0: no count ceiling, including environments, retained resources and
-cooperative reservations. Positive saved values remain operator ceilings and count
+default to 0: no count ceiling, including environments and retained resources.
+Positive saved values remain operator ceilings and count
 all waiting/active checks or retained owners, including those beyond the first
 displayed page. Existing saved limits are never rewritten by a default change.
 A request with `independent: true` may overlap other independent checks in distinct
@@ -23,10 +23,13 @@ Stop or cancellation). An explicit wait limit and already-accepted deadlines kee
 their original meaning; changing defaults never rewrites a queued receipt. The
 host saves the request in the existing command journal, waits for physical
 backend capacity, takes a working-folder snapshot when admitted, executes the
-command once, stops the exact owned environment, exports source and artifacts,
-then removes the environment. Export or removal uncertainty preserves ownership
-and evidence. Docker exports the working folder and artifact directory; do not
-put unique output elsewhere. The first Incus adapter retains a bounded complete
+command once, stops the exact owned environment, preserves its selected evidence,
+then removes the environment. New disposable Docker owners export `/artifacts`
+by default; `preserveSource: true` additionally exports `/workspace`. The original
+source snapshot, results and receipts remain retained. Existing owners keep their
+original preservation contract. Export or removal uncertainty preserves ownership
+and evidence; keep unique output in the selected retained roots. The first Incus
+adapter retains a bounded complete
 instance archive, with its storage cost described in
 [Incus test environments](workspaces/incus-test-environments.md).
 
@@ -135,7 +138,7 @@ The result does not satisfy a shared-task dependency or prove product acceptance
 The optional per-source **Outstanding task chats per manager** count also defaults
 to 0. Explicit zero disables only that count gate, not assignment, causal-depth,
 notification or ownership checks. Saved positive settings remain unchanged.
-The global pending queue, retained resource-owner and reservation count ceilings
+The global pending queue and retained resource-owner count ceilings
 also default to zero; explicitly saved positive values remain effective.
 Bounded reads and ownership records remain intact. Removing a chat count ceiling
 does not itself provide machine resource admission for ordinary model workers.
@@ -220,9 +223,13 @@ open for the duration.
 
 The supervisor's control directory is root-owned and separate from writable
 source/artifacts. Commands run as uid/gid 65534 with no supplementary groups.
-Docker retains a read-only root, no-new-privileges, no host mounts and no exposed
-ports; only CHOWN, SETUID, SETGID and KILL capabilities are available to its root
-supervisor. Incus remains unprivileged and offline. Prepared dependencies must
+The default Docker Compose preset retains a read-only root, no-new-privileges,
+no host mounts and no exposed ports; only CHOWN, SETUID, SETGID and KILL
+capabilities are available to its root supervisor. Trusted ordinary Compose
+profiles and app-preview can select images/builds and loopback ports; copied
+source and explicit offline/source-retention choices follow the
+[managed runner contract](workspaces/managed-test-runner.md). Docker no longer
+requires per-operation runtime hashing or a target-local qualifier. Incus remains unprivileged and offline. Prepared dependencies must
 be readable by the workload user; writable project dependencies are initialized
 inside the owned source snapshot.
 
@@ -337,13 +344,12 @@ its ordered queue barrier clears only when the canonical resource owner retires.
 ## Work concurrency settings
 
 The same Advanced execution limits form exposes global limits for outstanding
-task chats per manager (default 0: no count ceiling), owned test environments per
-chat (default 0: no count ceiling),
-all non-retired resource owners (default 512), and resource owners per chat
-(default 32), and cooperative reservations per installation (default 1024) and
-per chat including nested workers (default 64). Retained-owner and reservation
-bounds must stay positive; the first two counts accept zero. These are operator
-settings, not model-selected overrides.
+task chats per manager, owned test environments per chat, all non-retired resource
+owners and resource owners per chat. All default to 0 (no count ceiling) and
+accept optional positive operator limits, not model-selected overrides.
+The retired cooperative-claim quota keys are ignored only when decoding old
+disk settings; they are absent from current settings and rejected in new saves.
+No other saved positive setting is reset.
 An empty setting restores the default. The host-defaults authority and exact
 settings revision protect changes through either the UI or agent actions.
 Machine CPU, memory, storage and backend limits remain additional admission gates;

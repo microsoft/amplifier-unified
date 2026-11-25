@@ -179,7 +179,14 @@ async def test_migration_deduplicates_surfaces_bounds_results_and_preserves_rece
         sid = state['sessions'][0]['id']
         state['canvasArtifacts'] = [{'id': 'surface', 'sessionId': sid, 'body': {'$resource': identity}, 'kind': 'mcp-app'}]
         db.execute('UPDATE state SET value=? WHERE id=1', (json.dumps(state),))
+        db.commit()
+        # This connection remains open after its transaction context exits.
+        # Measure committed legacy bytes, not a small main file whose newly
+        # inserted payloads still live in WAL; upgrade checkpoints before VACUUM.
+        assert db.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0] == 0
     old_size = (home / 'app.sqlite3').stat().st_size
+    assert old_size > len(body.encode()) * 20
+    db.close()
     upgrade = migration.upgrade
 
     def checked_upgrade(service):
@@ -191,7 +198,12 @@ async def test_migration_deduplicates_surfaces_bounds_results_and_preserves_rece
     restored = AppService(home, workspace=tmp_path)
     try:
         await restored._storage_maintenance_task
-        assert (home / 'backups/shared-storage-v1/app.sqlite3').is_file()
+        backup = home / 'backups/shared-storage-v1/app.sqlite3'
+        assert backup.is_file()
+        with sqlite3.connect(backup) as saved:
+            assert saved.execute('SELECT count(*) FROM smart_tool_operations').fetchone()[0] == 20
+            assert all(json.loads(raw)['result'] == body for raw, in
+                       saved.execute('SELECT value FROM smart_tool_operations'))
         assert restored.db.execute('SELECT count(*) FROM smart_tool_operations').fetchone()[0] == 20
         assert restored.db.execute("SELECT count(*) FROM smart_tool_operations WHERE json_extract(value,'$.resultExpired')=1").fetchone()[0] == 18
         # Three migration surfaces plus the exact immutable session projection.
@@ -203,6 +215,14 @@ async def test_migration_deduplicates_surfaces_bounds_results_and_preserves_rece
         assert resource(restored.db, projections[0])['id'] == sid
         assert restored.db.execute('SELECT count(*) FROM state_resources').fetchone()[0] == 3+len(projections)
         assert (home / 'app.sqlite3').stat().st_size < old_size / 3
+        for identity, raw in restored.db.execute('SELECT id,value FROM smart_tool_operations'):
+            receipt = json.loads(raw)
+            assert receipt['id'] == identity and receipt['status'] == 'completed'
+            assert receipt['updatedAt'] == now + int(identity)
+            if int(identity) < 18:
+                assert receipt['resultExpired'] is True and 'result' not in receipt
+            else:
+                assert resource(restored.db, receipt['result']['$resource']) == body
         from amplifier_web.canvas_library import remember
         from amplifier_web.resource_files import references
         committed_bodies = {identity: resource(restored.db, identity)

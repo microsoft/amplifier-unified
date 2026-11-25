@@ -64,7 +64,8 @@ def generation_failure(event):
              'native_measurement_unavailable', 'native_compaction_failed', 'disabled',
              'request_context_unavailable', 'invalid_native_contract', 'authoritative_measurement_unavailable',
              'summary_output_limit', 'summary_empty', 'previous_failure', 'summary_failed', 'native_failed',
-             'native_recovery_required_context_oversized', 'checkpoint_persist_failed'}
+             'native_recovery_required_context_oversized', 'checkpoint_persist_failed',
+             'summary_work_paused', 'summary_progress_incompatible'}
     code = code if isinstance(code, str) else None
     if category == 'context_compaction':
         stage = 'context_preparation'
@@ -85,13 +86,19 @@ def generation_failure(event):
             guidance = 'Original history is preserved; the candidate checkpoint was not accepted because its measurement was unavailable or did not show a reduction. A completed compaction call is not proof that the full continuation fits. Copy the chat diagnostics and report native_no_reduction before retrying; an unchanged retry is not a repair. A recovery copy with the same history can hit the same limit; do not replay completed actions or paste the entire history into a new chat.'
         elif code in {'native_measurement_unavailable', 'authoritative_measurement_unavailable'}:
             summary = 'Could not check conversation size.'
-            guidance = 'Original history and the saved checkpoint are preserved. The counting service returned no usable measurement; the underlying cause was not recorded. Try Continue conversation once. If it fails again, share diagnostics; resetting the chat is not required.'
+            guidance = 'Original history and the saved checkpoint are preserved. The counting service returned no usable measurement and the cause was not recorded. Open Details & reporting to review diagnostics.'
         elif code == 'summary_output_limit':
             summary = 'The conversation summary reached its output limit.'
             guidance = 'Increase the context module’s summary_max_output_tokens allowance before continuing. No incomplete summary was saved; original history is preserved.'
         elif code == 'summary_empty':
             summary = 'The summarizer returned no usable conversation summary.'
             guidance = 'Check the summarization model and its output allowance before continuing. Original history is preserved; no empty summary was saved.'
+        elif code == 'summary_work_paused':
+            summary = 'Conversation preparation reached its local call allowance.'
+            guidance = 'Completed summary progress is saved. Further preparation requires separate admission; it was not automatically retried. Original history and the checkpoint are preserved.'
+        elif code == 'summary_progress_incompatible':
+            summary = 'Saved summary progress cannot be used with the current source or policy.'
+            guidance = 'No replacement summary work was started. Original history and the checkpoint are preserved. Review the source and policy mismatch before deciding how to proceed.'
         elif code == 'previous_failure':
             summary = 'Conversation preparation is waiting after an earlier compaction failure.'
             guidance = 'Inspect the earlier failure and correct its cause, or wait for the retry cooldown before continuing. The conversation has not advanced; repeating the same request immediately will not bypass this protection.'
@@ -129,7 +136,7 @@ def generation_failure(event):
             count['requestId'] = request_id
         guidance = 'Original history and the saved checkpoint are preserved. ' + reasons.get(reason, 'The counting failure needs investigation.')
         if count['retryable']:
-            guidance += ' Wait briefly, then choose Continue conversation to try again.'
+            guidance += ' Wait briefly, then send a new message in this chat to try again. The earlier message will not be automatically resent.'
     return {**({'code': code} if category == 'context_compaction' and code in known else {}),
             **({'countFailure': count} if category == 'context_measurement' else {}),
             'category': category, 'errorType': kind, 'stage': stage,
@@ -156,7 +163,13 @@ def failure_details(error, error_type=None):
     kind = error_type or (type(error).__name__ if isinstance(error, BaseException) else 'Error')
     kind = kind if isinstance(kind, str) and re.fullmatch(r'[A-Za-z][A-Za-z0-9_.]{0,99}', kind) else 'Error'
     category, summary, guidance = 'unknown', 'Something interrupted this chat.', 'Your conversation is saved, but Amplifier could not identify the cause. If this happens again, copy the diagnostics and share them with support.'
-    if 'app bridge response timed out' in text:
+    if "this chat's folder has a path that is too long for windows" in text:
+        # The app's own sentence (session_files.chat_folder_too_long). It holds the folder's
+        # path, so it is tested first: no word of a folder name may select another cause.
+        # The category stays the one of a start that did not happen.
+        category, summary = 'worker_startup', 'The path of this chat’s folder is too long for Windows.'
+        guidance = 'Move the folder to a shorter path, or start a chat in another folder. Your saved message is kept; this attempt did not send it.'
+    elif 'app bridge response timed out' in text:
         category, summary = 'app_bridge_timeout', 'Amplifier timed out waiting for an internal operation.'
         guidance = 'The operation may still have completed. Inspect its recorded outcome before retrying; this error does not establish a model provider timeout.'
     elif kind == 'WorkerExitedError':
@@ -201,9 +214,62 @@ def failure_details(error, error_type=None):
     return {'category': category, 'errorType': kind, 'summary': summary, 'guidance': guidance, 'replayed': False}
 
 
+def startup_failure_details(event):
+    """Only facts bound by the runtime owner to this exact startup attempt.
+
+    No log reads, prose-based reconstruction or historical cause inference.
+    Absence/invalidity remains absence, not an empty successful diagnosis.
+    """
+    from .worker_diagnostics import validate_startup_failure_facts
+    attempt = event.get('startupAttemptId')
+    if type(attempt) is not str or not re.fullmatch(
+            r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', attempt):
+        return {}
+    facts = validate_startup_failure_facts(event.get('startupFailureFacts'))
+    return {'startupAttemptId': attempt, 'startupFailureFacts': facts} if facts is not None else {}
+
+
+def _function_call_truncation_details():
+    return {'category': 'invalid_request', 'code': 'function_call_truncated',
+            'errorType': 'FunctionCallTruncationError', 'stage': 'provider_request',
+            'summary': 'The model tool call was cut off before usable arguments were available.',
+            'guidance': 'This incomplete call was not run. Earlier actions may already have had effects. Review saved results, then explicitly ask for a smaller step or chunked output. This does not mean the whole chat is broken.',
+            'effects': 'not_rolled_back', 'replayed': False, 'retryable': False}
+
+
+def _context_recovery_details(code):
+    messages = {
+        'transition_unsupported': (
+            'provider_selection', 'Managed Context needs an update to switch models in this chat.',
+            'Select the previous model and connection, or update Managed Context in Settings and send again.'),
+        'transition_intent_required': (
+            'provider_selection', 'Choose a model and connection for this chat.',
+            'Select the connection and model you want to use, then send a new message.'),
+        'recovery_checkpoint_rejected': (
+            'persistence', 'The saved checkpoint could not be validated for this model change.',
+            'Keep the original chat history and restore a compatible, validated checkpoint before continuing.'),
+        'recovery_unreconciled': (
+            'context_compaction', 'Earlier conversation preparation could not be resumed.',
+            'This preparation step stopped before a model request. Copy the chat diagnostics from Details & reporting.'),
+        'summary_work_paused': (
+            'context_compaction', 'Conversation preparation can continue from saved progress.',
+            'Review preparation to approve calls for your next message. One earlier call remains unconfirmed and counts against the original allowance.'),
+    }
+    category, summary, guidance = messages[code]
+    return {'category': category, 'code': code, 'stage': 'context_preparation',
+            'summary': summary, 'guidance': guidance, 'retryable': False,
+            'effects': 'not_rolled_back', 'replayed': False}
+
+
 def exception_details(error):
-    from .support_diagnostics import exception_chain
+    from .support_diagnostics import exception_chain, terminal_function_call_truncation
     chain = exception_chain(error)
+    # The Worker separately certifies and correlates native manager wrappers.
+    recovery = chain[0].get('contextRecoveryCode') if chain else None
+    if recovery:
+        return {**_context_recovery_details(recovery), 'errorType': 'ContextRecoveryError', 'exceptionChain': chain}
+    if terminal_function_call_truncation(chain):
+        return {**_function_call_truncation_details(), 'exceptionChain': chain}
     current, seen = error, set()
     while id(current) not in seen:
         seen.add(id(current))
@@ -219,7 +285,9 @@ def exception_details(error):
 
 def terminal_exception_failure(session, value):
     """Enrich only an exact retained terminal; never replace or redate a cause."""
-    from .support_diagnostics import terminal_exception_capture, terminal_request_refusal
+    from .support_diagnostics import (
+        terminal_context_recovery, terminal_exception_capture, terminal_function_call_truncation, terminal_request_refusal,
+    )
     capture = terminal_exception_capture(value)
     existing = session.get('failure')
     if (not capture or not isinstance(existing, dict) or existing.get('exceptionChain')
@@ -233,13 +301,27 @@ def terminal_exception_failure(session, value):
             or existing.get('generationId') != capture['generationId']
             or latest.get('error_type') != capture['errorType']
             or existing.get('errorType') != capture['errorType']
-            or existing.get('category') != 'unknown' or existing.get('stage') != 'manager_turn'
             or set(latest.get('input_ids') or []) != set(capture['inputIds'])
             or set(existing.get('inputIds') or []) != set(capture['inputIds'])):
         return None
     refusal = terminal_request_refusal(capture['exceptionChain'])
     detail = {}
-    if refusal:
+    recovery = terminal_context_recovery(capture['exceptionChain'])
+    if (recovery and existing.get('category') == 'unknown' and capture['errorType'] == 'RuntimeError'
+            and existing.get('stage') == 'manager_turn'):
+        detail = {**_context_recovery_details(recovery),
+            'nativeFailure': {key: existing[key] for key in
+                              ('category', 'errorType', 'stage', 'retryable') if key in existing}}
+    if (existing.get('category') == 'unknown' and capture['errorType'] == 'LLMError'
+            and existing.get('stage') == 'provider_request'
+            and terminal_function_call_truncation(capture['exceptionChain'])):
+        detail = {**_function_call_truncation_details(),
+            # Preserve the native terminal classification separately from the
+            # host's certified cause. Do not rewrite the native generation.
+            'errorType': existing['errorType'],
+            'nativeFailure': {key: existing[key] for key in
+                              ('category', 'errorType', 'stage', 'retryable') if key in existing}}
+    if refusal and existing.get('category') == 'unknown':
         causes = {
             'bridge_timeout': 'The host did not answer the Work currentness check before its deadline.',
             'bridge_error': 'The host could not complete the Work currentness check.',
@@ -263,11 +345,133 @@ def terminal_exception_failure(session, value):
             **({'secondaryFailure': capture['secondaryFailure']} if 'secondaryFailure' in capture else {})}
 
 
+def request_call_failure(session, inputs, generation=None, error_type=None):
+    """An earlier call can explain a terminal, but is not itself a turn failure."""
+    from .support_diagnostics import public_exception_chain
+    from .execution_working_set import readonly
+    tree = readonly(session)
+    for row in reversed([*tree.get('retiredUsageNodes', [])[-40:], *tree.get('nodes', [])[-40:]]):
+        if (row.get('sessionId') not in {session['id'], session.get('runtimeSessionId')}
+                or row.get('lifecycle') in {'background', 'voice'} or row.get('purpose')
+                or not row.get('failure')
+                or generation and row.get('generationId') not in {None, generation}
+                or (row.get('admissionInputId') or row.get('turnId')) not in inputs):
+            continue
+        failure = row['failure']
+        if (error_type and failure.get('errorType') != error_type
+                and failure.get('category') not in {'content_filter', 'computer_capture_stop'}):
+            continue  # A handled earlier error is not this terminal's cause.
+        return {**failure, 'exceptionChain': public_exception_chain(failure.get('exceptionChain')),
+                'inputId': row.get('admissionInputId') or row.get('turnId'),
+                'recordedAt': row.get('endedAt')}
+    return None
+
+
+def has_open_generation(session):
+    active = session.get('collaborationGeneration') or {}
+    if (not active.get('id') or active.get('terminal')
+            or active.get('interruptionRevision', 0) != session.get('interruptionRevision', 0)):
+        return False
+    start = latest_root_event(session)
+    # A previous host or owner may have interrupted the turn without a native terminal.
+    from .execution import LIVE_PHASES, current_execution, execution_record
+    saw_start = start.get('event') == 'generation.started'
+    # Child sessions can displace the root start from the event tail. In that
+    # case use only a live turn explicitly bound to the same generation.
+    identity = start.get('initial_input_id') if saw_start else current_execution(session).get('currentTurnId')
+    turn = execution_record(session, 'turns', {'id': identity}) if identity else None
+    if turn is None:
+        return saw_start
+    if turn.get('phase') not in LIVE_PHASES or turn.get('endedAt'):
+        return False
+    if turn.get('generationId'):
+        return turn['generationId'] == active['id']
+    return saw_start or turn.get('inputId', identity) in active.get('inputIds', [])
+
+
+def startup_fault(payload):
+    return payload.get('phase') == 'worker_startup' or payload.get('errorType') == 'RuntimeStartupError'
+
+
+def runtime_fault_is_current(session, payload):
+    """Runtime availability is not the outcome of an already saved response."""
+    if session.get('status') in {'stopped', 'stopping'}:
+        return False  # An error cannot turn actual Stop into an application failure.
+    if startup_fault(payload):
+        # A failed start never settles work already admitted to a generation.
+        return not has_open_generation(session)
+    active = session.get('collaborationGeneration') or {}
+    generation = payload.get('generationId') or (payload.get('executionFailure') or {}).get('generationId')
+    latest = latest_root_event(session)
+    if generation and (active.get('id') or latest.get('generation_id')) and generation != (active.get('id') or latest['generation_id']):
+        return False
+    if (payload.get('event') == 'persistence.failed'
+            or latest.get('event') != 'generation.finished' or latest.get('active_job_ids')):
+        return True
+    # Ordinary new send creates its own display turn before native admission.
+    # Do not mistake that pending/unknown delivery for the previous saved result.
+    from .execution_working_set import readonly
+    tree = readonly(session)
+    current = tree.get('currentTurnId')
+    turn = next((row for row in reversed(tree.get('turns', [])) if row['id'] == current), {})
+    if turn.get('phase') in {'running', 'working', 'starting', 'pending'} and (
+            current not in latest.get('input_ids', [])
+            or turn.get('retriedAt', 0) > latest.get('at', 0)):
+        return True
+    # The response checkpoint is already terminal. Retain a later runtime fault
+    # on the runtime, not as a failed request. A real save has its own explicit
+    # persistence.failed event; this does not attest that later state was saved.
+    return False
+
+
+def causal_timeline(session, failure=None):
+    """Small ordered tail from existing facts, not unrelated current activity."""
+    from .support_diagnostics import event_detail
+    failure = failure or session.get('failure') or {}
+    generation = failure.get('generationId')
+    if not generation:
+        latest = latest_root_event(session)
+        generation = latest.get('generation_id')
+    generations = [row for row in session.get('generations', [])[-200:]
+                   if row.get('generation_id') == generation]
+    start = next((_event_time(row.get('at')) for row in generations
+                  if row.get('event') == 'generation.started'), None)
+    end = _event_time(failure.get('recordedAt'))
+    rows = [*generations]
+    for row in session.get('runtimeEvents', [])[-100:]:
+        if row.get('type') not in {'runtime.error', 'runtime.ended', 'runtime.bridge'}:
+            continue
+        at = _event_time(row.get('at'))
+        observed = row.get('generationId') or row.get('generation_id')
+        if (generation and observed == generation or
+                not observed and row.get('scope') != 'runtime' and start is not None and at is not None and start <= at
+                and (end is None or at <= end)):
+            rows.append(row)
+    return [event_detail(row) for row in sorted(rows, key=lambda row: _event_time(row.get('at')) or 0)[-20:]]
+
+
+def latest_root_event(session):
+    active = session.get('collaborationGeneration') or {}
+    rows = [row for row in session.get('generations', [])[-200:]
+            if row.get('sessionId', session['id']) == session['id']
+            and row.get('rootSessionId', session['id']) == session['id']
+            and (not active.get('id') or row.get('generation_id') == active['id'])]
+    if active.get('id'):
+        # The canonical owner accepts only the first terminal. Later duplicate
+        # starts/terminals remain evidence, not a new current outcome.
+        if active.get('terminal'):
+            return next((row for row in rows if row.get('event') in {
+                'generation.finished', 'generation.failed', 'generation.detached'}), rows[-1] if rows else {})
+        return next((row for row in rows if row.get('event') == 'generation.started'), {})
+    return rows[-1] if rows else {}
+
+
 def inspection_stamp(session):
     """Match the diagnostic snapshot without comparing conversation content."""
     return (tuple(session.get(key) for key in (
         'id', 'runtimeSessionId', 'nativeIdentity', 'title', 'workspace', 'bundle',
         'status', 'selection', 'error', 'errorAt', 'failure', 'configurationBusy', 'diagnosticReceipt', 'runtimeEvents')),
+        tuple(event.get('generation_id') for event in session.get('generations', [])[-200:]),
         tuple(worker.get('status') for worker in session.get('workers', [])))
 
 
@@ -303,7 +507,7 @@ def _belongs_to_failure(event, data, session):
 
 def inspect_session(home, session):
     from .host.storage import SessionStore
-    from .support_diagnostics import environment, event_detail, execution_detail
+    from .support_diagnostics import environment, event_detail
     identity = session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']
     report = {'diagnosticsSchema': 2, 'environment': environment(),
               'capture': {'scope': 'bounded metadata; no prompts, tool arguments or provider payloads',
@@ -328,14 +532,25 @@ def inspect_session(home, session):
     report['moduleFailures'] = read_failures(current if (current / 'module-load-failures.json').exists() else directory)
     if session.get('failure') or session.get('error'):
         report['failure'] = session.get('failure') or failure_details(session['error'], 'RuntimeError')
+        # Saved facts cross the same closed boundary on read. A legacy failure
+        # does not acquire facts from a newer worker, receipt or log.
+        saved = report['failure']
+        report['failure'] = {key: value for key, value in saved.items()
+                             if key not in {'startupAttemptId', 'startupFailureFacts'}}
+        report['failure'].update(startup_failure_details(saved))
     runtime_support = (session.get('runtimeReport') or {}).get('support')
     if isinstance(runtime_support, dict):
         report['runtime'] = runtime_support
     else:
         report['capture']['limitations'].append('Worker dependency versions were not recorded by this runtime.')
-    report['recentExecution'] = [execution_detail(row) for row in (session.get('execution') or {}).get('nodes', [])[-40:] if isinstance(row, dict)]
-    report['timeline'] = [event_detail(row) for row in session.get('generations', [])[-30:] if isinstance(row, dict)]
-    report['timeline'].extend(event_detail(row) for row in session.get('runtimeEvents', [])[-40:] if isinstance(row, dict))
+    report['timeline'] = causal_timeline(session)
+    latest = latest_root_event(session)
+    report['requestOutcome'] = {'event': latest.get('event'), 'generationId': latest.get('generation_id'),
+                                'inputIds': latest.get('input_ids', [])}
+    from .support_diagnostics import public_exception_chain
+    report['runtimeFaults'] = [{**event_detail(row), 'exceptionChain': public_exception_chain(row.get('exceptionChain'))}
+        for row in session.get('runtimeEvents', [])[-100:]
+        if row.get('type') == 'runtime.error' and row.get('generationId') == latest.get('generation_id')][-5:]
     if session.get('error') and report['failure']['category'] == 'unknown':
         # Older versions discarded the cause at the manager boundary. Read a
         # bounded tail of this session's own native event log, only on request.

@@ -16,6 +16,7 @@ async def main():
     kind={'tools':'tool','hooks':'hook','providers':'provider','orchestrator':'orchestrator','context':'context'}[section]
     try:
         from amplifier_foundation import Bundle
+        from amplifier_web.source_imports import prepare
         from amplifier_core.validation import ToolValidator,HookValidator,ProviderValidator,OrchestratorValidator,ContextValidator
         entry={'module':module}
         if args.get('source'):entry['source']=args['source']
@@ -24,7 +25,7 @@ async def main():
         else:data[section]=[entry]
         bundle=Bundle.from_dict(data)
         os.environ['AMPLIFIER_HOME']=str(Path(os.environ['AMPLIFIER_WEB_HOME'])/'foundation')
-        await bundle.prepare(strict=True)
+        await prepare(bundle,strict=True)
         validator={'tool':ToolValidator,'hook':HookValidator,'provider':ProviderValidator,'orchestrator':OrchestratorValidator,'context':ContextValidator}[kind]()
         # Importable module names let Core validators resolve packages prepared
         # by Foundation without exposing arbitrary file reads over the API.
@@ -65,4 +66,11 @@ def run_behavioral(name,kind):
             code=pytest.main([str(target),'-q','-p','pytest_asyncio.plugin','-p','amplifier_core.pytest_plugin','--module-path='+str(package),'--asyncio-mode=auto'],plugins=[Results()])
     return {'passed':code==0 and any(row['status']=='passed' for row in reports),'exitCode':int(code),'tests':reports}
 
-if __name__=='__main__':asyncio.run(main())
+if __name__=='__main__':
+    if __package__:
+        from .runtime_bootstrap import bootstrap_app_package
+    else:
+        from runtime_bootstrap import bootstrap_app_package
+    bootstrap_app_package()
+    from amplifier_web.probe_git import query as owned_query
+    asyncio.run(owned_query(main()))

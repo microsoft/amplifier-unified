@@ -278,11 +278,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('os.kill(', code)
         self.assertIn('COLD_EXPECTED_HEAD', code)
 
-    def test_frozen_installer_is_not_changed(self):
-        # Git checkout may translate LF to CRLF on Windows; candidate content is
-        # immutable. This is not a hash of arbitrary normalization or a new pin.
+    def test_historical_driver_refuses_the_deliberately_changed_candidate(self):
+        # This driver remains bound to its old published 0.54.5 capsule. Do not
+        # relabel it as current acceptance merely by changing one installer hash.
         raw = (ROOT / 'scripts/install.ps1').read_bytes().replace(b'\r\n', b'\n')
-        self.assertEqual(hashlib.sha256(raw).hexdigest(), COLD.INSTALLER_SHA)
+        self.assertNotEqual(hashlib.sha256(raw).hexdigest(), COLD.INSTALLER_SHA)
+        head = "a" * 40
+        with patch.dict(COLD.os.environ, {"GITHUB_SHA": head, "COLD_EXPECTED_HEAD": head}), \
+             patch.object(COLD.subprocess, "check_output",
+                               side_effect=[head + "\n", "b" * 40 + "\n", "", raw]):
+            with self.assertRaisesRegex(ValueError, "Installer changed"):
+                COLD.source_identity()
         self.assertEqual(COLD.CAPSULE_BYTES, 53046193)
         self.assertLess(COLD.INSTALL_SECONDS + COLD.AUDIT_SECONDS + 4*COLD.OBSERVE_SECONDS,
                         COLD.OVERALL_SECONDS)

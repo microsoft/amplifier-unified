@@ -202,7 +202,9 @@ async def main():
                 return await agent_action(service, sender, "coordination.send", args, identity)
             return await service.dispatch("coordination.send", args, origin=origin, command_id=identity)
         older = await send("older-peer", "agent")
-        for index in range(65):
+        # Keep all 19 initial rows inside the production 20-message window.
+        # The cursor-sized history is added only after full-set attribution.
+        for index in range(10):
             service._message(recipient, "assistant", "Retained answer " + str(index))
         agent = await send("visible-peer", "agent")
         human = await send("human-forward", "ui")
@@ -254,6 +256,7 @@ async def main():
                     ("requestId", "inputId", "messageId", "origin", "mode", "delivery",
                      "dependencyRequestId", "dependencyOutcomeRevision", "dependencySatisfied", "admission")},
                 "queryWorkers": len(query_workers),
+                "messageCount": len(recipient["messages"]),
                 "peerTextDigest": hashlib.sha256(peer_text.encode()).hexdigest(), "peerTextLength": len(peer_text.encode()),
                 "agent": agent["messageId"], "human": human["messageId"], "older": older["messageId"],
                 "nativePeer": native_peer["id"], "lookalike": lookalike["id"],
@@ -274,7 +277,9 @@ async def main():
             # Exercise the actual >100-row cursor boundary only after proving
             # full-set receipt attribution. Partial windows cannot prove global
             # input uniqueness and deliberately keep neutral attribution.
-            additions = [service._message(recipient, 'assistant', 'Earlier filler ' + str(i)) for i in range(65)]
+            # 109 rows exceed one 100-row read, but the initial 20 plus one
+            # older page still reach the oldest peer without changing limits.
+            additions = [service._message(recipient, 'assistant', 'Earlier filler ' + str(i)) for i in range(90)]
             del recipient['messages'][-len(additions):]
             recipient['messages'][1:1] = additions
             service._publish()

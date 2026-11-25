@@ -21,11 +21,18 @@ try{
  await page.goto(vite.resolvedUrls.local[0]);await showFixtureConversation(page);
  await control({op:'patch',sessions:{[alpha]:{status:'error',error:'Saved worker message',errorAt:1791582278,failure:{category:'unknown',errorType:'str',summary:'Legacy summary',guidance:'A recovery copy can help',recordedAt:1791582278}}}});
  await page.reload();
- await page.getByRole('button',{name:'View error details',exact:true}).click();
+ const openErrorDetails=async()=>{
+  const disclosure=page.locator('[data-part=conversation-trouble] details').filter({hasText:'Details & reporting'});
+  await expect(disclosure).toBeVisible();
+  if(!await disclosure.evaluate(node=>node.open))await disclosure.locator('summary').click();
+  await disclosure.getByRole('button',{name:'Technical details',exact:true}).click();
+ };
+ await openErrorDetails();
  const panel=page.getByRole('dialog',{name:'Error details',exact:true});
  await expect(panel.getByRole('heading',{name:'Error details',exact:true})).toBeVisible();
- await expect(panel).toContainText('Something interrupted this chat.');
- await expect(panel).not.toContainText('Recorded error: str');
+ await expect(panel.getByText('Recorded problem',{exact:true})).toBeVisible();
+ await expect(panel).toContainText('The cause is not available in the saved details. Nothing is automatically sent again.');
+ await expect(panel).not.toContainText('Error type: str');
  await expect(panel).not.toContainText('Conversation usage');
  await expect(panel).not.toContainText('recovery copy');
  await expect(panel.getByText(alpha,{exact:true})).toBeVisible();
@@ -57,16 +64,20 @@ try{
  assert.equal(afterReview.state.sessions.find(row=>row.id===alpha).error,'Saved worker message');
  assert.equal(afterReview.runtimeStarts,beforeReview.runtimeStarts);assert.equal(afterReview.runtimeSends,0);
  await expect(composer).toHaveDraft('Private draft remains during error review.');
- // A genuinely newer error restores its own notice. Continue is a new explicit
- // request; it does not replay saved tool calls or consume the unsent draft.
+ // A newer failure restores its notice, not a second message-submission owner.
+ // Details and dismissal must leave both saved history and the private draft alone.
  await control({op:'patch',sessions:{[alpha]:{status:'error',error:'A newer saved worker failure',errorAt:1791582300,failure:{category:'unknown',summary:'New synthetic failure',recordedAt:1791582300}}}});
  await expect(page.getByRole('button',{name:'Dismiss conversation error',exact:true})).toBeVisible();
- await page.getByRole('button',{name:'Continue conversation',exact:true}).click();
- await expect.poll(async()=>(await control({op:'inspect'})).runtimeSends).toBe(1);
- const continued=calls.filter(call=>call.action==='conversation.send');assert.equal(continued.length,1);assert.equal(continued[0].args.sessionId,alpha);assert.equal(continued[0].args.preserveDraft,true);assert.match(continued[0].args.text,/Check what has already completed/);
+ await expect(page.getByRole('button',{name:'Continue conversation',exact:true})).toHaveCount(0);
+ await openErrorDetails();
+ await expect(panel).toBeVisible();
+ await panel.getByRole('button',{name:'Close panel',exact:true}).click();
+ const afterNewFailure=await control({op:'inspect'});
+ assert.equal(afterNewFailure.runtimeSends,0);
+ assert.deepEqual(afterNewFailure.state.sessions.find(row=>row.id===alpha).messages,beforeReview.state.sessions.find(row=>row.id===alpha).messages);
  await expect(composer).toHaveDraft('Private draft remains during error review.');
  const effects=calls.filter(call=>['conversation.send','session.recover'].includes(call.action));
- assert.equal(effects.length,1,'Only the explicit fresh continuation sends work');
+ assert.equal(effects.length,0,'Error review never creates a new input or recovery copy');
  assert.deepEqual(errors,[]);
  console.log('Focused error details passed: legacy failure, reload, explicit diagnostics, clipboard denial, mobile, and no replay.');
 }finally{await browser?.close();await vite?.close();fixture.kill('SIGTERM')}

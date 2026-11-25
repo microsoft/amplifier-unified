@@ -215,11 +215,15 @@ async def test_nested_child_keeps_original_assignment_when_installed_during_late
     worker.context_bindings['later-input'] = {'clientId': 'old-browser', 'targets': []}
     original_install = capture_install()
     installed = []
-    async def install(coordinator, bridge):
+    async def install(coordinator, bridge, *, execution_role):
+        assert execution_role == 'native_child'
         coordinator.register_capability('web.app_access.bridge', bridge)
         installed.append(bridge)
     monkeypatch.setattr('amplifier_web.app_guidance.install_app_access', install)
     grandchild = coordinator('native-grandchild')
+    # The synthetic coordinator is deliberately not Core/hashable. Computer
+    # sponsorship is unrelated to this assignment/role installer probe.
+    monkeypatch.setattr(worker.computer_episodes, 'install', lambda *args: None)
     await original_install(grandchild)
     captured = []
     async def transport(operation, args): captured.append(args)

@@ -30,6 +30,8 @@ def test_apply_settings_does_not_require_server_dependencies():
         for name in ('ActivationGate', 'NativeTranscriptGuard', 'NativeTranscriptConflict'):
             if hasattr(native_session, name):
                 delattr(native_session, name)
+        if hasattr(native_session.SharedSessionStore, 'acquire_async'):
+            delattr(native_session.SharedSessionStore, 'acquire_async')
         sys.modules['aiohttp'] = None
         # Dependency preparation must remain importable in a retained worker
         # before an included update installs the execution-only session APIs.
@@ -77,10 +79,13 @@ def test_worker_scripts_do_not_expose_host_site_packages(tmp_path, entrypoint, r
     (foundation / "history.py").write_text("class SessionHistoryStore: pass\n")
     (foundation / "jsonl.py").write_text("class TranscriptIndex: pass\n")
     (foundation / "activation.py").write_text("class ActivationGate: pass\n")
+    (foundation / "shared_state.py").write_text(
+        "class SharedSessionStore:\n async def acquire_async(self, **kwargs): pass\n"
+    )
     (foundation / "transcript_guard.py").write_text(
         "class NativeTranscriptGuard: pass\nclass NativeTranscriptConflict(RuntimeError): pass\n"
     )
-    for name in (entrypoint, "runtime_protocol.py", "message_delivery.py", "response_completion.py", "ownership.py", "__init__.py", "runtime_bootstrap.py", "update_diagnostics.py", "runtime_qualification.py", "runtime_environment.py"):
+    for name in (entrypoint, "runtime_protocol.py", "message_delivery.py", "response_completion.py", "ownership.py", "computer_episodes.py", "__init__.py", "runtime_bootstrap.py", "update_diagnostics.py", "runtime_qualification.py", "runtime_environment.py"):
         if (PACKAGE / name).exists():
             shutil.copy2(PACKAGE / name, package / name)
     shutil.copytree(PACKAGE.parent / "amplifier_operations", outer / "amplifier_operations")
@@ -138,6 +143,11 @@ def test_worker_scripts_do_not_expose_host_site_packages(tmp_path, entrypoint, r
         else:
             namespace = runpy.run_path(str(script), run_name="worker_test")
             worker = namespace["Worker"]()
+            # Construction precedes the process-identity handshake and app
+            # bootstrap. It must use only direct sibling/stdlib imports here.
+            assert "amplifier_web" not in sys.modules
+            assert type(worker.computer_episodes).__module__ == "computer_episodes"
+            assert not worker.computer_episodes.sponsors
             worker.start.__func__.__globals__["publish"] = lambda event: print(event)
             asyncio.run(worker.start({"id": "test"}))
     """)
@@ -253,6 +263,45 @@ else:
 """)
 
 
+def test_installed_voice_alignment_does_not_require_history_dependencies(installed_app):
+    run_bootstrap_check(installed_app, """
+import copy, json
+runtime_paths = list(sys.path)
+bootstrap.bootstrap_app_package()
+from amplifier_web.native_message_projection import display_message
+from amplifier_web.voice_input_projection import PREFIX, START, END, align
+raw_text = PREFIX + START + json.dumps([]) + END + "yes"
+native = {"role": "user", "content": raw_text, "metadata": {
+    "amplifier_input": {"version": 1, "kind": "user", "source": "user",
+                        "id": "voice:call-one:delegation-one"}}}
+original = copy.deepcopy(native)
+session = {"id": "chat", "nativeIdentity": "native-root"}
+old = display_message(native, 2, session, include_internal=True)
+incoming = display_message(native, 2, session)
+session["messages"] = [old]
+current, projected = align(session, [incoming])
+assert current == projected == [incoming]
+assert current[0]["id"] == old["id"] and current[0]["text"] == "yes"
+assert current[0]["nativeIndex"] == 2 and old["text"] == raw_text
+first = {"id": "first", "role": "user", "text": "yes", "voiceId": "call-one"}
+second = {**first, "id": "second", "voiceInputId": "voice:call-one:delegation-one"}
+session["messages"] = [first, second]
+current, projected = align(session, [incoming])
+assert current[0] == first and "nativeMessageId" not in current[0]
+assert current[1] == {**second, "nativeMessageId": incoming["id"]}
+assert projected == [{**second, "nativeMessageId": incoming["id"], "nativeIndex": 2}]
+assert native == original and session["messages"] == [first, second]
+assert all(name not in sys.modules for name in (
+    "amplifier_web.automatic_history", "amplifier_web.session_store",
+    "amplifier_web.session_files", "amplifier_web.host.config",
+    "amplifier_web.host.storage", "amplifier_foundation"))
+assert importlib.util.find_spec("amplifier_foundation") is None
+assert importlib.util.find_spec("filelock") is None
+assert importlib.util.find_spec("host_only_dependency") is None
+assert str(site) not in sys.path and sys.path == runtime_paths
+""")
+
+
 @pytest.mark.parametrize("name", ["amplifier_web", "amplifier_operations", "amplifier_kernels"])
 def test_bootstrap_rejects_wrong_origin_before_loading(installed_app, name):
     run_bootstrap_check(installed_app, f"""
@@ -270,6 +319,56 @@ else:
 assert sys.modules[{name!r}] is foreign
 assert not (set(sys.modules) - before) & {{"amplifier_web", "amplifier_operations", "amplifier_kernels"}}
 assert sys.path == paths
+""")
+
+
+def test_installed_checkpoint_projection_does_not_require_history_dependencies(installed_app):
+    run_bootstrap_check(installed_app, """
+import asyncio
+from types import SimpleNamespace
+runtime_paths = list(sys.path)
+bootstrap.bootstrap_app_package()
+assert importlib.util.find_spec("amplifier_workspace_metadata") is None
+assert importlib.util.find_spec("host_only_dependency") is None
+from amplifier_web.runtime_worker import Worker
+from amplifier_operations.coordination import fingerprint
+rows = [{"role": "user", "content": "Input",
+         "metadata": {"amplifier_input": {"version": 1, "kind": "user", "id": "input-1"}}},
+        {"role": "assistant", "content": [
+            {"type": "text", "text": "First "}, {"type": "text", "text": "second"}]}]
+calls = []
+async def checkpoint(*args, **kwargs):
+    calls.append((args, kwargs))
+    return rows
+capabilities = {"live.checkpoint": checkpoint}
+coordinator = SimpleNamespace(session_id="native-root", get_capability=capabilities.get,
+    register_capability=lambda name, value: capabilities.__setitem__(name, value))
+worker = Worker()
+worker.session = SimpleNamespace(coordinator=coordinator)
+worker.runtime = SimpleNamespace(generation={"id": "generation"})
+worker.install_collaboration_checkpoint(coordinator)
+result = asyncio.run(capabilities["live.checkpoint"](transcript_required=True))
+assert result is rows and calls == [((), {"transcript_required": True})]
+from amplifier_web.native_message_projection import display_identity
+assert worker.collaboration_terminal == {
+    "messageId": display_identity({"id": "native-root"}, 1, "assistant", "First \\nsecond"),
+    "nativeIndex": 1, "rootSessionId": "native-root", "generationId": "generation",
+    "nativeText": "First \\nsecond", "textDigest": fingerprint("First second")}
+from amplifier_web.collaboration_input import checkpoint_anchors
+peer_runtime = SimpleNamespace(session_id="native-root",
+    generation={"id": "generation", "input_ids": ["input-1"]})
+assert checkpoint_anchors(rows, peer_runtime) == [{
+    "messageId": worker.collaboration_terminal["messageId"],
+    "nativeIndex": 1, "generationId": "generation"}]
+assert all(name not in sys.modules for name in (
+    "amplifier_web.automatic_history", "amplifier_web.session_store",
+    "amplifier_web.host.config", "amplifier_web.host.storage",
+    "amplifier_foundation", "amplifier_workspace_metadata"))
+assert importlib.util.find_spec("amplifier_foundation") is None
+assert importlib.util.find_spec("amplifier_workspace_metadata") is None
+assert importlib.util.find_spec("host_only_dependency") is None
+assert importlib.util.find_spec("aiohttp") is None
+assert str(site) not in sys.path and sys.path == runtime_paths
 """)
 
 

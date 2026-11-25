@@ -102,6 +102,210 @@ async def test_wait_timeout_keeps_accepted_work_and_routes_later_completion():
     assert len(service.calls) == 1
 
 
+async def test_failed_delegation_tells_the_voice_no_internal_error_text():
+    from amplifier_web.errors import AppError
+    service, call = call_fixture()
+    service.voice_delegate = AsyncMock(side_effect=KeyError('delivery'))
+    await call.record('user', 'Check the code.', 'spoken')
+    await call.delegate_live('d')
+    told = ' '.join(e.get('content', '') for e in call.socket.sent)
+    assert 'could not complete this request, and no work was started: An internal error stopped it.' in told
+    assert 'delivery' not in told
+    service.voice_delegate = AsyncMock(side_effect=AppError('This assignment is stopped.', 409))
+    await call.record('user', 'Check the report.', 'spoken-2')
+    await call.delegate_live('d2')
+    assert 'no work was started: This assignment is stopped.' in call.socket.sent[-1]['content']
+
+
+async def test_failure_after_acceptance_says_that_amplifier_has_the_request():
+    from amplifier_web.errors import AppError
+    service, call = call_fixture()
+    service.wait_for_response = AsyncMock(side_effect=AppError('The Amplifier turn ended without a completed response.'))
+    await call.record('user', 'Check the code.', 'spoken')
+    await call.delegate_live('d')
+    assert call.socket.sent[-1]['content'] == (
+        'Amplifier received this request but could not complete it: The Amplifier turn ended without a completed response.'
+        ' Check the shared chat before asking again.')
+    assert call.pending_delegations['d']['status'] == 'accepted'
+
+
+async def test_realtime_tool_failure_output_has_no_internal_error_text():
+    import json
+    service, call = call_fixture()
+    call.provider = 'realtime'
+    service.voice_delegate = AsyncMock(side_effect=TypeError("'NoneType' object is not subscriptable"))
+    await call.realtime_tool({'name': 'amplifier_delegate', 'arguments': '{"text": "request"}', 'call_id': 'c1'})
+    output = json.loads(next(e for e in call.socket.sent if e['type'] == 'conversation.item.create')['item']['output'])
+    assert output == {'error': 'Amplifier could not complete this request, and no work was started: An internal error stopped it.'}
+
+
+def failed_chat(service, raw):
+    """As the host saves a turn that fails during the wait: raw text in `error`, the product's words in `failure`."""
+    from amplifier_web.errors import AppError
+    async def wait(*args, **kwargs):
+        service.state['sessions'][0].update(status='error', error=raw, errorAt=2.0,
+            failure={'category': 'unknown', 'summary': 'Something interrupted this chat.', 'recordedAt': 2.0})
+        raise AppError(raw)
+    service.wait_for_response = wait
+
+
+@pytest.mark.parametrize('raw', ['no_active_job', "'NoneType' object is not subscriptable"])
+async def test_the_voice_is_told_the_summary_that_the_chat_shows_not_its_raw_saved_error(raw):
+    service, call = call_fixture()
+    failed_chat(service, raw)
+    await call.record('user', 'Check the code.', 'spoken')
+    await call.delegate_live('d')
+    assert call.socket.sent[-1]['content'] == (
+        'Amplifier received this request but could not complete it: Something interrupted this chat.'
+        ' Check the shared chat before asking again.')
+
+
+async def test_an_older_failure_record_is_not_told_as_the_cause_of_this_turn():
+    from amplifier_web.errors import AppError
+    service, call = call_fixture()
+    chat = service.state['sessions'][0]
+    chat.update(errorAt=1.0, failure={'category': 'authentication', 'recordedAt': 1.0,
+                                      'summary': 'The provider rejected its credentials.'})
+    async def stop_fails(*args, **kwargs):
+        # As the host's stop.failed handler does: a new error, the earlier failure record kept.
+        chat.update(status='error', error='Stop could not be confirmed. Inspect the runtime details before continuing.')
+        raise AppError(chat['error'])
+    service.wait_for_response = stop_fails
+    await call.record('user', 'Check the code.', 'spoken')
+    await call.delegate_live('d')
+    assert call.socket.sent[-1]['content'] == (
+        'Amplifier received this request but could not complete it: Stop could not be confirmed.'
+        ' Inspect the runtime details before continuing. Check the shared chat before asking again.')
+
+
+async def test_a_stopped_chat_does_not_pass_an_older_saved_error_to_the_voice():
+    from amplifier_web.errors import AppError
+    service, call = call_fixture()
+    service.state['sessions'][0].update(status='stopped', error='raw text of an earlier failure')
+    service.wait_for_response = AsyncMock(side_effect=AppError('raw text of an earlier failure'))
+    await call.record('user', 'Check the code.', 'spoken')
+    await call.delegate_live('d')
+    assert 'could not complete it: Execution ended before the response completed.' in call.socket.sent[-1]['content']
+    assert 'raw text' not in call.socket.sent[-1]['content']
+
+
+def browser_snapshot(service):
+    """As the observer receives it: a browser projection, which omits each generation's text."""
+    return {'sessions': [{**row, 'generations': [{key: value for key, value in event.items() if key != 'text'}
+                                                  for event in row.get('generations', [])]}
+                         for row in service.state['sessions']]}
+
+
+async def test_late_result_is_spoken_from_the_host_record_when_the_snapshot_has_no_text():
+    service, call = call_fixture()
+    service.wait_for_response = AsyncMock(side_effect=TimeoutError)
+    await call.record('user', 'Run the long investigation.', 'spoken')
+    await call.delegate_live('d')
+    service.state['sessions'][0]['generations'] = [{'event': 'generation.finished',
+        'generation_id': 'late', 'sessionId': 'main', 'rootSessionId': 'main',
+        'input_ids': ['voice:live:d'], 'text': 'The investigation is complete.'}]
+    await call.announce_generations(browser_snapshot(service))
+    spoken = [e['content'] for e in call.socket.sent if e['type'] == 'session.commentary.append']
+    assert spoken == ['The investigation is complete.']
+    assert not any('update in the shared chat' in e.get('content', '') for e in call.socket.sent)
+
+
+async def test_answer_follows_a_reported_failure_when_the_turn_finishes_after_it():
+    service, call = call_fixture()
+    service.wait_for_response = AsyncMock(side_effect=ValueError('The turn ended without a completed response.'))
+    await call.record('user', 'Check the code.', 'spoken')
+    await call.delegate_live('d')
+    assert any('could not complete' in e.get('content', '') for e in call.socket.sent)
+    service.state['sessions'][0]['generations'] = [{'event': 'generation.finished',
+        'generation_id': 'after', 'sessionId': 'main', 'rootSessionId': 'main',
+        'input_ids': ['voice:live:d'], 'text': 'The code is correct.'}]
+    await call.announce_generations(browser_snapshot(service))
+    assert [e['content'] for e in call.socket.sent if e['type'] == 'session.commentary.append'][-1] == 'The code is correct.'
+    assert len(service.calls) == 1
+
+
+async def test_background_result_in_a_snapshot_without_text_is_spoken_from_the_host_record():
+    service, call = call_fixture()
+    service.state['sessions'][0]['generations'] = [{'event': 'generation.finished',
+        'generation_id': 'typed', 'sessionId': 'main', 'rootSessionId': 'main',
+        'input_ids': ['typed-input'], 'active_job_ids': [], 'text': 'The report has three findings.'}]
+    await call.announce_generations(browser_snapshot(service))
+    assert [e['content'] for e in call.socket.sent if e['type'] == 'session.commentary.append'] == [
+        'Amplifier manager update. The report has three findings.']
+
+
+async def test_realtime_marks_a_late_result_that_newer_accepted_input_followed():
+    service, call = call_fixture()
+    call.provider = 'realtime'
+    service.wait_for_response = AsyncMock(side_effect=TimeoutError)
+    await call.realtime_tool({'name': 'amplifier_delegate', 'arguments': '{"text": "Plan Friday."}', 'call_id': 'c1'})
+    assert call.pending_delegations['c1']['status'] == 'waiting_result'
+    service.state['sessions'][0]['messages'].append({'role': 'user', 'via': 'chat', 'text': 'Thursday, not Friday.',
+        'inputId': 'typed-correction', 'delivery': {'status': 'accepted'}})
+    service.state['sessions'][0]['generations'] = [{'event': 'generation.finished',
+        'generation_id': 'older', 'sessionId': 'main', 'rootSessionId': 'main',
+        'input_ids': ['voice:live:c1'], 'text': 'The Friday plan is ready.'}]
+    call.socket.sent.clear()
+    await call.announce_generations(browser_snapshot(service))
+    told = [e['item']['content'][0]['text'] for e in call.socket.sent
+            if e['type'] == 'conversation.item.create' and e['item']['type'] == 'message']
+    assert len(told) == 1 and told[0].startswith(
+        'Earlier request result; newer input may supersede it. Amplifier manager update. The Friday plan is ready.')
+
+
+async def test_realtime_current_late_result_is_not_marked_as_earlier():
+    service, call = call_fixture()
+    call.provider = 'realtime'
+    service.wait_for_response = AsyncMock(side_effect=TimeoutError)
+    await call.realtime_tool({'name': 'amplifier_delegate', 'arguments': '{"text": "Plan Friday."}', 'call_id': 'c1'})
+    service.state['sessions'][0]['generations'] = [{'event': 'generation.finished',
+        'generation_id': 'current', 'sessionId': 'main', 'rootSessionId': 'main',
+        'input_ids': ['voice:live:c1'], 'text': 'The Friday plan is ready.'}]
+    call.socket.sent.clear()
+    await call.announce_generations(browser_snapshot(service))
+    told = [e['item']['content'][0]['text'] for e in call.socket.sent
+            if e['type'] == 'conversation.item.create' and e['item']['type'] == 'message']
+    assert len(told) == 1 and told[0].startswith('Amplifier manager update. The Friday plan is ready.')
+
+
+async def test_realtime_answer_follows_a_reported_failure_when_the_turn_finishes_after_it():
+    import json
+    service, call = call_fixture()
+    call.provider = 'realtime'
+    failed_chat(service, 'no_active_job')
+    await call.realtime_tool({'name': 'amplifier_delegate', 'arguments': '{"text": "Check the code."}', 'call_id': 'c1'})
+    output = json.loads(next(e for e in call.socket.sent if e['type'] == 'conversation.item.create'
+                             and e['item']['type'] == 'function_call_output')['item']['output'])
+    assert output == {'error': 'Amplifier received this request but could not complete it: Something interrupted this chat.'
+                               ' Check the shared chat before asking again.'}
+    service.state['sessions'][0]['generations'] = [{'event': 'generation.finished',
+        'generation_id': 'after', 'sessionId': 'main', 'rootSessionId': 'main',
+        'input_ids': ['voice:live:c1'], 'text': 'The code is correct.'}]
+    call.socket.sent.clear()
+    await call.announce_generations(browser_snapshot(service))
+    await call.announce_generations(browser_snapshot(service))
+    told = [e['item']['content'][0]['text'] for e in call.socket.sent
+            if e['type'] == 'conversation.item.create' and e['item']['type'] == 'message']
+    assert len(told) == 1 and told[0].startswith('Amplifier manager update. The code is correct.')
+    assert len(service.calls) == 1
+
+
+async def test_realtime_failure_before_acceptance_does_not_wait_for_a_result():
+    service, call = call_fixture()
+    call.provider = 'realtime'
+    service.voice_delegate = AsyncMock(side_effect=ValueError('admission unavailable'))
+    await call.realtime_tool({'name': 'amplifier_delegate', 'arguments': '{"text": "Check the code."}', 'call_id': 'c1'})
+    assert call.pending_delegations['c1']['status'] == 'submitting'
+    output = json.loads(next(e for e in call.socket.sent if e['type'] == 'conversation.item.create')['item']['output'])
+    assert output == {'error': 'Amplifier could not complete this request, and no work was started: An internal error stopped it.'}
+    service.state['sessions'][0]['generations'] = [{'event': 'generation.finished',
+        'generation_id': 'unrelated', 'sessionId': 'main', 'rootSessionId': 'main',
+        'input_ids': ['voice:live:c1'], 'text': 'A result that this call never asked for.'}]
+    call.socket.sent.clear()
+    await call.announce_generations(browser_snapshot(service))
+    assert call.socket.sent == []
+
+
 async def test_append_ack_tracks_context_injection_and_rejection_without_reexecution():
     service, call = call_fixture()
     call.execute = AsyncMock(return_value={'text': 'Verified answer.', 'generation_id': 'g'})

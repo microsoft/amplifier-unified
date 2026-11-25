@@ -50,14 +50,15 @@ class _BuiltinsOnly(pickle.Pickler):
         raise Unsupported
 
 
-def _witness(value):
+def _witness(value, *, _size=False):
     if sys.implementation.name != 'cpython':
         raise Unsupported
     output = _BoundedBytes()
     output.pickler = _BuiltinsOnly(output, protocol=4)
     try:
         output.pickler.dump(value)
-        return output.getvalue()
+        encoded = output.getvalue()
+        return (encoded, output.pickler.__sizeof__()) if _size else encoded
     finally:
         output.pickler = None  # Do not leave the writer/pickler cycle for GC.
 
@@ -73,14 +74,27 @@ def _input_digest(tree):
         return None
     digest = hashlib.sha256()
     retired = None
-    def include(value, field_digest=None):
-        witness = _witness(value)
+    node_digests, node_charge = [], 0
+    def include(value, field_digest=None, *, node=False):
+        nonlocal node_digests, node_charge
+        if node and node_digests is not None:
+            witness, memo = _witness(value, _size=True)
+        else:
+            witness = _witness(value)
         length = len(witness).to_bytes(8, 'big')
+        node_digest = hashlib.sha256(witness).digest() if node else None
+        digest.update(b'\x01' if node else b'\x00')
         digest.update(length)
-        digest.update(witness)
+        digest.update(node_digest if node else witness)
         if field_digest is not None:
             field_digest.update(length)
             field_digest.update(witness)
+        if node and node_digests is not None:
+            part = (node_digest, len(witness), memo)
+            node_charge += sys.getsizeof(part) + sum(sys.getsizeof(item) for item in part)
+            node_digests.append(part)
+            if node_charge + sys.getsizeof(node_digests) > _BoundedBytes.LIMIT:
+                node_digests = None
     try:
         for name in sorted(tree):
             if name == 'plan':
@@ -91,14 +105,16 @@ def _input_digest(tree):
             field_digest = hashlib.sha256() if name == 'retiredUsageNodes' and chunked else None
             if chunked:
                 for start in range(0, len(value), ExecutionPreparation.CHUNK):
-                    include(value[start:start + ExecutionPreparation.CHUNK], field_digest)
+                    include(value[start:start + ExecutionPreparation.CHUNK], field_digest, node=name == 'nodes')
             else:
                 include(value)
             if field_digest is not None:
                 retired = field_digest.digest()
     except (Unsupported, pickle.PicklingError, RecursionError, TypeError, ValueError):
         return None
-    return digest.digest(), retired
+    # These digests leave only after the complete builtin witness succeeds.
+    # They are borrowed by this save's placement pass, never retained in cache.
+    return digest.digest(), retired, node_digests
 
 
 def _canonical_retired(rows):
@@ -148,7 +164,7 @@ class ExecutionPreparation:
 
     def _reserved(self, pending):
         entries = {id(entry): entry for entry in self.references.values()}
-        entries.update((id(entry), entry) for entry in pending.values() if entry is not None)
+        entries.update((id(entry), entry) for entry in pending.values() if isinstance(entry, ReferenceEntry))
         return sum(entry.charge for entry in entries.values())
 
     def retired(self, owner, rows, reserved=None):
@@ -255,9 +271,10 @@ class ExecutionPreparation:
                 return self.MAX_BYTES + 1
         return charge
 
-    def _part(self, key, value, reserved=0, project=None, summarize=None):
+    def _part(self, key, value, reserved=0, project=None, summarize=None, *, witness=None):
         try:
-            witness = hashlib.sha256(_witness(value)).digest()
+            if witness is None:
+                witness = hashlib.sha256(_witness(value)).digest()
         except (Unsupported, pickle.PicklingError, RecursionError, TypeError, ValueError):
             projected = project(value) if project else value
             return (json.dumps(projected, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode(),
@@ -294,7 +311,7 @@ class ExecutionPreparation:
             return encoded, token, summary
         return encoded, None, summary
 
-    def placements(self, owner, rows, turns, receipts, reserved):
+    def placements(self, owner, rows, turns, receipts, reserved, *, node_digests=None):
         """Reuse canonical JSON, within the existing encoding budget.
 
         Called only after the whole input passes the builtin content witness.
@@ -315,10 +332,27 @@ class ExecutionPreparation:
             dependencies = [(row.get('turnId') in turns,
                 receipts.get((row.get('sessionId'), row.get('id')))
                 if row.get('kind') in ('llm', 'worker') else None) for row in fragment]
+            witness = None
+            if node_digests is not None:
+                try:
+                    # The complete input pass already checked these raw rows.
+                    # Accounting may change their dependencies, so witness those
+                    # freshly after projection. No await/custom hook intervenes.
+                    dependency, memo = _witness(dependencies, _size=True)
+                    raw_digest, raw_size, raw_memo = node_digests[start // self.CHUNK]
+                    # Combined memo indexes can widen a 2-byte GET to 5 bytes.
+                    # Memo tables can grow 4x; near either old bound keep the
+                    # original combined-witness path, allowing for framing too.
+                    if (3 * (raw_size + len(dependency) + 64) <= _BoundedBytes.LIMIT
+                            and 4 * (raw_memo + memo + 64) <= _BoundedBytes.LIMIT * 4):
+                        witness = hashlib.sha256(b'placement-parts\0' + raw_digest +
+                            hashlib.sha256(dependency).digest()).digest()
+                except (Unsupported, pickle.PicklingError, RecursionError, TypeError, ValueError):
+                    pass  # Keep the original complete fragment/fallback path.
             encoded, token, summary = self._part((owner, 'nodes', start, 'projection'),
                 (fragment, dependencies), reserved,
                 project=lambda value: _stored_nodes(value[0], turns, receipts),
-                summarize=pending_execution_nodes)
+                summarize=pending_execution_nodes, witness=witness)
             observation |= summary[0]
             voice |= summary[1]
             if encoded != b'[]':
@@ -386,7 +420,7 @@ class ExecutionPreparation:
                  and sum(len(rows) for rows in (tree.get('nodes'), tree.get('retiredUsageNodes'))
                          if type(rows) is list) >= self.CHUNK)
         witnessed = _input_digest(tree) if large or (previous is not None and previous.input_digest is not None) else None
-        digest, retired_digest = witnessed if witnessed is not None else (None, None)
+        digest, retired_digest, node_digests = witnessed if witnessed is not None else (None, None, None)
         if (digest is not None and previous is not None and previous.owner == owner
                 and previous.input_digest == digest and previous.projection is not None):
             resource = resource_files.reuse_reference(db, previous.resource)
@@ -410,7 +444,8 @@ class ExecutionPreparation:
         # Encoded nodes are an explicit part of preparation, not a partial
         # canonical tree masquerading as complete. Inline/unsupported values
         # still take the ordinary projection and retain Python representations.
-        placements = (self.placements(identity, tree.get('nodes', []), turns, receipts, self._reserved(pending))
+        placements = (self.placements(identity, tree.get('nodes', []), turns, receipts, self._reserved(pending),
+                                      node_digests=node_digests)
                       if digest is not None and len(receipts) >= self.CHUNK else None)
         node_parts, node_summary = placements if placements is not None else (None, (False, False))
         if node_parts is None:
@@ -477,6 +512,7 @@ class ExecutionPreparation:
     def committed(self, pending, owners, deleted=()):
         """Failed transactions never promote or replace reference evidence."""
         from .cold_display import MARKER
+        from .execution_working_set import PendingExecution
         def current(identity, entry):
             owner = owners.get(identity)
             if identity in deleted or owner is None or owner.get('historyManaged'):
@@ -490,7 +526,11 @@ class ExecutionPreparation:
                 self.references.pop(identity)
         for identity, entry in pending.items():
             self.references.pop(identity, None)
-            if entry is not None and current(identity, entry):
+            if isinstance(entry, PendingExecution):
+                owner = owners.get(identity)
+                if identity not in deleted and owner is not None:
+                    entry.committed(owner)
+            elif entry is not None and current(identity, entry):
                 self.references[identity] = entry
 
     def retain(self, owners):

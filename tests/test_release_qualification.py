@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import sys
 
 import pytest
 import yaml
@@ -195,10 +196,12 @@ def test_runtime_project_constrains_the_recorded_build_backend(tmp_path, monkeyp
 def test_workflow_consolidates_checks_without_sharing_publication_credentials():
     workflow = yaml.load((ROOT / '.github/workflows/release.yml').read_text(), Loader=yaml.BaseLoader)
     jobs = workflow['jobs']
-    assert set(jobs) == {'prepare', 'release'}
+    assert set(jobs) == {'prepare', 'windows-consumer', 'release'}
     assert workflow['permissions'] == {'contents': 'read'}
     assert jobs['prepare']['permissions'] == {'contents': 'read', 'actions': 'read'}
-    assert jobs['release']['needs'] == 'prepare'
+    assert jobs['windows-consumer']['needs'] == 'prepare'
+    assert jobs['windows-consumer']['permissions'] == {'contents': 'read'}
+    assert jobs['release']['needs'] == ['prepare', 'windows-consumer']
     assert jobs['release']['permissions'] == {'contents': 'write'}
     steps = jobs['prepare']['steps']
     commands = '\n'.join(step.get('run', '') for step in steps)
@@ -843,12 +846,12 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     selection = workflow['on']['workflow_dispatch']['inputs']['suite']
     assert selection['type'] == 'choice' and selection['default'] == 'full'
-    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'fresh-cleanup-native', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'cold-control-restore', 'goal-peer-publisher-0410', 'updater-omitted-ref', 'updater-public-selected-source', 'updater-synthetic-acquisition', 'updater-expanded-lock', 'native-child-fixtures', 'question-answer-resume', 'question-answer-installed']
+    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'fresh-cleanup-native', 'prepared-runtime-native', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'cold-control-restore', 'goal-peer-publisher-0410', 'updater-omitted-ref', 'updater-public-selected-source', 'updater-synthetic-acquisition', 'updater-expanded-lock', 'native-child-fixtures', 'question-answer-resume', 'question-answer-installed', 'live-first-send', 'live-first-accepted-graph']
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['on']['workflow_call']['secrets'] == {'LOOP_LIVE_CI_READ_KEY': {'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
     jobs = workflow['jobs']
-    assert jobs['python']['if'] == "${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' && inputs.suite != 'updater-omitted-ref' && inputs.suite != 'updater-public-selected-source' && inputs.suite != 'updater-synthetic-acquisition' && inputs.suite != 'updater-expanded-lock' && inputs.suite != 'fresh-cleanup-native' }}"
+    assert jobs['python']['if'] == "${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' && inputs.suite != 'updater-omitted-ref' && inputs.suite != 'updater-public-selected-source' && inputs.suite != 'updater-synthetic-acquisition' && inputs.suite != 'updater-expanded-lock' && inputs.suite != 'fresh-cleanup-native' && inputs.suite != 'prepared-runtime-native' }}"
     assert jobs['python']['env']['CHECK_SUITE'] == "${{ inputs.suite || 'full' }}"
     assert jobs['core-wheels']['if'] == "${{ inputs.core_wheels && (!inputs.suite || inputs.suite == 'full') }}"
     remote = jobs['remote-test-origins']
@@ -886,19 +889,22 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     complete = next(step for step in steps if step.get('name') == 'Run the complete Python suite')
     focused = next(step for step in steps if step.get('name') == 'Run the selected repair suite')
     assert complete['if'] == "${{ env.CHECK_SUITE == 'full' }}"
-    assert focused['if'] == "${{ env.CHECK_SUITE != 'full' && env.CHECK_SUITE != 'native-child-fixtures' && env.CHECK_SUITE != 'question-answer-installed' }}" and focused['shell'] == 'bash'
+    assert focused['if'] == "${{ env.CHECK_SUITE != 'full' && env.CHECK_SUITE != 'native-child-fixtures' && env.CHECK_SUITE != 'question-answer-installed' && env.CHECK_SUITE != 'live-first-send' && env.CHECK_SUITE != 'live-first-accepted-graph' }}" and focused['shell'] == 'bash'
     assert 'mapfile -t targets < output/python-checks/targets.txt' in focused['run']
     assert 'test "${#targets[@]}" -gt 0' in focused['run']
     assert '"${targets[@]}"' in focused['run'] and 'set -o pipefail' in focused['run']
     assert '--junitxml=output/python-checks/junit.xml' in focused['run']
     assert 'tee output/python-checks/pytest.log' in focused['run']
     assert '${{' not in focused['run'] and '${{' not in steps[2]['run']
-    receipts = next(step for step in steps if step.get('name') == 'Prepare pinned native receipt dependencies')
+    receipts = next(step for step in steps if step.get('name') == 'Verify locked native receipt dependencies')
     installed = next(step for step in steps if step.get('name') == 'Verify installed native receipt boundary outside checkout')
     assert receipts['if'] == "${{ env.CHECK_SUITE == 'full' || env.CHECK_SUITE == 'shared-work-native' }}"
     assert installed['if'] == "${{ env.CHECK_SUITE == 'shared-work-native' }}"
-    assert '2b35fa334fb2fb2c5c948842e8c7bd691ce5e834' in receipts['run']
-    assert 'NativeSendAdmission, NativeOutboundEnvelope' in receipts['run']
+    assert 'uv pip install' not in receipts['run']
+    assert 'uv run --no-sync python scripts/native_dependency_preflight.py' in receipts['run']
+    assert '--output output/python-checks/native-readiness.json' in receipts['run']
+    assert steps.index(receipts) < steps.index(complete)
+    assert steps.index(receipts) < steps.index(focused)
     assert 'unset PYTHONPATH' in installed['run']
     assert '--no-deps -r output/python-checks/installed-requirements.txt' in installed['run']
     assert 'uv pip check --python "$RUNNER_TEMP/native-receipt-installed/bin/python"' in installed['run']
@@ -913,6 +919,14 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     assert manager['if'] == "${{ env.CHECK_SUITE == 'manager-exception-boundary' }}"
     assert 'assert path.is_relative_to(root)' in manager['run']
     assert 'if [ "$CHECK_SUITE" = manager-exception-boundary ]; then' in focused['run']
+    live = next(step for step in steps if step.get('name') == 'Qualify live-first Send from the installed wheel with scripted external transports')
+    assert live['if'] == "${{ env.CHECK_SUITE == 'live-first-send' || env.CHECK_SUITE == 'live-first-accepted-graph' }}"
+    assert 'web_client_build.py verify' in live['run'] and 'web_client_build.py build' not in live['run']
+    assert '--no-deps --reinstall-package amplifier-unified' in live['run']
+    assert 'DIRECTION_INSTALLED_HOST' in live['run'] and 'unset PYTHONPATH' in live['run']
+    assert 'native ordinary tool completion stale-config stop native-unknown native-stop' in live['run']
+    assert "('failure', 'error', 'skipped')" in live['run'] and "row['cleanupConfirmed']" in live['run']
+    assert "direct['vcs_info']['commit_id']" in live['run']
 
 
 def test_goal_peer_publisher_is_exclusive_fixed_manual_and_preserves_failure_evidence():
@@ -986,7 +1000,7 @@ def test_goal_peer_publisher_fixed_cases_environment_and_no_resolve(publisher_ch
     assert module.SELECTORS == {
         'native': ['tests/test_goal_peer_continuation.py', 'tests/test_task_goal_runtime.py'],
         'auto': ['tests/test_peer_auto_delivery.py']}
-    assert sum(map(len, module.EXPECTED.values())) == 43
+    assert sum(map(len, module.EXPECTED.values())) == 44
     # Expand only this file's literal single-axis parameterizations, without
     # importing the product or running collection to define our expected oracle.
     names = set()
@@ -1011,7 +1025,7 @@ def test_goal_peer_publisher_fixed_cases_environment_and_no_resolve(publisher_ch
     assert all(value not in source for value in ("['uv', 'add'", "['uv', 'lock'", '--upgrade', '--refresh'))
     assert 'time.monotonic() + 900' in source and 'time.monotonic() + 300' in source
     assert 'run_scenarios(ROOT' in source and "row['cleanup'] == {'remaining': [], 'terminated': 0}" in source
-    assert "assert check_native(OUTPUT / 'native.xml') == 43" in source
+    assert "assert check_native(OUTPUT / 'native.xml') == 44" in source
     assert "restored-input-hashes.json" in source and 'candidate-source.tar' in source
     assert "for key in ('graph', 'files', 'coreWheel')" in source
     assert 'source(ROOT)' in source and "git(root, 'ls-files', '--stage', '-z')" in source
@@ -1065,13 +1079,13 @@ def test_goal_peer_publisher_installed_graph_must_match_locked_export(publisher_
 def test_cold_control_restore_is_exclusive_manual_locked_and_bounded():
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
-    assert set(workflow['on']['workflow_dispatch']['inputs']) == {'suite', 'core_wheels'}
+    assert set(workflow['on']['workflow_dispatch']['inputs']) == {'suite', 'core_wheels', 'candidate_ref'}
     assert workflow['on']['workflow_dispatch']['inputs']['suite']['default'] == 'full'
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
     jobs = workflow['jobs']
     assert set(jobs) == {'python', 'core-wheels', 'remote-test-origins', 'incompatible-selection',
-                         'cold-control-restore', 'goal-peer-publisher-0410', 'fresh-cleanup-native',
+                         'cold-control-restore', 'goal-peer-publisher-0410', 'fresh-cleanup-native', 'prepared-runtime-native',
                          'updater-omitted-ref', 'updater-public-selected-source',
                          'updater-synthetic-acquisition', 'updater-expanded-lock'}
     job = jobs['cold-control-restore']
@@ -1645,17 +1659,19 @@ def test_browser_retains_only_the_successfully_built_public_web_payload():
     build = next(index for index, step in enumerate(steps) if step.get('id') == 'frontend-build')
     assert identity < build
     assert 'python scripts/web_client_build.py build' in steps[build]['run']
-    upload = steps[build + 1]
+    upload = next(step for step in steps if step.get('name') == 'Retain the successful production web build')
     assert upload['if'] == "${{ steps.frontend-build.outcome == 'success' }}"
     assert upload['uses'] == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
     assert upload['with'] == {
         'name': 'browser-static-${{ steps.build-source.outputs.revision }}-${{ github.run_attempt }}',
         'path': 'amplifier_web/static/', 'include-hidden-files': 'true', 'if-no-files-found': 'error'}
-    assert steps[build + 2]['name'] == 'Install browser dependencies'
+    assert steps.index(upload) > build
+    assert steps[steps.index(upload) + 1]['name'] == 'Install browser dependencies'
     # The artifact includes the builder's metadata and is retained before later
     # scenario failure; an unrun/failed build cannot upload the old tracked tree.
     selection = json.loads((ROOT / 'components/web-client.source.json').read_text())
-    source = ROOT / selection['delivery']['path']
+    source = ROOT / (selection['delivery']['path'] if selection['delivery']['type'] == 'directory'
+                     else '.build/web-client')
     vite = (source / 'vite.config.js').read_text()
     assert 'emptyOutDir:true' in vite and 'dist/build.json' in vite
     assembler = (ROOT / 'scripts/web_client_build.py').read_text()
@@ -1697,6 +1713,7 @@ def test_browser_runner_matcher_excludes_test_names_without_hiding_extra_invocat
 def test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     job = workflow['jobs']['canvas-qualification']
+    job['steps'] = [step for step in job['steps'] if step.get('name') != 'Reject mixed captured delivery selection']
     assert job['if'] == "${{ !inputs.permissions_history && !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && inputs.canvas_qualification }}"
     assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '20'
     assert workflow['permissions'] == {'contents': 'read'}
@@ -1783,7 +1800,7 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption',
                            'canvas_qualification', 'destination_history', 'settings_close_diagnostic',
                            'multi_quote', 'attachment_experience', 'compact_composer', 'peer_messages',
-                           'readiness_trio', 'permissions_history', 'canvas_scope'}
+                           'readiness_trio', 'permissions_history', 'canvas_scope', 'captured_message_delivery'}
     assert inputs['canvas_qualification']['type'] == 'boolean'
     assert inputs['canvas_qualification']['default'] == 'false'
     assert inputs['multi_quote']['type'] == 'boolean'
@@ -1813,6 +1830,8 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     mcp = workflow['jobs']['mcp-boundary']
     assert mcp['if'] == "${{ !inputs.permissions_history && !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
     history = workflow['jobs']['destination-history']
+    history['steps'] = [step for step in history['steps'] if step.get('name') != 'Reject mixed captured delivery selection']
+    mcp['steps'] = [step for step in mcp['steps'] if step.get('name') != 'Reject mixed captured delivery selection']
     assert history['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}'
     assert history['steps'][0] == {
         'name': 'Require the fixed navigation selection for diagnostic mode',
@@ -1847,25 +1866,31 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert len(commands) == 2
     flag = "${{ inputs.app004_qualification && '--app004-qualification' || '' }}"
     attachment_flag = "${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}"
+    captured_flag = "${{ inputs.captured_message_delivery && '--captured-message-delivery' || '' }}"
     assert all(command.count(flag) == 1 for command in commands)
     assert all(command.count(attachment_flag) == 1 for command in commands)
+    assert all(command.count(captured_flag) == 1 for command in commands)
     # Empty/default selection executes exactly the preexisting plan and budget.
-    assert commands[0].replace(flag, '').replace(attachment_flag, '').strip() == (
+    assert commands[0].replace(flag, '').replace(attachment_flag, '').replace(captured_flag, '').strip() == (
         'python scripts/browser_check_runner.py --plan tests/web/browser-checks.json '
         '--output output/browser-checks --initialize')
-    assert commands[1].replace(flag, '').replace(attachment_flag, '').strip() == (
+    assert commands[1].replace(flag, '').replace(attachment_flag, '').replace(captured_flag, '').strip() == (
         'uv run --no-sync python scripts/browser_check_runner.py '
         '--plan tests/web/browser-checks.json --output output/browser-checks --budget-seconds 1500')
-    assert next(i for i, s in enumerate(steps) if '--initialize' in s.get('run', '')) < next(
-        i for i, s in enumerate(steps) if s.get('uses') == 'actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065')
+    prepare = next(i for i, step in enumerate(steps)
+                   if step.get('name') == 'Prepare selected client source for host checks')
+    initialize = next(i for i, step in enumerate(steps) if '--initialize' in step.get('run', ''))
+    install = next(i for i, step in enumerate(steps) if 'uv sync --locked' in step.get('run', ''))
+    assert prepare < initialize < install
     contracts = [s for s in steps if s.get('name') == 'Verify fixed APP004 qualification contracts']
     assert len(contracts) == 1
     contract = contracts[0]
     assert contract['if'] == '${{ inputs.app004_qualification }}'
     assert contract['run'].splitlines() == [
         'set -o pipefail',
-        'uv run --no-sync pytest -v --tb=short tests/test_browser_check_runner.py '
-        'tests/test_release_qualification.py --junitxml=output/browser-checks/app004-contracts.xml '
+        'contracts=(tests/test_browser_check_runner.py tests/test_release_qualification.py)',
+        'if [[ -f tests/web/chat_reference_qualification.py ]]; then contracts+=(tests/test_chat_reference_qualification.py); fi',
+        'uv run --no-sync pytest -v --tb=short "${contracts[@]}" --junitxml=output/browser-checks/app004-contracts.xml '
         '2>&1 | tee output/browser-checks/app004-contracts.log',
     ]
     before = steps[:steps.index(contract)]
@@ -1876,7 +1901,8 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert any(s.get('with', {}).get('path') == 'amplifier_web/static/' for s in before)
     # The fixed attachment-only contracts are inactive for APP004/default.
     after = [step for step in steps[steps.index(contract) + 1:]
-             if step.get('if') != '${{ inputs.attachment_consumption }}']
+             if step.get('if') not in {'${{ inputs.attachment_consumption }}',
+                                       '${{ inputs.captured_message_delivery }}'}]
     next_step = after[0]
     assert next_step['name'] == 'Run all extended browser scenarios serially'
     # Multi-quote replaces only this explicitly selected run; default/APP004
@@ -1890,8 +1916,9 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     }
     # Opt-in can neither mask a failed step nor bypass the existing always upload.
     continued = [step for step in steps if 'continue-on-error' in step]
-    assert {step['id'] for step in continued} == {'attachment-contracts', 'attachment-client-contracts'}
-    assert all(step['if'] == '${{ inputs.attachment_consumption }}' for step in continued)
+    assert {step['id'] for step in continued} == {'attachment-contracts', 'attachment-client-contracts', 'captured-host', 'captured-client'}
+    assert all(step['if'] == ('${{ inputs.captured_message_delivery }}' if step['id'].startswith('captured-')
+                             else '${{ inputs.attachment_consumption }}') for step in continued)
     failures = next(step for step in steps if step.get('name') == 'Preserve failed attachment contracts')
     assert failures['run'] == 'exit 1' and 'always()' in failures['if']
     diagnostics = steps[-1]
@@ -1931,11 +1958,11 @@ def test_readiness_trio_is_exclusive_manual_fixed_and_not_a_default_gate():
     assert job['if'] == "${{ !inputs.permissions_history && github.event_name == 'workflow_dispatch' && inputs.readiness_trio == true }}"
     assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '15'
     assert 'needs' not in job and 'continue-on-error' not in job
-    steps = job['steps']
+    steps = [step for step in job['steps'] if step.get('name') != 'Reject mixed captured delivery selection']
     mixed = ('attachment_experience', 'peer_messages', 'destination_history', 'settings_close_diagnostic',
              'mcp_boundary', 'app004_qualification', 'attachment_consumption', 'canvas_qualification',
              'multi_quote', 'compact_composer')
-    assert set(inputs) == {'readiness_trio', 'permissions_history', 'canvas_scope', *mixed}
+    assert set(inputs) == {'readiness_trio', 'permissions_history', 'canvas_scope', 'captured_message_delivery', *mixed}
     assert steps[0] == {
         'name': 'Reject mixed readiness trio selections before setup',
         'if': '${{ ' + ' || '.join('inputs.' + name for name in mixed) + ' }}',
@@ -1997,8 +2024,8 @@ def test_permissions_history_is_exclusive_manual_fixed_and_preserves_default_job
         if name != 'permissions-history':
             assert other['if'].startswith('${{ !inputs.permissions_history && ')
             assert 'needs' not in other
-    steps = job['steps']
-    assert set(re.findall(r'inputs\.([a-z_0-9]+)', steps[0]['if'])) == set(inputs) - {'permissions_history', 'canvas_scope'}
+    steps = [step for step in job['steps'] if step.get('name') != 'Reject mixed captured delivery selection']
+    assert set(re.findall(r'inputs\.([a-z_0-9]+)', steps[0]['if'])) == set(inputs) - {'permissions_history', 'canvas_scope', 'captured_message_delivery'}
     assert steps[0]['run'].endswith('exit 1\n')
     assert steps[1]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
     assert steps[2]['run'].startswith('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"\n')
@@ -2099,7 +2126,7 @@ def test_permissions_history_selection_comes_from_actual_source(permissions_chec
     assert set(node) == set(module.NODE_TESTS)
     assert {name: len(names) for name, names in node.items()} == {
         'tests/approval-card.test.mjs': 27, 'tests/settings-action-queue.test.mjs': 9,
-        'tests/pending-view.test.mjs': 9, 'tests/conversation-navigation.test.mjs': 16,
+        'tests/pending-view.test.mjs': 9, 'tests/conversation-navigation.test.mjs': 18,
         'tests/fixture-lifecycle.test.mjs': 5}
     approval = node['tests/approval-card.test.mjs']
     assert {name.removeprefix('passive Stop lookup stays fenced on ') for name in approval
@@ -2116,6 +2143,10 @@ def test_permissions_history_selection_comes_from_actual_source(permissions_chec
                in node['tests/conversation-navigation.test.mjs'] for value in ('a', 'b'))
     assert all('delayed ' + value + ' cannot overtake later browsing, while later drawer intent still wins'
                in node['tests/conversation-navigation.test.mjs'] for value in ('navExpanded', 'navPinned'))
+    assert {
+        'composer focus is one-use and requires exact explicit selection commit',
+        'newer selection, rejection, user interaction and unsafe surfaces revoke pending focus',
+    } <= set(node['tests/conversation-navigation.test.mjs'])
     assert 'unexpected fixture exit is never reported as successful cleanup' in node['tests/fixture-lifecycle.test.mjs']
 
 
@@ -2272,7 +2303,7 @@ def test_compact_composer_is_fixed_manual_only_with_independent_failure_evidence
     job = workflow['jobs']['compact-composer']
     assert job['if'] == "${{ !inputs.permissions_history && !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && inputs.compact_composer }}"
     assert job['timeout-minutes'] == '30'
-    steps = job['steps']
+    steps = [step for step in job['steps'] if step.get('name') != 'Reject mixed captured delivery selection']
     assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
     assert steps[1] == {'name': 'Reject mixed selections',
                        'if': '${{ inputs.canvas_qualification || inputs.multi_quote || inputs.attachment_experience || inputs.peer_messages || inputs.mcp_boundary || inputs.attachment_consumption || inputs.app004_qualification || inputs.destination_history || inputs.settings_close_diagnostic }}',
@@ -2360,7 +2391,13 @@ def test_recipe_probe_installs_its_declared_module_before_freezing_runtime(workf
     assert 'tree-sitter' not in commands
 
 
-def test_coordination_prepares_real_loop_before_first_contract_suite():
+def test_coordination_prepares_real_loop_before_first_contract_suite(tmp_path, monkeypatch, capsys):
+    import ast
+    import builtins
+    import hashlib
+    import xml.etree.ElementTree as ET
+    from types import SimpleNamespace
+
     workflow = yaml.load((ROOT / '.github/workflows/coordination.yml').read_text(), Loader=yaml.BaseLoader)
     assert workflow['permissions'] == {'contents': 'read'}
     assert set(workflow['on']) == {'pull_request'}
@@ -2383,11 +2420,182 @@ def test_coordination_prepares_real_loop_before_first_contract_suite():
     assert 'BundleLiveOrchestrator' in steps[verify]['run'] and 'selectedLoopRevision' in steps[verify]['run']
     assert 'importorskip' not in steps[verify]['run']
     assert not any('continue-on-error' in s for s in steps)
-    assert any(s.get('name') == 'Verify mounted child identity and file boundaries' for s in steps[contracts + 1:])
+    mounted = next(i for i, s in enumerate(steps) if s.get('name') == 'Verify mounted child identity and file boundaries')
+    first_suite = next(i for i, s in enumerate(steps) if 'pytest' in s.get('run', ''))
+    assert verify < first_suite <= contracts < mounted
+    for step in steps[verify:mounted + 1]:
+        assert not any(token in step.get('run', '') for token in ('uv sync', 'uv pip', '--with', '--locked'))
+
+    programs = []
+    for index in (verify, mounted):
+        lines = steps[index]['run'].splitlines()
+        assert lines[0] == "uv run --no-sync python - <<'PY'" and lines[-1] == 'PY'
+        programs.append(ast.parse('\n'.join(lines[1:-1])))
+    helpers = [next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == 'runtime_identity') for tree in programs]
+    assert ast.dump(helpers[0]) == ast.dump(helpers[1])
+    readiness_record = next(node.value for node in programs[0].body if isinstance(node, ast.Assign)
+                            and any(isinstance(target, ast.Name) and target.id == 'record'
+                                    for target in node.targets))
+    readiness_fields = {ast.literal_eval(key): value for key, value in
+                        zip(readiness_record.keys, readiness_record.values)}
+    assert ast.unparse(readiness_fields['runtime']) == 'runtime_identity()'
+    readiness_update = next(node for node in ast.walk(programs[0]) if isinstance(node, ast.Call)
+                            and ast.unparse(node.func) == 'record.update')
+    assert {ast.literal_eval(key) for key in readiness_update.args[0].keys} == {
+        'candidate', 'declaredLoopRevision', 'selectedLoopRevision', 'python', 'versions', 'imports'}
+    assert any(isinstance(node, ast.Assert) and ast.unparse(node.test) ==
+               'callable(BundleLiveOrchestrator) and callable(mount)' for node in programs[0].body)
+    tree = programs[1]
+    hard_imports = [node for node in tree.body if isinstance(node, ast.ImportFrom)
+                    and node.module in ('amplifier_module_loop_live', 'amplifier_module_context_simple')]
+    assert [(node.module, [name.name for name in node.names]) for node in hard_imports] == [
+        ('amplifier_module_loop_live', ['BundleLiveOrchestrator']),
+        ('amplifier_module_context_simple', ['mount'])]
+    assert 'importorskip' not in steps[mounted]['run']
+    pytest_import = next(node for node in tree.body if isinstance(node, ast.Import)
+                         and any(name.name == 'pytest' for name in node.names))
+    selection = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                 and ast.unparse(node.func) == 'pytest.main']
+    assert len(selection) == 1
+    assert hard_imports[-1].lineno < pytest_import.lineno < selection[0].lineno
+    assert any(isinstance(node, ast.Assert) and ast.unparse(node.test) ==
+               'callable(BundleLiveOrchestrator) and callable(mount)'
+               and hard_imports[-1].lineno < node.lineno < pytest_import.lineno for node in tree.body)
+    pytest_args = ast.literal_eval(selection[0].args[0])
+    assert pytest_args == [
+        '-q', '-rs', '--junitxml=output/mounted-child-boundaries.xml',
+        'tests/test_child_app_authority.py', 'tests/test_child_file_policy.py',
+        'tests/test_child_image_policy.py', 'tests/test_child_resume_admission.py',
+        'tests/test_runtime_worker.py', 'tests/test_app_guidance.py']
+    assert any(ast.dump(node) == ast.dump(ast.parse(
+        "os.environ['UNIFIED_RUNTIME_PYTHON'] = sys.executable").body[0]) for node in tree.body)
+
+    # Execute the actual metadata/continuity guard, not product imports or pytest.
+    def dist(name, direct):
+        return SimpleNamespace(metadata={'Name': name}, version='1.0',
+                               read_text=lambda filename: json.dumps(direct))
+
+    installed = [
+        dist('amplifier-module-loop-live', {'url': 'file:///checkout/.ci/loop-live', 'dir_info': {}}),
+        dist('amplifier-module-loop-streaming', {'url': 'https://example/streaming',
+                                              'vcs_info': {'commit_id': 'streaming-commit'}}),
+        dist('amplifier-module-context-simple', {'url': 'https://example/context',
+                                              'vcs_info': {'commit_id': 'context-commit'}}),
+        dist('unrelated-package', None)]
+
+    def git(args, *, text):
+        assert args == ['git', '-C', '.ci/loop-live', 'rev-parse', 'HEAD'] and text
+        return 'checked-out-live-commit\n'
+
+    namespace = dict(hashlib=hashlib, json=json, Path=Path,
+                     subprocess=SimpleNamespace(check_output=git),
+                     sys=SimpleNamespace(executable='/venv/bin/python', prefix='/venv', version='3.13.test'),
+                     distributions=lambda: installed,
+                     find_spec=lambda name: SimpleNamespace(origin=f'/venv/{name}/__init__.py'))
+    prefix = tree.body[:tree.body.index(hard_imports[0])]
+    guard = compile(ast.Module(body=[node for node in prefix
+                                    if not isinstance(node, (ast.Import, ast.ImportFrom))],
+                               type_ignores=[]), '<mounted-runtime-guard>', 'exec')
+    exec(compile(ast.Module(body=[helpers[0]], type_ignores=[]), '<runtime-identity>', 'exec'), namespace)
+    expected = namespace['runtime_identity']()
+    assert expected['executable'] == '/venv/bin/python' and expected['prefix'] == '/venv'
+    assert expected['selectedLoopRevision'] == 'checked-out-live-commit'
+    assert set(expected['sources']) == {d.metadata['Name'] for d in installed[:3]}
+    for d in installed[:3]:
+        source = expected['sources'][d.metadata['Name']]
+        assert source['distribution'] == {'name': d.metadata['Name'], 'version': d.version,
+                                          'directUrl': json.loads(d.read_text('direct_url.json'))}
+        assert source['moduleOrigin'] == f"/venv/{d.metadata['Name'].replace('-', '_')}/__init__.py"
+    installed[-1].version = '2.0'
+    changed = namespace['runtime_identity']()
+    assert changed['sources'] == expected['sources']
+    assert changed['installedFingerprint'] != expected['installedFingerprint']
+    installed[-1].version = '1.0'
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / 'output/coordination-runtime-readiness.json'
+    early_imports = [node for node in programs[0].body if isinstance(node, ast.ImportFrom)
+                     and node.module in ('amplifier_module_loop_live', 'amplifier_module_context_simple')]
+    assert [node.module for node in early_imports] == [node.module for node in hard_imports]
+    for failed_import in early_imports:
+        def import_failure(name, *args, **kwargs):
+            assert name in {node.module for node in early_imports}
+            if name == failed_import.module:
+                raise ImportError('synthetic runtime import failure')
+            return SimpleNamespace(BundleLiveOrchestrator=lambda: None)
+
+        # Run the actual early prefix through a failing hard import: metadata survives.
+        namespace['__builtins__'] = {**vars(builtins), '__import__': import_failure}
+        early_prefix = programs[0].body[:programs[0].body.index(failed_import) + 1]
+        early = ast.Module(body=[node for node in early_prefix
+                                if not isinstance(node, (ast.Import, ast.ImportFrom))
+                                or node in early_imports], type_ignores=[])
+        with pytest.raises(ImportError, match='synthetic runtime import failure'):
+            exec(compile(early, '<early-readiness-import-failure>', 'exec'), namespace)
+        assert json.loads(output.read_text()) == json.loads(capsys.readouterr().out) == {'runtime': expected}
+    del namespace['__builtins__']
+    exec(guard, namespace)
+    assert json.loads(output.read_text())['mountedRuntime'] == expected
+    assert json.loads(capsys.readouterr().out)['mountedRuntime'] == expected
+    for field in expected:
+        output.write_text(json.dumps({'runtime': {**expected, field: 'changed'}}))
+        with pytest.raises(AssertionError, match='Coordination runtime changed after readiness'):
+            exec(guard, namespace)
+        # Both identities survive even when comparison fails, before either hard import.
+        assert json.loads(output.read_text()) == json.loads(capsys.readouterr().out) == {
+            'runtime': {**expected, field: 'changed'}, 'mountedRuntime': expected}
+
+    # Exercise the embedded post-pytest gate with synthetic XML, never the six suites.
+    invocation = next(node for node in tree.body if isinstance(node, ast.Assign) and node.value is selection[0])
+    junit_gate = compile(ast.Module(body=tree.body[tree.body.index(invocation):], type_ignores=[]),
+                         '<mounted-junit-gate>', 'exec')
+    families = {'tests.' + Path(arg).stem for arg in pytest_args if arg.endswith('.py')}
+    resume = 'tests.test_child_resume_admission'
+    counts = {family: 23 if family == resume else 1 for family in families}
+    junit = tmp_path / 'output/mounted-child-boundaries.xml'
+
+    def write_junit(case_counts, tag=None):
+        root = ET.Element('testsuite')
+        for family, count in sorted(case_counts.items()):
+            for index in range(count):
+                row = ET.SubElement(root, 'testcase', classname=family, name=f'synthetic_{index}')
+                if tag:
+                    ET.SubElement(row, tag)
+        ET.ElementTree(root).write(junit)
+
+    def run_gate(returncode):
+        def main(args):
+            assert args == pytest_args
+            return returncode
+        exec(junit_gate, dict(pytest=SimpleNamespace(main=main), sys=sys, json=json))
+
+    write_junit(counts)
+    with pytest.raises(SystemExit) as passed:
+        run_gate(0)
+    assert passed.value.code == 0
+    assert json.loads(capsys.readouterr().out)['mountedChildClassCounts'] == counts
+    for bad_counts, tag in [
+        (counts, 'skipped'), (counts, 'failure'), (counts, 'error'),
+        ({key: value for key, value in counts.items() if key != 'tests.test_child_app_authority'}, None),
+        ({**counts, resume: 22}, None)]:
+        write_junit(bad_counts, tag)
+        raw_xml = junit.read_bytes()
+        with pytest.raises(AssertionError):
+            run_gate(0)
+        assert junit.read_bytes() == raw_xml
+        assert json.loads(capsys.readouterr().out)['mountedChildClassCounts'] == bad_counts
+    # A failed pytest result exits unchanged, before XML parsing or extra assertions.
+    junit.write_text('synthetic malformed XML')
+    for returncode in range(1, 6):
+        with pytest.raises(SystemExit) as failed:
+            run_gate(returncode)
+        assert failed.value.code == returncode
+    assert capsys.readouterr().out == ''
     assert any(s.get('run', '').strip() == 'node tests/web/coordination-browser.mjs' for s in steps)
     assert steps[-1]['if'] == 'always()'
     assert '${{ runner.temp }}/test-environments' in steps[-1]['with']['path']
     assert 'output/coordination-runtime-readiness.json' in steps[-1]['with']['path']
+    assert 'output/mounted-child-boundaries.xml' in steps[-1]['with']['path']
 
 
 def test_remote_machine_queue_routing_has_a_focused_ci_owner():
@@ -2405,3 +2613,388 @@ def test_remote_machine_queue_routing_has_a_focused_ci_owner():
                    'tests/test_registered_test_runner_queue.py tests/test_runner_enrollment.py '
                    'tests/test_registered_test_runner_recovery.py --junitxml=routing-results.xml')
     assert any(step.get('if') == 'always()' and step.get('with', {}).get('path') == 'routing-results.xml' for step in steps)
+
+
+# The Windows setup file carries the Git commits that its release run qualified.
+# A release run resolves each branch requirement three times: the host graph
+# (bound into the candidate), the runtime tests' graph, and the Windows job's
+# installation, which becomes the setup file's plan.
+
+FOUNDATION = 'https://github.com/microsoft/amplifier-foundation'
+NAMING = 'amplifier-module-hooks-session-naming'
+QUALIFIED, MOVED = '1' * 40, '2' * 40
+APP_ROW = {'name': 'amplifier-unified', 'version': '1.2.3', 'revision': 'a' * 40,
+           'url': 'https://github.com/microsoft/amplifier-unified'}
+# The last line of a refusal, after one line for each difference.
+STOP = '\nThis run stops before it publishes.'
+# Each text names the one graph that it is about. A graph is not the whole release run.
+HOST_HAS, HOST_LACKS = "This run's host resolution has it", "This run's host resolution does not have"
+TESTS_HAVE = "The environment of this run's runtime tests has it"
+TESTS_LACK = "The environment of this run's runtime tests does not have"
+# Only for two known commits of one place: a new run can then resolve them equal.
+AGAIN = ' If a branch moved during this run, run all jobs again.'
+
+
+def component_rows(revision=QUALIFIED):
+    """Rows in the form of the host resolution and of the Windows plan."""
+    return [{'name': 'amplifier-core', 'version': '2.0.2'},
+            {'name': 'amplifier-foundation', 'version': '1.0.0', 'url': FOUNDATION, 'revision': revision},
+            {'name': NAMING, 'version': '0.2.0', 'url': FOUNDATION, 'revision': revision,
+             'subdirectory': 'modules/hooks-session-naming'}]
+
+
+def install_record(row, requested='main'):
+    """The same row in the form of an install record that uv wrote."""
+    direct = None
+    if row.get('url'):
+        direct = {'url': row['url'], 'vcs_info': {'vcs': 'git', 'commit_id': row.get('revision')}}
+        if requested is not None:
+            direct['vcs_info']['requested_revision'] = requested
+        if row.get('subdirectory'):
+            direct['subdirectory'] = row['subdirectory']
+    return {'name': row['name'], 'version': row['version'], 'direct': direct}
+
+
+def changed(rows, name, **fields):
+    """The rows with one row replaced; a field with the value None is removed."""
+    return [{key: value for key, value in {**row, **fields}.items() if value is not None}
+            if row['name'] == name else row for row in rows]
+
+
+@pytest.fixture
+def consumer(tmp_path, monkeypatch):
+    """One release run's evidence: the host resolution, the runtime graph and the plan."""
+    monkeypatch.setattr(qualification, 'identity', lambda root: {'revision': 'a' * 40, 'version': '1.2.3'})
+
+    def make(resolved, plan=None, runtime=None):
+        evidence, receipts = tmp_path / 'host', tmp_path / 'receipts'
+        evidence.mkdir()
+        receipts.mkdir()
+        qualification.write(evidence / 'resolution.json', {'ok': True, 'resolved': resolved})
+        (evidence / 'qualified-overrides.txt').write_text('overrides\n')
+        (evidence / 'development.lock').write_text('development inputs')
+        expected = qualification.candidate(tmp_path, evidence)
+        graph = [install_record(row) for row in (plan or resolved)] if runtime is None else runtime
+        editable = {'name': 'amplifier-unified', 'version': '1.2.3',
+                    'direct': {'url': 'file:///checkout', 'dir_info': {'editable': True}}}
+        snapshot = {'build': 'build-hash', 'graph': [*graph, editable]}
+        qualification.write(receipts / 'qualified-runtime.json', snapshot)
+        qualification.write(receipts / 'runtime.json', {
+            'schema': 1, 'candidate': expected, 'revision': 'a' * 40, 'lane': 'runtime',
+            'runtime': qualification.digest(snapshot)})
+        path = tmp_path / 'windows-consumer-plan.json'
+        if plan is not None:
+            qualification.write(path, {'schema': 1, 'graph': [APP_ROW, *plan]})
+        return tmp_path, evidence, expected, path, receipts
+    return make
+
+
+def test_windows_plan_with_the_commits_of_its_release_run_is_accepted(consumer, capsys):
+    # A control: none of these may stop a release. The app's own row has a commit
+    # that no resolution has. The host resolution is the development environment,
+    # so it has rows that the wheel does not install.
+    resolved = [*component_rows(), {'name': 'pytest', 'version': '9.0.0'},
+                {'name': 'amplifier-module-tool-exec', 'version': '0.1.1', 'revision': '3' * 40,
+                 'url': 'https://github.com/microsoft/amplifier-module-tool-exec'}]
+    # An empty subdirectory is the same as none, in a row and in an install record.
+    resolved = changed(resolved, 'amplifier-foundation', subdirectory='')
+    # An ending '.git' or '/' is the same repository. Registry versions are not compared.
+    plan = changed(changed(changed(component_rows(), 'amplifier-foundation', url=FOUNDATION + '.git'),
+                           NAMING, url=FOUNDATION + '/'), 'amplifier-core', version='2.0.9')
+    # A name with dots, repeated separators or upper case is the same package.
+    plan = [{**row, 'name': row['name'].replace('-', '.-_').upper()} for row in plan]
+    # An install record has the name as the package's metadata writes it.
+    runtime = [install_record({**row, 'name': row['name'].replace('-', '_').title()}) for row in resolved]
+    next(row for row in runtime if row['name'] == 'Amplifier_Foundation')['direct']['subdirectory'] = ''
+    # Only Git commits are compared: a package that the plan and the host resolution have from the
+    # registry is not looked at, also when the runtime tests' environment has it from Git.
+    next(row for row in runtime if row['name'] == 'Amplifier_Core')['direct'] = {
+        'url': 'https://github.com/microsoft/amplifier-core',
+        'vcs_info': {'vcs': 'git', 'commit_id': '4' * 40, 'requested_revision': 'main'}}
+    root, evidence, expected, path, receipts = consumer(resolved, plan, runtime)
+    assert qualification.verify_consumer(root, evidence, expected, path, receipts) == ['amplifier-foundation', NAMING]
+    output = capsys.readouterr().out
+    assert f'amplifier-foundation {QUALIFIED}: the same commit' in output
+    assert '2 Git components of the Windows setup file were compared. None differs.' in output
+
+
+@pytest.mark.parametrize(('plan', 'resolved', 'message'), [
+    # Every difference is reported, one line each, in the plan's order.
+    (component_rows(MOVED), component_rows(),
+     f'The Windows setup file has amplifier-foundation at {MOVED}. {HOST_HAS} at {QUALIFIED}.\n'
+     f'The Windows setup file has {NAMING} at {MOVED}. {HOST_HAS} at {QUALIFIED}.' + STOP + AGAIN),
+    # One moved commit and one component that the host resolution does not have: the remedy is still printed.
+    (component_rows(MOVED), [row for row in component_rows() if row['name'] != NAMING],
+     f'The Windows setup file has amplifier-foundation at {MOVED}. {HOST_HAS} at {QUALIFIED}.\n'
+     f'The Windows setup file has {NAMING} at {MOVED} from {FOUNDATION}#subdirectory=modules/hooks-session-naming. '
+     f'{HOST_LACKS} {NAMING}.' + STOP + AGAIN),
+    # The runtime graph of this case has the component. So the text must name the host resolution alone.
+    (component_rows(), [row for row in component_rows() if row['name'] != 'amplifier-foundation'],
+     f'The Windows setup file has amplifier-foundation at {QUALIFIED} from {FOUNDATION}. '
+     f'{HOST_LACKS} amplifier-foundation.' + STOP),
+    (component_rows(), changed(component_rows(), 'amplifier-foundation', url=None, revision=None),
+     f'The Windows setup file has amplifier-foundation at {QUALIFIED} from {FOUNDATION}. '
+     f'{HOST_HAS} from a source that is not Git.' + STOP),
+    (component_rows(), changed(component_rows(), 'amplifier-foundation', url='https://github.com/example/amplifier-foundation'),
+     f'The Windows setup file has amplifier-foundation at {QUALIFIED} from {FOUNDATION}. {HOST_HAS} '
+     f'at {QUALIFIED} from https://github.com/example/amplifier-foundation.' + STOP),
+    (component_rows(), changed(component_rows(), NAMING, subdirectory='modules/other'),
+     f'The Windows setup file has {NAMING} at {QUALIFIED} from {FOUNDATION}#subdirectory=modules/hooks-session-naming. '
+     f'{HOST_HAS} at {QUALIFIED} from {FOUNDATION}#subdirectory=modules/other.' + STOP),
+    # The runtime graph of this case also has it from a source that is not Git. That is no second difference.
+    (changed(component_rows(), 'amplifier-foundation', url=None, revision=None), component_rows(),
+     'The Windows setup file has amplifier-foundation from a source that is not Git. '
+     f'{HOST_HAS} at {QUALIFIED} from {FOUNDATION}.' + STOP),
+    # A Git origin without a recorded commit is never equal, also to another one without a commit.
+    # The runtime graph of this case has no commit either: one line for each graph.
+    (changed(component_rows(), 'amplifier-foundation', revision=None),
+     changed(component_rows(), 'amplifier-foundation', revision=None),
+     f'The Windows setup file has amplifier-foundation with no recorded commit. {HOST_HAS} with no recorded commit.\n'
+     f'The Windows setup file has amplifier-foundation with no recorded commit. {TESTS_HAVE} with no recorded commit.' + STOP),
+    (component_rows(), changed(component_rows(), 'amplifier-foundation', revision=None),
+     f'The Windows setup file has amplifier-foundation at {QUALIFIED}. {HOST_HAS} with no recorded commit.' + STOP),
+], ids=['commit', 'commit-and-absent', 'absent', 'registry-in-run', 'repository', 'subdirectory', 'registry-in-plan',
+        'no-commit-in-both', 'no-commit-in-run'])
+def test_windows_plan_that_differs_from_the_host_resolution_stops_the_release(consumer, plan, resolved, message):
+    root, evidence, expected, path, receipts = consumer(resolved, plan)
+    with pytest.raises(ValueError) as refusal:
+        qualification.verify_consumer(root, evidence, expected, path, receipts)
+    assert str(refusal.value) == message
+
+
+@pytest.mark.parametrize(('runtime', 'message'), [
+    (changed(component_rows(), 'amplifier-foundation', revision=MOVED),
+     f'The Windows setup file has amplifier-foundation at {QUALIFIED}. '
+     f'{TESTS_HAVE} at {MOVED}.' + STOP + AGAIN),
+    ([row for row in component_rows() if row['name'] != NAMING],
+     f'The Windows setup file has {NAMING} at {QUALIFIED} from {FOUNDATION}#subdirectory=modules/hooks-session-naming. '
+     f'{TESTS_LACK} {NAMING}.' + STOP),
+    (changed(component_rows(), 'amplifier-foundation', url=None, revision=None),
+     f'The Windows setup file has amplifier-foundation at {QUALIFIED} from {FOUNDATION}. '
+     f'{TESTS_HAVE} from a source that is not Git.' + STOP),
+    (changed(component_rows(), NAMING, subdirectory=None),
+     f'The Windows setup file has {NAMING} at {QUALIFIED} from {FOUNDATION}#subdirectory=modules/hooks-session-naming. '
+     f'{TESTS_HAVE} at {QUALIFIED} from {FOUNDATION}.' + STOP),
+    (changed(component_rows(), 'amplifier-foundation', revision=None),
+     f'The Windows setup file has amplifier-foundation at {QUALIFIED}. {TESTS_HAVE} with no recorded commit.' + STOP),
+], ids=['commit', 'absent', 'not-git', 'subdirectory', 'no-commit'])
+def test_windows_plan_that_differs_from_the_runtime_tests_stops_the_release(consumer, runtime, message):
+    root, evidence, expected, path, receipts = consumer(
+        component_rows(), component_rows(), [install_record(row) for row in runtime])
+    with pytest.raises(ValueError) as refusal:
+        qualification.verify_consumer(root, evidence, expected, path, receipts)
+    assert str(refusal.value) == message
+
+
+def test_windows_plan_that_differs_from_both_graphs_names_both(consumer):
+    root, evidence, expected, path, receipts = consumer(
+        component_rows(), changed(component_rows(), NAMING, revision=MOVED), [install_record(row) for row in component_rows()])
+    first = f'The Windows setup file has {NAMING} at {MOVED}. '
+    with pytest.raises(ValueError) as refusal:
+        qualification.verify_consumer(root, evidence, expected, path, receipts)
+    assert str(refusal.value) == (first + f'{HOST_HAS} at {QUALIFIED}.\n' + first + f'{TESTS_HAVE} at {QUALIFIED}.'
+                                  + STOP + AGAIN)
+
+
+def test_windows_plan_with_one_component_twice_is_refused(consumer):
+    # Without this, the later row would replace the earlier one in the comparison.
+    twice = [{**component_rows(MOVED)[1], 'name': 'Amplifier._Foundation'}, *component_rows()]
+    root, evidence, expected, path, receipts = consumer(component_rows(), twice, [install_record(row) for row in component_rows()])
+    with pytest.raises(ValueError, match='^amplifier-foundation is recorded twice$'):
+        qualification.verify_consumer(root, evidence, expected, path, receipts)
+
+
+@pytest.mark.parametrize(('change', 'error', 'message'), [
+    ('no-plan', FileNotFoundError, 'windows-consumer-plan.json'),
+    ('host-evidence', ValueError, 'Candidate host dependency evidence changed'),
+    ('other-candidate', ValueError, 'Qualification does not match the selected application candidate'),
+    ('runtime-graph', ValueError, 'The runtime graph is not the one that this candidate was tested with'),
+    ('runtime-candidate', ValueError, 'The runtime graph is not the one that this candidate was tested with'),
+], ids=['no-plan', 'host-evidence', 'other-candidate', 'runtime-graph', 'runtime-candidate'])
+def test_windows_plan_check_needs_the_plan_and_this_candidates_evidence(consumer, change, error, message):
+    root, evidence, expected, path, receipts = consumer(component_rows(), component_rows())
+    qualification.verify_consumer(root, evidence, expected, path, receipts)
+    # Each change leaves the three graphs equal, so only the named binding can refuse it.
+    if change == 'no-plan':
+        # A setup file without its plan must stop the run; it is not a skip.
+        path.unlink()
+    elif change == 'host-evidence':
+        (evidence / 'qualified-overrides.txt').write_text('other overrides\n')
+    elif change == 'other-candidate':
+        expected = 'f' * 64
+    elif change == 'runtime-graph':
+        value = json.loads((receipts / 'qualified-runtime.json').read_text())
+        qualification.write(receipts / 'qualified-runtime.json', {**value, 'build': 'another-build'})
+    else:
+        value = json.loads((receipts / 'runtime.json').read_text())
+        qualification.write(receipts / 'runtime.json', {**value, 'candidate': 'f' * 64})
+    with pytest.raises(error, match=message):
+        qualification.verify_consumer(root, evidence, expected, path, receipts)
+
+
+def test_windows_plan_check_starts_from_the_command_line(consumer, monkeypatch):
+    root, evidence, expected, path, receipts = consumer(component_rows(), component_rows())
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(sys, 'argv', ['release_qualification.py', 'verify-consumer', '--evidence', str(evidence),
+                                      '--candidate', expected, '--plan', str(path), '--receipts', str(receipts)])
+    qualification.main()
+    # A difference ends the command with an error, so the workflow step fails.
+    qualification.write(path, {'schema': 1, 'graph': [APP_ROW, *component_rows(MOVED)]})
+    with pytest.raises(ValueError, match='This run stops before it publishes'):
+        qualification.main()
+
+
+def test_release_job_checks_the_windows_plan_after_its_download_and_before_publication():
+    jobs = yaml.load((ROOT / '.github/workflows/release.yml').read_text(), Loader=yaml.BaseLoader)['jobs']
+    steps = jobs['release']['steps']
+    receipts = next(i for i, step in enumerate(steps) if 'verify-receipts' in step.get('run', ''))
+    download = next(i for i, step in enumerate(steps) if step.get('with', {}).get('name') == 'windows-consumer')
+    check = [i for i, step in enumerate(steps) if 'verify-consumer' in step.get('run', '')]
+    publish = next(i for i, step in enumerate(steps) if 'publish --tag' in step.get('run', ''))
+    assert len(check) == 1 and receipts < download < check[0] < publish
+    step = steps[check[0]]
+    # A selected source without the producer has no plan. With the producer, a missing plan is an error.
+    assert step['if'] == steps[download]['if'] == "hashFiles('scripts/windows_consumer_release.py') != ''"
+    assert steps[download]['with']['path'] == 'dist'
+    assert step['run'] == ('python "$RUNNER_TEMP/release-tools/release_qualification.py" verify-consumer '
+                           '--evidence "$RUNNER_TEMP/host-resolution" --candidate "$RELEASE_CANDIDATE" '
+                           '--plan dist/windows-consumer-plan.json --receipts "$RUNNER_TEMP/qualification"')
+    # A failed check must stop the run: nothing lets the publication start after it.
+    assert all('continue-on-error' not in item for item in (jobs['release'], *steps))
+    assert 'if' not in steps[publish]
+    assert jobs['release']['env']['RELEASE_CANDIDATE'] == '${{ needs.prepare.outputs.candidate }}'
+    # The receipts folder holds the runtime graph and its receipt, from the job that ran the tests.
+    merged = next(step for step in steps if step.get('with', {}).get('pattern') == '*-qualification')
+    assert merged['with'] == {'pattern': '*-qualification', 'path': '${{ runner.temp }}/qualification',
+                              'merge-multiple': 'true'}
+    prepare = jobs['prepare']['steps']
+    upload = next(step for step in prepare if step.get('with', {}).get('name') == 'runtime-qualification')
+    assert upload['with']['path'].splitlines() == ['${{ runner.temp }}/runtime.json', '${{ runner.temp }}/qualified-runtime.json']
+    # The check is the workflow revision's tool, not a file of the selected source.
+    assert 'cp scripts/release.py scripts/release_qualification.py ' in '\n'.join(step.get('run', '') for step in prepare)
+
+
+def native_plan_check():
+    spec = importlib.util.spec_from_file_location('consumer_plan_native', ROOT / 'tests/fixtures/windows_consumer_plan_native.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_windows_plan_native_check_passes_only_with_one_acceptance_and_two_refusals(tmp_path):
+    # The native check's own logic, with rows in the plan's form and in the form of install records.
+    fixture = native_plan_check()
+    rows = component_rows()
+    path = tmp_path / 'windows-consumer-plan.json'
+    delivery = {'sha256': 'c' * 64, 'url': 'https://github.com/microsoft/amplifier-unified/releases/download/v1.2.3/app.whl'}
+    path.write_text(json.dumps({'schema': 1, 'graph': [{**APP_ROW, 'delivery': delivery}, *rows]}))
+    records = [install_record(row) for row in rows]
+    result = fixture.cases(tmp_path / 'work', path, records)
+    assert result['ok'] is True and [case['passed'] for case in result['cases']] == [True, True, True]
+    assert result['gitComponents'] == {'amplifier-foundation': QUALIFIED, NAMING: QUALIFIED}
+    assert [case['required'] for case in result['cases']] == [
+        'accepted',
+        f'refused: The Windows setup file has amplifier-foundation at {QUALIFIED}. {HOST_HAS} at {fixture.OTHER}.' + STOP + AGAIN,
+        f'refused: The Windows setup file has amplifier-foundation at {QUALIFIED}. {TESTS_HAVE} at {fixture.OTHER}.' + STOP + AGAIN]
+    # Each refusal changes the one row of Amplifier Foundation: one difference, and the other component is equal.
+    for case in result['cases'][1:]:
+        assert len([line for line in case['output'].splitlines() if 'The Windows setup file has' in line]) == 1
+        assert f"{NAMING} {QUALIFIED}: the same commit" in case['output']
+    tool = (ROOT / 'scripts/release_qualification.py').read_text()
+    # A gate that accepts every plan must fail the check: both refusals are required.
+    accepts = tmp_path / 'accepts.py'
+    assert tool.count('    if problems:\n') == 1
+    accepts.write_text(tool.replace('    if problems:\n', '    if False:\n'))
+    result = fixture.cases(tmp_path / 'accepts', path, records, tool=accepts)
+    assert result['ok'] is False and [case['passed'] for case in result['cases']] == [True, False, False]
+    # A gate that refuses every plan must fail the check: the acceptance is required.
+    refuses = tmp_path / 'refuses.py'
+    equal = "    if same_place and shipped['revision'] and shipped['revision'] == other['revision']:\n"
+    assert tool.count(equal) == 1
+    refuses.write_text(tool.replace(equal, '    if False:\n'))
+    result = fixture.cases(tmp_path / 'refuses', path, records, tool=refuses)
+    # Its refusals have more lines than the one difference that each case made: the exact text is required.
+    assert result['ok'] is False and [case['passed'] for case in result['cases']] == [False, False, False]
+    # A gate that refuses and names the wrong graph must fail the check: the exact text is required.
+    wrong = tmp_path / 'wrong.py'
+    assert tool.count('name in tested, TESTS)') == 1
+    wrong.write_text(tool.replace('name in tested, TESTS)', 'name in tested, HOST)'))
+    result = fixture.cases(tmp_path / 'wrong', path, records, tool=wrong)
+    assert result['ok'] is False and [case['passed'] for case in result['cases']] == [True, True, False]
+    assert result['cases'][2]['returncode'] != 0
+    # A gate that prints the acceptance and then ends with an error must fail the control.
+    fails = tmp_path / 'fails.py'
+    assert tool.count('    return checked\n') == 1
+    fails.write_text(tool.replace('    return checked\n', '    raise SystemExit(3)\n'))
+    result = fixture.cases(tmp_path / 'fails', path, records, tool=fails)
+    assert result['ok'] is False and [case['passed'] for case in result['cases']] == [False, True, True]
+    assert result['cases'][0]['returncode'] == 3
+    # The other commit must differ from the installed one, or a refusal would show nothing.
+    path.write_text(json.dumps({'schema': 1, 'graph': [APP_ROW, *component_rows(fixture.OTHER)]}))
+    with pytest.raises(RuntimeError, match='Change OTHER'):
+        fixture.cases(tmp_path / 'same-commit', path, records)
+
+
+def test_windows_plan_native_check_keeps_only_the_published_wheel_and_installs_only_on_a_ci_runner(tmp_path, monkeypatch):
+    fixture = native_plan_check()
+    requested = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *details):
+            return False
+
+        def read(self, limit):
+            return b'another file'
+
+    monkeypatch.setattr(fixture.urllib.request, 'urlopen', lambda url, timeout: requested.append(url) or Response())
+    with pytest.raises(RuntimeError, match='The downloaded wheel is not the published release file'):
+        fixture.wheel(tmp_path)
+    version = fixture.RELEASE['version']
+    assert requested == [f'https://github.com/microsoft/amplifier-unified/releases/download/v{version}/'
+                         f'amplifier_unified-{version}-py3-none-any.whl']
+    assert list(tmp_path.iterdir()) == []
+    # The installation and the compiler run start only on a runner of CI, before any download.
+    monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
+    with pytest.raises(AssertionError):
+        fixture.prepare(tmp_path)
+    assert len(requested) == 1
+
+
+def test_windows_plan_native_check_runs_for_changes_of_the_gate_and_cannot_be_skipped():
+    workflows = ROOT / '.github/workflows'
+    workflow = yaml.load((workflows / 'windows-consumer-plan.yml').read_text(), Loader=yaml.BaseLoader)
+    assert set(workflow['on']) == {'workflow_dispatch', 'pull_request'}
+    assert workflow['permissions'] == {'contents': 'read'}
+    paths = workflow['on']['pull_request']['paths']
+    # The gate, the workflow that runs it, the producer of the plan with its build inputs, and the check itself.
+    assert sorted(paths) == sorted([
+        '.github/workflows/windows-consumer-plan.yml', '.github/workflows/release.yml',
+        'scripts/release_qualification.py', 'tests/fixtures/windows_consumer_plan_native.py',
+        'scripts/windows_consumer_release.py', 'scripts/windows_bootstrap_native.py',
+        'scripts/windows_bootstrap_native.cs', 'scripts/windows_bootstrap_capsule.py',
+        'scripts/windows_private_git.py', 'scripts/install.ps1'])
+    assert all((ROOT / path).is_file() for path in paths)
+    assert set(workflow['jobs']) == {'windows-consumer-plan'}
+    job = workflow['jobs']['windows-consumer-plan']
+    release = yaml.load((workflows / 'release.yml').read_text(), Loader=yaml.BaseLoader)['jobs']['windows-consumer']
+    # The same runner and resolver settings as the release job whose installation becomes the plan.
+    assert job['runs-on'] == release['runs-on'] == 'windows-latest' and job['env'] == release['env']
+    steps = job['steps']
+    assert [step.get('uses') for step in steps[:3]] == [step.get('uses') for step in release['steps'][:3]]
+    assert steps[0]['with'] == {'ref': '${{ github.event.pull_request.head.sha || github.sha }}',
+                                'persist-credentials': 'false'}
+    check = [step for step in steps if 'windows_consumer_plan_native.py' in step.get('run', '')]
+    assert len(check) == 1 and 'if' not in check[0]
+    assert check[0]['run'].splitlines() == [
+        "$ErrorActionPreference = 'Stop'",
+        'python -I -B tests/fixtures/windows_consumer_plan_native.py',
+        "if ($LASTEXITCODE -ne 0) { throw 'The consumer plan check failed; inspect result.json.' }"]
+    assert all('continue-on-error' not in item for item in (job, *steps))
+    # It is a pull-request check. It adds no step to a release run.
+    assert 'windows_consumer_plan_native' not in (workflows / 'release.yml').read_text()
+    fixture = native_plan_check()
+    assert re.fullmatch(r'\d+\.\d+\.\d+', fixture.RELEASE['version'])
+    assert re.fullmatch('[a-f0-9]{64}', fixture.RELEASE['sha256']) and re.fullmatch('[a-f0-9]{40}', fixture.RELEASE['revision'])

@@ -13,7 +13,23 @@
 /.github/** source-context=tooling
 /tests/** source-context=tests
 /tests/web/** source-context=tests
+/amplifier_web/status_protocol/** source-context=generated linguist-vendored=true linguist-generated=true -text
+/components/status-emitter.source.json source-context=configuration
 /scripts/**/tests/** source-context=tests
+/components/recall.source.json source-context=configuration
+/components/recall-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
+/components/scheduling.source.json source-context=configuration
+/components/scheduling-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
+/components/publishing.source.json source-context=configuration
+/components/publishing-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
+/components/worktrees.source.json source-context=configuration
+/components/worktrees-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
+/components/portability.source.json source-context=configuration
+/components/portability-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
+/components/outputs.source.json source-context=configuration
+/components/outputs-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
+/components/workspace-metadata.source.json source-context=configuration
+/components/workspace-metadata-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /docs/** source-context=documentation
 /contracts/** source-context=contracts
 /context/** source-context=guidance
@@ -69,16 +85,14 @@ package-lock.json source-context=locks
 # Preserve committed bytes and existing source/build/installed parity checks.
 /amplifier_web/static/** source-context=generated linguist-generated=true -text
 
-# Mechanically refreshed upstream client source; ownership stays discoverable.
+# Public client source selection; ownership stays discoverable.
 /components/README.md source-context=documentation
 /components/AGENTS.md source-context=guidance
 /components/web-client.source.json source-context=configuration
-/components/web-client/** source-context=generated linguist-vendored=true linguist-generated=true
 
 # Dependency entrypoints are generated from the selected client plus host commands.
 
 # The selected component and locked shared inputs have platform-independent bytes.
-/components/web-client/** -text
 /amplifier_web/ai_services.json text eol=lf
 /amplifier_web/provider_sources.json text eol=lf
 /amplifier_web/voice_options.json text eol=lf
@@ -94,3 +108,14 @@ package-lock.json source-context=locks
 /scripts/files1318_integrated_checks.py source-context=evidence linguist-generated=true
 /scripts/scale_runtime_browser.mjs source-context=evidence linguist-generated=true
 /scripts/scale_runtime_workspace_browser.mjs source-context=evidence linguist-generated=true
+
+# Preserve installed/isolated worker paths; selected snapshots are not authoring owners.
+/components/operations.source.json source-context=configuration
+/amplifier_operations/** source-context=generated linguist-vendored=true linguist-generated=true -text
+/components/kernels.source.json source-context=configuration
+/amplifier_kernels/** source-context=generated linguist-vendored=true linguist-generated=true -text
+
+# Public SDK artifact and authoring-example projection; edit in its public owner.
+/components/shell-sdk.source.json source-context=configuration
+/packages/shell-sdk/** source-context=generated linguist-vendored=true linguist-generated=true -text
+/examples/shell-controls/** source-context=generated linguist-vendored=true linguist-generated=true -text

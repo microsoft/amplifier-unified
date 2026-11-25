@@ -66,6 +66,43 @@ independent roots, including a second correction round without separate
 subscription calls or manual completion messages. Scripted runtime evidence,
 real Worker-process evidence and actual-model cooperation remain distinct.
 
+## Current dependency decisions and retained reports
+
+The coordination repair proposal separates a requester's decision to await a
+result from cancellation of recipient execution. `coordination.unsubscribe`
+withdraws an existing request's saved wait, including a cancelled or uncertain
+wait. Withdrawal is sticky: later cancellation, review, subscribe or an exact
+send retry cannot rearm it. Only the current authenticated requester or its
+direct user can make that decision. No task completion or old-task activation
+is required to stop awaiting a result.
+
+Withdrawal closes future automatic returns and suppresses positively queued
+returns in the existing command transaction. Its receipt distinguishes suppressed
+returns from already submitting, admitted or unknown inputs, which may still
+arrive. It neither stops execution nor changes admission, cancellation, result
+qualification or historical UNKNOWN. Exact results remain inspectable. A current
+dependency warning excludes explicitly withdrawn waits, not other uncertain
+requests to the same recipient. Cold/restarted projections use the same saved
+withdrawal, without reading transcript or receipt bodies per render.
+
+The manager separately decides whether to resume its own agent-recorded
+dependency block through `task.resume`. Withdrawal never resumes work, clears
+Stop or a human pause, or authorizes replay of an uncertain write. Fresh work
+must independently satisfy its current authority and execution controls.
+
+A current recipient can report confirmed previously admitted work even when the
+old task or Stop boundary has changed through separately authorized fresh work.
+Current authenticated root/generation/Stop, original participant identity,
+response revision, retention and terminal-evidence checks still apply. UNKNOWN
+prior admission does not become confirmed merely because a report was offered.
+Reporting does not restore the original request's execution or automatic-return
+rights. Exact notification review likewise records review, not old-task
+execution, withdrawal or acceptance of a later result.
+
+These are the selected revised promises for the removal-first repair; focused
+implementation/qualification evidence is separate. The original design checkpoint
+and Fable's brief-only review are not source or runtime verification.
+
 ## Cross-workspace existing-root communication
 
 The October 26 user direction is: “Lets spin up a task that lets you do so in

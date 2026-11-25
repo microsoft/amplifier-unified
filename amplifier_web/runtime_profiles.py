@@ -19,6 +19,53 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
+def app_folders(value, roots, **options):
+    """Write a value as JSON text in which the installation's folders are "$APP".
+
+    A copy of the installation in another folder then gives the same text.
+
+    A folder path that JSON text writes as it is (no backslash, only ASCII) is
+    replaced wherever it stands in that text, as it always was: installations
+    have saved values of the text, also for a folder beside it whose name
+    starts with its name, and for the name of an entry.
+
+    Any other folder, so every Windows path, was never found in that text, and
+    it is not looked for there: JSON text does not show where the name of a
+    folder ends. The values are changed before they are written. Only a text
+    value that is the folder or a path below it loses the folder, also after
+    "file://": the folder's path, and then the end of the value or a path
+    separator of this system. A value with ".." after the folder stays as it
+    is, because it can name a place outside the folder; so does an address
+    with "%" there, which can hide the dots. The name of an entry is never
+    changed.
+    """
+    ordered = sorted(roots, key=len, reverse=True)
+    other = [root for root in ordered if json.dumps(root)[1:-1] != root]
+    separators = tuple(filter(None, (os.sep, os.altsep)))
+
+    def below(text):
+        start = "file://" if text.startswith("file://") else ""
+        for root in other:
+            rest = text[len(start) + len(root):]
+            if text.startswith(root, len(start)) and (not rest or rest.startswith(separators)):
+                outside = ".." in rest or bool(start) and "%" in rest
+                return text if outside else start + "$APP" + rest
+        return text
+
+    def walk(item):
+        if isinstance(item, dict):
+            return {key: walk(entry) for key, entry in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [walk(entry) for entry in item]
+        return below(item) if isinstance(item, str) else item
+
+    text = json.dumps(walk(value) if other else value, **options)
+    for root in ordered:
+        if root not in other:
+            text = text.replace(root, "$APP")
+    return text
+
+
 def configuration_key(settings, *roots):
     # Provider IDs, keys, models and prompts are runtime values. They must not
     # create a new Python graph for every conversation or credential rotation.
@@ -64,11 +111,7 @@ def configuration_key(settings, *roots):
             if isinstance(row, dict) and row.get("source")
         },
     }
-    text = json.dumps(value, sort_keys=True, default=str)
-    for root in sorted(
-        {str(Path(root).resolve()) for root in roots}, key=len, reverse=True
-    ):
-        text = text.replace(root, "$APP")
+    text = app_folders(value, {str(Path(root).resolve()) for root in roots}, sort_keys=True, default=str)
     return hashlib.sha256(text.encode()).hexdigest()
 
 
@@ -230,6 +273,23 @@ async def _profile_attempt(home, generation, selected, stage, index):
                 f"Profile admission-marker cleanup failed ({type(cleanup_error).__name__}); "
                 f"inspect retained attempt at {stage} before admitting it."
             )
+        # The stage's copy of the keys file is not a diagnostic. This coroutine
+        # wrote it once, before its first command, and nothing uses this stage
+        # again: a retry gets a new stage, and nothing admits what a program of
+        # this attempt still produces. A refused removal keeps the copy. Idle
+        # maintenance removes it later only when the saved record says that this
+        # attempt ended. The status write above can fail, so the note asks the
+        # reader of idle maintenance what the record says now.
+        from .update_storage import _ended_without_admission, remove_stage_keys
+
+        reason = remove_stage_keys(home, stage)
+        if reason is not None:
+            error.add_note(
+                f"The stage's copy of the keys file was not removed ({reason}). "
+                + ("Idle maintenance tries again." if _ended_without_admission(stage) else
+                   "The saved record does not say that this attempt ended, so idle maintenance leaves that copy.")
+                + f" Attempt retained at {stage}."
+            )
         raise
 
 
@@ -283,11 +343,15 @@ async def ensure(home, generation, session, *, progress=None):
         from amplifier_foundation.modules.preparation import source_signature
 
         contents = []
+        signatures = {}
         for path in sorted(local_inputs):
-            content = await asyncio.to_thread(
-                source_signature, path if path.is_dir() else path.parent
-            )
-            contents.append([str(path), content])
+            root = path if path.is_dir() else path.parent
+            # Sibling bundle files share the same content observation within
+            # this check. Keep every declared path in the identity, and rescan
+            # on the next check so local edits cannot reuse an obsolete wheel.
+            if root not in signatures:
+                signatures[root] = await asyncio.to_thread(source_signature, root)
+            contents.append([str(path), signatures[root]])
         key = hashlib.sha256((key + json.dumps(contents)).encode()).hexdigest()
     if edited is not None:
         key = hashlib.sha256(
@@ -301,17 +365,6 @@ async def ensure(home, generation, session, *, progress=None):
         and key == offered["configuration"]
     ):
         return generation
-    if os.name == "nt":
-        # The baseline/previously offered graph keeps its existing route. Custom
-        # qualification also calls freeze/update subprocess owners and copies
-        # credential snapshots; those are not native-qualified yet. Refuse
-        # BEFORE directories, locks, private snapshots or subprocess effects.
-        # Do not fall back to the shared graph for changed declarations.
-        raise RuntimeError(
-            "Custom runtime preparation is unavailable on Windows. "
-            "This chat's changed dependency declarations were not installed; "
-            "use the existing offered runtime or qualify the custom graph separately."
-        )
     # The profile key contains no prompts, histories or credentials in plaintext.
     identity = hashlib.sha256(
         json.dumps([generation, bundle, key]).encode()
@@ -401,6 +454,10 @@ async def ensure(home, generation, session, *, progress=None):
         current = project_path(home, generation)
         shutil.copy2(current / "pyproject.toml", project / "pyproject.toml")
         shutil.copy2(current / "uv.lock", project / "uv.lock")
+        # Baseline policy is distinct from the parent's exact frozen manifest.
+        # Never label this older prepared graph as adopting current app policy.
+        baseline = receipt / "runtime-base.toml"
+        baseline_manifest = (baseline if baseline.exists() else project / "pyproject.toml").read_bytes()
         from .runtime_qualification import freeze, prepare_overrides, verify_recorded
         from .update_sources import store_environment
 
@@ -467,7 +524,8 @@ async def ensure(home, generation, session, *, progress=None):
 
         manager = SimpleNamespace(home=home, diagnostics=Diagnostics())
         await report("Saving this chat’s prepared setup…")
-        final = await _run_phase(stage, attempt, "runtime-freeze", freeze, manager, selected, project)
+        final = await _run_phase(stage, attempt, "runtime-freeze", freeze, manager, selected, project,
+                                 baseline_manifest=baseline_manifest)
         attempt["paths"]["qualifiedProject"] = str(final)
         _write_attempt(stage, attempt)
         overrides = stage / "runtime-install-overrides.txt"

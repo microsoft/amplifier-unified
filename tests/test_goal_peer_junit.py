@@ -13,7 +13,7 @@ spec.loader.exec_module(checker)
 
 def report():
     root = ET.Element("testsuites")
-    suite = ET.SubElement(root, "testsuite", tests="43", failures="0", errors="0", skipped="0")
+    suite = ET.SubElement(root, "testsuite", tests="44", failures="0", errors="0", skipped="0")
     for module, names in checker.EXPECTED.items():
         for name in sorted(names):
             ET.SubElement(suite, "testcase", classname=module, name=name)
@@ -24,8 +24,8 @@ def test_exact_native_cases_pass(tmp_path):
     root, _ = report()
     path = tmp_path / "results.xml"
     ET.ElementTree(root).write(path)
-    assert [len(names) for names in checker.EXPECTED.values()] == [35, 8]
-    assert checker.check(path) == 43
+    assert [len(names) for names in checker.EXPECTED.values()] == [36, 8]
+    assert checker.check(path) == 44
 
 
 def test_release_workflow_requires_and_retains_native_evidence():

@@ -11,6 +11,9 @@ from .transcript_window import TranscriptWindowReader
 
 MAX_PAGES = 32
 MAX_BYTES = 32 * 1024 * 1024
+# Opening a chat should not render an entire explicit history page. Older rows
+# keep the same cursor/read owner and its independently requested page limit.
+INITIAL_MESSAGES = 20
 
 
 def _digest(value):
@@ -32,29 +35,69 @@ def _visible(value):
             and bool(text_content(value)))
 
 
-def _native_page(reader, source, before, limit):
-    from .automatic_history import directory
+def _native_page(reader, source, before, limit, *, public_only=False):
+    from collections import Counter
+    from .automatic_history import directory, native_input_id
     from .shared_state_probe import text_content
     from .session_store import message_time
+    counts = Counter()
+    def visible(value):
+        exact_input = native_input_id(value)
+        if exact_input:
+            counts[exact_input] += 1
+        return _visible(value)
+
     result = reader.read_window(directory(source), {
         'project': source['nativeProject'],
         'nativeId': source.get('nativeIdentity') or source.get('runtimeSessionId') or source['id']},
-        before=before, limit=limit, visible=_visible)
+        before=before, limit=limit, visible=visible)
     if result['status'] != 'ready':
         raise ValueError('Saved message window is unavailable: ' + result['reason'])
     window = result['messageWindow']
+    # Only an initial, gap-free read of the entire primary proves marker
+    # multiplicity for this display join. Count every validated raw occurrence,
+    # including hidden/media-only inputs, without expanding the reader's budget.
+    complete = (before is None and result['coverage']['rangeStart'] == 0
+                and not window['hasEarlier'] and not result['unavailableRanges']
+                and window['source'] == 'primary' and window['recoveredBackup'] is False)
     items = []
     for item in result['rows']:
         value = item['value']
         at = message_time(value)
-        text = text_content(value)
+        utility_fields = {}
+        if public_only:
+            from .native_message_projection import _public_blocks
+            from .voice_input_projection import public_input
+            from .suggestion_source import speaker
+            metadata = value.get('metadata') or {}
+            # Host-service recovery and peer inputs are not the current human.
+            provenance = metadata.get('amplifier_input') or {}
+            if (provenance.get('kind') == 'service' or metadata.get('live_recovery_job')
+                    or metadata.get('private') or value.get('private') or value.get('partial')
+                    or value.get('visibility') in {'internal', 'developer'}):
+                continue
+            text = text_content({'content': _public_blocks(value, text_only=True)['blocks']})
+            voice = public_input(text, provenance)
+            if voice:
+                text = voice['text']
+            utility_fields['inputActor'] = speaker(value)
+            if not text:
+                continue
+        else:
+            text = text_content(value)
+        exact_input = native_input_id(value)
         items.append({'id': item['displayId'], 'role': value['role'],
+            **utility_fields,
+            **({'nativeInputId': exact_input} if exact_input else {}),
             '_windowDigest': hashlib.sha256(text.encode()).hexdigest(),
             'text': text, 'source': 'native', 'via': 'chat',
             'createdAt': at or source.get('createdAt', 0), 'timestampKnown': at is not None,
             'displayOnly': True, 'windowKey': window['windowKey'],
             'sourceReference': {'kind': 'transcript-window', 'byteOffset': item['byteOffset'],
                                 'revision': window['revision'], 'restoreCursor': window['restoreCursor']}})
+    for row in items:
+        if row.get('nativeInputId') and (not complete or counts[row['nativeInputId']] != 1):
+            row['nativeInputAmbiguous'] = True
     return {'items': items, **window, 'coverage': {'kind': 'native-saved', **result['coverage']},
             'unavailableRanges': result['unavailableRanges'], '_owner': source}
 
@@ -206,7 +249,57 @@ class TranscriptWindows:
                 'coverage': {'kind': 'saved-web', 'historyComplete': False}, 'unavailableRanges': gaps,
                 '_savedComplete': start == 0 and end == len(rows) and not gaps}
 
-    async def read(self, session_id, *, before=None, limit=100, native=False):
+    def public_native_tail(self, session):
+        """Reuse a bounded utility page while its physical source is unchanged.
+
+        Generic save/event fences retire presentation caches, not public text.
+        A changed file stamp requires the same bounded canonical reader again;
+        neither a cached body nor an old stat becomes current authority.
+        """
+        from .automatic_history import directory
+        source = _source(session)
+        revision = self.reader.source_revision(directory(source), {
+            'project': source['nativeProject'],
+            'nativeId': source.get('nativeIdentity') or source.get('runtimeSessionId') or source['id']})
+        for page, _ in reversed(self.pages.values()):
+            if (page.get('_publicUtility') and page.get('_owner') == source
+                    and page.get('revision') == revision and page.get('_utilityTail')):
+                return page
+        page = _native_page(self.reader, source, None, 100, public_only=True)
+        if page['revision'] != revision:
+            raise ValueError('The public transcript source changed during reading.')
+        page.update(_publicUtility=True, _utilityTail=True)
+        page['windowKey'] = _digest([page['windowKey'], 'public-utility'])
+        size = len(json.dumps(page, ensure_ascii=False, separators=(',', ':')).encode())
+        self._retain(session['id'], page, size)
+        return page
+
+    def public_saved_tail(self, session, cold):
+        """Bounded saved suffix for utility freshness, never cold hydration.
+
+        Reuse the existing page cache only for the exact resource/index, owner
+        and fresh physical signature. A change re-enters the canonical bounded
+        reader; physical storage identity is not the utility's public input.
+        """
+        from .resource_files import detached_signature
+        from .saved_message_window import read_saved_window
+        source = _source(session)
+        signature = list(detached_signature(cold))
+        binding = {'source': source, 'resource': cold.identity,
+                   'directory': str(cold.directory), 'index': cold.indexed, 'signature': signature}
+        for page, _ in reversed(self.pages.values()):
+            if page.get('_savedUtilityBinding') == binding:
+                return page, signature
+        page = read_saved_window(cold, self.reader, session_id=session['id'], fence=0, limit=100)
+        if list(detached_signature(cold)) != signature:
+            raise ValueError('The public saved source changed during reading.')
+        page['_savedUtilityBinding'] = binding
+        page['windowKey'] = _digest([page['windowKey'], 'public-utility'])
+        size = len(json.dumps(page, ensure_ascii=False, separators=(',', ':')).encode())
+        self._retain(session['id'], page, size)
+        return page, signature
+
+    async def read(self, session_id, *, before=None, limit=100, native=False, public_only=False):
         if self.closed:
             raise ValueError('Saved message readers are closed.')
         if type(limit) is not int or not 1 <= limit <= 100:
@@ -224,7 +317,8 @@ class TranscriptWindows:
             if self.closed or len(self.jobs) >= 8:
                 raise ValueError('Saved message readers are busy. Try again.')
             if use_native:
-                work = asyncio.to_thread(_native_page, self.reader, source, before, limit)
+                work = asyncio.to_thread(_native_page, self.reader, source, before, limit,
+                                         **({'public_only': True} if public_only else {}))
             else:
                 from .saved_message_window import read_saved_window
                 work = asyncio.to_thread(read_saved_window, cold, self.reader, session_id=session_id,
@@ -238,6 +332,12 @@ class TranscriptWindows:
                 page['_savedComplete'] = before is None and not page['hasEarlier'] and not page['unavailableRanges']
             page['_savedOwner'] = {'source': source, 'fence': fence,
                                    'resource': cold.identity if cold is not None else None}
+        if public_only:
+            # The sanitized utility view must never replace an ordinary page
+            # under its display cache identity or become an initial chat window.
+            page['windowKey'] = _digest([page['windowKey'], 'public-utility'])
+            page['_publicUtility'] = True
+            page['_utilityTail'] = before is None and limit == 100
         # Detach/size only this selected page outside writer exclusion.
         def prepare():
             detached = copy.deepcopy(page)
@@ -248,10 +348,14 @@ class TranscriptWindows:
             raise ValueError('Saved message window exceeds the display budget.')
         async with self.service.lock:
             current = self.service._session(session_id, hydrate=False)
-            if (_source(current) != source or self._fence(session_id) != fence
+            if (_source(current) != source or not public_only and self._fence(session_id) != fence
                     or cold is not None and self._cold_source(current) != cold):
                 raise ValueError('The selected message source changed.')
             self._retain(session_id, page, size)
+        if public_only:
+            # Utility callers own their own input-acceptance projection. Browser
+            # wire decoration adds native progress even to accepted ACP inputs.
+            return {key: copy.deepcopy(value) for key, value in page.items() if not key.startswith('_')}
         return self._wire(page, session_id)
 
     def _wire(self, page, session_id):
@@ -271,7 +375,10 @@ class TranscriptWindows:
         # unsupported annotation fields or decorate native display-only rows.
         current = self.service._session(session_id, hydrate=False)
         annotations = dict.get(current, 'messageAnnotations', {})
+        from .input_status import annotate as input_annotation
         for index, row in enumerate(result['items']):
+            row = input_annotation(current, row)
+            result['items'][index] = row
             if not row.get('displayOnly'):
                 from .browser_detail import compact
                 result['items'][index] = compact(row, session_id, 'messages', 4096)
@@ -328,7 +435,7 @@ class TranscriptWindows:
                 and (managed or entry.get('savedSource') == saved_source)):
             return
         if not managed:
-            page = await self.read(session_id) if cold is not None else None
+            page = await self.read(session_id, limit=INITIAL_MESSAGES) if cold is not None else None
             self.initial[session_id] = {'status': 'ready', 'stamp': stamp,
                 'source': source, 'savedSource': saved_source,
                 **({'key': (session_id, page['windowKey'])} if page else {}),
@@ -341,7 +448,7 @@ class TranscriptWindows:
         self.initial[session_id] = {'status': 'loading', 'stamp': stamp}
         self._notify(session_id)
         try:
-            page = await self.read(session_id)
+            page = await self.read(session_id, limit=INITIAL_MESSAGES)
             self.initial[session_id] = {'status': 'ready', 'stamp': stamp, 'source': source,
                                         'key': (session_id, page['windowKey'])}
         except asyncio.CancelledError:
@@ -373,7 +480,7 @@ class TranscriptWindows:
                         'historyLoading': not failed, 'historyError': entry.get('error') if failed else None}
                 page = self._wire(retained[0], session['id'])
             else:
-                page = self._wire(self._saved_page(session, None, 100), session['id'])
+                page = self._wire(self._saved_page(session, None, INITIAL_MESSAGES), session['id'])
             return {'messages': page.pop('items'), 'messageWindow': page,
                     'nativeContinuation': entry.get('continuation', {'status': 'unknown'}),
                     'historyLoading': False, 'historyError': None}
@@ -433,3 +540,46 @@ class TranscriptWindows:
         end = min(len(text), start + limit)
         return {'value': text[start:end], 'nextOffset': end if end < len(text) else None,
                 'total': len(text)}
+
+    @staticmethod
+    def _public_room_row(row):
+        return (row.get('role') in {'user', 'assistant'} and not row.get('partial')
+                and type(row.get('roomSequence')) is int and row['roomSequence'] > 0
+                and isinstance(row.get('text'), str) and not row.get('displayOnly'))
+
+    async def read_room(self, session_id, *, before=None, limit=20):
+        """Public source data only, without browser actions or private drafts.
+
+        Paging and text ownership remain with the existing saved-window owner.
+        A page can contain fewer public rows than its physical source range.
+        """
+        from .shared_conversation import SharedConversations
+        page = await self.read(session_id, before=before, limit=limit)
+        retained = self.pages.get((session_id, page['windowKey']))
+        if retained is None:
+            raise ValueError('This message window expired. Reload its page.')
+        items = []
+        for row in retained[0]['items']:
+            if not self._public_room_row(row):
+                continue
+            item = {key: copy.deepcopy(row[key]) for key in
+                    ('id', 'roomSequence', 'role', 'agentId', 'agentLabel', 'createdAt') if key in row}
+            actor, is_agent = SharedConversations._actor(row)
+            item['author'] = {'id': actor, 'isAgent': is_agent}
+            text = row['text']
+            item.update(text=text[:2048], textTruncated=len(text) > 2048)
+            if item['textTruncated']:
+                item['continuation'] = {'message_id': row['id'], 'window_key': page['windowKey'],
+                    'digest': hashlib.sha256(text.encode()).hexdigest(), 'offset': 2048}
+            items.append(item)
+        return {'conversationId': session_id, 'items': items, 'before': page['before'],
+                'hasEarlier': page['hasEarlier'], 'unavailableRanges': page['unavailableRanges']}
+
+    async def read_room_text(self, session_id, *, message_id, window_key, digest, offset=0, limit=8000):
+        retained = self.pages.get((session_id, window_key))
+        row = next((row for row in retained[0]['items'] if row.get('id') == message_id), None) if retained else None
+        if row is None or not self._public_room_row(row):
+            raise ValueError('This public message window expired. Reload its page.')
+        result = await self.read_text(session_id, {'field': 'text', 'id': message_id,
+            'windowKey': window_key, 'digest': digest, 'offset': offset, 'limit': limit})
+        return {'conversationId': session_id, 'messageId': message_id, 'offset': offset, **result}

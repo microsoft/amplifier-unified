@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import Any
 from copy import deepcopy
 from collections import OrderedDict
-from .browser_detail import project
+from .browser_detail import PRIVATE_SESSION_FIELDS, project
 from .chat_navigation import ChatPage, snapshot as chat_snapshot, _matches, recent_activity
 from .session_navigation import is_top_level
 from .session_activity import navigation_busy
@@ -15,14 +15,22 @@ from .session_activity import navigation_busy
 SUMMARY_FIELDS = ('location', 'id', 'title', 'titleSource', 'nativeNameSource', 'autoName', 'naming', 'configurationBusy', 'configurationPending', 'configurationRefresh', 'fileAccessPending', 'description', 'status', 'workspace', 'workingDirectory', 'executionRevision',
     'workspaceId', 'workspaceAvailable', 'bundle', 'createdAt', 'recentActivityAt', 'navigationActivityAt',
     'sessionKind', 'sessionPurpose', 'parentId', 'nativeParentId', 'nativeIdentity', 'nativeProject',
-    'runtimeSessionId', 'historyManaged', 'historyLoaded', 'historyReadOnlyReason', 'nativeAvailable',
+    'runtimeSessionId', 'externalAgent', 'historyManaged', 'historyLoaded', 'historyReadOnlyReason', 'nativeAvailable',
     'sharedHistoryTotal', 'turnCount', 'unreadCompletion', 'creationCommandId')
 ACTIVE = {'starting', 'working', 'running', 'stopping'}
 
 
 def summary(session):
-    return {**{key: session[key] for key in SUMMARY_FIELDS if key in session},
-            'messages': [], 'workers': [], 'approvals': []}
+    result = {**{key: session[key] for key in SUMMARY_FIELDS if key in session},
+              'messages': [], 'workers': [], 'approvals': []}
+    if 'externalAgent' in result:
+        def slim(binding):
+            return {k: v for k, v in binding.items() if k not in ('configOptions', 'optionRevision')}
+        external = slim(result['externalAgent'])
+        if 'participants' in external:
+            external['participants'] = [slim(row) for row in external['participants']]
+        result['externalAgent'] = external
+    return result
 
 
 def direct_child(row, parent):
@@ -73,7 +81,6 @@ class SessionIndex:
             if row.get('sessionKind') != 'internal':
                 from .cold_display import notifications
                 self.notifications.extend(notifications(row))
-        self.notifications.extend(state.get('scheduleNotifications', []))
         self.notifications.sort(key=lambda row: row.get('createdAt', 0))
         self.notifications = self.notifications[-100:]
 
@@ -123,7 +130,7 @@ class SessionIndex:
             self.roots.sort(key=lambda row: self.positions[row['id']])
         self.first_root = self.roots[0] if self.roots else None
         # Notifications are bounded presentation facts; only changed rows can
-        # contribute new assistant messages. Preserve independent schedule rows.
+        # contribute new assistant messages. Schedule notices have a separate owner.
         self.notifications = [row for row in self.notifications if row.get('sessionId') not in identities]
         for identity in identities:
             row = self.by_id[identity]
@@ -253,8 +260,9 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
     result['conversationOrganization'] = organization_projection(state, visible, directory=directory)
     # Report history is read through bounded coordination cursors, never copied
     # into every browser progress snapshot. The worker's latest report remains.
-    result['sessions'] = [{**row, 'workers': [{key: value for key, value in worker.items() if key != 'reportReceipts'}
-                           for worker in row.get('workers', [])]} for row in result['sessions']]
+    from .shared_conversation import public_output
+    result['sessions'] = [{**{key: value for key, value in row.items() if key not in PRIVATE_SESSION_FIELDS}, 'workers': [{key: value for key, value in worker.items() if key != 'reportReceipts'}
+                           for worker in row.get('workers', [])]} for row in map(public_output, result['sessions'])]
     # Only the selected owner's current, indexed waits; no transcript or peer
     # configuration loads, and this read never consumes a return notification.
     if directory is not None and selected_row:
@@ -279,9 +287,11 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
                                  if row.get('sessionId') == selected or row.get('id') == state.get('canvas', {}).get('id')]
     result['devices'] = {key: {field: row[field] for field in ('clientId', 'updatedAt', 'online', 'viewport', 'capabilities') if field in row}
                          for key, row in state.get('devices', {}).items()}
+    notices = [*index.notifications, *state.get('scheduleNotifications', [])]
+    notices.sort(key=lambda row: row.get('createdAt', 0))
     result['notificationMessages'] = [{key: value for key, value in row.items()
                                       if key != 'text' or state.get('notificationSettings', {}).get('preview', True)}
-                                     for row in index.notifications]
+                                     for row in notices[-100:]]
     result['library'] = {'workspaceCount': len(state.get('workspaces', [])),
                          'bounded': True, 'detailPath': '/api/state/detail'}
     if 'browserResources' not in derived:

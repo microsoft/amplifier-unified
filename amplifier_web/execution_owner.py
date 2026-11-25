@@ -7,6 +7,7 @@ It is not a remotely authenticated service or an independent native runtime.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import uuid
 from pathlib import Path
@@ -70,6 +71,38 @@ class Projection:
         self.failed.cancel()
 
 
+class ExecutionObservers:
+    """One service-lifetime tap, including callbacks held by resident workers."""
+    def __init__(self, service):
+        self.service = service
+        self.original = service.on_runtime_event
+        self.attachments = set()
+        self.sink = EventSink(self.event, self.events)
+        service.on_runtime_event = self.sink
+
+    def remove(self, attachment):
+        self.attachments.discard(attachment)
+
+    async def event(self, kind, payload):
+        await self.original(kind, payload)
+        for attachment in tuple(self.attachments):
+            await attachment.observe(kind, payload)
+
+    async def events(self, rows):
+        await self.original.batch(rows)
+        for kind, payload in rows:
+            for attachment in tuple(self.attachments):
+                await attachment.observe(kind, payload)
+
+
+def ensure_observers(service):
+    """Install the shared tap before a worker can capture its event callback."""
+    observers = getattr(service, "_execution_observers", None)
+    if observers is None:
+        observers = service._execution_observers = ExecutionObservers(service)
+    return observers
+
+
 class ExecutionOwner:
     def __init__(self, service, *, workspace, bundle, origin, enable_mcp=False):
         self.service = service
@@ -81,10 +114,37 @@ class ExecutionOwner:
         self._attachment_id = str(uuid.uuid4())
         self.attached = set()
         self.pending = {}
-        self.original_events = service.on_runtime_event
-        service.on_runtime_event = EventSink(self.event, self.events)
+        self._disconnected = False
+        self._retiring = False
+        self._retired = None
+        self.retirement_hint = None
+        self.request_permission = None
+        self.approval_policy = False
+        self.attachment_guard = None
+        self._retirement_hint_task = None
+        self._observers = ensure_observers(service)
+        self._observers.attachments.add(self)
+
+    def require_connection(self):
+        if self._disconnected:
+            raise ValueError("Execution attachment is disconnected")
+        if self._retiring or self._retired:
+            raise ValueError("Execution attachment retirement is in progress or confirmed")
+
+    async def _attach_session(self, identity, mcp_servers):
+        self.require_connection()
+        if self.mcp_capabilities is not None:
+            await self.service.runtime.bind_ephemeral_mcp(identity, self._attachment_id, mcp_servers or {})
+            try:
+                self.require_connection()
+            except ValueError:
+                self.service.runtime.release_ephemeral_mcp(identity, self._attachment_id)
+                raise
+        self.attached.add(identity)
+        return identity
 
     async def create(self, cwd, *, mcp_servers=None):
+        self.require_connection()
         if mcp_servers is not None and self.mcp_capabilities is None:
             raise ValueError("MCP attachment is not enabled by this trusted launcher")
         if mcp_servers is not None and not isinstance(mcp_servers, dict):
@@ -95,10 +155,7 @@ class ExecutionOwner:
             "workspace": str(self.workspace), "bundle": self.bundle, "select": False,
         }, origin=self.origin, include_state=False)
         identity = receipt["result"]["sessionId"]
-        if self.mcp_capabilities is not None:
-            await self.service.runtime.bind_ephemeral_mcp(identity, self._attachment_id, mcp_servers or {})
-        self.attached.add(identity)
-        return identity
+        return await self._attach_session(identity, mcp_servers)
 
     async def attach(self, identity, cwd, *, mcp_servers=None):
         """Attach to saved metadata; prompt admission still owns native resume.
@@ -106,6 +163,7 @@ class ExecutionOwner:
         Reading an attachment must not hydrate history, select a browser chat,
         start a runtime or imply that its exclusive writer has been acquired.
         """
+        self.require_connection()
         if mcp_servers is not None and self.mcp_capabilities is None:
             raise ValueError("MCP attachment is not enabled by this trusted launcher")
         if mcp_servers is not None and not isinstance(mcp_servers, dict):
@@ -126,16 +184,15 @@ class ExecutionOwner:
             location = source.get("workingDirectory") or workspace
             if requested != Path(location).resolve(strict=True):
                 raise ValueError("cwd does not match the saved execution location")
-        if self.mcp_capabilities is not None:
-            await self.service.runtime.bind_ephemeral_mcp(identity, self._attachment_id, mcp_servers or {})
-        self.attached.add(identity)
-        return identity
+        return await self._attach_session(identity, mcp_servers)
 
     def require_attachment(self, identity):
+        self.require_connection()
         if identity not in self.attached:
             raise ValueError("Execution is not attached to this connection")
 
-    async def prompt(self, identity, input_id, text, on_event):
+    async def prompt(self, identity, input_id, text, on_event, *,
+                     expected_interruption_revision=None, admission_check=None, origin=None):
         self.require_attachment(identity)
         if identity in self.pending:
             raise ValueError("This execution already has an unsettled input")
@@ -148,9 +205,13 @@ class ExecutionOwner:
         try:
             # The owner may already be executing while its admission ACK waits.
             # Detaching this observer must not cancel that dispatch or its work.
-            admission = self.service._task(self.service.dispatch("conversation.send", {
-                "sessionId": identity, "text": text,
-            }, origin=self.origin, command_id=input_id, include_state=False))
+            args = {"sessionId": identity, "text": text}
+            if expected_interruption_revision is not None:
+                args["expectedInterruptionRevision"] = expected_interruption_revision
+            admission = self.service._task(self.service.dispatch("conversation.send", args,
+                origin=origin or self.origin, command_id=input_id, include_state=False,
+                **({"caller_session_id": identity} if origin is not None else {}),
+                **({"admission_check": admission_check} if admission_check is not None else {})))
             admission.add_done_callback(lambda task: None if task.cancelled() else task.exception())
             done, _ = await asyncio.wait({admission, delivery.failed}, return_when=asyncio.FIRST_COMPLETED)
             if delivery.failed in done:
@@ -200,7 +261,9 @@ class ExecutionOwner:
         row["stop"] = command
         try:
             await self.service.dispatch("conversation.stop", {"sessionId": identity},
-                                        origin=self.origin, command_id=command, include_state=False)
+                origin=self.origin, command_id=command, include_state=False,
+                **({'admission_check': lambda: self.attachment_guard(identity)}
+                   if self.attachment_guard is not None else {}))
         except BaseException:
             if row["stop"] == command:
                 row["stop"] = None
@@ -215,14 +278,28 @@ class ExecutionOwner:
         if identity in self.pending:
             self.pending[identity]["delivery"].fail("Observation detached; native work may continue. Inspect retained owner state.")
 
-    async def event(self, kind, payload):
-        await self.original_events(kind, payload)
-        await self.observe(kind, payload)
-
-    async def events(self, rows):
-        await self.original_events.batch(rows)
-        for kind, payload in rows:
-            await self.observe(kind, payload)
+    async def retire(self, identity):
+        """One attached session only: success permits closing this connection."""
+        if self._retired == identity and not self._disconnected:
+            return 'retired'  # A lost acknowledgement never requires new work.
+        self.require_attachment(identity)
+        if self.attached != {identity} or self.pending:
+            return 'busy'
+        def occupied():
+            return (self._disconnected or self.attached != {identity}
+                    or any(identity in owner.pending for owner in self._observers.attachments))
+        if occupied():
+            return 'busy'
+        self._retiring = True
+        try:
+            disposition = await self.service.runtime.retire_attachment(
+                identity, self._attachment_id, guard=occupied)
+            if disposition == 'retired':
+                self._retired = identity
+                self.attached.discard(identity)
+            return disposition
+        finally:
+            self._retiring = False
 
     async def approvals(self, identity, row):
         try:
@@ -234,10 +311,38 @@ class ExecutionOwner:
                 task = self.service._task(self.service.access_mode.settle(identity, wait=True))
                 await asyncio.shield(task)
                 session = self.service._session(identity, hydrate=False)
-                if any(item.get("id") in identities and item.get("status") == "pending"
-                       for item in session.get("approvals", [])):
-                    row["delivery"].fail("Interactive approval is unavailable on this attachment. The owner retains the pending request; inspect it before retrying. No decision or work was replayed.")
-                    return
+                for approval in list(session.get('approvals', [])):
+                    if approval.get('id') not in identities or approval.get('status') != 'pending':
+                        continue
+                    if self.request_permission is None:
+                        row["delivery"].fail("Interactive approval is unavailable on this attachment. The owner retains the pending request; inspect it before retrying. No decision or work was replayed.")
+                        return
+                    captured = self.service.approval_request_hash(session, approval)
+                    stop = session.get('interruptionRevision', 0)
+                    offered = copy.deepcopy(approval)
+                    offered.pop('policyScope', None)  # Worker prose/metadata is not policy authority.
+                    scope = None
+                    if self.approval_policy:
+                        from .approval_policy import descriptor
+                        scope = descriptor(self.service, session, approval)
+                        if scope:
+                            offered['policyScope'] = scope
+                    choice = await self.request_permission(identity, offered)
+                    # The transport returns a choice, never an authority object.
+                    # Canonical policy rechecks the captured request at commit.
+                    if (self.pending.get(identity) is not row or self._disconnected
+                            or identity not in self.attached or session.get('interruptionRevision', 0) != stop):
+                        continue
+                    if approval.get('status') != 'pending':
+                        continue  # Another genuine owner decision already won.
+                    if choice not in {'allow', 'deny'}:
+                        raise ValueError('The approval client returned a choice that was not offered.')
+                    await self.service.dispatch('approval.respond', {'sessionId': identity, 'id': approval['id'],
+                        'decision': choice, 'expectedRequestHash': captured,
+                        **({'expectedApprovalScope': scope['key']} if scope else {})},
+                        origin=self.origin, command_id=str(uuid.uuid4()), include_state=False,
+                        **({'admission_check': lambda: self.attachment_guard(identity)}
+                           if self.attachment_guard is not None else {}))
         except Exception:
             row["delivery"].fail("Approval settlement is unresolved; inspect retained owner state before retrying.")
         finally:
@@ -245,6 +350,18 @@ class ExecutionOwner:
 
     async def observe(self, kind, payload):
         identity = payload.get("sessionId")
+        candidate = kind == 'runtime.retirement_requested'
+        if (candidate and self.attached == {identity} and not self._disconnected
+                and not self._retiring and self.retirement_hint is not None
+                and (self._retirement_hint_task is None or self._retirement_hint_task.done())):
+            # This is only an opportunity to ask the native owner. Never wait
+            # for a client socket on the canonical runtime event reader.
+            async def hint():
+                try:
+                    await self.retirement_hint(identity)
+                except Exception:
+                    pass  # Losing an advisory event cannot authorize cleanup.
+            self._retirement_hint_task = asyncio.create_task(hint())
         row = self.pending.get(identity)
         if row is None or identity not in self.attached:
             return
@@ -291,8 +408,24 @@ class ExecutionOwner:
         row["delivery"].offer(event)
 
     async def close(self):
-        """Owned service shutdown, distinct from releasing one attachment."""
-        await self.service.close()
-        for row in self.pending.values():
-            row["delivery"].fail("Execution owner closed; inspect retained state before retrying")
-        self.service.on_runtime_event = self.original_events
+        """Standalone launcher shutdown; shared clients must use disconnect()."""
+        try:
+            await self.service.close()
+        finally:
+            await self.disconnect()
+
+    async def disconnect(self):
+        """Retire this connection's observations without stopping accepted work."""
+        self._disconnected = True
+        rows = list(self.pending.values())
+        try:
+            for identity in tuple(self.attached):
+                await self.release(identity)
+        finally:
+            self._observers.remove(self)
+            if self._retirement_hint_task is not None:
+                self._retirement_hint_task.cancel()
+                await asyncio.gather(self._retirement_hint_task, return_exceptions=True)
+            for row in rows:
+                row["delivery"].fail("Observation detached; native work may continue. Inspect retained owner state.")
+            await asyncio.gather(*(row["delivery"].close() for row in rows))

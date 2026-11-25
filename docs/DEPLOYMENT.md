@@ -1,6 +1,71 @@
-# Deploying Unified beyond localhost
+# Installation and deployment
 
-This guide is the canonical reference for making Unified available on a LAN or Tailscale network. It covers the service host, TLS trust, and Linux service management. The short path is in the [README](../README.md).
+This guide covers manual installation and making Unified available on a LAN or Tailscale network, including service hosting, TLS trust, and Linux service management. The recommended installation path is in the [README](../README.md).
+
+## Manual installation
+
+The [README installer](../README.md#install) is the recommended path and selects
+the current stable release. Use the following instructions when you want to
+manage prerequisites and package installation yourself. These versioned examples
+pin `v0.20.101`; choose another published release tag deliberately when needed.
+
+Install [uv](https://docs.astral.sh/uv/) and Git, then select Python **3.13**
+explicitly, as the installer does. A newer system Python may lack prebuilt
+dependency wheels. uv can manage the selected Python without replacing your
+system Python. Run installation and launch as your normal user.
+
+### Linux
+
+```sh
+uv tool install --python 3.13 git+https://github.com/microsoft/amplifier-unified@v0.20.101
+amplifier-unified
+```
+
+### Windows through WSL
+
+Use a Linux distribution in WSL with systemd enabled. Add this to `/etc/wsl.conf`
+in that distribution:
+
+```ini
+[boot]
+systemd=true
+```
+
+Restart WSL with `wsl --shutdown` from Windows PowerShell, reopen the distribution,
+then run:
+
+```sh
+uv tool install --python 3.13 git+https://github.com/microsoft/amplifier-unified@v0.20.101
+amplifier-unified
+```
+
+This is WSL installation, not native Windows support. Open the app address from
+your Windows browser and sign in with the account running the app in WSL.
+
+### macOS
+
+```sh
+uv tool install --python 3.13 git+https://github.com/microsoft/amplifier-unified@v0.20.101
+amplifier-unified
+```
+
+The first launch sets up the per-user background service and opens the browser;
+later launches reuse it. Use `amplifier-unified serve` to run in the current
+terminal instead. Package installation alone does not register a service.
+
+### Advanced repair
+
+For a broken installation that needs the latest recovery command, the existing
+source recovery path is:
+
+```sh
+uv tool install --force --python 3.13 git+https://github.com/microsoft/amplifier-unified@main
+amplifier-unified reset --dry-run
+```
+
+Inspect the preview before running `amplifier-unified reset`. This source-branch
+repair path is separate from normal stable-release installation and updates.
+Read [the reset guide](RESET.md) for what is preserved and other recovery options.
 
 ## Before you start
 
@@ -70,7 +135,51 @@ can be ready even when no app-owned CA exists to export. This check does not
 establish that a client trusts the certificate, or that it covers the public
 hostname.
 
+Headless commands such as `access` use Unified's local CA for the app-owned
+certificate pair, and normal system/environment trust for supplied certificates.
+A supplied private issuer must already be trusted by the account running the
+command. Configured HTTPS origins retain certificate and hostname verification.
+If verification fails and no other configured origin reaches the matching host,
+the command reports that failure instead of starting a temporary local host.
+An unreachable host without a certificate failure keeps the ordinary local fallback.
+
 If Unified uses a non-default data directory, pass the same `--data-dir` value to `setup-tls` and `doctor`.
+
+## Sign in with the installing host owner's account
+
+On Unix, the default login checks PAM for the account running Unified. An
+isolated service can instead use the installing human's existing host account
+through the [Constellation owner-login bridge](https://github.com/microsoft/amplifier-constellation-instance/blob/main/ops/container/README.md).
+This keeps the service's OS identity, data directory and conversation ownership
+separate from the account checking the password.
+
+Run the canonical bridge as the intended host owner, with a private installation
+configuration and socket directory. Expose **only its `owner-login.sock`** through
+the container runtime's private Unix-socket forwarding. The guest socket must be
+owned by root or the Unified service account, with no group/other permissions,
+inside a private directory. Do not mount the host password database, copy a
+password, expose this socket on TCP, or share another installation's bridge.
+No optional bridge TCP routes are needed for login.
+
+Configure the existing Unified installation, then restart it at a safe boundary:
+
+```sh
+amplifier-unified --data-dir /path/to/instance config set host_pam '{owner: your-host-account, socket: /run/your-installation/owner-login.sock}'
+```
+
+The normal HTTPS login page accepts that one host username and its normal PAM
+password. The canonical bridge applies host authentication, account policy and
+attempt limits. A missing, unavailable or rejecting bridge denies the login;
+there is no fallback to the guest password. The app never saves or logs the
+submitted password. TLS, Origin, CSRF, signed-session cookies and control-token
+rules remain unchanged. This grants access to the same single-owner installation;
+it does not create a multi-user workspace, impersonate the user for tools, or
+change filesystem/agent permissions.
+
+Set `host_pam` to `null` and restart to restore the default process-owner PAM
+login. Windows keeps its existing native sign-in and does not accept this option.
+Existing browser sessions retain their normal lifetime through this setting
+change; changing the login backend is not a session-revocation operation.
 
 ## Trust the CA on each client
 
@@ -197,6 +306,392 @@ References: [Ubuntu trust-store guide](https://ubuntu.com/server/docs/how-to/sec
 and [Edge root-store policy history](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/microsoftrootstoreenabled).
 The obsolete Edge root-store policy is not a workaround.
 
+## Windows host: reach Unified from another device
+
+A Windows host has no password sign-in. On the PC, the launcher opens the
+browser. A browser on another device signs in with a one-use code that you make
+at the PC, or with a sign-in key that you made at the PC and saved. Remote
+access is off until you do the steps below, and you can turn it off again.
+Local use on the PC needs none of this.
+
+The steps use Tailscale. Amplifier listens only on this PC's own address,
+`127.0.0.1`, and a Tailscale forwarding rule sends connections from your other
+device to it. For a LAN address without Tailscale, see
+[LAN without Tailscale](#lan-without-tailscale).
+
+### Before you start on a Windows host
+
+- Use **Command Prompt** (`cmd.exe`) for every command in this section. The
+  commands are written for it, and it saves the certificate file as plain
+  text. Windows PowerShell 5.1 saves that file as UTF-16, and another device
+  may not accept it.
+- If Amplifier was set up with the Windows setup file, `amplifier-unified` is
+  not on the PATH. Use this full command in place of `amplifier-unified` in
+  every Amplifier command of this section, also in the two checks below:
+
+  ```
+  "%LOCALAPPDATA%\Amplifier\tools\amplifier-unified\Scripts\amplifier-unified.exe" --data-dir "%LOCALAPPDATA%\Amplifier\app" <command>
+  ```
+
+  Stop and start Amplifier there with **Stop Amplifier** and **Amplifier
+  Unified** in the Start menu.
+- With another kind of installation, pass the same `--data-dir` value to every
+  Amplifier command if Amplifier uses a non-default data directory.
+- Sign-in with a code needs a version after 0.98.7. Sign-in with a saved key
+  needs version 0.128.0 or a later one.
+  `amplifier-unified --version` shows the version.
+- `<port>` is the port that Amplifier uses. `amplifier-unified config get port`
+  shows it. Type the number in place of `<port>`, without the angle brackets.
+  Do the same for every other `<...>` in the commands.
+- Type each list in square brackets exactly as shown, with no space inside it.
+- Tailscale is installed on the PC and on the other device, and both are
+  connected to the same private Tailscale network (tailnet).
+- `<pc>.<tailnet>.ts.net` is the Tailscale name of the PC.
+  `tailscale status --json --peers=false` shows it as `DNSName`, with a dot at
+  the end that you leave out. The other device finds the PC by this name
+  through MagicDNS. If the name does not open on the other device, check that
+  MagicDNS is on for the tailnet
+  ([Tailscale: MagicDNS](https://tailscale.com/docs/features/magicdns)).
+
+### Turn remote access on
+
+Do steps 1 to 4 one after the other. After step 1, Amplifier cannot start
+again until step 3 is done: its certificate does not name the new address yet.
+If Amplifier does not start in between, do step 3 and start it again. To go
+back instead, set the lists back and then start Amplifier. With Tailscale, run
+the command of step 2 of [Turn remote access off](#turn-remote-access-off).
+With a LAN address, run the command of step 3 of
+[LAN without Tailscale](#lan-without-tailscale): it sets both lists back.
+
+1. Add the Tailscale address **after** the local address. The first address in
+   the list is the main one: when a connected service sends you back to
+   Amplifier after its sign-in, Amplifier uses the first address by default.
+
+   ```
+   amplifier-unified config set public_origins "[https://127.0.0.1:<port>,https://<pc>.<tailnet>.ts.net:<port>]"
+   ```
+
+2. Stop Amplifier.
+3. Make a certificate that includes the new address.
+
+   ```
+   amplifier-unified setup-tls force
+   ```
+
+4. Start Amplifier and open it on the PC. If Amplifier was set up with the
+   Windows setup file, Amplifier shows a message about the new certificate.
+   Windows then asks whether to install it. Select **Yes**. Windows then asks
+   whether to delete the earlier certificate, which Amplifier no longer uses.
+   Select **Yes** there too. If Windows does not ask the second question, see
+   [Certificates that `setup-tls force` replaced](#certificates-that-setup-tls-force-replaced).
+   With another kind of installation no question shows: the certificate
+   authority stays the same. Do not continue past a certificate warning in
+   the browser.
+5. Add the Tailscale forwarding rule.
+
+   ```
+   tailscale serve --bg --tcp=<port> tcp://127.0.0.1:<port>
+   ```
+
+6. Save the certificate in a file. Command Prompt saves the file in the folder
+   that its prompt shows, usually `C:\Users\<your name>`.
+
+   ```
+   amplifier-unified setup-tls export > amplifier-unified-ca.crt
+   ```
+
+7. Move the file to the other device and trust it there (see
+   [Trust the CA on each client](#trust-the-ca-on-each-client)).
+
+### Sign in from the other device
+
+1. On the PC, make a code.
+
+   ```
+   amplifier-unified browsers code
+   ```
+
+   The command shows the address to open and a code such as `ABCDE-FGHJK`.
+2. On the other device, open `https://<pc>.<tailnet>.ts.net:<port>`.
+3. Type the code within two minutes. Select **Sign in**.
+
+The code works once. A typing mistake does not use it up: check the code and
+type it again. After two minutes, or after one use, make a new code.
+
+If more than one address for other devices is configured, name the one that the
+other device opens: `amplifier-unified browsers code --origin https://<address>`.
+
+### Sign in with a saved key
+
+A code needs you at the PC each time. A sign-in key does not: you make it once
+at the PC, save it, and type it on any device, also when you are not at the PC.
+
+1. On the PC, make a key.
+
+   ```
+   amplifier-unified browsers key
+   ```
+
+   The command shows a key such as `ABCDE-FGHJK-LMNPQ-RSTUV-WXYZ2`, once.
+   Amplifier saves only a hash of the key and cannot show the key again.
+2. Save the key, for example in a password manager.
+3. On the other device, open the address of the PC. Type or paste the key in
+   the field **Sign-in key**. Select **Sign in with key**.
+
+The key works at every address for other devices, as often as you need it. A
+typing mistake does not end it. Amplifier must be running. It uses a new
+address only after the steps of [Turn remote access on](#turn-remote-access-on):
+the certificate must name the address, and Amplifier must start again. The key
+is a password for your Amplifier: everyone who has the key and can reach one of
+those addresses can sign in. Treat it as one.
+
+- To replace the key, run the command again. The earlier key stops working.
+  Browsers that are signed in stay signed in.
+- To remove the key without a new one, run
+  `amplifier-unified browsers key --remove`.
+- [Sign out all browsers from the PC](#sign-out-all-browsers-from-the-pc) also
+  ends the key.
+- If another person may have the key, sign out all browsers first. Then make a
+  new key. A new key alone does not sign out a browser that signed in with the
+  earlier key.
+
+### Sign out all browsers from the PC
+
+1. On the PC, sign out every browser, on the PC and on other devices.
+
+   ```
+   amplifier-unified browsers sign-out
+   ```
+
+2. Wait a few seconds. Until then, a new sign-in on the PC, a new code or a
+   new key opens nothing.
+3. To use Amplifier again, open it on the PC. For another device, make a new
+   code or a new key.
+
+If the command says that it could not confirm the sign-out, run it again.
+The command also drops every code that is not used yet, and it ends a saved
+sign-in key. If it says that it could not confirm that the key is removed, run
+`amplifier-unified browsers key --remove`. There is no sign-out for one
+device. More: [Sign out all browsers](#sign-out-all-browsers).
+
+### Turn remote access off
+
+1. Remove the Tailscale forwarding rule. From this moment no device reaches
+   Amplifier through Tailscale.
+
+   ```
+   tailscale serve --tcp=<port> off
+   ```
+
+2. Remove the Tailscale address.
+
+   ```
+   amplifier-unified config set public_origins "[https://127.0.0.1:<port>]"
+   ```
+
+3. Stop Amplifier. Then start it again. Amplifier now refuses the Tailscale
+   address, and no code can be made.
+4. Sign out all browsers, so that no sign-in from another device stays valid
+   if you turn remote access on again later. This also signs out the browser
+   on this PC.
+
+   ```
+   amplifier-unified browsers sign-out
+   ```
+
+5. Wait a few seconds. Then open Amplifier again on the PC.
+
+The certificate still names the Tailscale address. That gives nothing to
+anyone: Amplifier refuses the address. For a certificate without it, stop
+Amplifier, run `amplifier-unified setup-tls force` and start Amplifier. On a PC
+that was set up with the Windows setup file, Windows then asks about the
+certificates again, as in step 4 of
+[Turn remote access on](#turn-remote-access-on).
+
+### Certificates that `setup-tls force` replaced
+
+This is for a PC that was set up with the Windows setup file. Each
+`amplifier-unified setup-tls force` there makes a new certificate named
+"Amplifier Unified (this PC only)". Windows keeps the earlier one in your list
+of trusted root certificates until it is deleted. Nobody can use an earlier
+certificate: no signing key exists for it, and it names only addresses of this
+PC.
+
+The Windows questions about an earlier certificate come from the Start-menu
+entries of the PC. A PC whose Start-menu entries are from a setup file that did
+not have these questions yet does not ask them. The end of this section says
+what stays on such a PC.
+
+- `setup-tls force` saves the certificate that it replaces in the file
+  `replaced-roots.pem`, in the folder `app\config\tls` of the installation.
+  The file holds certificates only, no key.
+- When you open Amplifier after `setup-tls force`, Windows asks one question
+  for the new certificate and one question for each earlier certificate that
+  it still holds. That is normally two questions. Amplifier's message before
+  them gives the number of questions. It gives the thumbprint of the new
+  certificate and of up to five earlier ones.
+- **No** to a deletion keeps that certificate. Windows asks about it again
+  after your next **Yes** to install Amplifier's certificate, for example
+  after the next `setup-tls force`. It also asks at an uninstall.
+- When you uninstall Amplifier, Windows asks one question for each of
+  Amplifier's certificates that it holds: the current one and each earlier one.
+  That is normally one question. If there are more, Amplifier's first question
+  gives the number.
+- Amplifier asks Windows to delete only a certificate that this file names,
+  that has the fixed form of Amplifier's own certificate, and that Windows
+  holds exactly. It never finds a certificate by its name, and it never asks
+  about another certificate.
+- The file never loses a certificate that Windows may still hold. It has room
+  for about 50. If it is full, `setup-tls force` first drops the ones that
+  Windows no longer holds. If it is still full, the command makes no new
+  certificate and says so. Delete earlier certificates with the steps below,
+  then run the command again.
+
+**To see which certificates are Amplifier's**, run this. Use the full command
+of [Before you start on a Windows host](#before-you-start-on-a-windows-host)
+in place of `amplifier-unified`.
+
+```
+amplifier-unified setup-tls status
+```
+
+On a PC that was set up with the Windows setup file, the output ends like
+this:
+
+```
+Thumbprint in Windows (SHA-1): AE04AE23 D93C087C D02B5D4F 20FF6449 23D284D5
+Earlier certificates that Windows still holds: 1
+  F1B8CACF 2815A074 8B2F3F3A B793CFB2 41A5ECAA
+```
+
+The first line is the certificate that Amplifier uses now. Keep it. Each line
+below the count is an earlier certificate of this installation that Windows
+still holds. You can delete those, and only those.
+
+**To delete an earlier certificate yourself:**
+
+1. Press the Windows key and **R**, type `certmgr.msc` and press Enter.
+2. Open **Trusted Root Certification Authorities**, then **Certificates**.
+3. Double-click a certificate named "Amplifier Unified (this PC only)". Select
+   the **Details** tab and look at **Thumbprint**. Windows can show the 40
+   characters in small letters and without spaces.
+4. If that thumbprint is on a line below "Earlier certificates that Windows
+   still holds" in the output above, close the window and delete the
+   certificate. Windows asks you to confirm.
+5. Do steps 3 and 4 for each certificate of that name.
+
+Leave every other certificate, also one of the same name. Do not delete a
+certificate because of its name. Do not delete one because the command shows
+no thumbprint, or because it says that it could not read something: nothing is
+then known about that certificate.
+
+A certificate of that name that is on no such line can be the one that an
+Amplifier installation uses now, in this folder or in another folder of your
+account. It can also be one that a version before this change replaced. No
+file names those, and Amplifier cannot tell the two apart. A certificate that
+stays does no harm: no signing key exists for it, and it names only addresses
+of this PC.
+
+Two kinds of earlier certificate stay after `setup-tls force`:
+
+- one that a version before this change replaced. No file names it, and the
+  steps above do not delete it.
+- one on a PC whose Start-menu entry is from a setup file before this change.
+  The file names it, and Windows asks only the first question. The status
+  command lists it, so the steps above delete it. An uninstall with a later
+  Start-menu entry also asks about it.
+
+If you deleted the certificate that Amplifier uses now, open Amplifier from the
+Start menu. Windows asks whether to install it again. Select **Yes**.
+
+### LAN without Tailscale
+
+These steps are not measured on a Windows host. They differ from the steps
+above in three places.
+
+1. In step 1 of "Turn remote access on", use the LAN address of the PC, and
+   add it to `bind` in the same command. Keep `127.0.0.1` first in both lists:
+   the PC itself uses it.
+
+   ```
+   amplifier-unified config set public_origins "[https://127.0.0.1:<port>,https://<LAN address>:<port>]" bind "[127.0.0.1,<LAN address>]"
+   ```
+
+   Use a LAN address that does not change. If the PC gets another address,
+   Amplifier does not start; do these steps again with the new address.
+2. In place of step 5, an administrator adds a Windows Firewall rule that lets
+   TCP port `<port>` in, for private networks only. Amplifier does not add
+   this rule and does not ask for administrator rights.
+3. To turn remote access off, do these four things in this order. The
+   administrator removes the firewall rule. Set both lists back with the
+   command below. Stop Amplifier and start it again. Sign out all browsers
+   with `amplifier-unified browsers sign-out`, wait a few seconds, and open
+   Amplifier again on the PC.
+
+   ```
+   amplifier-unified config set public_origins "[https://127.0.0.1:<port>]" bind "[127.0.0.1]"
+   ```
+
+On the other device, open `https://<LAN address>:<port>`.
+
+### What is measured, and limits
+
+Measured on Windows 11 with Tailscale 1.104.5 from an ordinary account: the
+forwarding rule needs no administrator and no firewall rule, the other device
+receives Amplifier's own certificate, and the same account removes the rule
+again.
+
+Not measured: these steps from start to end on a PC that was set up with the
+Windows setup file; a real phone; a Windows restart with the forwarding rule in
+place; a tailnet with MagicDNS off; the LAN steps; the Windows question about
+an earlier certificate on a real PC (a test computer cannot answer it; the
+calls behind it are measured on a private test list of certificates).
+
+- Never use Tailscale Funnel. It puts the address on the public internet.
+- `tailscale cert` is not used. It publishes the name of the PC in a public
+  certificate log for good.
+- Each code is for one address, lasts two minutes and works once. Wrong codes
+  do not lock anyone out; see the
+  [design](design/native-windows-installation.md#remote-browser-sign-in-on-a-windows-host).
+- The code command and the key command have no Start-menu entry and no button
+  in the app. They need a terminal.
+- A sign-in lasts seven days (`session_ttl_seconds`). After that, the device
+  signs in again with a code or with the key.
+- The key was not tried with a password manager. The key field is a password
+  field, so that a password manager can save and fill the key.
+- Linux, macOS and WSL hosts do not use codes or keys. Sign in there with the
+  host account password on the sign-in page.
+
+## Sign out all browsers
+
+To end every browser session on every device at once, for example after a
+phone is lost, run this on the host as the account that owns Unified:
+
+```sh
+amplifier-unified browsers sign-out
+```
+
+Pass the same `--data-dir` value if Unified uses a non-default data directory.
+The command saves a time in the owner's private configuration
+(`config/auth/session-epoch`). It needs no running host, no password and no
+network request: the ability to write that private folder is the authority.
+A running host applies the change within a few seconds. It then refuses every
+session from before that time, drops pending sign-in tickets and codes, and ends open
+live-update connections so that a signed-out browser cannot keep watching.
+On a Windows host it also refuses a saved sign-in key from before that time.
+A sign-in ticket, code or key that is made or used during those few seconds opens
+no session, so that one from before the sign-out cannot outlast it. Wait a few
+seconds after the command. Then open Amplifier again on the PC, or make a new
+code for another device.
+If the command says that it could not confirm the sign-out, run it again.
+Sign in again in the usual way for your platform.
+
+Limits: this signs out **all** browsers; there is no sign-out for one device.
+Connected terminals, apps and devices with their own access are not browser
+sessions and stay connected; remove those in the app. The saved time never
+moves backward. If the record is damaged, the host signs everyone out once and
+repairs it.
+
 ## Keep the host running
 
 On Linux, including a WSL distribution with systemd enabled, install and manage
@@ -242,6 +737,24 @@ Foreground `serve` announces the listener and schedules browser opening only
 after all configured addresses bind successfully. An occupied port, unavailable
 address or permission refusal gives a specific next step. It does not stop an
 existing process, choose another interface, or change the saved configuration.
+Name-resolution failures give hostname guidance rather than a port-conflict
+diagnosis. A configured name may use its available address family, but success
+for one configured entry never substitutes for another unavailable entry.
+
+The CLI acquires and holds the actual listening sockets before settings migration
+or application construction. A bind failure therefore starts no app controllers
+and creates no new app diagnostic capture. Every held socket is released on a
+failed start; successful startup transfers the same sockets to the HTTP server
+without closing and rebinding. TCP connections may queue during construction:
+a TCP connect alone is **not** readiness. Continue to use the authenticated
+HTTP(S) health checks above. Later application/TLS/filesystem failures keep their
+own identity rather than being reported as bind errors.
+
+Service-manager retry policies are unchanged, including launchd's `KeepAlive`.
+An unavailable VPN address still causes failed starts until it returns or the
+operator deliberately changes the configuration or stops the service. This fix
+does not suppress process retries, rewrite service definitions or repair/delete
+historical failed-start captures.
 
 If the generated definition differs, rerun the same install command with `--replace` to save a timestamped private backup and restart with the new definition. The command reports the backup location. Custom service files are preserved unless `--replace` is explicit; review them before replacing. Expected service setup errors are reported without a Python traceback and do not undo a separately completed package installation.
 

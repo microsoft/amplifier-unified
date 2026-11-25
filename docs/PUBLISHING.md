@@ -62,8 +62,10 @@ restart, prior listeners are not treated as live. Inspect the status and receipt
 before deliberately stopping or removing an uncertain local deployment. A new
 deploy requires a fresh explicit action against the current revision.
 
-The portable `amplifier_publishing` package owns immutable files, lifecycle
-transitions, receipts, and the loopback HTTP adapter. It imports no app code.
+The public [amplifier-publishing](https://github.com/microsoft/amplifier-publishing)
+package owns immutable files, lifecycle transitions, receipts, and the loopback
+HTTP adapter. It imports no app code. Unified consumes an explicitly selected
+published artifact; see the [selection guide](../components/README.md#select-a-publishing-artifact).
 `amplifier_web.publishing` adds task execution-folder confinement, agent calling
 task checks, local-host metadata, and action schemas. The frontend calls those
 same actions. No content is served from the app's authenticated origin.
@@ -159,7 +161,7 @@ The portable Publisher now supports prospective body policy, one explicit pin
 primitive, current availability and availability-aware backups. These are Python
 library APIs; automatic expiry, the app's Storage/Publishing controls and remote
 protocol support are not yet connected. Existing app behavior stays in place.
-See [the library contract](../amplifier_publishing/README.md#prospective-body-retention-and-pins).
+See [the library contract](https://github.com/microsoft/amplifier-publishing/blob/main/src/amplifier_publishing/README.md#prospective-body-retention-and-pins).
 
 Under an explicit future policy, two prior successful releases have a default
 30-day automatic rollback window. `previousReleaseId` remains historical; current

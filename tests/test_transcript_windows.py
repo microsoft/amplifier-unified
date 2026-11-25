@@ -47,8 +47,8 @@ async def test_bound_selection_reads_only_window_without_canonical_merge(tmp_pat
     await service.history.load('app')
     assert session == original
     overlay = service.history.windows.project(session)
-    assert len(overlay['messages']) == 100
-    assert overlay['messages'][0]['text'] == '140'
+    assert len(overlay['messages']) == 20
+    assert overlay['messages'][0]['text'] == '220'
     assert all(row['displayOnly'] and 'nativeIndex' not in row for row in overlay['messages'])
     assert not overlay['historyLoading']
     assert overlay['sharedHistoryOffset'] is None
@@ -56,7 +56,8 @@ async def test_bound_selection_reads_only_window_without_canonical_merge(tmp_pat
     assert overlay['messageWindow']['globalInputUniqueness'] == 'unknown'
     first = copy.deepcopy(overlay)
     older = await service.history.windows.read('app', before=overlay['messageWindow']['before'])
-    assert older['items'][0]['text'] == '40'
+    assert len(older['items']) == 100
+    assert older['items'][0]['text'] == '120'
     assert service.history.windows.project(session) == first
 
 
@@ -74,6 +75,33 @@ async def test_web_owned_saved_ids_remain_actionable_without_native_decode(tmp_p
     assert view['nativeContinuation']['status'] == 'available'
     assert not view['messages'][0].get('displayOnly')
     assert session == original
+
+
+@pytest.mark.asyncio
+async def test_initial_saved_render_budget_keeps_all_older_messages_and_authority(tmp_path):
+    service, session = service_for(tmp_path, managed=False)
+    session.update(nativeProject=None, messages=[
+        {'id': str(i), 'role': 'user' if i % 2 == 0 else 'assistant',
+         'text': f'Message {i}\n' + '| example | result |\n' * 180,
+         'attachments': [{'id': f'attachment-{i}'}]} for i in range(240)],
+        interruption={'id': 'original-stop'}, interruptionRevision=7,
+        task={'id': 'owned-task', 'status': 'paused'})
+    original = copy.deepcopy(session)
+    view = service.history.windows.project(session)
+    assert [row['id'] for row in view['messages']] == [str(i) for i in range(220, 240)]
+    assert len(json.dumps(view).encode()) < 100_000
+    assert view['messages'][-1]['attachments'] == [{'id': 'attachment-239'}]
+    ids = [row['id'] for row in view['messages']]
+    page = view['messageWindow']
+    sizes = []
+    while page['hasEarlier']:
+        page = await service.history.windows.read('app', before=page['before'])
+        sizes.append(len(page['items']))
+        ids = [row['id'] for row in page['items']] + ids
+    assert sizes == [100, 100, 20]
+    assert ids == [str(i) for i in range(240)]
+    assert session == original
+    assert service.history.windows.project(session) == view
 
 
 @pytest.mark.asyncio
@@ -196,7 +224,7 @@ async def test_cold_web_saved_resource_keeps_canonical_ids_without_any_field_hyd
         monkeypatch.setattr(cold_display, 'load', lambda *args: (_ for _ in ()).throw(AssertionError('Full cold body load')))
         await service.history.load('app')
         view = service.history.windows.project(cold)
-        assert [row['id'] for row in view['messages']] == [str(i) for i in range(140, 240)]
+        assert [row['id'] for row in view['messages']] == [str(i) for i in range(220, 240)]
         assert not any(row.get('displayOnly') for row in view['messages'])
         assert dict.get(cold, '_coldFields')['messages'] == reference
         detail = view['messages'][-1]['textDetail']
@@ -210,7 +238,7 @@ async def test_cold_web_saved_resource_keeps_canonical_ids_without_any_field_hyd
         await service.history.windows.load('app')
         view = service.history.windows.project(cold)
         older = await service.history.windows.read('app', before=view['messageWindow']['before'])
-        assert [row['id'] for row in older['items']] == [str(i) for i in range(40, 140)]
+        assert [row['id'] for row in older['items']] == [str(i) for i in range(120, 220)]
     finally:
         db.close()
 
@@ -400,7 +428,7 @@ async def test_saved_window_reactions_are_current_exact_id_annotations_without_b
     class PointAnnotations(dict):
         def items(self):
             raise AssertionError('Do not scan unrelated message annotations')
-    session['messageAnnotations'] = PointAnnotations({'1': {'reactions': ['❤️'],
+    session['messageAnnotations'] = PointAnnotations({'81': {'reactions': ['❤️'],
         'attribution': {'caption': 'Untrusted'}, 'text': 'Not the body'}, '0': {'reactions': ['👍']}})
     db = sqlite3.connect(tmp_path / 'state.sqlite3')
     try:
@@ -415,9 +443,9 @@ async def test_saved_window_reactions_are_current_exact_id_annotations_without_b
         await service.history.windows.load('app')
         first = service.history.windows.project(session)
         row = first['messages'][0]
-        assert row['id'] == '1' and row['text'] == 'Message 1' and row['reactions'] == ['❤️']
+        assert row['id'] == '81' and row['text'] == 'Message 81' and row['reactions'] == ['❤️']
         assert 'attribution' not in row and first['messageWindow']['hasEarlier']
-        session['messageAnnotations']['1']['reactions'] = []
+        session['messageAnnotations']['81']['reactions'] = []
         current = service.history.windows.project(session)
         assert current['messages'][0]['reactions'] == []
         assert row['reactions'] == ['❤️'], 'Published rows must stay detached'

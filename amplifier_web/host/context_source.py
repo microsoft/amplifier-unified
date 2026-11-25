@@ -56,7 +56,8 @@ def _files(package):
 
 def _git(root, *args):
     return subprocess.run(['git', '-C', str(root), *args], capture_output=True,
-                          text=True, timeout=1, check=False)
+                          text=True, timeout=1, check=False,
+                          creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
 
 
 class _InstalledSource:

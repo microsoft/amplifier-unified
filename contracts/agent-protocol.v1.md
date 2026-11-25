@@ -20,14 +20,29 @@ optional capability -> negotiated extension or explicit unavailable result
 ```
 
 [Protocol fit](../docs/architecture/protocol-fit.md) contains the mapping inventory.
+The [supported pilot record](../docs/validation/acp-supported-composition.md)
+separates exact-version acceptance from these promises and later source review.
 
 ACP's session is not assumed to be the experience's shared conversation. Adapters
 own that mapping and their context/memory strategy, including whether one instance
 uses separate native contexts or retrieves connected conversations into a shared
 working context. Standard protocol behavior remains intact; no invented ACP field
-is required merely by this distinction. [HP7](host-protocol.v1.md) owns the shared
-conversation boundary. External work or an event response need not produce a chat
-reply; an agent's supported triggers and outcome channels belong to its implementation.
+is required merely by this distinction. [HP7](host-protocol.v1.md) maps the shared
+conversation boundary within Unified. External work or an event response need not
+produce a chat reply; an agent's supported triggers and outcome channels belong to
+its implementation.
+
+For Constellation participation, the
+[Agent Instance contract](https://github.com/microsoft/amplifier-constellation/blob/main/contracts/agent-instance.md)
+owns the continuing participant's outward promises. AP governs Unified's ACP
+adapter and host boundary; the [composition mapping](../docs/architecture/VISION.md#constellation-boundaries)
+identifies the other owners without requiring this adapter to implement every role.
+
+The [optional Unified public-agent profile](../docs/architecture/unified-acp-backend.md#optional-unified-public-agent-instance-profile-candidate)
+maps continuing identity, original-input inspection and existing task controls
+without redefining ACP sessions or cancel. It is a candidate serving profile:
+plain ACP is unchanged, source attribution grants no authority, and its scoped
+evidence does not imply every Agent Instance or multi-tenant promise is qualified.
 
 ## The promises
 
@@ -49,12 +64,38 @@ reply; an agent's supported triggers and outcome channels belong to its implemen
    experience conversation can have several agent participants without merging
    their native identities or becoming owned by one of them. ACP loading/resuming and lock
    acquisition preserve that authority; UI attachment neither changes engines nor takes ownership.
+   A live Amplifier worker retains its exclusive writer while busy or idle. Idle
+   retention, replacement and takeover save and retire that owner before a fresh
+   worker acquires it; there is no ownerless live parking or hot reacquisition.
    Broken: a new viewer starts a competing native writer. Affected: every session participant.
+
+   Experience-owned public context may be retrieved through standard MCP supplied
+   at the ACP boundary. Current room membership and the saved participant/source
+   binding authorize reads without another approval gate. Transport credentials
+   confer no other room, private history or host control authority. Source-owned
+   paging and text continuation preserve attribution and explicit omissions;
+   revocation is checked before reading and before returning an asynchronous result.
+   Absent HTTPS configuration or unadvertised HTTP capability leaves ordinary
+   chat unchanged. A rejected advertised attachment remains an explicit failure;
+   it does not silently remove tools or create a replacement execution session.
 
 4. **AP4 — Translate lifecycle faithfully.** Prompt completion, cancellation,
    permissions, errors, tool progress and resource callbacks retain upstream meanings.
    Capabilities without a faithful mapping are explicit limitations or negotiated extensions.
    Broken: an admission response is treated as a finished turn. Affected: clients and automation.
+
+   Optional conditional retirement is distinct from Stop and session closure.
+   A host may close an idle attachment only after its exact native owner
+   acknowledges that the attached execution has saved and retired, with no
+   remaining work using the connection's tools. A completed prompt, advertised
+   resume support or inherited wrapper metadata is not that acknowledgement.
+   Refused or uncertain retirement retains the attachment and its authority;
+   timeout never authorizes killing work. New input and retirement are fenced
+   against each other. Durable conversation, endpoint, workspace and native
+   session identities survive; waking uses exact resume without replay.
+   Automatic cleanup follows the owner's existing warm-worker retention policy,
+   not every completed turn. Advisory retention requests require a fresh policy
+   and native-owner check and confer no closure authority.
 
 5. **AP5 — Keep advanced behavior optional.** Standard config options expose supported
    session controls. Composition administration and advanced runtime controls have
@@ -72,6 +113,11 @@ Cross-engine session conversion or identical advanced features in every peer; pr
 only with explicit semantics and independent acceptance. No new kernel protocol dependency.
 
 ## How the kit checks it
+
+The [installed Unified backend](../docs/architecture/unified-acp-backend.md)
+applies AP3/AP4 to persistent host attachment: connection loss releases observation,
+while the host retains admitted work. Explicit Stop and host shutdown remain
+distinct operations. Multiple attachments do not acquire competing native writers.
 
 - AP1/AP4: run our host with another ACP agent and our agent in an independent client.
 - AP2/AP5: compare every affected module-class implementation and advertised control.

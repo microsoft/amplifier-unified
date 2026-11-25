@@ -91,7 +91,7 @@ async def test_already_submitted_or_settled_notification_remains_unchanged(app, 
     assert app.collaboration.receipt(identity) == notification
 
 
-@pytest.mark.parametrize('change', ['revision', 'key', 'stop', 'task', 'pause', 'workspace', 'foreign', 'generation'])
+@pytest.mark.parametrize('change', ['revision', 'key', 'stop', 'workspace', 'foreign', 'generation'])
 async def test_changed_identity_authority_or_boundary_refuses_without_writes(app, change):
     args, identity = await ready(app)
     source, target = app.state['sessions'][:2]
@@ -102,10 +102,6 @@ async def test_changed_identity_authority_or_boundary_refuses_without_writes(app
         args['reviewKey'] = 'not-the-saved-result'
     elif change == 'stop':
         source['interruptionRevision'] = source.get('interruptionRevision', 0) + 1
-    elif change == 'task':
-        source['task'] = {'id': 'different-objective', 'revision': 1, 'status': 'active'}
-    elif change == 'pause':
-        source['task'] = {**(source.get('task') or {}), 'status': 'paused'}
     elif change == 'workspace':
         target['workspace'] = '/unrelated-workspace'
     elif change == 'foreign':

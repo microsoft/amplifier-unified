@@ -26,6 +26,12 @@ assessment below when the supported Core wheel is installed.
 - Allowlisted diagnostics identify the module and optional instance, with distinct
   schema/configuration reasons. Raw exceptions and configuration values are not
   included. Feedback exports reason counts, not account identities.
+- Connection verification compares the configured account with the mounted
+  provider without treating the host's opt-in recording default as a connection
+  override. Only `raw`/`raw_debug: true` carrying the existing row-level host-default
+  provenance is removed from a copied identity input; recording remains enabled
+  on the actual plan. Explicit recording settings and all other config,
+  credential, endpoint, source and instance checks remain intact.
 
 ## Original isolation prerequisite assessment (historical)
 
@@ -58,3 +64,15 @@ before this change and prepare successfully afterward. Tests cover endpoint
 identity, missing endpoint/secret, nested atomicity, cancellation, sanitization,
 setup account binding, and the actual isolated probe entry point. No live provider
 request, Spark session, provider installation, or production adoption is used.
+
+`tests/test_provider_connection_identity.py` retains a separate-process
+configured-catalog to recording/materialization to real verification-handler
+regression. It covers host defaults versus explicit recording values, changed
+account/endpoint/source refusal, post-capture credential rotation, instance
+refusal and nonmutation of the mounted plan. The optional
+`tests/fixtures/next_message_native_probe.py --connection-binding` lane uses a
+local offline provider under a recording-supported module identity, real
+nonempty configured binding and worker verification across bundle replacements,
+with history, Stop and no-replay assertions. It is not live-provider or native
+macOS qualification. A historical generic verification failure alone does not
+establish that recording was enabled or explain its cause.

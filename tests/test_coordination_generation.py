@@ -108,6 +108,58 @@ async def test_two_distinct_roots_without_grant_inherit_and_return_once(app):
     assert not source.get("approvals")
 
 
+@pytest.mark.parametrize('complete_after_capture', [False, True])
+async def test_fresh_creation_keeps_completed_history_but_not_new_completion(app, monkeypatch, complete_after_capture):
+    from amplifier_web.task_continuity import publish_task_observation
+    from test_task_continuity import controls, create
+    source = app.state['sessions'][0]
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(app.data_dir))
+    native = controls(source['id'])
+    release = asyncio.Event()
+    original_finish = app.collaboration.finish_create
+    async def deferred_finish(identity):
+        await release.wait()
+        await original_finish(identity)
+    monkeypatch.setattr(app.collaboration, 'finish_create', deferred_finish)
+    try:
+        await create(native)
+        async def complete():
+            await native.perform('task.complete', {'commandId': 'finished-A', 'expectedRevision': 1,
+                'condition': 'Ship the verified report', 'evidence': ['Verified original result']})
+            publish_task_observation(app, source['id'], native.tasks.canonical_snapshot())
+        if not complete_after_capture:
+            await complete()
+        else:
+            publish_task_observation(app, source['id'], native.tasks.canonical_snapshot())
+        # A fresh authenticated root generation owns this request, not task A's goal.
+        await app.on_runtime_event('runtime.generation', {'sessionId': source['id'],
+            'rootSessionId': source['id'], 'event': 'generation.started',
+            'generation_id': 'fresh-B', 'interruptionRevision': 0})
+        app.collaboration.observe(source, 'runtime.status', {'event': 'input.delivered', 'inputId': 'fresh-B-input'})
+        result = await agent(app, source, 'coordination.create',
+            {'title': 'Fresh work B', 'text': 'Do not reopen A'}, 'fresh-create-B')
+        assert result['accepted'] and result['delivery'] == 'creation_pending'
+        if complete_after_capture:
+            await complete()
+        saved = native.state_path().read_bytes()
+        release.set()
+        await until(lambda: app.collaboration.receipt('fresh-create-B')['delivery'] != 'creation_pending')
+        receipt = app.collaboration.receipt('fresh-create-B')
+        if complete_after_capture:
+            assert receipt['delivery'] == 'suppressed'
+            assert not app.runtime.inputs
+            assert not any(row['id'] == result['sessionId'] for row in app.state['sessions'])
+        else:
+            await until(lambda: len(app.runtime.inputs) == 1)
+            assert app.runtime.inputs[0][1] == result['initialInputId']
+        assert native.tasks.record()['status'] == 'completed'
+        assert native.state_path().read_bytes() == saved
+        assert not await native.tasks.continuation_allowed()
+    finally:
+        release.set()
+        await native.close()
+
+
 @pytest.mark.parametrize("transport", [
     {"_runtimeSessionId": "foreign-child"},
     {"_generationId": "stale"},
@@ -371,7 +423,7 @@ async def test_outer_drain_cancellation_persists_not_sent_and_leaves_next_input(
 
 
 @pytest.mark.parametrize("state", ["ready", "stopped", "paused"])
-async def test_warmth_releases_only_existing_guarded_queue_once(app, state):
+async def test_warmth_waits_for_guarded_idle_to_release_existing_queue_once(app, state):
     source, target = app.state["sessions"]
     target["status"] = "ready"
     await agent(app, source, "coordination.send", {"sessionId": target["id"], "text": "queued", "mode": "queue"}, "warm-queue")
@@ -379,23 +431,41 @@ async def test_warmth_releases_only_existing_guarded_queue_once(app, state):
     assert not app.runtime.inputs
     if state == "stopped":
         await app.dispatch("conversation.stop", {"sessionId": target["id"]})
+        await asyncio.gather(*list(app.tasks))
+        assert target["status"] == "stopped"
     elif state == "paused":
         target["task"] = {"id": "paused-task", "revision": 1, "status": "paused"}
     before = copy.deepcopy(target.get("collaborationGeneration"))
+    queued = copy.deepcopy(app.collaboration.receipt("warm-queue"))
+    interruption = target.get("interruptionRevision", 0)
+    status = target["status"]
     for _ in range(2):
         await app.on_runtime_event("runtime.warmth", {"sessionId": target["id"], "status": "warm"})
     await asyncio.gather(*list(app.tasks))
     assert target.get("collaborationGeneration") == before  # warmth itself invents no turn
+    assert target["status"] == status
+    assert not app.runtime.inputs
+    assert app.collaboration.receipt("warm-queue") == queued
+    # Explicit queue waits for the real idle boundary, not worker availability.
+    # Even a late idle after Stop or task pause cannot bypass admission guards.
+    await app.on_runtime_event("runtime.status", {"sessionId": target["id"], "status": "idle"})
+    await asyncio.gather(*list(app.tasks))
+    assert target.get("interruptionRevision", 0) == interruption
     if state == "ready":
-        assert len(app.runtime.inputs) == 1
+        assert [row[:2] for row in app.runtime.inputs] == [(target["id"], "warm-queue")]
         assert app.collaboration.receipt("warm-queue")["delivery"] == "accepted"
     else:
         assert not app.runtime.inputs
-        assert app.collaboration.receipt("warm-queue")["delivery"] in {"suppressed", "queued"}
-    # Passive warmth without a new queued input never sends a second one.
+        assert app.collaboration.receipt("warm-queue")["delivery"] == "suppressed"
+        if state == "paused":
+            assert target["task"]["status"] == "paused"
+    settled = copy.deepcopy(app.collaboration.receipt("warm-queue"))
+    # Duplicate idle and passive warmth never send or revive the same input.
     await app.on_runtime_event("runtime.warmth", {"sessionId": target["id"], "status": "warm"})
+    await app.on_runtime_event("runtime.status", {"sessionId": target["id"], "status": "idle"})
     await asyncio.gather(*list(app.tasks))
     assert len(app.runtime.inputs) == (1 if state == "ready" else 0)
+    assert app.collaboration.receipt("warm-queue") == settled
 
 
 async def test_idle_history_and_terminal_unknown_creation_do_not_exhaust_cap(app):

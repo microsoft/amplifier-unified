@@ -137,9 +137,10 @@ async def test_host_send_separates_history_configuration_and_delivery(clock, tmp
         history, refresh = service.history.ensure_loaded, service.refresh_configuration
         publish = service._publish_changes
 
-        async def load(sid):
+        async def load(sid, *, hydrate=True):
+            assert hydrate is False
             clock[0] += 2
-            return await history(sid)
+            return await history(sid, hydrate=hydrate)
 
         async def configuration(sid):
             clock[0] += 3
@@ -178,7 +179,8 @@ async def test_history_refusal_is_measured_without_runtime_work(clock, tmp_path,
     try:
         await service.dispatch('session.create', {'title': 'Synthetic chat'})
 
-        async def load(sid):
+        async def load(sid, *, hydrate=True):
+            assert hydrate is False
             clock[0] += 2
             raise ValueError('private history refusal')
 

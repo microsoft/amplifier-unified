@@ -15,6 +15,10 @@ def child_context(parent, key, context):
             return 'ollama-images'
         if key == 'result' and parent.get('type') == 'image_generation_call':
             return ('image', 'base64', None)
+        if key == 'output' and parent.get('type') in {'function_call_output', 'custom_tool_call_output'}:
+            return 'blocks'
+        if key == 'output' and parent.get('type') == 'computer_call_output':
+            return 'computer-output'
     if context == 'block':
         kind = parent.get('type')
         if key == 'image_url' and kind == 'input_image':
@@ -27,14 +31,19 @@ def child_context(parent, key, context):
             return 'blocks'
     if context == 'image-url' and key == 'url':
         return ('image', 'data-url', None)
+    if context == 'computer-output' and key == 'image_url' and parent.get('type') == 'computer_screenshot':
+        return ('image', 'data-url', None)
     if context == 'image-source' and key == 'data' and parent.get('type') == 'base64':
         media_type = parent.get('media_type')
         if isinstance(media_type, str) and media_type.startswith('image/'):
             return ('image', 'base64', media_type)
-    if context == 'gemini-message' and key == 'parts':
+    if context in {'gemini-message', 'gemini-function-response'} and key == 'parts':
         return 'gemini-parts'
-    if context == 'gemini-part' and key in {'inline_data', 'inlineData'}:
-        return 'inline-image'
+    if context == 'gemini-part':
+        if key in {'inline_data', 'inlineData'}:
+            return 'inline-image'
+        if key in {'function_response', 'functionResponse'}:
+            return 'gemini-function-response'
     if context == 'inline-image' and key == 'data':
         media_type = parent.get('mime_type', parent.get('mimeType'))
         if isinstance(media_type, str) and media_type.startswith('image/'):

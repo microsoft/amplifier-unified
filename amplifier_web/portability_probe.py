@@ -157,12 +157,13 @@ async def _probe(request):
     _runtime_transfer_fence()
     if request.get("source"):
         from amplifier_foundation import Bundle
+        from amplifier_web.source_imports import prepare
         previous_home = os.environ.get("AMPLIFIER_HOME")
         try:
             os.environ["AMPLIFIER_HOME"] = request["registryHome"]
             bundle = Bundle.from_dict({"bundle": {"name": "destination-execution-probe"},
                 "providers": [{"module": request["module"], "source": request["source"]}]})
-            await bundle.prepare(strict=True)
+            await prepare(bundle, strict=True)
         finally:
             if previous_home is None:
                 os.environ.pop("AMPLIFIER_HOME", None)
@@ -176,7 +177,10 @@ async def _probe(request):
         schema = await config_schema(schema_provider)
     finally:
         await _strict_close(schema_provider)
-    config = materialize_provider_config(request["config"], schema)
+    # This check is a model call. The provider's own state files belong in the
+    # shared home, as in a chat. AMPLIFIER_HOME names that home again here.
+    from amplifier_web.provider_state_files import with_state_files
+    config = with_state_files(request["module"], materialize_provider_config(request["config"], schema))
     previous_copilot = os.environ.get("COPILOT_AGENT_TOKEN")
     copilot = request["module"] == "provider-github-copilot" and config.get("github_token")
     if copilot:

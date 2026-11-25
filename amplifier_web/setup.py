@@ -250,10 +250,13 @@ class SetupManager:
         try:yield
         finally:self._config_snapshot=previous
 
-    def provider_rows(self,workspace):
+    def provider_rows(self,workspace,*,ordinary_only=False):
         config=self.config(workspace)
         rows=[]
-        for value in config.configured_connections:
+        # Settings lists every account; inference utilities must use the same
+        # ordinary inventory as catalog_key/probe_snapshot, before projection.
+        # Filtering public aliases afterwards can conflate distinct namespaces.
+        for value in config.configured_connections if ordinary_only else config.saved_connections:
             identity=value.get('id') or value.get('instance_id') or value['module'].removeprefix('provider-')
             raw=value.get('config',{})
             refs=[]
@@ -278,7 +281,7 @@ class SetupManager:
                 'authenticationRequired':needs_auth,'account':account,'accountConnected':connected,'credentialsConfigured':configured,'keySource':'environment' if (not refs and credential['available']) or any(isinstance(v,str) and v.startswith('${') for v in refs) else ('configuration' if refs else 'provider-managed'), 'enabled':value.get('enabled',True) and identity not in config.settings.get('configurator',{}).get('disabled',{}).get('providers',[])})
         return rows
 
-    async def discover_catalog(self, workspace, *, refresh=False, instance=None, selected_only=False):
+    async def discover_catalog(self, workspace, *, refresh=False, instance=None, selected_only=False, cache_only=False):
         """Configured connections only; all consumers share the host cache.
 
         A session's mounted/default/saved selection is not an inventory source.
@@ -287,7 +290,9 @@ class SetupManager:
         """
         from .provider_catalog import model_key
         with self.read_snapshot(workspace):
-            rows = [row for row in self.provider_rows(workspace) if row['enabled']
+            chat_ids = {row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-')
+                        for row in self.config(workspace).configured_connections}
+            rows = [row for row in self.provider_rows(workspace) if row['id'] in chat_ids and row['enabled']
                     and (not selected_only or row['id'] == instance)]
             for row in rows:
                 row['sharedCatalogKey'] = self.catalog_key({'id': row['id']}, workspace)
@@ -301,6 +306,8 @@ class SetupManager:
                 return row['sharedCatalogKey'], {'sharedCatalogKey':key[1], 'models':[],
                     'phase':'invalidated','supported':False,
                     'error':'This connection needs sign-in. Cached models are not available until it is reconnected.'}
+            if cache_only and not (refresh and (instance is None or instance == row['id'])):
+                return row['sharedCatalogKey'], self.catalog.entry(key)
             try:
                 await self.cached_probe('providers.models', {
                     'id': row['id'], 'refresh': refresh and (instance is None or instance == row['id'])
@@ -322,7 +329,7 @@ class SetupManager:
         entries = dict(await asyncio.gather(*(discover(row) for row in rows)))
         with self.read_snapshot(workspace):
             current = {row['id']: self.catalog_key({'id': row['id']}, workspace)
-                       for row in self.provider_rows(workspace) if row['enabled']
+                       for row in self.provider_rows(workspace) if row['id'] in chat_ids and row['enabled']
                        and (not selected_only or row['id'] == instance)}
         if current != {row['id']: row['sharedCatalogKey'] for row in rows}:
             raise ValueError('Configured connections changed during discovery. Reopen model settings.')
@@ -331,7 +338,7 @@ class SetupManager:
             row['info'] = metadata.get('info', {})
         return {'providers': rows, 'catalogs': entries}
 
-    def catalog_key(self,args,workspace,*,binding=False):
+    def catalog_key(self,args,workspace,*,binding=False,_legacy_visibility=False,_binding_pair=False):
         from .provider_catalog import configuration_key, connection_key
         config=self.config(workspace)
         row=next((row for row in config.configured_connections if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==args.get('id')),None)
@@ -346,9 +353,11 @@ class SetupManager:
             # host composition, even before any runtime receipt exists.
             # Do NOT apply this fallback to discovery reuse: an implicit probe
             # must still prove its installed implementation independently.
-            rows = [value for value in config.configured_connections if value.get('enabled', True)]
+            rows = [value for value in config.saved_connections if value.get('enabled', True)]
             source = provider_mount_sources(rows, config.settings).get(args.get('id'))
-        return identity(workspace,module,raw,source,home=self.home)
+        return identity(workspace,module,raw,source,home=self.home,
+            **({'_legacy_visibility':True} if binding and _legacy_visibility else {}),
+            **({'_binding_pair':True} if binding and _binding_pair else {}))
 
     async def cached_probe(self,action,args,workspace,*,_rotation_retry=True):
         from .provider_catalog import model_key, CatalogInvalidated, public_failure
@@ -437,17 +446,66 @@ class SetupManager:
         snapshot=self.probe_snapshot(action,args,workspace)
         module,raw,config,env=(snapshot[name] for name in ('module','raw','config','env'))
         credential_generation=snapshot['credentialGeneration']
-        command=self.probe_command or RuntimeManager()._command()[:-1]+[str(Path(__file__).with_name('provider_probe.py'))]
+        if action == 'suggestion.complete' and self.probe_command is None:
+            from .updates import active_release
+            from .runtime_environment import project_path, receipt_directory
+            from .suggestion_provider import qualified_source_matches
+            generation_id = active_release(self.home).get('current')
+            receipts = receipt_directory(self.home, generation_id)
+            if not (receipts / 'runtime-project.json').is_file():
+                return {'status': 'unsupported', 'suggestion': None, 'usage': None, 'cost': None,
+                        'reason': 'runtime_not_prepared'}
+            project = project_path(self.home, generation_id)
+            executable = project / '.venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+            if not executable.is_file():
+                return {'status': 'unsupported', 'suggestion': None, 'usage': None, 'cost': None,
+                        'reason': 'runtime_not_prepared'}
+            if snapshot['source']:
+                try:
+                    matches = qualified_source_matches(module, snapshot['source'],
+                        json.loads((receipts / 'runtime-installed.json').read_text()),
+                        json.loads((receipts / 'runtime-sources.json').read_text()),
+                        (receipts / 'runtime.toml').read_bytes())
+                except (OSError, ValueError, TypeError):
+                    matches = False
+                if not matches:
+                    return {'status': 'unsupported', 'suggestion': None, 'usage': None, 'cost': None,
+                            'reason': 'qualified_source_mismatch'}
+            # Already qualified interpreter and matching installed source only:
+            # unlike the setup command, this cannot run uv sync or prepare files.
+            command = [str(executable), str(Path(__file__).with_name('provider_probe.py'))]
+            snapshot['source'] = None
+        else:
+            command=self.probe_command or RuntimeManager()._command()[:-1]+[str(Path(__file__).with_name('provider_probe.py'))]
         probe_workspace=Path(workspace)
         while not probe_workspace.is_dir() and probe_workspace.parent!=probe_workspace:
             probe_workspace=probe_workspace.parent
         from .probe_diagnostics import communicate, stderr_tail, ProbeProcessFailure, HostProbeFailure
         from .probe_process import spawn, stop
-        process=await spawn(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,env=env,cwd=probe_workspace)
+        process=await spawn(*command,owned_git=True,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,env=env,cwd=probe_workspace)
         stderr_task=asyncio.create_task(stderr_tail(process.stderr))
         try:
             try:
-                output,stderr=await asyncio.wait_for(asyncio.gather(communicate(process,json.dumps({'action':action,'model':args.get('model'),**({'prompt':args['prompt']} if action=='naming.complete' else {}),'module':module,'config':config,'source':snapshot['source'],'fallbackSource':KNOWN_PROVIDER_SOURCES.get(module),'registryHome':snapshot['registryHome']}).encode()),stderr_task),90)
+                if action == 'suggestion.complete' and not args['_admit']():
+                    raise ValueError('Suggestion source changed before provider preparation.')
+                payload = json.dumps({'action':action,'model':args.get('model'),**({'prompt':args['prompt']} if action=='naming.complete' else {}),**({'transcript':args['transcript'], 'effort':args.get('effort'), **({'prompt':args['prompt']} if 'prompt' in args else {})} if action=='suggestion.complete' else {}),'module':module,'config':config,'source':snapshot['source'],'fallbackSource':KNOWN_PROVIDER_SOURCES.get(module),'registryHome':snapshot['registryHome']}).encode()
+                if action == 'suggestion.complete':
+                    # Keep stdin open for the final currentness handshake. No
+                    # provider call is authorized by the preparation payload.
+                    process.stdin.write(payload + b'\n')
+                    await process.stdin.drain()
+                    ready = await process.stdout.readline()
+                    if ready == b'{"suggestionReady":true}\n':
+                        output, stderr = await asyncio.gather(
+                            communicate(process, json.dumps({'admitted': bool(args['_admit']())}).encode() + b'\n'),
+                            stderr_task)
+                    else:
+                        # Unsupported setup can finish without requesting a
+                        # transport grant. Preserve its terminal typed result.
+                        remainder, stderr = await asyncio.gather(communicate(process, b''), stderr_task)
+                        output = ready + remainder
+                else:
+                    output,stderr=await asyncio.wait_for(asyncio.gather(communicate(process,payload),stderr_task),90)
             except TimeoutError:
                 raise HostProbeFailure('timeout') from None
             try:result=json.loads(output)
@@ -455,6 +513,9 @@ class SetupManager:
                 raise ProbeProcessFailure(process.returncode, stderr) from None
             if action!='providers.schema' and generation(module,raw)==credential_generation:
                 api_observation = action!='providers.models' or result.get('modelsProvenance')=='provider-api'
+                if action == 'suggestion.complete':
+                    # A typed utility failure is not an authenticated success.
+                    api_observation = result.get('suggestion', {}).get('status') in {'ready', 'empty'}
                 if (not result.get('error') and api_observation) or result.get('authenticationRequired') is True:
                     record(self.home,args['id'],credential_generation,authentication_required=result.get('authenticationRequired') is True)
             if result.get('error'):
@@ -464,6 +525,8 @@ class SetupManager:
                 error.diagnostic = result.get('diagnostic', {'stage':'probe','category':'ProviderError'})
                 raise error
             if process.returncode:raise ProbeProcessFailure(process.returncode, stderr)
+            if action=='suggestion.complete':
+                return result['suggestion']
             if action=='naming.complete':
                 if result.get('naming',{}).get('error'):raise ValueError(result['naming']['error'])
                 return {'text':result.get('naming',{}).get('text','')}
@@ -528,19 +591,38 @@ class SetupManager:
         identity=safe_name(args.get('id') or args.get('module','').removeprefix('provider-'))
         effective=self.config(workspace)
         def signature(config):
-            return fingerprint([config.providers,
-                [configuration_key(workspace,row['module'],row.get('config',{}),config.module_sources.get(row['module']) or row.get('source'),home=self.home) for row in config.providers],
+            return fingerprint([config.connections,
+                [configuration_key(workspace,row['module'],row.get('config',{}),config.module_sources.get(row['module']) or row.get('source'),home=self.home) for row in config.connections],
                 config.settings.get('configurator',{}).get('disabled',{}).get('providers',[]), config.settings.get('image_generation')])
         before=signature(effective)
-        existing=next((row for row in effective.providers if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==identity),None)
+        existing=next((row for row in effective.connections if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==identity),None)
         def mutate(settings):
             if image_mode is not None:
                 settings['image_generation']={'mode':image_mode}
-            rows=settings.setdefault('config',{}).setdefault('providers',[])
+            from .decision_namespace import connections, decision_only, key
+            from .decision_settings import catalogs
+            candidate = {'module': args.get('module') or (existing or {}).get('module'),
+                         'config': args.get('config', (existing or {}).get('config', {}))}
+            definitions = catalogs(unique=True)
+            previously_dedicated = any('provider' not in value and key(value) == key(existing or {})
+                                       for value in connections(effective.settings).values())
+            if (existing and not remove and
+                    ((previously_dedicated and candidate['module'] != existing['module']) or
+                     decision_only(existing, definitions) != decision_only(candidate, definitions))):
+                raise ValueError('Changing a saved connection between chat and decision-only roles needs a new connection.')
+            dedicated = decision_only(candidate, definitions) or previously_dedicated
+            if dedicated:
+                accounts = settings.setdefault('decision_models', {}).setdefault('connections', {})
+                account_key = key(existing) if existing else identity
+                rows = [accounts[account_key]] if account_key in accounts else []
+            else:
+                rows=settings.setdefault('config',{}).setdefault('providers',[])
             index=next((i for i,row in enumerate(rows) if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==identity),None)
             if remove:
                 if not existing: raise ValueError('Provider instance does not exist.')
                 row={'id':identity,'module':existing['module']}
+                if dedicated and existing.get('config', {}).get('chat_enabled') is False:
+                    row['config'] = {'chat_enabled': False}
             else:
                 module=safe_name(args.get('module') or (existing or {}).get('module',''))
                 if not module.startswith('provider-'): raise ValueError('Choose a provider module.')
@@ -600,15 +682,43 @@ class SetupManager:
                     unchanged_source = existing and existing['module'] == module and existing.get('source') == source
                     row['source'] = source if unchanged_source else validate_uri(source)
                 if updates:self._keys(updates)
+            if existing and not existing.get('id'):
+                row.pop('id', None)
+                if existing.get('instance_id'):
+                    row['instance_id'] = existing['instance_id']
             if index is None:rows.append(row)
             else:rows[index]=row
+            if dedicated:
+                # A removal remains a scoped tombstone; it cannot reveal an
+                # inherited account or change a saved backend's connection.
+                if existing:
+                    row.pop('id', None)
+                    row.update({name: existing[name] for name in ('id', 'instance_id') if name in existing})
+                accounts[account_key] = row
+            elif not remove and 'decisions' in row.get('config', {}):
+                # The advanced editor accepts a complete logical connection.
+                # Route its explicit decision edit to the same scoped owner;
+                # do not treat an intentional save as a legacy collision.
+                identity_key = key(row)
+                decisions = row['config'].pop('decisions')
+                settings.setdefault('decision_models', {}).setdefault('connections', {})[identity_key] = {
+                    'provider': identity_key, 'module': row['module'], 'config': {'decisions': decisions}}
+            elif not remove:
+                # The advanced editor replaces this scope's complete config.
+                # Omitting its decision field removes this scope's reference,
+                # just as omitting it from the old provider config did; broader
+                # scope options still inherit through the ordinary overlay.
+                identity_key = key(row)
+                scoped_accounts = settings.get('decision_models', {}).get('connections', {})
+                if scoped_accounts.get(identity_key, {}).get('provider') == identity_key:
+                    del scoped_accounts[identity_key]
             disabled=set(overlay(effective.settings,settings).get('configurator',{}).get('disabled',{}).get('providers',[]))
             if remove:disabled.add(identity)
             else:disabled.discard(identity)
             settings.setdefault('configurator',{}).setdefault('disabled',{})['providers']=sorted(disabled)
             # Clear the older Unified-only flag when editing an existing entry.
             settings.get('overrides',{}).get(identity,{}).pop('enabled',None)
-        self.store.update(workspace,scope,mutate)
+        self.store.update(workspace,scope,mutate,migrate_decisions=True)
         with self.read_snapshot(workspace):
             current=self.config(workspace)
             changed=before!=signature(current)
@@ -747,6 +857,17 @@ class SetupManager:
         if action=='providers.configureDecisions':
             from .decision_settings import configure
             return configure(self, args, workspace, scope)
+        if action=='providers.suggestionModels':
+            from .suggestion_settings import describe, recommendation
+            with self.read_snapshot(workspace):
+                rows = self.provider_rows(workspace, ordinary_only=True)
+                for row in rows:
+                    row['sharedCatalogKey'] = self.catalog_key({'id': row['id']}, workspace)
+                    row['suggestionRecommendation'] = recommendation(self, row)
+                return {'suggestionModels': describe(self, workspace), 'providers': rows}
+        if action=='providers.configureSuggestions':
+            from .suggestion_settings import configure
+            return configure(self, args, workspace, scope)
         if action=='providers.list':
             return {'providers':self.provider_rows(workspace),'providersWorkspace':str(workspace),'providersLoadedAt':time.time()}
         if action in {'providers.schema','providers.models','providers.imageModels','providers.test','providers.testMessage'}:
@@ -754,7 +875,7 @@ class SetupManager:
         if action in {'providers.move','providers.reorder'}:
             current=self.config(workspace)
             enabled={row['id'] for row in self.provider_rows(workspace) if row['enabled']}
-            rows=[row for row in current.providers if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-')) in enabled]
+            rows=[row for row in current.connections if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-')) in enabled]
             ids=[row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-') for row in rows]
             if action=='providers.reorder':
                 ordered=args['ids']
@@ -770,15 +891,22 @@ class SetupManager:
                     ids.remove(identity);ids.insert(ids.index(before) if before else len(ids),identity)
             if changed:
                 def reorder(settings):
+                    from .decision_namespace import connections, key as storage_key
+                    dedicated = {key for key, row in connections(current.settings).items() if 'provider' not in row}
                     scoped=settings.setdefault('config',{}).setdefault('providers',[])
                     for priority, key in enumerate(ids,1):
                         source=next(row for row in rows if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==key)
+                        if storage_key(source) in dedicated:
+                            mapping = settings.setdefault('decision_models', {}).setdefault('connections', {})
+                            row = mapping.setdefault(storage_key(source), {k: source[k] for k in ('id', 'instance_id', 'module') if k in source})
+                            row.setdefault('config', {})['priority'] = priority
+                            continue
                         row=next((row for row in scoped if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==key),None)
                         if row is None:
                             row={k:source[k] for k in ('id','module') if k in source};scoped.append(row)
                         row.setdefault('config',{})['priority']=priority
                     settings.pop('provider_order',None)
-                self.store.update(workspace,scope,reorder)
+                self.store.update(workspace,scope,reorder,migrate_decisions=True)
             return {'providers':self.provider_rows(workspace),'scope':scope}
         if action=='providers.save':
             if args.get('useGitHubCli'):

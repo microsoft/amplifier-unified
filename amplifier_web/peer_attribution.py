@@ -25,11 +25,20 @@ def derive(session, rows, resolver=None):
     return resolver(session, rows) if resolver is not None else rows
 
 
-def display_annotations(session):
-    """Only supported reaction annotations may overlay a derived message."""
-    return {identity: {key: value[key] for key in ("reactions", "assistantReactions") if key in value}
-            for identity, value in session.get("messageAnnotations", {}).items()
-            if isinstance(value, dict) and any(key in value for key in ("reactions", "assistantReactions"))}
+def display_annotations(session, identities):
+    """Only requested message reactions; never scan the per-input receipts."""
+    from .input_status import PREFIX
+    annotations = session.get("messageAnnotations", {})
+    result = {}
+    for identity in identities:
+        if not isinstance(identity, str) or identity.startswith(PREFIX) or identity in result:
+            continue
+        value = annotations.get(identity)
+        if isinstance(value, dict):
+            selected = {key: value[key] for key in ("reactions", "assistantReactions") if key in value}
+            if selected:
+                result[identity] = selected
+    return result
 
 
 def input_identity(row):

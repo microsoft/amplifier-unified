@@ -39,8 +39,8 @@ an isolation boundary for untrusted code.
 
 Evidence: [`shell_modules.py`](../../amplifier_web/shell_modules.py),
 [`shell-sdk`](../../packages/shell-sdk/index.d.ts),
-[`shell runtime`](../../components/web-client/src/shell/runtime.jsx),
-[`main.jsx`](../../components/web-client/src/main.jsx), and
+[`shell runtime`](https://github.com/microsoft/amplifier-client-web/blob/main/src/shell/runtime.jsx),
+[`main.jsx`](https://github.com/microsoft/amplifier-client-web/blob/main/src/main.jsx), and
 [conversation surfaces](conversation-surfaces.md). The navigation SDK deliberately
 does not expose transcripts, composer drafts, credentials or runtime plans.
 

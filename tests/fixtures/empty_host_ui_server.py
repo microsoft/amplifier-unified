@@ -10,7 +10,55 @@ import sys
 import tempfile
 
 installed_mode = os.environ.get('AMPLIFIER_TEST_INSTALLED') == '1'
+pr36_mode = os.environ.get('AMPLIFIER_TEST_PR36') == '1'
 sys.path.insert(0, str(Path(__file__).resolve().parent if installed_mode else Path(__file__).resolve().parents[2]))
+
+
+def pr36_installed_inputs():
+    """Strict opt-in: bind wheel files before any application/discovery import."""
+    import importlib.metadata
+    assert installed_mode and sys.flags.isolated and sys.dont_write_bytecode
+    assert 'PYTHONPATH' not in os.environ and 'PYTHONHOME' not in os.environ
+    assert '--synthetic-discovery' in sys.argv and '--appearance-records' in sys.argv
+    assert not os.environ.get('AMPLIFIER_TEST_SHARED_WORK_HOME')
+    expected = json.loads(Path(os.environ['AMPLIFIER_TEST_INSTALLED_IDENTITY']).read_text())
+    package = Path(os.environ['AMPLIFIER_TEST_PACKAGE_ROOT']).resolve(strict=True)
+    prefix = Path(sys.prefix).resolve()
+    dist = importlib.metadata.distribution('amplifier-unified')
+    base = Path(dist.locate_file('')).resolve()
+    assert package == Path(dist.locate_file('amplifier_web')).resolve()
+    assert base.is_relative_to(prefix) and package.is_relative_to(prefix)
+    assert dist.read_text('WHEEL')
+    assert not json.loads(dist.read_text('direct_url.json') or '{}').get('dir_info', {}).get('editable')
+    files = expected['files']
+    assert files and len(expected['wheelSha256']) == 64
+    owned = {str(path) for path in dist.files or ()}
+    assert set(files) <= owned
+    for name, digest in files.items():
+        relative = Path(name)
+        path = base / relative
+        assert not relative.is_absolute() and '..' not in relative.parts
+        assert not path.is_symlink() and path.resolve().is_relative_to(base)
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, name
+    shipped = {str(path.relative_to(base)) for path in package.rglob('*')
+               if path.is_file() and (path.suffix == '.py' or 'static' in path.relative_to(package).parts)}
+    assert shipped <= set(files), 'Identity must cover every package Python/static file'
+    roots = {Path(name).parts[0] for name in files
+             if name.endswith('.py') and len(Path(name).parts) > 1}
+    origins = {}
+    for name, module in tuple(sys.modules.items()):
+        if name.split('.')[0] not in roots:
+            continue
+        if getattr(module, '__file__', None):
+            path = Path(module.__file__).resolve()
+            assert path.is_relative_to(base), (name, path)
+            relative = str(path.relative_to(base))
+            assert relative in files, (name, relative)
+            origins[name] = {'file': relative, 'sha256': files[relative]}
+        for path in getattr(module, '__path__', ()):
+            assert Path(path).resolve().is_relative_to(base), (name, path)
+    return {'verified': True, 'isolated': True, 'noPythonPath': True,
+            'fileCount': len(files), 'modules': origins}
 
 
 class Runtime:
@@ -56,10 +104,94 @@ class Runtime:
         pass
 
 
+async def seed_appearance_records(home, workspace):
+    """Cold-start canaries, confined to this synthetic fixture's private home."""
+    from amplifier_web.service import AppService
+    from amplifier_web import appearance_packages
+    service = AppService(home / 'app', workspace=str(workspace))
+    try:
+        service._state['theme'] = {'name': 'Retained legacy canary',
+                                   'css': '#amp-one{--a-accent:#e94a9f}'}
+        old = {'owner': 'retained-not-production', 'revision': 19,
+               'values': {'appearanceId': 'reference', 'scheme': 'dark', 'accent': '#e94a9f'}}
+        for key in ('appearance', 'reference-v1', 'shared-reference-v1', 'appearance-experiment-0801-v1'):
+            service.shell.put('preferences', key, old)
+        for kind in ('client', 'experiment-client-0801'):
+            service.db.execute('INSERT OR REPLACE INTO shell_records VALUES (?,?,?)',
+                               (kind, 'legacy-canary', json.dumps({'revision': 19, 'legacy': True})))
+        if '--appearance-malformed' in sys.argv:
+            service.shell.put('preferences', 'shared-reference-v2',
+                              {'owner': 'invalid-owner', 'revision': 1, 'values': {}})
+        root = home / 'app/themes'
+        root.mkdir(exist_ok=True)
+        (root / 'legacy.css').write_text('#amp-one{--a-accent:#e94a9f}')
+        for version in (1, 2):
+            manifest = {'type': 'appearance', 'formatVersion': version, 'name': 'Retained canary',
+                        'stylesheet': 'theme.css'}
+            if version == 2:
+                manifest['base'] = 'reference-v1'
+            (root / f'legacy-format{version}.zip').write_bytes(appearance_packages.encode({
+                'appearance.json': json.dumps(manifest).encode(),
+                'theme.css': b'#amp-one{--a-accent:#e94a9f}'}))
+        service._save()
+        (home / 'appearance-canary-sha256').write_text(appearance_record_hash(service))
+    finally:
+        await service.close()
+
+
+def appearance_record_hash(service):
+    """Only fixed synthetic canaries, never user records or a whole DB dump."""
+    from amplifier_web.state_records import load
+    rows = list(service.db.execute(
+        "SELECT kind,id,value FROM shell_records WHERE (kind='preferences' AND id IN "
+        "('appearance','reference-v1','shared-reference-v1','appearance-experiment-0801-v1')) "
+        "OR kind IN ('client','experiment-client-0801') ORDER BY kind,id"))
+    value = {'theme': load(service.db).get('theme'), 'rows': rows,
+             'files': {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                       for p in sorted((service.data_dir / 'themes').iterdir()) if p.is_file()}}
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def reservation_retirement_records(home, *, seed=False):
+    """Upgrade canaries in this disposable fixture only, never a product API."""
+    import sqlite3
+    data = home / 'app'
+    target = data / 'workspace-resources/reservations.sqlite3'
+    if seed:
+        from amplifier_web import task_resources, test_execution_settings
+        from types import SimpleNamespace
+        row, fresh = task_resources.prepare(data, 'historical-workspace', 'historical-owner',
+            {'sessionId': 'historical-owner', 'principal': 'historical-owner'},
+            {'kind': 'scratch-directory'}, 'historical-allocation')
+        if fresh:
+            task_resources.allocate(data, row)
+        test_execution_settings.write(SimpleNamespace(data_dir=data), {
+            'version': 1, 'queue': {'maxPending': 19},
+            'profiles': {'browser-test': {'cpus': 3}},
+            'concurrency': {'maxOwnedResources': 21, 'maxEnvironmentsPerChat': 4,
+                'maxResourceReservations': 1, 'maxResourceReservationsPerChat': 1}})
+        with sqlite3.connect(target) as db:
+            db.execute('CREATE TABLE claims(id TEXT PRIMARY KEY, workspace TEXT, resource_key TEXT, root TEXT, status TEXT, body TEXT)')
+            for status in ('held', 'uncertain'):
+                db.execute('INSERT INTO claims VALUES(?,?,?,?,?,?)',
+                    (status, 'historical-workspace', status, 'closed-chat', status, 'private malformed historical body'))
+            db.execute('INSERT INTO commands VALUES(?,?,?)',
+                ('historical-claim', 'original-fingerprint', '{"outcome":"reserved"}'))
+    with sqlite3.connect(target) as db:
+        retained = {table: db.execute(query).fetchall() for table, query in (
+            ('claims', 'SELECT * FROM claims ORDER BY id'),
+            ('command', "SELECT * FROM commands WHERE id='historical-claim'"),
+            ('allocation', "SELECT * FROM allocations WHERE root='historical-owner'"))}
+    return {'sha256': hashlib.sha256(json.dumps(retained, sort_keys=True).encode()).hexdigest(),
+            'claims': len(retained['claims']), 'allocations': len(retained['allocation'])}
+
+
 async def main(home):
     from contextlib import nullcontext
-    from configured_browser import synthetic_discovery
     synthetic = '--synthetic-discovery' in sys.argv
+    if any(flag in sys.argv for flag in ('--appearance-records', '--appearance-malformed')):
+        if not synthetic or '--appearance-records' not in sys.argv:
+            raise ValueError('Appearance record fixtures require --appearance-records --synthetic-discovery')
     if synthetic and any(flag in sys.argv for flag in ('--chat-controls', '--provider-resolution')):
         raise ValueError('--synthetic-discovery cannot replace a provider scenario')
     if '--voice-settings' in sys.argv:
@@ -70,15 +202,31 @@ async def main(home):
         AMPLIFIER_HOME=str(home / "shared-settings"),
         AMPLIFIER_WEB_HOME=str(home / "app"),
         AMPLIFIER_SESSION_STATE_HOME=str(home / "sessions"),
+        AMPLIFIER_UNIFIED_IMPORT_HOME=str(home / "import-home"),
     )
+    pre_import = None
+    if pr36_mode:
+        user_home = home / 'user'
+        user_home.mkdir()
+        os.environ.update(HOME=str(user_home), XDG_CACHE_HOME=str(home / 'cache'),
+                          XDG_CONFIG_HOME=str(home / 'config'), XDG_DATA_HOME=str(home / 'data'))
+        pre_import = pr36_installed_inputs()
+        assert not pre_import['modules'], 'No wheel application module may precede isolated homes/input checks'
+    # This sibling helper remains importable with -I and a fixture staged outside
+    # the source checkout. Its application imports occur only after isolated homes.
+    from configured_browser import synthetic_discovery
     # Set isolated homes before importing discovery owners. Keep replacements
     # installed through create_app, requests and full cleanup, including errors;
     # other browser scenarios retain their own probes.
     with synthetic_discovery() if synthetic else nullcontext():
-        await serve(home)
+        if '--appearance-records' in sys.argv:
+            workspace = home / 'workspace'
+            workspace.mkdir(exist_ok=True)
+            await seed_appearance_records(home, workspace)
+        await serve(home, pre_import=pre_import)
 
 
-async def serve(home):
+async def serve(home, *, pre_import=None):
     from configured_browser import seed_connection
     seed_connection(home / 'shared-settings')
     from aiohttp import web
@@ -159,10 +307,16 @@ async def serve(home):
         from amplifier_web.runtime import RuntimeManager
         # Settings exercise the actual manager policy without starting a model.
         runtime = RuntimeManager(command=[sys.executable, '-c', 'raise RuntimeError("Unexpected worker start in settings fixture")'])
+    isolated_appearance = installed_mode and '--appearance-records' in sys.argv
+    retirement_before = (reservation_retirement_records(home, seed=True)
+                         if '--reservation-retirement' in sys.argv else None)
     app = await create_app(home / "app", workspace=str(workspace), runtime=runtime,
-                           voice='--voice-settings' in sys.argv, background_updates=False)
+                           voice='--voice-settings' in sys.argv, background_updates=False,
+                           **({'background_work': False, 'preload_providers': False}
+                              if isolated_appearance else {}))
     app["control_token"] = "fixture-browser-control-token"
     runtime.service = app['service']
+    appearance_before = (home / 'appearance-canary-sha256').read_text() if '--appearance-records' in sys.argv else None
     stalled_body_release = asyncio.Event()
     stalled_body_transports = []
     stalled_body_mode = os.environ.get('CANVAS_RENDERER_STALLED_BODY') == '1'
@@ -216,6 +370,8 @@ async def serve(home):
 
     async def inspect(request):
         return web.json_response({"installedIdentity": installed_identity,
+            "reservationRetirement": {'before': retirement_before,
+                'current': reservation_retirement_records(home)} if retirement_before else None,
             "foundationCachePresent": (home / "app/foundation").exists(),
             "installedPackageVerified": installed_package_verified, "staticSha256": static_identity,
             "storedCopyPath": str(stored_copy_path) if stored_copy_path else None,
@@ -224,6 +380,27 @@ async def serve(home):
             "workerCount": len(getattr(runtime, 'workers', {})), "started": getattr(runtime, "started", []), "stopped": getattr(runtime, "stopped", [])})
 
     app.router.add_get("/fixture", inspect)
+    if '--appearance-records' in sys.argv:
+        async def appearance_records(request):
+            if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+                raise web.HTTPForbidden()
+            service = app['service']
+            current = appearance_record_hash(service)
+            snapshot = service.appearance.read()
+            saved = service.shell.get('preferences', 'shared-reference-v2')
+            root = service.data_dir / 'appearance-library-v1'
+            return web.json_response({
+                'legacy': {'beforeSha256': appearance_before, 'currentSha256': current,
+                           'unchanged': current == appearance_before},
+                'production': {'present': saved is not None, 'revision': (saved or {}).get('revision', 0),
+                               'values': snapshot.get('shared', {}).get('values'),
+                               'namespace': snapshot.get('namespace'),
+                               'availability': snapshot['availability'], 'error': snapshot.get('error'),
+                               'code': snapshot.get('code')},
+                'library': {'legacyNames': sorted(p.name for p in (service.data_dir / 'themes').iterdir()),
+                            'newNames': sorted(p.name for p in root.iterdir()) if root.exists() else []},
+                'sent': getattr(runtime, 'sent', []), 'started': getattr(runtime, 'started', [])})
+        app.router.add_get('/fixture/appearance-records', appearance_records)
     if '--appearance-states' in sys.argv:
         async def appearance_status(request):
             # Synthetic lifecycle input to the real publication/projection path.
@@ -261,6 +438,66 @@ async def serve(home):
             return web.json_response({'ok': True})
         app.router.add_post('/fixture/report-selection', report_selection)
     if '--chat-controls' in sys.argv:
+        async def composer_eligibility(request):
+            # Synthetic history classification only. Publish through the real
+            # installed host so React/ProseMirror receive their actual props.
+            if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+                raise web.HTTPForbidden()
+            data = await request.json()
+            if (set(data) != {'sessionId', 'readOnlyReason'}
+                    or not isinstance(data['readOnlyReason'], (str, type(None)))):
+                raise web.HTTPBadRequest()
+            service = app['service']
+            service._session(data['sessionId'])['historyReadOnlyReason'] = data['readOnlyReason']
+            service._publish()
+            return web.json_response({'ok': True})
+        app.router.add_post('/fixture/composer-eligibility', composer_eligibility)
+
+        async def conversation_error(request):
+            if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+                raise web.HTTPForbidden()
+            data = await request.json()
+            if set(data) != {'sessionId'}:
+                raise web.HTTPBadRequest()
+            service = app['service']
+            session = service._session(data['sessionId'])
+            # Presentation seed only, confined to disposable test history.
+            # No recovery, retry, provider or feedback operation runs.
+            session.update(status='error', error='Synthetic context-limit failure.',
+                           errorAt=time.time(), failure={
+                'category': 'context_limit',
+                'summary': 'Synthetic conversation reached its context limit.',
+                'guidance': 'Saved messages are kept. Review recovery options. ' + 'long-provider-detail-' * 25,
+                'recordedAt': time.time(),
+            })
+            service._publish()
+            return web.json_response({'ok': True})
+        app.router.add_post('/fixture/conversation-error', conversation_error)
+
+        async def layout_status(request):
+            if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+                raise web.HTTPForbidden()
+            data = await request.json()
+            if set(data) != {'sessionId', 'status'} or data['status'] not in {'loading', 'retrying', 'ready'}:
+                raise web.HTTPBadRequest()
+            service = app['service']
+            session = service._session(data['sessionId'])
+            session['messages'] = []
+            # TranscriptWindows owns the published history-error field. Seed its
+            # synthetic unavailable entry rather than a session field that its
+            # normal saved-history projection would overwrite.
+            session['historyManaged'] = data['status'] == 'retrying'
+            service.history.windows.initial[session['id']] = ({
+                'status': 'unavailable',
+                'error': 'Synthetic history read is unavailable. Original files are unchanged.',
+            } if data['status'] == 'retrying' else {})
+            service.event_log_view.windows.status[session['id']] = {
+                'status': data['status'], 'current': data['status'] == 'ready'}
+            session['workProjection'] = dict(service.event_log_view.windows.status[session['id']])
+            service._publish()
+            return web.json_response({'ok': True})
+        app.router.add_post('/fixture/layout-status', layout_status)
+
         async def provider_preference(request):
             preferred_model[0] = (await request.json())['model']
             save_provider_settings()
@@ -440,6 +677,43 @@ async def serve(home):
     port = site._server.sockets[0].getsockname()[1]
     url = f"http://127.0.0.1:{port}"
     app["allowed_origins"] = app["allowed_origins"] | {url}
+    installed_proof = None
+    if installed_mode and '--appearance-records' in sys.argv:
+        # The installed lifecycle must exercise this listener's bundled entry,
+        # not merely a source declaration or a filesystem manifest.
+        import re
+        from urllib.parse import urlsplit
+        from aiohttp import ClientSession, ClientTimeout
+        served = {}
+        async with ClientSession(timeout=ClientTimeout(total=20),
+                                 headers={'Authorization': 'Bearer fixture-browser-control-token'}) as client:
+            async def fetched(path, relative):
+                async with client.get(url + path) as response:
+                    assert response.status == 200, (path, response.status)
+                    body = await response.read()
+                assert body == (package_root / 'static' / relative).read_bytes(), path
+                served[relative] = {'bytes': len(body), 'sha256': hashlib.sha256(body).hexdigest()}
+                return body
+            index = await fetched('/', 'index.html')
+            paths = re.findall(r'''(?:src|href)=["'](/[^"']+\.(?:js|css)(?:\?[^"']*)?)["']''',
+                               index.decode())
+            assert any(urlsplit(path).path.endswith('.js') for path in paths)
+            assert any(urlsplit(path).path.endswith('.css') for path in paths)
+            for path in paths:
+                await fetched(path, urlsplit(path).path.lstrip('/'))
+            for name in ('client-component.json', 'build.json'):
+                await fetched('/' + name, name)
+        installed_proof = {'installedIdentity': installed_identity, 'served': served,
+                           'sourceMode': False, 'syntheticRuntime': True,
+                           'case': 'malformed' if '--appearance-malformed' in sys.argv else 'normal',
+                           'payloadAfterCleanup': False}
+        if pr36_mode:
+            installed_proof['strictPreImport'] = pre_import
+            installed_proof['strictBefore'] = pr36_installed_inputs()
+        proof_path = Path(os.environ['AMPLIFIER_TEST_ARTIFACTS']) / (
+            'installed-host-' + installed_proof['case'] + '.json')
+        assert not proof_path.exists()
+        proof_path.write_text(json.dumps(installed_proof, sort_keys=True) + '\n')
     stopped = asyncio.Event()
     loop = asyncio.get_running_loop()
     # Windows event loops cannot register Unix signals; preserve fixture startup
@@ -467,6 +741,15 @@ async def serve(home):
                     transport.abort()
                 stalled_body_release.set()
             await runner.cleanup()
+            if installed_proof is not None:
+                for name, digest in expected['files'].items():
+                    source = Path(dist.locate_file(name)).resolve()
+                    assert source.is_relative_to(prefix)
+                    assert hashlib.sha256(source.read_bytes()).hexdigest() == digest, name
+                installed_proof['payloadAfterCleanup'] = True
+                if pr36_mode:
+                    installed_proof['strictAfter'] = pr36_installed_inputs()
+                proof_path.write_text(json.dumps(installed_proof, sort_keys=True) + '\n')
             if stalled_body_mode:
                 print(json.dumps({'canvasRendererStalledBody': {
                     'event': 'cleanup-complete', 'stalledResponses': len(stalled_body_transports)}}), flush=True)

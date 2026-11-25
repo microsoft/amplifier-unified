@@ -136,10 +136,15 @@ def create(service, plan_id, command_id):
             raise ValueError('The default folder changed. Review the workspace location again.')
         if plan['disposition'] != 'create':
             raise ValueError('This folder already exists. Open its workspace or choose Use existing folder.')
-        bundle = plan.get('starter', {}).get('bundle')
+        from .bundle_defaults import automatic_starter, shipped_bundle
+        starter = plan.get('starter', {})
+        bundle = shipped_bundle(starter['id']) if automatic_starter(starter) else starter.get('bundle')
         if bundle:
             from .workspace_starters import configured_catalog
-            if bundle not in configured_catalog(service).bundle_names:
+            catalog = configured_catalog(service)
+            if automatic_starter(starter) and catalog.inherit_amplifier_default:
+                bundle = None  # Explicit app/shared default wins over this fallback.
+            if bundle and bundle not in catalog.bundle_names:
                 raise ValueError('The prepared starter bundle is no longer an enabled standalone choice. Review a new plan; the original plan was preserved.')
         ancestor = Path(plan['ancestor'])
         info = ancestor.stat()
@@ -175,19 +180,3 @@ def create(service, plan_id, command_id):
         receipt['outcome'] = 'created'
         atomic(receipt_path, receipt)
         return receipt
-
-
-def listing(service, args):
-    query = args.get('query', '').strip().casefold()
-    rows = [dict(row) for row in service.state['workspaces'] if row.get('available') and row.get('path') and not row.get('archived')
-            and (not query or query in (row['name'] + ' ' + row['path']).casefold())]
-    names = {}
-    for row in rows:
-        names[row['name']] = names.get(row['name'], 0) + 1
-    for row in rows:
-        row['label'] = row['name'] + (' · ' + row['path'] if names[row['name']] > 1 else '')
-    rows.sort(key=lambda row: (row['name'].casefold(), row['path']))
-    offset = args.get('offset', 0)
-    limit = args.get('limit', 100)
-    return {'items': rows[offset:offset + limit], 'nextOffset': offset + limit if len(rows) > offset + limit else None,
-            'total': len(rows)}

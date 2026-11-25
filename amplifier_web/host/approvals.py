@@ -6,6 +6,7 @@ import contextvars
 import inspect
 
 REQUEST_CONTEXT = contextvars.ContextVar('approval_feedback_context', default=None)
+REQUEST_SCOPE = contextvars.ContextVar('approval_tool_scope', default=None)
 
 
 class ApprovalDecision(str):
@@ -17,30 +18,39 @@ class ApprovalDecision(str):
 
 
 class Approvals:
-    def __init__(self, runtime, ask):
+    def __init__(self, runtime, ask, *, coordinator=None):
         self.runtime = runtime
         self.ask = ask
+        self.coordinator = coordinator
 
     @property
     def interactive(self):
         """Transport availability only; never a permission or remembered grant."""
         return callable(self.ask)
 
-    def for_context(self, get_context):
+    def for_context(self, get_context, *, coordinator=None):
         if not self.interactive:
-            return Approvals(self.runtime, None)
+            return Approvals(self.runtime, None, coordinator=coordinator)
         async def ask(prompt, options):
             token = REQUEST_CONTEXT.set(get_context())
             try:
                 return await self.ask(prompt, options)
             finally:
                 REQUEST_CONTEXT.reset(token)
-        return Approvals(self.runtime, ask)
+        return Approvals(self.runtime, ask, coordinator=coordinator)
 
     async def request_approval(self, prompt, options=None, timeout=None, default="deny"):
         provider_request = not isinstance(prompt, str)
         request = prompt if provider_request else None
+        scope = None
         if provider_request:
+            from amplifier_core import ApprovalRequest
+            from ..tool_approval_scope import ToolApprovalScope
+            coordinator = self.coordinator() if callable(self.coordinator) else None
+            owner = coordinator.get_capability('web.tool_approval.scope') if coordinator else None
+            if (isinstance(request, ApprovalRequest) and type(owner) is ToolApprovalScope
+                    and owner.coordinator is coordinator):
+                scope = owner.request(request)
             prompt = f"{request.tool_name}: {request.action}"
             if request.details:
                 import json
@@ -62,19 +72,24 @@ class Approvals:
         if not callable(self.ask):
             raise RuntimeError("This operation requires approval, but no user approval surface is connected")
         # A default of allow is not human authorization. Timeouts never approve.
-        result = self.ask(prompt, list(choices))
-        if not inspect.isawaitable(result):
-            raise TypeError("The app approval callback must be asynchronous")
+        token = REQUEST_SCOPE.set(scope)
         try:
+            result = self.ask(prompt, list(choices))
+            if not inspect.isawaitable(result):
+                raise TypeError("The app approval callback must be asynchronous")
             decision = await asyncio.wait_for(result, timeout) if timeout is not None else await result
         except TimeoutError:
             if provider_request:
                 from amplifier_core import ApprovalResponse
                 return ApprovalResponse(approved=False, reason="User approval timed out", remember=False)
             return choices["deny"]
+        finally:
+            REQUEST_SCOPE.reset(token)
         if decision not in choices:
             raise ValueError("The approval response is not one of the offered choices")
         if provider_request:
             from amplifier_core import ApprovalResponse
+            if scope is not None and decision == 'allow':
+                scope.approve()
             return ApprovalResponse(approved=decision in {"allow", "approve"}, reason=getattr(decision, "comment", None), remember=False)
         return ApprovalDecision(choices[decision], getattr(decision, "comment", None))

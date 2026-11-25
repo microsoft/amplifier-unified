@@ -43,6 +43,118 @@ def test_config_cli_sets_and_resets_server_setting(tmp_path, capsys):
     assert load_server_config(tmp_path)["session_ttl_seconds"] == 604800
 
 
+def test_config_cli_saves_related_settings_in_one_validated_write(tmp_path, monkeypatch):
+    from amplifier_web import deployment
+    monkeypatch.setattr(sys, "argv", [
+        "amplifier-unified", "config", "set", "port", "23456",
+        "public_origins", '["https://127.0.0.1:23456", "https://pc.example.ts.net"]'])
+    args = _parse()
+    assert (args.key, args.value) == ("port", "23456") and len(args.more) == 2
+    load_server_config(tmp_path)
+    writes = []
+    save = deployment.save_server_config
+    monkeypatch.setattr(deployment, "save_server_config", lambda *a: writes.append(a) or save(*a))
+    _config(args, tmp_path)
+    saved = load_server_config(tmp_path)
+    assert saved["port"] == 23456
+    assert saved["public_origins"] == ["https://127.0.0.1:23456", "https://pc.example.ts.net"]
+    assert len(writes) == 1
+    # A setting without its value changes nothing.
+    before = config_path(tmp_path).read_bytes()
+    with pytest.raises(SystemExit, match="value for every setting"):
+        _config(Namespace(config_command="set", key="port", value="23457", more=["public_origins"]), tmp_path)
+    # A later invalid setting discards the earlier ones in the same command.
+    with pytest.raises(ValueError):
+        _config(Namespace(config_command="set", key="port", value="23457", more=["bind", "[]"]), tmp_path)
+    assert config_path(tmp_path).read_bytes() == before
+
+
+@pytest.mark.parametrize("mode,keyless,told", [("force", True, True), ("force", False, False),
+                                              ("default", True, False)])
+def test_forced_renewal_of_a_keyless_windows_identity_says_what_happens_next(
+        tmp_path, monkeypatch, capsys, mode, keyless, told):
+    from amplifier_web import tls, windows_tls
+    calls = []
+    monkeypatch.setattr(cli.browser_entry, "is_windows", lambda: True)
+    monkeypatch.setattr(tls, "setup_local_ca", lambda home, config, *, force: calls.append(force))
+    monkeypatch.setattr(tls, "ca_fingerprint", lambda home: "AA:BB")
+    monkeypatch.setattr(windows_tls, "keyless_identity", lambda home: (b"root", b"leaf") if keyless else None)
+    cli._setup_tls(tmp_path, mode)
+    output = capsys.readouterr().out
+    assert calls == [mode == "force"]
+    # A new certificate needs a new Windows confirmation and a new import elsewhere.
+    assert ("Windows asks you to confirm it" in output) is told
+    assert ("Other devices must import it again" in output) is told
+    # Windows can still hold the replaced certificate, and asks about it at the same open.
+    # True for one earlier certificate and for several.
+    assert ("If Windows also asks whether to delete an earlier certificate, select Yes. "
+            "It asks once for each earlier certificate that it still holds. "
+            "Amplifier no longer uses them.\n" in output) is told
+
+
+def test_a_force_that_the_record_stops_ends_with_its_plain_text_and_no_success_line(tmp_path, monkeypatch, capsys):
+    from amplifier_web import tls, windows_tls
+    text = "Amplifier made no new certificate. Nothing was changed.\n\nIts record of earlier certificates is full."
+
+    def stop(home, config, *, force):
+        raise windows_tls.ReplacedRecord(text)
+    monkeypatch.setattr(cli.browser_entry, "is_windows", lambda: True)
+    monkeypatch.setattr(tls, "setup_local_ca", stop)
+    with pytest.raises(SystemExit) as stopped:
+        cli._setup_tls(tmp_path, "force")
+    assert str(stopped.value) == text and capsys.readouterr().out == ""  # Not "Created ...".
+
+
+def test_status_on_windows_shows_the_thumbprints_that_find_amplifiers_certificates(tmp_path, monkeypatch, capsys):
+    from amplifier_web import tls, windows_tls, windows_trust
+    state = {"windows": True, "identity": (b"current", b"leaf"), "earlier": [b"one", b"two"], "configured": True}
+
+    def read(name):
+        if isinstance(state[name], Exception):
+            raise state[name]
+        return state[name]
+
+    def replaced(home, current, *, strict=False):
+        assert home == tmp_path and current == b"current"  # Never the certificate that is in use.
+        assert strict is True  # A record that is too long to read must not show as "0".
+        return read("earlier")
+    monkeypatch.setattr(cli.browser_entry, "is_windows", lambda: state["windows"])
+    monkeypatch.setattr(tls, "ca_bytes", lambda home: b"certificate" if state["configured"] else None)
+    monkeypatch.setattr(tls, "tls_ready", lambda home, config: True)
+    monkeypatch.setattr(tls, "ca_fingerprint", lambda home: "AA:BB")
+    monkeypatch.setattr(windows_tls, "keyless_identity", lambda home: read("identity"))
+    monkeypatch.setattr(windows_trust, "replaced", replaced)
+    monkeypatch.setattr(windows_trust, "thumbprint", lambda der: "print of " + der.decode())
+
+    def status(**change):
+        state.update({"windows": True, "identity": (b"current", b"leaf"), "earlier": [b"one", b"two"],
+                      "configured": True, **change})
+        cli._setup_tls(tmp_path, "status")
+        output = capsys.readouterr().out
+        assert "CA SHA-256 fingerprint: AA:BB\n" in output
+        return output.split("CA SHA-256 fingerprint: AA:BB\n", 1)[1]
+    # Windows shows the SHA-1 thumbprint. Each earlier certificate that Windows holds has its own line.
+    assert status() == ("Thumbprint in Windows (SHA-1): print of current\n"
+                        "Earlier certificates that Windows still holds: 2\n  print of one\n  print of two\n")
+    assert status(earlier=[]) == ("Thumbprint in Windows (SHA-1): print of current\n"
+                                  "Earlier certificates that Windows still holds: 0\n")
+    # What cannot be read is said, not counted as none: the record, or the Windows store.
+    for unread in (OSError("the store cannot be read"), ValueError("the record is too long to read")):
+        assert status(earlier=unread) == (
+            "Thumbprint in Windows (SHA-1): print of current\n"
+            "Earlier certificates that Windows still holds: Amplifier could not read them\n")
+    # An identity with a signing key on disk: Amplifier added nothing to Windows.
+    assert status(identity=None) == ""
+    # A certificate that cannot be read is said, also when only one of its files is missing.
+    for unread in (PermissionError("refused"), ValueError("not a certificate"), FileNotFoundError("leaf.crt")):
+        assert status(identity=unread) == "Thumbprint in Windows (SHA-1): Amplifier could not read its certificate\n"
+    # No certificate at all: the line "Local CA: not configured" says it.
+    assert status(identity=FileNotFoundError("ca.crt"), configured=False) == ""
+    assert status(identity=PermissionError("refused"), configured=False) == (
+        "Thumbprint in Windows (SHA-1): Amplifier could not read its certificate\n")
+    assert status(windows=False) == ""  # macOS and Linux: unchanged.
+
+
 def test_serve_options_are_top_level_repeatable_and_overlay_nested_tls(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", [
         "amplifier-unified", "--bind", "127.0.0.1", "--bind", "192.0.2.5",
@@ -98,13 +210,63 @@ def test_cli_starts_with_saved_server_extension_fields(tmp_path, monkeypatch):
         return app
     monkeypatch.setattr(server, "create_app", create_app)
     launches = []
-    monkeypatch.setattr(web, "run_app", lambda app, **kwargs: launches.append((app, kwargs)))
+    def run(app, **kwargs):
+        assert "host" not in kwargs and "port" not in kwargs
+        assert [sock.getsockname()[1] for sock in kwargs["sock"]] == [9321]
+        launches.append((app, kwargs))
+    monkeypatch.setattr(web, "run_app", run)
 
     cli.main()
     assert configurations[0]["debug"] == {"profiling": True}
     assert launches[0][0] is app
-    assert launches[0][1]["port"] == 9321
+    assert all(sock.fileno() == -1 for sock in launches[0][1]["sock"])
     assert path.read_text() == original
+
+
+def test_task_control_attaches_after_async_application_factory(tmp_path, monkeypatch):
+    import asyncio
+    from amplifier_web import server, tls
+    monkeypatch.setattr(tls, "ssl_context", lambda *a: None)
+    monkeypatch.setattr("amplifier_web.settings_migration.migrate_settings", lambda *a: None)
+    monkeypatch.setattr("amplifier_web.host.config.load_config", lambda *a: None)
+    events = []
+    app = web.Application()
+    async def create(*args, **kwargs):
+        events.append("created")
+        return app
+    monkeypatch.setattr(server, "create_app", create)
+    class Runner:
+        spec = object()                                     # The definition of the task that started the host.
+        def attach(self, value):
+            assert value is app
+            events.append("attached")
+        def phase(self, value):
+            events.append(value)
+    def run(factory, **kwargs):
+        assert asyncio.run(factory) is app
+        kwargs["print"]("listening")
+    monkeypatch.setattr(web, "run_app", run)
+    args = Namespace(port=None, workspace=str(tmp_path), no_open=True, bind=None, host=None,
+                     public_origin=None, tls_cert=None, tls_key=None, session_ttl_seconds=None)
+    cli._serve_unlocked(args, tmp_path, task_runner=Runner())
+    assert events == ["created", "attached", "listening"]
+    # The sign-in page reads it: only a host that its own task started names the Start menu.
+    assert app["owner_task"] is Runner.spec
+
+
+def test_a_host_that_a_person_started_has_no_task_definition(tmp_path, monkeypatch):
+    from amplifier_web import server, tls
+    monkeypatch.setattr(tls, "ssl_context", lambda *a: None)
+    monkeypatch.setattr("amplifier_web.settings_migration.migrate_settings", lambda *a: None)
+    monkeypatch.setattr("amplifier_web.host.config.load_config", lambda *a: None)
+    app = web.Application()
+    monkeypatch.setattr(server, "create_app", lambda *args, **kwargs: app)
+    served = []
+    monkeypatch.setattr(web, "run_app", lambda value, **kwargs: served.append(value))
+    args = Namespace(port=None, workspace=str(tmp_path), no_open=True, bind=None, host=None,
+                     public_origin=None, tls_cert=None, tls_key=None, session_ttl_seconds=None)
+    cli._serve_unlocked(args, tmp_path)
+    assert served == [app] and "owner_task" not in app
 
 
 def test_nonloopback_serve_is_rejected_before_socket_binding(tmp_path, monkeypatch):
@@ -244,7 +406,7 @@ def windows_cli_transport(monkeypatch):
     """
     import aiohttp
     from amplifier_web import application_generations, deployment_service, host_dependencies
-    from amplifier_web import installation_health, windows_files, windows_service
+    from amplifier_web import installation_health, windows_files, windows_service, windows_task_runtime
     root = Path(__file__).resolve().parents[1]
     for module in (cli, deployment_service, windows_service, windows_files):
         assert Path(module.__file__).resolve().is_relative_to(root), 'Wrong source checkout'
@@ -266,6 +428,18 @@ def windows_cli_transport(monkeypatch):
     monkeypatch.setattr(aiohttp.ClientSession, '_request',
                         lambda *a, **kw: pytest.fail('Service status must not send a health bearer'))
     monkeypatch.setattr(cli.webbrowser, 'open', lambda *a: pytest.fail('No browser permitted'))
+    # Only the native private-file/handle seam is replaced. No receipt means a
+    # scheduler Running observation must not send credentials or report ready.
+    monkeypatch.setattr(windows_task_runtime, 'observe', lambda spec: None)
+    def request_stop(spec, **kwargs):
+        assert spec.data_dir == value.data_dir
+        state['calls'].append('request_stop')
+        state['state'] = 3
+    monkeypatch.setattr(windows_task_runtime, 'request_stop', request_stop)
+    async def one_observation(home, wait=0):
+        return await installation_health._status_once(home)
+    # This fixture exercises root routing, not the 60-second readiness budget.
+    monkeypatch.setattr(installation_health, 'status', one_observation)
     def run(argv, **kwargs):
         request = json.loads(kwargs['input'])
         operation = request['op']
@@ -312,12 +486,12 @@ def test_windows_service_cli_real_chain_root_boundary(windows_cli_transport, mon
     else:
         mutations = [op for op in state['calls'] if op != 'query']
         assert mutations == {
-            'start': ['start'], 'stop': ['stop'], 'restart': ['stop', 'start'],
-            'status': [], 'uninstall': ['remove'],
+            'start': ['start'], 'stop': ['request_stop'], 'restart': ['request_stop', 'start'],
+            'status': [], 'uninstall': ['request_stop', 'remove'],
         }[command]
         assert state['exists'] == (command != 'uninstall')
         if command in {'start', 'restart', 'status'}:
-            assert 'not readiness' in capsys.readouterr().out
+            assert 'not ready' in capsys.readouterr().out
 
 
 @pytest.mark.parametrize('ambient_argv', [

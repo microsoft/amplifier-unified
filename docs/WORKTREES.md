@@ -9,7 +9,7 @@ that commit. Legacy `sourceRevision` remains an opaque full working-folder
 snapshot digest, never a Git SHA; its existing validation is unchanged.
 Clean committed checkout is default; including uncommitted
 changes is an explicit option. The reusable library contract and limits live in
-[amplifier_worktrees](../amplifier_worktrees/README.md).
+[amplifier_worktrees](https://github.com/bkrabach/amplifier-platform-worktrees).
 
 A task keeps its canonical session.workspace, native identity, history, settings,
 voice records, task goal, drafts and artifact references. Its workingDirectory is
@@ -20,15 +20,21 @@ PreparedBundle session_cwd use the explicit execution folder. Naming receives th
 canonical history-home capability so it cannot create a second metadata owner.
 Existing file/tool permission boundaries continue to apply.
 
-Handoff returns a durable pending receipt, blocks new task input, and requests
-cooperative release through the existing Foundation owner protocol. A running
-writer checkpoints and stops before release. An already parked runtime is safe
-to close while a temporary native session lock proves writer ownership. Another
+Handoff saves and returns a durable pending receipt before waiting for its
+initiating turn. It blocks new task input while the existing turn, tools and
+admitted children finish. The boundary probe reports current blockers without
+waiting behind a command or checkpointing history. Cooperative release through
+the existing Foundation owner protocol is the one authoritative save/cleanup
+boundary for a checkout move. A running writer, including an idle one,
+checkpoints and stops before release. The exact native writer reported on the
+worker pipe, not its `uv` launcher PID, identifies the expected acquisition. A temporary
+native session lock then proves exclusive ownership through the move. Another
 application's owner is not silently taken over. No provider input is submitted,
 no effects are rolled back, and no uncertain operation is replayed. After release
 the app changes only the execution association and increments executionRevision.
-The original task resumes only on a later explicit input or separately reviewed
-authorized scheduler admission. Internal handoff does not increment the user stop
+An active task receives its existing guarded continuation after confirmed
+placement, preserving its original input ancestry and used budget. Placement and
+continuation acceptance are separate outcomes. Internal handoff does not increment the user stop
 epoch. Scheduled work must bind executionRevision and defer configurationBusy.
 
 An initial writer-ownership refusal before any release request is rejected: the
@@ -36,15 +42,34 @@ source stays unchanged and that attempt leaves no execution fence. Release
 failure after that boundary, process death or an interrupted commit is visible as unknown.
 Previously unknown receipts are not reclassified by this distinction; a newly
 rejected reconciliation leaves the original unknown receipt fenced.
-Restart never resumes the handoff automatically. Reconcile requires current
-receipt revision and a user's finding; choose the old source or intended target,
-confirm cooperative writer release again, and record a new receipt. Agent-mediated
-reconciliation must cite a genuine user message after the uncertain attempt.
+After restart, positive retained release/placement facts can finish the existing
+placement/notification path. A pre-release observation with unconfirmed marker
+cleanup is shown as needing recovery until machine evidence proves the original
+marker removed (or its worker absent) and the saved source placement unchanged.
+Startup tries that absence proof once without warming or stopping a writer.
+`worktree.check` observes the same receipt and may record that proven no-move
+result; it never requests a
+writer release, changes execution placement, warms a runtime or submits input.
+A genuinely uncertain release or commit stays unknown.
+
+Stop does not wait indefinitely on a boundary cleanup reply. Its bounded caller
+wait can end at Needs recovery while the one original reply owner remains alive;
+a late ordered removal acknowledgement or exact worker-absence proof can settle
+that same receipt when Check move reads it. Neither the missing reply nor a
+user's explanation is proof.
+
+The existing Task execution folder card shows Waiting for this turn, Moving,
+Moved, Not moved or Needs recovery, the actual source/target folder names and
+continuation status separately. **Check move** uses the receipt identity under
+the control; users do not enter internal IDs or write a verification essay.
+The independent expert `worktree.reconcile` API retains its deliberate
+source/target choice, current revision and user-finding contract. It is not called
+by Check move and is not evidence that an uncertain external effect is harmless.
 A duplicate command returns its original record. Source/target files remain
 untouched by handoff. Cleanup refuses folders still used by a task or unresolved
 handoff, then relies on the library's exact Git ownership/cleanliness checks.
 
-P01's optional operations source registry exposes handoff receipts read-only as
+The optional operations source registry exposes handoff receipts read-only as
 worktree:<receipt-id>; it does not create a second lifecycle journal. These are
 local execution-folder controls. Cross-host filesystem transfer, native session
 migration, portable absolute-path rewriting, submodule state copying and arbitrary

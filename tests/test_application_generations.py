@@ -42,6 +42,61 @@ def test_qualified_launch_preserves_arguments_and_data_scope(qualified, monkeypa
     monkeypatch.delenv('AMPLIFIER_APP_GENERATION_EXEC')
 
 
+def windows_hand_over(monkeypatch, *, console=True, status=0):
+    """`hand_over` as on Windows, with stand-ins for the console, the handles and the process."""
+    import signal
+    import subprocess
+    started, ignored = [], []
+
+    class Child:
+        def __init__(self, command, **options):
+            started.append((command, options, list(ignored)))
+
+        def wait(self):
+            return status
+    monkeypatch.setattr(generations.os, "name", "nt")
+    monkeypatch.setattr(generations.os, "execv", lambda *args: pytest.fail("Windows has no exec."))
+    monkeypatch.setattr(generations, "_console", lambda: console)
+    monkeypatch.setattr(generations, "_standard", lambda descriptor: f"own handle {descriptor}")
+    monkeypatch.setattr(subprocess, "Popen", Child)
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(signal, "SIGBREAK", 21, raising=False)
+    monkeypatch.setattr(signal, "signal", lambda number, action: ignored.append((number, action)))
+    arguments = ["-I", "-m", "amplifier_web", "--data-dir", "C:\\Users\\Jane Doe\\app", "", 'say "hello"', "open"]
+    with pytest.raises(SystemExit) as ended:
+        generations.hand_over("C:\\Users\\Jane Doe\\python.exe", arguments)
+    (command, options, ignored_at_start), = started
+    # Each argument whole, as a list: subprocess quotes it for Windows. A
+    # folder name with a space (a user name such as "Jane Doe") stays one argument.
+    assert command == ["C:\\Users\\Jane Doe\\python.exe", *arguments]
+    # Ctrl+C and Ctrl+Break are the child's to decide, from before it starts.
+    assert ignored_at_start == [(signal.SIGINT, signal.SIG_IGN), (21, signal.SIG_IGN)]
+    return ended.value.code, options
+
+
+@pytest.mark.parametrize("status,ends_with", [(0, 0), (1, 1), (3, 3), (0xC000013A, 0xC000013A - (1 << 32))])
+def test_windows_hand_over_waits_and_ends_with_the_status_of_the_app(monkeypatch, status, ends_with):
+    code, options = windows_hand_over(monkeypatch, status=status)
+    assert code == ends_with
+    assert code & 0xFFFFFFFF == status  # The same 32 bits reach the caller.
+    assert options == {"stdin": "own handle 0", "stdout": "own handle 1", "stderr": "own handle 2",
+                       "creationflags": 0}  # The app shares this process's handles and its console.
+
+
+def test_windows_hand_over_from_a_process_without_a_console_opens_no_console_window(monkeypatch):
+    _, options = windows_hand_over(monkeypatch, console=False)
+    assert options["creationflags"] == 0x08000000  # CREATE_NO_WINDOW
+
+
+def test_hand_over_is_exec_where_exec_exists(monkeypatch):
+    calls = []
+    monkeypatch.setattr(generations.os, "name", "posix")
+    monkeypatch.setattr(generations.os, "execv", lambda python, arguments: calls.append((python, arguments)))
+    generations.hand_over("/opt/app/bin/python", ["-I", "-m", "amplifier_web", "--data-dir", "/home/jane doe/app"])
+    assert calls == [("/opt/app/bin/python",
+                      ["/opt/app/bin/python", "-I", "-m", "amplifier_web", "--data-dir", "/home/jane doe/app"])]
+
+
 def test_manual_reinstall_and_development_launch_take_precedence(qualified, monkeypatch):
     home, bootstrap, dist, target, graph = qualified
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(home))
@@ -66,6 +121,85 @@ def test_changed_qualification_receipt_is_not_a_launch_target(qualified):
     (target['folder'] / 'validated.json').write_text(json.dumps(data))
     with pytest.raises(ValueError, match='qualification'):
         generations.active(home)
+
+
+def test_windows_compact_directory_retains_full_receipt_identity_and_old_bytes(tmp_path, monkeypatch):
+    monkeypatch.setattr(generations, "sys", SimpleNamespace(platform="win32"))
+    home, revision, generation = tmp_path / "app", "a" * 40, "b" * 32
+    compact = generations.directory(home, revision, generation)
+    assert compact == home / "updates/a" / generation
+    legacy = home / "updates/applications" / revision / generation
+    legacy.mkdir(parents=True)
+    (legacy / "retained-evidence").write_bytes(b"unchanged")
+    assert generations.directory(home, revision, generation) == legacy
+    compact.mkdir(parents=True)
+    with pytest.raises(ValueError, match="Ambiguous"):
+        generations.directory(home, revision, generation)
+    assert (legacy / "retained-evidence").read_bytes() == b"unchanged"
+    assert compact.is_dir()  # Refusal never normalizes, moves or removes either.
+
+
+def test_windows_short_folder_does_not_relax_revision_binding(qualified, monkeypatch):
+    home, bootstrap, _, target, _ = qualified
+    monkeypatch.setattr(generations, "sys", SimpleNamespace(platform="win32"))
+    assert generations.active(home) == target  # Exact older retained receipt.
+    receipt = json.loads((target["folder"] / "validated.json").read_text())
+    receipt["generation"] = "c" * 32
+    folder = generations.directory(home, receipt["revision"], receipt["generation"])
+    folder.mkdir(parents=True)
+    (folder / "validated.json").write_text(json.dumps(receipt))
+    new = generations.promote(home, receipt, bootstrap)
+    assert new["folder"] == home / "updates/a" / receipt["generation"]
+    pointer = home / "updates/application-active.json"
+    actual = json.loads(pointer.read_text())
+    pointer.write_text(json.dumps({**actual, "revision": "f" * 40}))
+    with pytest.raises(ValueError, match="qualification"):
+        generations.active(home)
+    assert json.loads((folder / "validated.json").read_text()) == receipt
+
+
+@pytest.mark.parametrize('previous_exists', [False, True])
+def test_restore_exact_promoted_target_preserves_previous_chain(qualified, previous_exists):
+    home, bootstrap, _, original, _ = qualified
+    previous = original if previous_exists else None
+    if not previous_exists:
+        (home / 'updates/application-active.json').unlink()
+    receipt = json.loads((original['folder'] / 'validated.json').read_text())
+    receipt['generation'] = 'c' * 32
+    folder = generations.directory(home, receipt['revision'], receipt['generation'])
+    folder.mkdir(parents=True)
+    (folder / 'validated.json').write_text(json.dumps(receipt))
+    promoted = generations.promote(home, receipt, bootstrap)
+    generations.restore(home, promoted, previous, bootstrap, expected_bootstrap=promoted['bootstrap'])
+    assert generations.active(home) == previous
+    assert (folder / 'validated.json').is_file()
+
+
+def test_restore_cannot_overwrite_later_promoted_generation(qualified):
+    home, bootstrap, _, previous, _ = qualified
+    receipt = json.loads((previous['folder'] / 'validated.json').read_text())
+    targets = []
+    for character in ('c', 'd'):
+        receipt['generation'] = character * 32
+        folder = generations.directory(home, receipt['revision'], receipt['generation'])
+        folder.mkdir(parents=True)
+        (folder / 'validated.json').write_text(json.dumps(receipt))
+        targets.append(generations.promote(home, receipt, bootstrap))
+    with pytest.raises(ValueError, match='changed'):
+        generations.restore(home, targets[0], previous, bootstrap, expected_bootstrap=targets[0]['bootstrap'])
+    assert generations.active(home) == targets[1]
+
+
+def test_pointer_writers_share_a_nonblocking_lock(qualified):
+    from filelock import Timeout
+    home, bootstrap, _, previous, _ = qualified
+    receipt = json.loads((previous['folder'] / 'validated.json').read_text())
+    with generations._pointer_lock(home):
+        with pytest.raises(Timeout):
+            generations.promote(home, receipt, bootstrap)
+        with pytest.raises(Timeout):
+            generations.restore(home, previous, None, bootstrap, expected_bootstrap=previous['bootstrap'])
+    assert generations.active(home) == previous
 
 
 def isolated_launchers(tmp_path, archive=False):
@@ -125,6 +259,29 @@ def test_bootstrap_execs_qualified_interpreter_in_real_isolated_environments(tmp
     result = subprocess.check_output([str(python), '-I', '-m', 'amplifier_web', *arguments], env=environment, text=True)
     actual = json.loads(result)
     assert Path(actual['prefix']).resolve() == candidate.resolve()
+    assert actual['args'] == arguments
+
+
+@pytest.mark.parametrize('previous_exists', [False, True])
+def test_restored_bootstrap_executes_previous_real_isolated_interpreter(tmp_path, previous_exists):
+    import os
+    import subprocess
+
+    home, bootstrap, candidate, receipt = isolated_launchers(tmp_path, archive=True)
+    previous = generations.promote(home, receipt, bootstrap) if previous_exists else None
+    newer = {**receipt, 'generation': 'e' * 32}
+    folder = generations.directory(home, newer['revision'], newer['generation'])
+    folder.mkdir(parents=True)
+    (folder / 'validated.json').write_text(json.dumps(newer))
+    promoted = generations.promote(home, newer, bootstrap)
+    generations.restore(home, promoted, previous, bootstrap, expected_bootstrap=promoted['bootstrap'])
+    python = bootstrap / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+    arguments = ['--data-dir', str(home), '--port', '8999']
+    environment = {name: os.environ[name] for name in ('PATH', 'SystemRoot') if name in os.environ}
+    environment['AMPLIFIER_WEB_HOME'] = str(home)
+    actual = json.loads(subprocess.check_output(
+        [str(python), '-I', '-m', 'amplifier_web', *arguments], env=environment, text=True))
+    assert Path(actual['prefix']).resolve() == (candidate if previous_exists else bootstrap).resolve()
     assert actual['args'] == arguments
 
 

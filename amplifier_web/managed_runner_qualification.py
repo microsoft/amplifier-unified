@@ -181,6 +181,8 @@ def cancel(app, path, record, config):
 
 def advance(app, path, record, config, *, admission=None):
     """Advance a bounded step; return waiting/qualified/failed/unknown."""
+    if config.get('backend') != 'incus':
+        raise ValueError('Target-local certification is only supported for explicit Incus runners.')
     state = record.get('probeState', 'new')
     if state in {'qualified', 'failed'}:
         return state

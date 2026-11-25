@@ -29,6 +29,7 @@ class StartupTimings:
     neither clock establishes provider latency or the host's ready observation.
     """
     PHASES = frozenset({'worker.bootstrap', 'worker.imports', 'worker.ownership',
+        'worker.runtime.verify.before_prepare', 'worker.runtime.verify.after_prepare',
         'worker.recovery', 'manager.prepare', 'manager.config', 'manager.history.load',
         'manager.bundle.load', 'manager.plan', 'manager.bundle.prepare',
         'manager.providers', 'manager.history.repair', 'manager.session.create',
@@ -173,7 +174,7 @@ _READER_FRAME_SOURCES = (
     ('amplifier_web.host.storage', 'SessionStore', '_atomic', 'storage.atomic'),
     ('amplifier_web.naming', None, 'persist', 'storage.naming'),
 )
-_COMMAND_FRAME_LABELS = frozenset({'worker.command', 'worker.command_serial',
+_COMMAND_FRAME_LABELS = frozenset({'worker.command', 'worker.command_serial', 'worker.stdin',
                                  *(label for _, _, _, label in _READER_FRAME_SOURCES)})
 _COMMAND_MAX_ERRORS = 4
 _COMMAND_MAX_FRAMES = 5
@@ -203,7 +204,7 @@ def _command_frame_codes():
             continue
         methods = vars(worker)
         for method, label in (('command', 'worker.command'),
-                              ('_command_serial', 'worker.command_serial')):
+                              ('_command_serial', 'worker.command_serial'), ('read', 'worker.stdin')):
             function = methods.get(method)
             if type(function) is types.FunctionType:
                 codes.append((function.__code__, label))
@@ -371,7 +372,8 @@ def _validated_reader(value):
 def validate_runtime_failure_witness(value):
     """Copy a closed causal envelope; reader facts do not prove input outcomes."""
     try:
-        if not _command_keys(value, ('schema', 'origin', 'factsStatus', 'errors', 'truncated'), ('reader',)):
+        if not _command_keys(value, ('schema', 'origin', 'factsStatus', 'errors', 'truncated'),
+                             ('reader', 'workerFailure')):
             return None
         if type(value['schema']) is not int or value['schema'] != 1:
             return None
@@ -387,7 +389,7 @@ def validate_runtime_failure_witness(value):
             reader = _validated_reader(value.get('reader'))
             if reader is None or status != ('not_applicable' if reader['reason'] == 'eof' else 'valid'):
                 return None
-        elif 'reader' in value:
+        elif 'reader' in value or 'workerFailure' in value:
             return None
         facts = validate_command_failure_facts({'errors': value['errors'], 'truncated': value['truncated']})
         if facts is None or status != 'valid' and (facts['errors'] or facts['truncated']):
@@ -395,6 +397,18 @@ def validate_runtime_failure_witness(value):
         result = {'schema': 1, 'origin': origin, 'factsStatus': status, **facts}
         if reader is not None:
             result['reader'] = reader
+        if 'workerFailure' in value:
+            worker = value['workerFailure']
+            if not _command_keys(worker, ('source', 'factsStatus', 'errors', 'truncated')):
+                return None
+            source, status = worker['source'], worker['factsStatus']
+            if (type(source) is not str or source not in ('execution', 'stdin', 'other')
+                    or type(status) is not str or status not in ('valid', 'invalid', 'missing')):
+                return None
+            facts = validate_command_failure_facts({'errors': worker['errors'], 'truncated': worker['truncated']})
+            if facts is None or status != 'valid' and (facts['errors'] or facts['truncated']):
+                return None
+            result['workerFailure'] = {'source': source, 'factsStatus': status, **facts}
         return result if len(json.dumps(result).encode('utf-8')) <= _COMMAND_MAX_BYTES else None
     except BaseException:
         return None
@@ -411,41 +425,84 @@ def runtime_failure_witness(error):
         return None
 
 
+_STARTUP_ERROR_CLASSES = tuple((kind, kind.__name__) for kind in (
+    Exception, RuntimeError, AssertionError, ValueError, TypeError, KeyError,
+    AttributeError, ImportError, ModuleNotFoundError, OSError, PermissionError,
+    FileNotFoundError, NotADirectoryError, IsADirectoryError, NotImplementedError,
+    TimeoutError, asyncio.CancelledError, subprocess.TimeoutExpired,
+    subprocess.CalledProcessError, UnicodeError, UnicodeDecodeError, UnicodeEncodeError,
+))
+_STARTUP_CLASS_LABELS = frozenset(label for _, label in _STARTUP_ERROR_CLASSES) | {'ModuleActivationError', 'other'}
+
+
+def validate_startup_failure_facts(value):
+    """Copy the existing private receipt's finite facts, never arbitrary detail."""
+    try:
+        if not _command_keys(value, ('errors', 'truncated')):
+            return None
+        errors, truncated = value['errors'], value['truncated']
+        if type(errors) is not list or len(errors) > 4 or type(truncated) is not bool:
+            return None
+        rows = []
+        for error in errors:
+            if not _command_keys(error, ('class',), ('errno', 'winerror', 'returncode')):
+                return None
+            label = error['class']
+            if type(label) is not str or len(label) > 32 or label not in _STARTUP_CLASS_LABELS:
+                return None
+            row = {'class': label}
+            for key in ('errno', 'winerror', 'returncode'):
+                if key in error:
+                    if (not _command_number(error[key])
+                            or key == 'returncode' and label != 'CalledProcessError'
+                            or key != 'returncode' and label not in _COMMAND_OS_LABELS):
+                        return None
+                    row[key] = error[key]
+            rows.append(row)
+        return {'errors': rows, 'truncated': truncated}
+    except BaseException:
+        return None
+
+
 def _startup_exception_facts(error):
+    """Fact capture is optional and must not replace the original failure."""
+    try:
+        return _collect_startup_exception_facts(error)
+    except BaseException:
+        return {'errors': [], 'truncated': True}
+
+
+def _collect_startup_exception_facts(error):
     """Closed, payload-free facts while the original exception still exists.
 
     Exact class identity only. Unknown/subclass names and their properties never
     become labels; exception messages, arguments, commands and frames stay private.
     """
-    kinds = tuple((kind, kind.__name__) for kind in (
-        Exception, RuntimeError, AssertionError, ValueError, TypeError, KeyError,
-        AttributeError, ImportError, ModuleNotFoundError, OSError, PermissionError,
-        FileNotFoundError, NotADirectoryError, IsADirectoryError, NotImplementedError,
-        TimeoutError, asyncio.CancelledError, subprocess.TimeoutExpired,
-        subprocess.CalledProcessError, UnicodeError, UnicodeDecodeError, UnicodeEncodeError,
-    ))
     module = sys.modules.get('amplifier_foundation.modules.activator')
     activation = vars(module).get('ModuleActivationError') if type(module) is types.ModuleType else None
     rows, seen = [], set()
     while isinstance(error, BaseException) and id(error) not in seen and len(rows) < 4:
         seen.add(id(error))
         kind = type(error)
-        label = next((label for known, label in kinds if kind is known), 'other')
+        label = next((label for known, label in _STARTUP_ERROR_CLASSES if kind is known), 'other')
         row = {'class': 'ModuleActivationError' if kind is activation else label}
         if label != 'other' and isinstance(error, OSError):
             for key in ('errno', 'winerror'):
-                number = BaseException.__getattribute__(error, key) if hasattr(error, key) else None
+                try:
+                    number = BaseException.__getattribute__(error, key)
+                except AttributeError:
+                    continue
                 if type(number) is int and -(2**31) <= number < 2**32:
                     row[key] = number
         if kind is subprocess.CalledProcessError:
-            number = error.returncode
+            number = BaseException.__getattribute__(error, '__dict__').get('returncode')
             if type(number) is int and -(2**31) <= number < 2**32:
                 row['returncode'] = number
         rows.append(row)
-        cause = BaseException.__getattribute__(error, '__cause__')
+        cause = BaseException.__cause__.__get__(error)
         error = cause if cause is not None else (
-            None if BaseException.__getattribute__(error, '__suppress_context__')
-            else BaseException.__getattribute__(error, '__context__'))
+            None if BaseException.__suppress_context__.__get__(error)
+            else BaseException.__context__.__get__(error))
     return {'errors': rows, 'truncated': isinstance(error, BaseException)}
 
 

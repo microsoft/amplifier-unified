@@ -193,10 +193,13 @@ async def test_preflight_failure_leaves_source_usable_without_release(tmp_path, 
             await app.close()
             app = AppService(tmp_path / 'app', runtime, workspace=root)
         receipt = app.worktrees.receipts(sid)[0]
-        assert receipt['phase'] == 'rejected'
-        assert app.worktrees.operation_shape(receipt)['state'] == 'failed'
-        assert app.worktrees.execution_state(sid)['fenced'] is False
-        assert app._session(sid)['configurationBusy'] is False
+        # A restarted pending observation cannot claim marker removal from an
+        # unavailable synthetic transport. Machine absence proof has its own
+        # actual-runtime regression; no live writer is cleared from this mock.
+        assert receipt['phase'] == ('unknown' if restart else 'rejected')
+        assert app.worktrees.operation_shape(receipt)['state'] == ('outcome_unknown' if restart else 'failed')
+        assert app.worktrees.execution_state(sid)['fenced'] is restart
+        assert app._session(sid)['configurationBusy'] is restart
         assert app._session(sid).get('workingDirectory', str(root)) == str(root)
         runtime.quiesce_for_handoff.assert_not_awaited()
     finally:

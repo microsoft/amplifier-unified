@@ -49,7 +49,9 @@ try{
   if(await page.getByRole('button',{name:'Open navigation',exact:true}).isVisible()){
    await reach('button[aria-label="Open navigation"]','Open navigation');await page.keyboard.press('Enter');
   }
-  await reach(page.getByRole('button',{name:/^Settings(?: \d+ unread items)?$/}),'Settings');
+  await reach(page.getByRole('button',{name:'App options',exact:true}),'App options');
+  await page.keyboard.press('Enter');
+  await reach(page.getByRole('group',{name:'App options',exact:true}).getByRole('button',{name:/^Settings(?: \d+ unread items)?$/}),'Settings');
   await page.keyboard.press('Enter');
   const panel=page.locator('.a-settings-experience');await expect(panel).toBeVisible();
   for(const id of ['ai','smart-tools','appearance','workspaces','voice','notifications','privacy','updates']){

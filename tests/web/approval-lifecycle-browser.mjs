@@ -186,7 +186,7 @@ try{
  const panel=page.locator('#workspace-canvas'),history=panel.locator('[data-overview-section="permissions"]');
  const closeHistory=async()=>{
   const before=await state(),response=responseFor(command=>command.action==='canvas.visibility'&&command.args.open===false);
-  await panel.getByRole('button',{name:'Close canvas panel',exact:true}).click();
+  await page.locator('#canvas-toggle').click();
   await expect(panel).toBeHidden();
   const received=await response;if(received.error)throw received.error;
   const request=received.response.request();
@@ -226,10 +226,108 @@ try{
  await page.screenshot({path:join(output,'narrow.png'),animations:'disabled'});
  const dismissButton=current.getByRole('button',{name:'Dismiss old request'});
  await dismissButton.scrollIntoViewIfNeeded();
- assert.equal(await dismissButton.evaluate(button=>{
-  const bounds=button.getBoundingClientRect(),container=button.closest('[data-part="approvals"]').getBoundingClientRect();
-  return bounds.top>=container.top&&bounds.bottom<=container.bottom&&button.contains(document.elementFromPoint(bounds.x+bounds.width/2,bounds.y+bounds.height/2));
- }),true,'Narrow dismissal is visible and hit-testable after scrolling');
+ const dismissalGeometry=await dismissButton.evaluate(async button=>{
+  const samples=[],card=button.closest('[data-part="approvals"]');
+  for(let frame=0;frame<4;frame++){
+   const bounds=button.getBoundingClientRect(),container=card.getBoundingClientRect();
+   const hit=document.elementFromPoint(bounds.x+bounds.width/2,bounds.y+bounds.height/2);
+   samples.push({frame,button:bounds.toJSON(),container:container.toJSON(),scrollTop:card.scrollTop,
+    clientHeight:card.clientHeight,scrollHeight:card.scrollHeight,viewport:{width:innerWidth,height:innerHeight},
+    hit:hit?{tag:hit.tagName,id:hit.id,class:hit.className,name:hit.getAttribute('aria-label')}:null,
+    reachable:bounds.top>=container.top&&bounds.bottom<=container.bottom&&button.contains(hit)});
+   if(frame<3)await new Promise(resolve=>requestAnimationFrame(resolve));
+  }
+  return samples;
+ });
+ await writeFile(join(output,'dismissal-geometry.json'),JSON.stringify(dismissalGeometry,null,2)+'\n');
+ // scrollHeight/clientHeight are integer CSS pixels but layout edges can be
+ // fractional. Compare occupied device-pixel centers, not an arbitrary epsilon;
+ // additionally require all label text and real interior hit targets to fit.
+ // This is a geometry model, not physical screenshot/raster qualification.
+ const dismissalReachability=button=>{
+  if(visualViewport&&(visualViewport.scale!==1||visualViewport.offsetLeft!==0||visualViewport.offsetTop!==0))
+   throw Error('This fixture requires an unscaled, unshifted visual viewport');
+  if(button.childElementCount!==0)throw Error('This fixture requires an ordinary text-only dismissal button');
+  const box=button.getBoundingClientRect(),scale=devicePixelRatio;
+  const clip={left:0,top:0,right:innerWidth,bottom:innerHeight},clips=[];
+  for(let node=button;node;node=node.parentElement){
+   const style=getComputedStyle(node),r=node.getBoundingClientRect();
+   if(style.transform!=='none'||style.clipPath!=='none'||style.scale!=='none'||style.rotate!=='none'||style.translate!=='none'
+    ||!['1','normal'].includes(style.zoom))throw Error('Unsupported transformed or shaped dismissal geometry');
+   if(node===button)continue;
+   const x=style.overflowX!=='visible',y=style.overflowY!=='visible';
+   if(!x&&!y)continue;
+   // This synthetic fixture has no classic scrollbar/gutter. Fail explicitly
+   // if one appears instead of treating it as usable padding-box content.
+   const verticalGutter=node.offsetWidth-node.clientWidth-Math.round(parseFloat(style.borderLeftWidth)+parseFloat(style.borderRightWidth));
+   const horizontalGutter=node.offsetHeight-node.clientHeight-Math.round(parseFloat(style.borderTopWidth)+parseFloat(style.borderBottomWidth));
+   if(verticalGutter!==0||horizontalGutter!==0)throw Error('Unexpected classic scrollbar/gutter in dismissal fixture');
+   const inner={left:r.left+parseFloat(style.borderLeftWidth),right:r.right-parseFloat(style.borderRightWidth),
+    top:r.top+parseFloat(style.borderTopWidth),bottom:r.bottom-parseFloat(style.borderBottomWidth)};
+   if(x){clip.left=Math.max(clip.left,inner.left);clip.right=Math.min(clip.right,inner.right)}
+   if(y){clip.top=Math.max(clip.top,inner.top);clip.bottom=Math.min(clip.bottom,inner.bottom)}
+   clips.push({tag:node.tagName,class:node.className,x,y,inner});
+  }
+  const pixels=(start,end)=>[Math.ceil(scale*start-.5),Math.ceil(scale*end-.5)-1];
+  const inside=(start,end,low,high)=>{
+   const [first,last]=pixels(start,end),[clipFirst,clipLast]=pixels(low,high);
+   return first<=last&&first>=clipFirst&&last<=clipLast;
+  };
+  const modeledContained=inside(box.left,box.right,clip.left,clip.right)&&inside(box.top,box.bottom,clip.top,clip.bottom);
+  const texts=[],walker=document.createTreeWalker(button,NodeFilter.SHOW_TEXT);
+  while(walker.nextNode())if(walker.currentNode.textContent.trim()){
+   const range=document.createRange();range.selectNodeContents(walker.currentNode);
+   for(const r of range.getClientRects())texts.push({left:r.left,right:r.right,top:r.top,bottom:r.bottom});
+  }
+  const textContained=texts.length>0&&texts.every(r=>r.left>=Math.max(clip.left,box.left)&&r.right<=Math.min(clip.right,box.right)
+   &&r.top>=Math.max(clip.top,box.top)&&r.bottom<=Math.min(clip.bottom,box.bottom));
+  const hits=[];
+  for(const x of [.25,.5,.75])for(const y of [.25,.5,.75])
+   hits.push(button.contains(document.elementFromPoint(box.left+box.width*x,box.top+box.height*y)));
+  return {scale,box:box.toJSON(),clip,clips,texts,modeledContained,textContained,hits,
+   centerHit:hits[4],reachable:modeledContained&&textContained&&hits.every(Boolean)};
+ };
+ const reachable=await dismissButton.evaluate(dismissalReachability);
+ assert.equal(reachable.reachable,true,JSON.stringify(reachable));
+ // Reject a genuinely clipped target even while its center is still usable.
+ const savedStyle=await dismissButton.getAttribute('style');
+ let clipped,textClipped,occluded,offCenterOccluded;
+ try{
+  await dismissButton.evaluate(button=>{button.style.position='relative';button.style.top='8px'});
+  clipped=await dismissButton.evaluate(dismissalReachability);
+  await writeFile(join(output,'dismissal-clipped-control.json'),JSON.stringify(clipped,null,2)+'\n');
+  assert.equal(clipped.centerHit,true);assert.equal(clipped.textContained,true);assert.ok(clipped.hits.every(Boolean));
+  assert.equal(clipped.modeledContained,false);assert.equal(clipped.reachable,false);
+ }finally{await dismissButton.evaluate((button,style)=>style===null?button.removeAttribute('style'):button.setAttribute('style',style),savedStyle)}
+ try{
+  await dismissButton.evaluate(button=>{
+   const box=button.getBoundingClientRect();
+   button.style.width=box.width+'px';button.style.minWidth=box.width+'px';button.style.maxWidth=box.width+'px';
+   button.style.height=box.height+'px';button.style.boxSizing='border-box';
+   button.style.textIndent='500px';button.style.overflow='hidden';
+  });
+  textClipped=await dismissButton.evaluate(dismissalReachability);
+  await writeFile(join(output,'dismissal-text-control.json'),JSON.stringify(textClipped,null,2)+'\n');
+  assert.deepEqual(textClipped.box,reachable.box,'Text-only negative must preserve the original target box');
+  assert.equal(textClipped.modeledContained,true);assert.ok(textClipped.hits.every(Boolean));
+  assert.equal(textClipped.textContained,false);assert.equal(textClipped.reachable,false);
+ }finally{await dismissButton.evaluate((button,style)=>style===null?button.removeAttribute('style'):button.setAttribute('style',style),savedStyle)}
+ const cover=await dismissButton.evaluateHandle(button=>{
+  const r=button.getBoundingClientRect(),cover=document.createElement('div');
+  Object.assign(cover.style,{position:'fixed',left:r.left+r.width/2-5+'px',top:r.top+r.height/2-5+'px',
+   width:'10px',height:'10px',zIndex:'2147483647',background:'black',pointerEvents:'auto'});
+  document.body.append(cover);return cover;
+ });
+ try{
+  occluded=await dismissButton.evaluate(dismissalReachability);
+  assert.equal(occluded.modeledContained,true);assert.equal(occluded.textContained,true);assert.equal(occluded.centerHit,false);assert.equal(occluded.reachable,false);
+  await cover.evaluate((node,box)=>{node.style.left=box.x+box.width*.25-5+'px';node.style.top=box.y+box.height*.25-5+'px'},reachable.box);
+  offCenterOccluded=await dismissButton.evaluate(dismissalReachability);
+  assert.equal(offCenterOccluded.modeledContained,true);assert.equal(offCenterOccluded.textContained,true);
+  assert.equal(offCenterOccluded.centerHit,true);assert.equal(offCenterOccluded.hits[0],false);assert.equal(offCenterOccluded.reachable,false);
+ }finally{await cover.evaluate(node=>node.remove());await cover.dispose()}
+ assert.equal((await dismissButton.evaluate(dismissalReachability)).reachable,true);
+ await writeFile(join(output,'dismissal-reachability.json'),JSON.stringify({reachable,clipped,textClipped,occluded,offCenterOccluded},null,2)+'\n');
  await page.screenshot({path:join(output,'narrow-actions.png'),animations:'disabled'});
  await current.getByRole('button',{name:'Dismiss old request'}).click();
  await expect(current).toHaveCount(0);
@@ -262,7 +360,7 @@ try{
  await expect(touch.locator('#workspace-canvas [data-permission-history-id="capability:later"]')).toContainText('Permission denied');
  assert.equal(await touch.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
  await touch.screenshot({path:join(output,'history-touch.png'),animations:'disabled'});
- await touch.getByRole('button',{name:'Close canvas panel',exact:true}).tap();
+ await touch.locator('#canvas-toggle').tap();
  await expect(touch.locator('#workspace-canvas')).toBeHidden();await touchContext.close();
  // Pending cards must complete the ordinary guarded path while a different,
  // read-only history reveal is held. Releasing history cannot make this pass.
@@ -329,12 +427,14 @@ try{
  const historyOpening=responseFor(command=>command.action==='view.update'&&command.args?.patch?.canvasDraft?.delivery==='permissions');
  await historyEntry().click();await expect.poll(()=>selectionHeld).toBe(true);
  const selectionResponse=responseFor(command=>command.action==='canvas.select'&&command.args.id===newerDocumentId);
- const newerTab=panel.getByRole('tab',{name:'Newer document choice',exact:true});
- await newerTab.click();releaseHeld();
+ const documentControl=panel.getByRole('button',{name:/^Open documents, /});
+ await documentControl.click();
+ const documents=page.getByRole('dialog',{name:'Open documents',exact:true});
+ await documents.getByRole('button',{name:/^Newer document choice markdown/}).click();releaseHeld();
  const openedRow=await acceptedResponse(historyOpening),selectedRow=await acceptedResponse(selectionResponse);
  await page.unroute('**/api/actions',holdSelectionHistory);
- await expect(newerTab).toHaveAttribute('aria-selected','true');
- await expect(newerTab).toBeFocused();
+ await expect(documentControl).toHaveAttribute('aria-label',/^Open documents, \d+ open, Newer document choice$/);
+ await expect(documentControl).toBeFocused();
  // Allow the presentation frame, then flush queued housekeeping before the host read.
  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  // One explicit operation. Node bounds the wait; page defaultTimeout does not
@@ -371,7 +471,7 @@ try{
  assert.equal(selected.selectedSessionId,sid);assert.equal(selected.canvas.id,newerDocumentId);
  assert.equal(selected.view.canvasDraft.library,false);
  assert.ok(selected.revision>=(selectedRow.body.stateRevision??selectedRow.body.revision));
- await expect(history).toBeHidden();await expect(newerTab).toBeFocused();
+ await expect(history).toBeHidden();await expect(documentControl).toBeFocused();
  checks.push({name:'Held history/newer document wins',opened:openedRow,selected:selectedRow,server:selected});
  await page.screenshot({path:join(output,'newer-document-retained.png'),animations:'disabled'});
  await action('canvas.select',{id:unfinishedId});
@@ -379,7 +479,8 @@ try{
  const source='export default ({React})=>function Editor({host}){const [text,setText]=React.useState("");const [mount]=React.useState(()=>crypto.randomUUID());const [dirty,setDirty]=React.useState("unrequested");return React.createElement("label",null,"Retained local edit",React.createElement("input",{"data-mount":mount,"data-dirty-settlement":dirty,value:text,onChange:event=>{setText(event.target.value);setDirty("pending");host.setDirty(true).then(result=>setDirty(JSON.stringify(result)),error=>setDirty("error: "+error.message))}}))}';
  const staged=await action('shell.packages.stage',{manifest,source}),digest=staged.result.digest;
  assert.equal((await action('shell.packages.validate',{digest})).result.status,'passed');
- await panel.getByRole('button',{name:'Canvas details',exact:true}).click();
+ await panel.locator('summary[aria-label="More canvas options"]').click();
+ await panel.locator('.a-canvas-more-menu').getByRole('button',{name:'Canvas details',exact:true}).click();
  await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(digest);
  const edit=page.getByLabel('Retained local edit', {exact:true});
  await panel.getByRole('button',{name:'Close canvas details',exact:true}).click();
@@ -397,7 +498,8 @@ try{
  await historyEntry().click();await expect(history).toBeVisible();await expect(edit).toBeHidden();
  const refusal=await action('canvas.show',{kind:'text',title:'Must not replace',content:'not accepted'}).then(value=>({value}),error=>({error:error.message}));
  assert.match(refusal.error,/viewer edit/);
- await panel.getByRole('tab',{name:'Unfinished document',exact:true}).click();
+ await documentControl.click();
+ await documents.getByRole('button',{name:/^Unfinished document markdown/}).click();
  await expect(edit).toHaveValue('Keep unsaved permission review edit');
  assert.equal(await edit.getAttribute('data-mount'),mount);
  const afterView=(await views()).find(row=>row.viewId==='primary');
@@ -418,7 +520,7 @@ try{
  await historyEntry().click();
  await expect.poll(()=>historyHeld).toBe(true);
  const closing=responseFor(command=>command.action==='canvas.visibility'&&command.args.open===false);
- await panel.getByRole('button',{name:'Close canvas panel',exact:true}).click();
+ await page.locator('#canvas-toggle').click();
  await expect(panel).toBeHidden();
  checks.push({name:'Newer Close hides immediately before either receipt',serverStillOpen:(await serverSnapshot(beforeClose.client.id)).canvas.open});
  releaseHeld();

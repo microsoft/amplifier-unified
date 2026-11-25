@@ -1,6 +1,7 @@
 """Portable refusal oracles; real NTFS/uv qualification is separate."""
 from contextlib import contextmanager
 from pathlib import Path
+import asyncio
 import os
 import tempfile
 import unittest
@@ -173,6 +174,7 @@ class InstalledTargetTests(unittest.IsolatedAsyncioTestCase):
                                                        supports=lambda prefix: supports),
             "host.config": SimpleNamespace(app_home=lambda: f.root / "unused"),
             "windows_uv_tool": windows_uv_tool,
+            "windows_service": SimpleNamespace(installed_target=lambda home: None),
         }
 
         def load(name, *args, **kwargs):
@@ -201,6 +203,7 @@ class InstalledTargetTests(unittest.IsolatedAsyncioTestCase):
             "__builtins__": {**vars(builtins), "__import__": load},
             "Path": Path, "os": SimpleNamespace(name=platform),
             "sys": SimpleNamespace(prefix=str(running or f.prefix)), "__version__": "fixture",
+            "asyncio": asyncio,
             "shutil": SimpleNamespace(which=which),
             "process": process, "git_environment": lambda: {}, "json": json,
             "metadata": AbsentMetadata,

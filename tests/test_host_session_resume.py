@@ -38,11 +38,13 @@ def mounted_host(tmp_path, monkeypatch):
     loop = SimpleNamespace(_select_provider=lambda _: provider, load_failures=[])
     capabilities = {}
     mounted_config = {}
-    coordinator = SimpleNamespace(get=lambda key: {"context": context, "orchestrator": loop,
+    coordinator = SimpleNamespace(session_id=runtime.session_id, session_state={},
+        get=lambda key: {"context": context, "orchestrator": loop,
         "providers": {"fixture": provider}, "tools": {}}.get(key), get_capability=capabilities.get,
         register_capability=lambda key, value: capabilities.update({key: value}),
         hooks=SimpleNamespace(register=Mock()), register_cleanup=Mock(), config=mounted_config)
-    session = SimpleNamespace(coordinator=coordinator, config=mounted_config, cleanup=AsyncMock(), execute=AsyncMock())
+    session = SimpleNamespace(session_id=runtime.session_id, coordinator=coordinator,
+        config=mounted_config, cleanup=AsyncMock(), execute=AsyncMock())
     prepared = SimpleNamespace(mount_plan={"session": {"orchestrator": {"module": "loop-live"}}},
                                create_session=AsyncMock(return_value=session))
     loaded = SimpleNamespace(hooks=[], to_mount_plan=lambda: copy.deepcopy(prepared.mount_plan),
@@ -50,12 +52,13 @@ def mounted_host(tmp_path, monkeypatch):
     registry = SimpleNamespace(list_registered=lambda: {}, find=lambda _: None, register=Mock(), save=Mock(),
                                load=AsyncMock(return_value=loaded))
     configurator = SimpleNamespace(apply_saved_settings=AsyncMock(), take_snapshot=Mock())
-    monkeypatch.setitem(sys.modules, "amplifier_foundation", SimpleNamespace(
-        BundleRegistry=lambda *, persist=True, read_persisted=True, **_: registry, SessionConfigurator=lambda *_: configurator))
+    import amplifier_foundation
+    monkeypatch.setattr(amplifier_foundation, "BundleRegistry",
+        lambda *, persist=True, read_persisted=True, **_: registry)
+    monkeypatch.setattr(amplifier_foundation, "SessionConfigurator", lambda *_: configurator)
     monkeypatch.setitem(sys.modules, "amplifier_module_loop_live.runtime", SimpleNamespace(Runtime=lambda: runtime))
     monkeypatch.setitem(sys.modules, "amplifier_module_loop_live.job_store", SimpleNamespace(
         JobStore=lambda _: SimpleNamespace(rows=[], close=Mock())))
-    monkeypatch.setitem(sys.modules, "amplifier_core", SimpleNamespace(HookResult=lambda: None))
     monkeypatch.setitem(sys.modules, "amplifier_web.host.children", SimpleNamespace(
         install_children=AsyncMock(), StandaloneHostAdapter=lambda: object()))
     monkeypatch.setattr(host, "compose_configured_bundle", AsyncMock(return_value=loaded))
@@ -82,6 +85,55 @@ def mounted_host(tmp_path, monkeypatch):
 
 def snapshot(messages):
     return {"messages": copy.deepcopy(messages), "metadata": {}, "bundle": "anchors"}
+
+
+@pytest.fixture
+async def constructing_host(mounted_host):
+    """Use real Core construction when exercising before_initialize policies."""
+    from amplifier_core import AmplifierSession
+    # Load the real media boundary regardless of the surrounding collection.
+    from amplifier_foundation.session.media_host import SessionMediaBinding
+
+    h = mounted_host
+    loop = h.session.coordinator.get("orchestrator")
+    provider = h.session.coordinator.get("providers")["fixture"]
+    loop.execute = AsyncMock(side_effect=AssertionError("Initialization must not execute"))
+    provider.complete = AsyncMock(side_effect=AssertionError("Initialization must not call a provider"))
+    provider.parse_tool_calls = lambda response: []
+    h.prepared.mount_plan = {
+        "session": {"orchestrator": {"module": "loop-live"},
+                    "context": {"module": "context-fixture"}},
+        "providers": [{"module": "provider-fixture"}],
+    }
+
+    class Loader:
+        async def load(self, module_id, config, **kwargs):
+            async def mount(coordinator):
+                point, module, name = {
+                    "loop-live": ("orchestrator", loop, None),
+                    "context-fixture": ("context", h.context, None),
+                    "provider-fixture": ("providers", provider, "fixture"),
+                }[module_id]
+                await coordinator.mount(point, module, name=name)
+            return mount
+
+        def get_on_session_ready_queue(self):
+            return []
+
+        def clear_on_session_ready_queue(self):
+            pass
+
+    h.session = AmplifierSession(copy.deepcopy(h.prepared.mount_plan),
+                                session_id=h.runtime.session_id, is_resumed=True)
+    h.session.coordinator.loader = Loader()
+    h.cleanup = AsyncMock()
+    h.session.coordinator.register_cleanup(h.cleanup)
+    h.executed, h.provider_called = loop.execute, provider.complete
+    h.media_binding_type = SessionMediaBinding
+    try:
+        yield h
+    finally:
+        await h.session.cleanup()
 
 
 async def test_host_retains_agent_definitions_before_saved_settings_disable_them(mounted_host):
@@ -143,7 +195,90 @@ async def test_checkpoints_persist_tools_without_republishing_unchanged_message_
     assert h.runtime.emit.await_count == 4
 
 
-async def test_checkpoint_hook_timing_retains_recovery_writer_guard(mounted_host, monkeypatch):
+async def test_discarded_checkpoint_history_stays_inside_synchronous_visit(mounted_host):
+    h = mounted_host
+    h.runtime.generation = {'id': 'generation-one', 'input_ids': ['input-one']}
+    borrowing = False
+    visits = []
+    def visit(consumer):
+        nonlocal borrowing
+        borrowing = True
+        visits.append(len(h.context.messages))
+        try:
+            assert consumer(h.context.messages) is None
+        finally:
+            borrowing = False
+    h.capabilities['context.history.visit'] = visit
+    h.context.get_messages = AsyncMock(wraps=h.context.get_messages)
+    async def emit(*args, **kwargs):
+        assert not borrowing  # No borrowed transcript survives a possible yield.
+        assert all(set(row) == {'messageId', 'nativeIndex', 'generationId'}
+                   for row in kwargs['messageAnchors'])
+        await asyncio.sleep(0)
+    h.runtime.emit = AsyncMock(side_effect=emit)
+    rows = [
+        {'role': 'user', 'content': 'Input', 'metadata': {'amplifier_input': {'id': 'input-one'}}},
+        {'role': 'assistant', 'content': 'Response', 'metadata': {'nested': ['original']}},
+    ]
+    await h.prepare(snapshot(rows))
+    h.context.get_messages.assert_not_awaited()
+    assert visits == [2]
+    before = h.path.read_bytes()
+    h.context.messages[-1]['metadata']['nested'][0] = 'later edit'
+    assert h.path.read_bytes() == before
+    hook = next(call.args[1] for call in h.session.coordinator.hooks.register.call_args_list
+                if call.kwargs.get('name') == 'unified-checkpoint-tool:post')
+    await hook('tool:post', {'session_id': h.runtime.session_id})
+    h.context.get_messages.assert_not_awaited()
+    assert visits == [2, 2]
+    assert json.loads(h.path.read_text().splitlines()[-1])['metadata']['nested'] == ['later edit']
+
+    # Request preservation discards the checkpoint result too, but must still
+    # persist nested edits and publish changed anchors after releasing the borrow.
+    before = h.path.read_bytes()
+    h.context.messages[-1]['metadata']['nested'][0] = 'preserved edit'
+    h.runtime.generation['id'] = 'generation-two'
+    assert h.path.read_bytes() == before
+    references = await h.capabilities['context.preserve_evidence'](copy.deepcopy(h.context.messages))
+    assert references == []  # These ordinary messages need no large-output references.
+    h.context.get_messages.assert_not_awaited()
+    assert visits == [2, 2, 2]
+    assert json.loads(h.path.read_text().splitlines()[-1])['metadata']['nested'] == ['preserved edit']
+    assert h.runtime.emit.call_args.kwargs['generation_id'] == 'generation-two'
+
+    returned = await h.capabilities['live.checkpoint']()
+    h.context.get_messages.assert_awaited_once()
+    assert visits == [2, 2, 2]  # Ordinary/full-result callers still get detached rows.
+    returned[-1]['metadata']['nested'][0] = 'caller edit'
+    assert h.context.messages[-1]['metadata']['nested'] == ['preserved edit']
+
+
+@pytest.mark.parametrize('fault', ['async-visitor', 'async-result', 'no-visit'])
+async def test_invalid_history_visitor_never_retries_through_a_snapshot(mounted_host, fault):
+    h = mounted_host
+    await h.prepare(snapshot([{'role': 'user', 'content': 'preserved'}]))
+    h.context.get_messages = AsyncMock(wraps=h.context.get_messages)
+    before = h.path.read_bytes()
+    entered = []
+    async def later():
+        entered.append('awaited')
+    async def async_visit(consumer):
+        entered.append('awaited')
+        consumer(h.context.messages)
+    def visit(consumer):
+        if fault == 'async-result':
+            consumer(h.context.messages)
+            return later()
+    h.capabilities['context.history.visit'] = async_visit if fault == 'async-visitor' else visit
+    with pytest.raises(RuntimeError, match='synchronous|did not provide'):
+        await h.capabilities['live.checkpoint'](capture_messages=False)
+    assert entered == []
+    assert h.path.read_bytes() == before
+    h.context.get_messages.assert_not_awaited()
+
+
+@pytest.mark.parametrize('visit_history', [False, True])
+async def test_checkpoint_hook_timing_retains_recovery_writer_guard(mounted_host, monkeypatch, visit_history):
     from amplifier_web import performance_diagnostics
     h = mounted_host
     writer = Mock()
@@ -151,6 +286,8 @@ async def test_checkpoint_hook_timing_retains_recovery_writer_guard(mounted_host
     h.runtime.generation = {'id': 'timed-generation'}
     monkeypatch.setattr(performance_diagnostics, 'TIMING_ENABLED', True)
     h.capabilities['web.performance.emit'] = emit
+    if visit_history:
+        h.capabilities['context.history.visit'] = lambda consumer: consumer(h.context.messages)
     await h.prepare(write_guard=writer)
     adapter = h.capabilities['web.continuity.recovery']
     writer.reset_mock()
@@ -174,8 +311,10 @@ async def test_checkpoint_hook_timing_retains_recovery_writer_guard(mounted_host
 
 
 @pytest.mark.parametrize('failure', [RuntimeError('pipe failed'), asyncio.CancelledError()])
-async def test_failed_anchor_notification_is_retried_on_next_checkpoint(mounted_host, failure):
+@pytest.mark.parametrize('capture_messages', [True, False])
+async def test_failed_anchor_notification_is_retried_on_next_checkpoint(mounted_host, failure, capture_messages):
     h = mounted_host
+    h.capabilities['context.history.visit'] = lambda consumer: consumer(h.context.messages)
     await h.prepare()
     h.runtime.generation = {'id': 'generation-one', 'input_ids': ['input-one']}
     async def emit(*args, **kwargs):
@@ -189,11 +328,11 @@ async def test_failed_anchor_notification_is_retried_on_next_checkpoint(mounted_
     ]
     checkpoint = h.capabilities['live.checkpoint']
     with pytest.raises(type(failure)):
-        await checkpoint()
+        await checkpoint(capture_messages=capture_messages)
     assert 'Saved response.' in h.path.read_text()
-    await checkpoint()
+    await checkpoint(capture_messages=capture_messages)
     assert h.runtime.emit.await_count == 2
-    await checkpoint()
+    await checkpoint(capture_messages=capture_messages)
     assert h.runtime.emit.await_count == 2
 
 
@@ -336,29 +475,36 @@ async def test_missing_saved_connection_publishes_choices_without_changing_histo
 
 
 @pytest.mark.parametrize("failure", [RuntimeError, asyncio.CancelledError])
-async def test_initialization_failure_keeps_cleanup_ownership_before_session_returns(mounted_host, failure):
-    h = mounted_host
+async def test_initialization_failure_keeps_cleanup_ownership_before_session_returns(constructing_host, failure):
+    h = constructing_host
     h.store.save("native-root", [{"role": "user", "content": "Retained work"}], {"bundle": "anchors"})
     before = h.path.read_bytes()
     async def create(**kwargs):
         await kwargs["before_initialize"](h.session)
+        binding = h.session.coordinator.get_capability("web.media.construction")
+        assert isinstance(binding, h.media_binding_type) if os.name == "posix" else binding is None
+        assert not h.session.initialized
         raise failure("Later account failed during initialization")
     h.prepared.create_session.side_effect = create
-    with pytest.raises(failure):
+    with pytest.raises(failure, match="Later account failed during initialization"):
         await h.prepare()
-    h.session.cleanup.assert_awaited_once()
-    h.session.execute.assert_not_called()
+    h.cleanup.assert_awaited_once()
+    h.executed.assert_not_called()
+    h.provider_called.assert_not_called()
     assert h.path.read_bytes() == before
 
 
-async def test_root_routing_observes_isolated_decision_accounts_before_mount(mounted_host, monkeypatch):
+async def test_root_routing_observes_isolated_decision_accounts_before_mount(constructing_host, monkeypatch):
     from amplifier_web import decision_accounts, provider_isolation
     from amplifier_web.host import model_selection
 
-    h = mounted_host
+    h = constructing_host
     phases = []
     async def isolate(session):
         assert session is h.session
+        binding = session.coordinator.get_capability("web.media.construction")
+        assert isinstance(binding, h.media_binding_type) if os.name == "posix" else binding is None
+        assert not session.initialized and session.coordinator.get("orchestrator") is None
         phases.append("isolated")
     async def accounts_ready(session):
         assert session is h.session and phases == ["isolated"]
@@ -378,22 +524,32 @@ async def test_root_routing_observes_isolated_decision_accounts_before_mount(mou
         await kwargs["before_initialize"](h.session)
         assert phases == ["isolated", "accounts", "routed"]
         adapter.require_complete.assert_not_called()
+        await h.session.initialize()
         return h.session
     h.prepared.create_session.side_effect = create
 
     await h.prepare()
     adapter.require_complete.assert_called_once_with()
-    h.session.execute.assert_not_called()
+    assert h.session.initialized
+    h.executed.assert_not_called()
+    h.provider_called.assert_not_called()
 
 
-async def test_native_only_resume_keeps_complete_history_and_repairs_receipt_without_replay(mounted_host):
+async def test_native_only_resume_keeps_complete_history_and_repairs_receipt_without_replay(mounted_host, monkeypatch):
     h = mounted_host
     rows = [{"role": "user", "content": "first"}, {"role": "assistant", "content": "answer"},
             {"role": "user", "content": "second"},
             {"role": "tool", "tool_call_id": "call-1", "content": json.dumps(
                 {"status": "queued", "job_id": "job-1", "call_id": "call-1"})}]
     h.store.save("native-root", rows, {"bundle": "anchors"})
+    original_load = SessionStore.load
+    loads = []
+    def load(store, identity, **kwargs):
+        loads.append((identity, kwargs))
+        return original_load(store, identity, **kwargs)
+    monkeypatch.setattr(SessionStore, 'load', load)
     _, _, report = await h.prepare()
+    assert loads == [('native-root', {'prepare_index': True})]
     assert h.context.messages[:3] == rows[:3]
     receipt = json.loads(h.context.messages[3]["content"])
     assert receipt["status"] == "interrupted" and receipt["effects"] == "not_rolled_back"
@@ -402,6 +558,28 @@ async def test_native_only_resume_keeps_complete_history_and_repairs_receipt_wit
     assert h.store.load("native-root")[0] == h.context.messages
     assert report["resumed"] and report["history_source"] == "native"
     assert h.prepared.create_session.call_args.kwargs["session_id"] == "native-root"
+    h.session.execute.assert_not_called()
+
+
+async def test_resume_prepares_index_after_legacy_migration(mounted_host, monkeypatch):
+    h = mounted_host
+    private = SessionStore(h.home / 'sessions')
+    directory = private.directory('native-root')
+    directory.mkdir()
+    rows = [{'role': 'user', 'content': 'Resume the legacy saved history'}]
+    checkpoint = directory / 'checkpoint.json'
+    checkpoint.write_text(json.dumps({'version': 1, 'messages': rows, 'metadata': {'bundle': 'anchors'}}))
+    original_bytes = checkpoint.read_bytes()
+    original_load = SessionStore.load
+    loads = []
+    def load(store, identity, **kwargs):
+        loads.append((store.shared, kwargs))
+        return original_load(store, identity, **kwargs)
+    monkeypatch.setattr(SessionStore, 'load', load)
+    _, _, report = await h.prepare()
+    assert loads == [(True, {'prepare_index': True}), (False, {}), (True, {'prepare_index': True})]
+    assert h.context.messages == rows and report['resumed']
+    assert checkpoint.read_bytes() == original_bytes
     h.session.execute.assert_not_called()
 
 
@@ -456,9 +634,11 @@ async def test_preparing_saved_chat_does_not_change_recency_until_actual_context
 
 
 @pytest.mark.parametrize("mutation", ["append", "delete", "replace", "symlink"])
-async def test_out_of_band_native_change_blocks_later_checkpoint(mounted_host, mutation):
+@pytest.mark.parametrize('capture_messages', [True, False])
+async def test_out_of_band_native_change_blocks_later_checkpoint(mounted_host, mutation, capture_messages):
     from amplifier_foundation.session.transcript_guard import NativeTranscriptConflict
     h = mounted_host
+    h.capabilities['context.history.visit'] = lambda consumer: consumer(h.context.messages)
     rows = [{"role": "user", "content": "first"}]
     h.store.save("native-root", rows, {})
     await h.prepare(snapshot(rows))
@@ -481,7 +661,7 @@ async def test_out_of_band_native_change_blocks_later_checkpoint(mounted_host, m
     native_after = h.path.read_bytes() if h.path.exists() else None
     h.context.messages.append({"role": "assistant", "content": "stale in-memory answer"})
     with pytest.raises(NativeTranscriptConflict):
-        await h.capabilities["live.checkpoint"]("completed")
+        await h.capabilities["live.checkpoint"]("completed", capture_messages=capture_messages)
     assert (h.path.read_bytes() if h.path.exists() else None) == native_after
     assert not h.checkpoint.exists()
     assert (h.path.parent / "metadata.json").read_bytes() == original_metadata
@@ -598,6 +778,174 @@ async def test_execution_write_policy_follows_checkout_on_all_prepare_routes(mou
     assert report['execution_workspace'] == str(checkout)
     assert h.path.read_bytes() == original
     h.session.execute.assert_not_called()
+
+
+@pytest.mark.parametrize('route', ['dependencies', 'manager', 'saved'])
+@pytest.mark.parametrize('local_source', [False, True])
+async def test_saved_module_sources_survive_preparation_and_mount(mounted_host, tmp_path, monkeypatch, route, local_source):
+    from amplifier_web.host.components import HostComponents, declarations
+    from amplifier_web.runtime_controls import override_path
+    h = mounted_host
+    old = 'git+https://github.com/example/tools@main#subdirectory=tool'
+    chosen = str(tmp_path / 'repair') if local_source else old.replace('@main', '@reviewed')
+    child = old.replace('@main', '@child-pin')
+    h.config.providers = []
+    h.config.module_sources = {'tool-fixture': old.replace('@main', '@global-default')}
+    h.loaded.providers = [{'module': 'provider-fixture'}]
+    h.loaded.tools = [{'module': 'tool-fixture', 'source': old}]
+    h.loaded.hooks = [{'module': 'hooks-session-naming', 'source': old}]
+    h.loaded.agents = {}
+    h.loaded.session = {'orchestrator': {'module': 'loop-live'}, 'context': {'module': 'context-simple'}}
+    h.loaded.to_mount_plan = lambda: copy.deepcopy({key: getattr(h.loaded, key)
+        for key in ('providers', 'tools', 'hooks', 'agents', 'session')})
+    # Composition has already chosen defaults. The saved conversation then
+    # chooses a different source, including a distinct instance in its child.
+    h.loaded._host_components = HostComponents({'tool-fixture': old})
+    edited = h.loaded.to_mount_plan()
+    edited['tools'][0]['source'] = chosen
+    edited['agents'] = {'child': {'tools': [{'module': 'tool-fixture', 'source': child}]}}
+    monkeypatch.setattr(host, 'installed_loop_source', lambda: '/installed/loop-live')
+    monkeypatch.setattr(host, 'installed_naming_source', lambda: '/installed/session-naming')
+    captured = {}
+    async def prepare_bundle(**kwargs):
+        captured['plan'] = h.loaded.to_mount_plan()
+        captured['sources'] = [(row['module'], kwargs['source_resolver'](row['module'], row.get('source')))
+                               for row in declarations(captured['plan'])]
+        h.prepared.mount_plan = copy.deepcopy(captured['plan'])
+        return h.prepared
+    h.loaded.prepare.side_effect = prepare_bundle
+    messages = [{'role': 'user', 'content': 'Do not replay completed work'}]
+    h.store.save('native-root', messages, {'bundle': 'anchors'})
+    original = h.path.read_bytes()
+    if route == 'dependencies':
+        await host.prepare_dependencies(h.config.workspace, runtime_plan=edited)
+        h.prepared.create_session.assert_not_awaited()
+    elif route == 'manager':
+        await h.prepare(runtime_plan=edited)
+    else:
+        path = override_path(h.runtime.session_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(edited))
+        await h.prepare()
+    assert captured['plan']['tools'][0]['source'] == chosen
+    assert captured['plan']['agents']['child']['tools'][0]['source'] == child
+    assert [value for module, value in captured['sources'] if module == 'tool-fixture'] == [chosen, child]
+    assert ('loop-live', '/installed/loop-live') in captured['sources']
+    assert ('hooks-session-naming', '/installed/session-naming') in captured['sources']
+    assert h.path.read_bytes() == original
+    h.session.execute.assert_not_called()
+
+
+@pytest.fixture
+def inherited_provider_plan(tmp_path):
+    from amplifier_foundation import Bundle
+    from amplifier_web.host.config import HostConfig
+    from amplifier_web.provider_environment import HOST_CREDENTIAL
+    row = {'module': 'provider-fixture', 'id': 'root', 'source': 'source-A',
+           'config': {'api_key': 'synthetic-root-secret', 'default_model': 'offline'}}
+    config = HostConfig(tmp_path, tmp_path, {'sources': {'modules': {'provider-fixture': 'source-B'}}}, tmp_path)
+    bundle = Bundle(name='source-fixture', providers=[copy.deepcopy(row)], session={
+        'orchestrator': {'module': 'loop-live'}, 'context': {'module': 'context-simple'}})
+    edited = copy.deepcopy(bundle.to_mount_plan())
+    edited['providers'][0].update(source='source-B', config={'api_key': HOST_CREDENTIAL, 'default_model': 'offline'})
+    return bundle, edited, config
+
+
+def test_inherited_source_credential_roundtrip_uses_current_same_instance_selection(inherited_provider_plan):
+    bundle, edited, config = inherited_provider_plan
+    before, saved = copy.deepcopy(bundle.to_mount_plan()), copy.deepcopy(edited)
+    authorized = host._inherited_provider_authorization(bundle, edited, config)
+    assert authorized['providers'][0]['source'] == 'source-B'
+    assert bundle.to_mount_plan() == before and edited == saved
+    loaded = host.apply_runtime_plan(bundle, edited, config, config.workspace)
+    assert loaded.providers[0]['source'] == 'source-B'
+    assert loaded.providers[0]['config']['api_key'] == 'synthetic-root-secret'
+    assert loaded._host_provider_credentials_bound is True
+    assert loaded._host_components.resolved_plan is True
+    assert host.module_source(config, False, 'provider-fixture', 'source-B', loaded._host_components) == 'source-B'
+    assert edited == saved
+
+
+def test_exact_instance_and_child_source_precede_ambient_module_choice(inherited_provider_plan):
+    from amplifier_web.provider_environment import HOST_CREDENTIAL
+    bundle, edited, config = inherited_provider_plan
+    bundle.providers[0]['source'] = edited['providers'][0]['source'] = 'source-C'
+    child = {'module': 'provider-fixture', 'instance_id': 'child-account', 'source': 'source-child',
+             'config': {'api_key': 'synthetic-child-secret'}}
+    second = {**copy.deepcopy(child), 'instance_id': 'second-root', 'source': 'source-second'}
+    bundle.providers.append(second)
+    bundle.agents = {'child': {'providers': [child]}}
+    edited['providers'].append({**copy.deepcopy(second), 'config': {'api_key': HOST_CREDENTIAL}})
+    edited['agents'] = {'child': {'providers': [{**copy.deepcopy(child), 'config': {'api_key': HOST_CREDENTIAL}}]}}
+    original = copy.deepcopy(bundle.to_mount_plan())
+    authorized = host._inherited_provider_authorization(bundle, edited, config)
+    assert authorized == original
+    loaded = host.apply_runtime_plan(bundle, edited, config, config.workspace)
+    assert [row['source'] for row in loaded.providers] == ['source-C', 'source-second']
+    assert loaded.agents['child']['providers'][0] == child
+    assert loaded.providers[0]['config']['api_key'] == 'synthetic-root-secret'
+    assert loaded.providers[1]['config']['api_key'] == 'synthetic-child-secret'
+
+
+@pytest.mark.parametrize('depth', [1, 2], ids=['child', 'nested-child'])
+def test_root_source_normalization_does_not_authorize_mismatched_child(inherited_provider_plan, depth):
+    from amplifier_web.provider_environment import HOST_CREDENTIAL
+    bundle, edited, config = inherited_provider_plan
+    child = {'module': 'provider-fixture', 'instance_id': 'child-account', 'source': 'source-A',
+             'config': {'api_key': 'synthetic-child-secret'}}
+    authorized_child = {'providers': [child]}
+    inherited_child = {'providers': [{**copy.deepcopy(child), 'source': 'source-B',
+                                    'config': {'api_key': HOST_CREDENTIAL}}]}
+    for _ in range(depth):
+        authorized_child = {'agents': {'child': authorized_child}}
+        inherited_child = {'agents': {'child': inherited_child}}
+    bundle.agents = authorized_child['agents']
+    edited['agents'] = inherited_child['agents']
+    before, saved = copy.deepcopy(bundle.to_mount_plan()), copy.deepcopy(edited)
+    # Root A -> B is the approved normalization; the same ambient B must not
+    # authorize a mismatched child, even at the same child/module/instance.
+    with pytest.raises(ValueError, match='provider instance/source'):
+        host.apply_runtime_plan(bundle, edited, config, config.workspace)
+    assert bundle.to_mount_plan() == before and edited == saved
+    authorized = host._inherited_provider_authorization(bundle, edited, config)
+    assert authorized['providers'][0]['source'] == 'source-B'
+    assert authorized['agents'] == before['agents']
+
+
+@pytest.mark.parametrize('fault', ['wrong-source', 'wrong-instance', 'wrong-module', 'duplicate',
+                                 'disabled', 'missing-field', 'cross-scope', 'revoked',
+                                 'snapshot', 'resolved-plan'])
+def test_inherited_credential_normalization_never_borrows_foreign_authority(inherited_provider_plan, fault):
+    from amplifier_web.host.components import HostComponents
+    from amplifier_web.bundles import SNAPSHOT_VERSION
+    bundle, edited, config = inherited_provider_plan
+    if fault == 'wrong-source':
+        edited['providers'][0]['source'] = 'source-D'
+    elif fault == 'wrong-instance':
+        edited['providers'][0]['id'] = 'foreign-account'
+    elif fault == 'wrong-module':
+        edited['providers'][0]['module'] = 'provider-foreign'
+    elif fault == 'duplicate':
+        other = copy.deepcopy(bundle.providers[0])
+        other['source'] = 'source-other'
+        bundle.providers.append(other)
+    elif fault == 'disabled':
+        bundle.providers[0]['enabled'] = False
+    elif fault == 'missing-field':
+        bundle.providers[0]['config'].pop('api_key')
+    elif fault == 'cross-scope':
+        bundle.agents = {'child': {'providers': bundle.providers}}
+        bundle.providers = []
+    elif fault == 'revoked':
+        config.settings['sources']['modules']['provider-fixture'] = 'source-C'
+    elif fault == 'snapshot':
+        bundle.version = SNAPSHOT_VERSION
+    else:
+        bundle._host_components = HostComponents(resolved_plan=True)
+    before, saved = copy.deepcopy(bundle.to_mount_plan()), copy.deepcopy(edited)
+    with pytest.raises(ValueError, match='provider|credential'):
+        host.apply_runtime_plan(bundle, edited, config, config.workspace)
+    assert bundle.to_mount_plan() == before and edited == saved
 
 
 def nested_checkpoint_scope(h):

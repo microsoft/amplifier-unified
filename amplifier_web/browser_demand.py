@@ -98,13 +98,20 @@ def project(result):
     # Only selected conversation receipts participate in automatic acknowledgement.
     # Full reviewed notices remain available in the Activity and relevant Settings view.
     attention = result.get('attention', {})
+    # Content-free device candidates retain off-chat decisions before the UI
+    # demand filter. Reuse the bounded attention projection; do not scan history.
+    result['notificationAttention'] = [
+        {key: item[key] for key in ('id', 'sessionId', 'fingerprint', 'read') if key in item}
+        for item in attention.get('items', [])
+        if item.get('sessionId') and item.get('id', '').startswith(('question:', 'approval:'))]
     result['attention'] = {**attention,
         'workspaces': {key: value for key, value in attention.get('workspaces', {}).items() if value},
         'items': [item for item in attention.get('items', []) if panel == 'activity'
                   or result.get('selectedSessionId') and item.get('sessionId') == result['selectedSessionId']
                   or page and item.get('page') == page
                   or panel == 'feedback' and item.get('requestId')]}
-    updates = result.get('updates', {})
+    from .update_health import browser_view
+    updates = result['updates'] = browser_view(result.get('updates', {}))
     if page != 'updates':
         result['updates'] = pick(updates, ('phase', 'error', 'detail', 'available', 'appAvailable',
             'pendingApp', 'pendingRelease', 'pendingRestart', 'pendingReplacement', 'installedAt',
@@ -119,7 +126,7 @@ def project(result):
     if page not in {'smart-tools', 'tool-connections'}:
         result['smartTools'] = {'servers': [pick(row, ('id', 'name', 'status', 'capabilities'))
                                          for row in smart.get('servers', [])]}
-    catalog_settings = page in {'ai-connections', 'overview', 'providers', 'routing', 'voice', 'defaults', 'desktop'}
+    catalog_settings = page in {'ai-connections', 'overview', 'providers', 'routing', 'voice', 'defaults', 'desktop', 'chat-input', 'suggestion-advanced'}
     from .model_catalogs import project as project_models
     project_models(result, settings=catalog_settings, runtime=runtime)
     # Setup operation receipts, matrices and diagnostic metadata are page resources.

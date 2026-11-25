@@ -14,14 +14,27 @@ projection is coalesced after 100 ms, and one background thread owns file writes
 No Settings change, default behavior composition, service restart, or live-host
 migration is performed by this feature.
 
-Unified includes the stdlib implementation at `amplifier_web.status_protocol` and
-the `amplifier-unified-status` reference consumer. The same source builds a separate,
-dependency-free `amplifier-status-emitter` wheel with public import `amplifier_status`
-and the `amplifier-status` consumer. Build that wheel with:
+Unified includes its selected stdlib implementation at `amplifier_web.status_protocol`
+and the `amplifier-unified-status` reference consumer. The independent
+[amplifier-platform-status](https://github.com/bkrabach/amplifier-platform-status)
+repository owns the dependency-free `amplifier-status-emitter` package, its
+standalone tests, public `amplifier_status` import and `amplifier-status` consumer.
+Use its public release for standalone installation; follow its README for development.
 
-```sh
-uv build amplifier_web/status_protocol --wheel
-```
+The exact public artifact selected by `components/status-emitter.source.json`
+supplies Unified's generated private runtime. Author edits and independent
+publication do not change that default. Follow the
+[selection instructions](../components/README.md#select-a-status-artifact); preserve the
+original source receipt, even when it names the historical nested author path.
+
+Independent artifact delivery uses the public repository's **Status package** workflow
+with a full merged main commit SHA. It
+builds the wheel and source archive once, binds their contents to that source,
+and verifies the installed standalone package before publication. Assets use the
+distribution name `amplifier_status_emitter`; the public import remains
+`amplifier_status`. The receipt is `status-emitter-source.json`, and tags use
+`status-emitter-v<version>`. Publication does not change Unified's bundled source
+or enable status observations. The old Unified Status publication workflow is retired.
 
 Install the wheel in the CLI's environment, then compose this hook into the chosen
 bundle. Supply an **explicit local source**: the CLI's normal resolver rejects an

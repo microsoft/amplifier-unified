@@ -20,6 +20,13 @@ EXECUTION = ContextVar("independent_handoff_execution", default=None)
 PREFIX = "session.handoff."
 ACTIVE = {"creating", "created", "delivering"}
 UNFINISHED = ACTIVE | {"pending", "unknown"}
+# Quota accounting above is unchanged; failed and contradictory receipts still
+# need presentation/recovery even though they do not consume proposal capacity.
+UNRESOLVED_SQL = """NOT (
+    (status='accepted' AND coalesce(json_extract(value,'$.creation'),'')='created'
+     AND coalesce(json_extract(value,'$.delivery'),'')='accepted')
+    OR (status='cancelled' AND coalesce(json_extract(value,'$.creation'),'')='not_started'
+        AND coalesce(json_extract(value,'$.delivery'),'')='not_started'))"""
 MAX_REVIEW_REFERENCES = 64
 PUBLIC = {"requestId", "sourceSessionId", "workspace", "title", "text", "bundle",
           "selection", "reviewHash", "status", "revision", "targetSessionId",
@@ -36,7 +43,7 @@ def definitions(schema, string):
         "bundle": string(2000), "selection": SELECTION, "clientId": string(100),
     }, ["requestId", "sessionId", "workspace", "title", "text"])
     return {
-        PREFIX + "start": ("Create and start an independent chat in an existing target folder. This does not commission a worker, establish a completion dependency or return its result to the source manager; use coordination.create for subordinate work in the inherited workspace. Full access supports autonomous roots, assigned children and trusted systems without a browser or fresh human request; destination access inherits the saved source relationship unless explicitly overridden. Ask requires an explicit user request and connected client, without a second confirmation. Uses the target folder's normal configuration. Keep requestId stable; read uncertain results without replaying. Preserves selection and drafts; opening the target is separate.", creation),
+        PREFIX + "start": ("Start independent work in an existing target folder without a browser. This does not commission a worker or return its result to the source manager; use coordination.create for subordinate work in the inherited workspace. Ask requires an explicit user request through the current root; Full also supports assigned children and trusted systems. Uses destination configuration; only Full starts establish inherited source access, with explicit destination choices taking precedence. Keep requestId stable and inspect uncertain results without replaying. Review and navigation, not direct execution, require a client. Preserves selection and drafts.", creation),
         PREFIX + "propose": ("Suggest an independent chat for compact human review when the user has not authorized starting it. No chat or work is created until the attached client confirms the exact target and brief. Confirmation does not commission a worker or establish a completion return to the source manager. For an explicit user request use session.handoff.start directly. Reuse requestId after lost acknowledgement; read uncertain results, never replay them.", creation),
         PREFIX + "read": ("Read one retained handoff receipt without creating a chat, starting a runtime, navigating or replaying input. Accepted means the brief was accepted, not that its work completed or that its result will return to the source manager.", schema(request, ["requestId"])),
         PREFIX + "confirm": ("Human client only: confirm this exact reviewed independent-chat handoff. Creates once and submits its exact brief once through normal creation, permissions and input handlers. Preserves selection and drafts. An unknown outcome must be inspected, never automatically resubmitted.", schema({**request, "reviewHash": {**string(64), "minLength": 64}}, ["requestId", "reviewHash"])),
@@ -59,10 +66,10 @@ class NewChatHandoffs:
         service.db.execute("""CREATE TABLE IF NOT EXISTS new_chat_handoffs(
             id TEXT PRIMARY KEY, owner TEXT NOT NULL, source TEXT NOT NULL,
             status TEXT NOT NULL, updated REAL NOT NULL, value TEXT NOT NULL)""")
-        service.db.execute("CREATE INDEX IF NOT EXISTS handoff_client_source ON new_chat_handoffs(owner,source,updated DESC)")
         service.db.execute("CREATE INDEX IF NOT EXISTS handoff_pending ON new_chat_handoffs(owner,source,status,updated DESC)")
-        service.db.execute("CREATE INDEX IF NOT EXISTS handoff_owner_recent ON new_chat_handoffs(owner,updated DESC)")
         service.db.execute("CREATE INDEX IF NOT EXISTS handoff_owner_pending ON new_chat_handoffs(owner,status,updated DESC)")
+        service.db.execute("CREATE INDEX IF NOT EXISTS handoff_source_unresolved ON new_chat_handoffs(owner,source,updated DESC) WHERE " + UNRESOLVED_SQL)
+        service.db.execute("CREATE INDEX IF NOT EXISTS handoff_owner_unresolved ON new_chat_handoffs(owner,updated DESC) WHERE " + UNRESOLVED_SQL)
         service.db.execute("CREATE INDEX IF NOT EXISTS handoff_input ON new_chat_handoffs(json_extract(value,'$.inputId'))")
         for (encoded,) in service.db.execute("SELECT value FROM new_chat_handoffs WHERE status IN ('creating','created','delivering')").fetchall():
             row = json.loads(encoded)
@@ -96,28 +103,39 @@ class NewChatHandoffs:
         source = self.service.state.get("selectedSessionId")
         if not owner or not source:
             return []
-        return [public(row) for row in self.visible(owner, source)]
+        # Private reviews and conversation-owned execution have separate bounded
+        # windows. Direct work must not displace an outstanding private review.
+        direct = self.unresolved('conversation:' + source, source)
+        return [public(row) for row in (*self.visible(owner, source), *direct)]
 
     def visible(self, client, source):
-        # Both owner reads use bounded indexed ranges; copied references use
-        # exact primary keys. Sorting never scans the owner's retained history.
-        rows = {}
-        for condition in (" AND status IN ('pending','creating','created','delivering','unknown')", ""):
-            index = "handoff_pending" if condition else "handoff_client_source"
-            for (value,) in self.service.db.execute(
-                    "SELECT value FROM new_chat_handoffs INDEXED BY " + index + " WHERE owner=? AND source=?" + condition + " ORDER BY updated DESC LIMIT 8", (client, source)):
-                row = json.loads(value); rows[row["requestId"]] = row
-        for row in self.captured(client):
+        # Filter before LIMIT, using partial indexes so retained success history
+        # cannot crowd out unresolved work or be decoded on each publication.
+        rows = {row["requestId"]: row for row in self.unresolved(client, source)}
+        for (value,) in self.service.db.execute(
+                "SELECT value FROM new_chat_handoffs INDEXED BY handoff_pending WHERE owner=? AND source=? "
+                "AND status IN ('pending','creating','created','delivering','unknown') ORDER BY updated DESC LIMIT 8", (client, source)):
+            row = json.loads(value); rows[row["requestId"]] = row
+        for row in self.captured(client, unresolved=True):
             if row["sourceSessionId"] == source:
                 rows[row["requestId"]] = row
         return sorted(rows.values(), key=lambda row: (row["status"] in UNFINISHED, row["updatedAt"]), reverse=True)[:8]
 
-    def captured(self, client):
+    def unresolved(self, client, source=None):
+        index = "handoff_source_unresolved" if source else "handoff_owner_unresolved"
+        scope = " AND source=?" if source else ""
+        return [json.loads(value) for (value,) in self.service.db.execute(
+            "SELECT value FROM new_chat_handoffs INDEXED BY " + index +
+            " WHERE owner=?" + scope + " AND " + UNRESOLVED_SQL +
+            " ORDER BY updated DESC LIMIT ?", (client, source, 8) if source else (client, MAX_REVIEW_REFERENCES))]
+
+    def captured(self, client, *, unresolved=False):
         references = self.service.clients.records.get(client, {}).get("handoffReviews", [])
         captured = {reference["requestId"]: reference["reviewHash"] for reference in references[:MAX_REVIEW_REFERENCES]}
         rows = []
         if captured:
-            for (value,) in self.service.db.execute("SELECT value FROM new_chat_handoffs WHERE id IN (" + ",".join("?" for _ in captured) + ")", list(captured)):
+            for (value,) in self.service.db.execute("SELECT value FROM new_chat_handoffs WHERE id IN (" + ",".join("?" for _ in captured) + ")" +
+                    (" AND " + UNRESOLVED_SQL if unresolved else ""), list(captured)):
                 row = json.loads(value)
                 if row["reviewHash"] == captured[row["requestId"]]:
                     rows.append(row)
@@ -131,14 +149,12 @@ class NewChatHandoffs:
         return rows
 
     def capture_on_attach(self, previous_client, previous, record):
-        # Preserve pending reviews across navigation and exact prior captures,
-        # never a lineage-wide authority over future proposals. Indexed LIMITs
-        # bound work even when this client has years of terminal receipts.
+        # Exact prior captures retain read authority after settlement, including
+        # a lost response, subject to the existing unfinished-first bounded cap.
+        # Add only unresolved owned work, never a completed tail.
         rows = {row["requestId"]: row for row in self.captured(previous_client)}
+        rows.update({row["requestId"]: row for row in self.unresolved(previous_client)})
         rows.update(self.unfinished(previous_client))
-        for (value,) in self.service.db.execute(
-                "SELECT value FROM new_chat_handoffs WHERE owner=? ORDER BY updated DESC LIMIT ?", (previous_client, MAX_REVIEW_REFERENCES)):
-            row = json.loads(value); rows[row["requestId"]] = row
         selected = sorted(rows.values(), key=lambda row: (row["status"] in UNFINISHED, row["updatedAt"]), reverse=True)[:MAX_REVIEW_REFERENCES]
         record["handoffReviews"] = [{"requestId": row["requestId"], "reviewHash": row["reviewHash"]} for row in selected]
 
@@ -150,8 +166,13 @@ class NewChatHandoffs:
 
     def authorize(self, row, origin, caller, *, human=False):
         owner = self.service.clients.current.get()
-        if row.get("mode") == "full":
-            if human or origin in {"ui", "user"} or not caller or row["sourceSessionId"] != caller:
+        if row.get("authority"):
+            if human:
+                self.error("Only client-owned proposals can be confirmed or cancelled.", 403)
+            if origin in {"ui", "user"}:
+                if not owner or self.service.state.get("selectedSessionId") != row["sourceSessionId"]:
+                    self.error("Open the source chat to inspect this handoff.", 403)
+            elif not caller or row["sourceSessionId"] != caller:
                 self.error("This handoff belongs to its calling conversation.", 403)
             return
         if human and origin not in {"ui", "user"}:
@@ -227,7 +248,7 @@ class NewChatHandoffs:
         return {"path": str(root), "files": identities}
 
     def guard(self, row, *, delivery=False):
-        if row.get("mode") == "full":
+        if row.get("authority"):
             self.guard_source(row["authority"])
         from .updates import work_paused
         if work_paused(self.service.state):
@@ -237,10 +258,10 @@ class NewChatHandoffs:
         try:
             current = self.target(row)
         except (OSError, ValueError):
-            self.error("The reviewed workspace or configuration is unavailable. Propose a new review.")
+            self.error("The requested workspace or configuration is unavailable. Inspect this handoff before starting a new request.")
         for key in ("workspace", "bundle", "selection", "targetIdentity", "configurationHash"):
             if current[key] != row[key]:
-                self.error("The reviewed workspace or configuration changed. Propose a new review.")
+                self.error("The requested workspace or configuration changed. Inspect this handoff before starting a new request.")
         if delivery:
             # A new independent chat has no session-level permission/configuration
             # override. Refuse a later edit instead of sending with unreviewed
@@ -251,7 +272,7 @@ class NewChatHandoffs:
             if any(file.exists() or file.is_symlink() for file in (session_file, config_file)):
                 self.error("The new chat's settings changed before the brief was submitted. Nothing was resent.")
             target = self.service._session(row["targetSessionId"], hydrate=False)
-            if row.get('mode') == 'full' and (
+            if row.get('authority') and (
                     self.service.access_mode.snapshot(target)['revision'] != row.get('targetAccessRevision')
                     or target.get('executionRevision', 0) != row.get('targetExecutionRevision')
                     or (target.get('workingDirectory') or target['workspace']) != row['workspace']):
@@ -263,20 +284,38 @@ class NewChatHandoffs:
 
     def capture(self, source, origin):
         from .access_mode import execution_id
+        from .collaboration import PRINCIPAL
         authority = self.service.access_mode.capture_full(source, origin)
-        if authority is not None:
-            authority.update(workspace=source['workspace'], executionId=execution_id(source),
-                             interruptionRevision=source.get('interruptionRevision', 0))
+        if authority is None:
+            authority = {'origin': origin, 'sessionId': source['id'],
+                         'accessRevision': self.service.access_mode.snapshot(source)['revision'],
+                         'accessMode': 'ask'}
+            if origin not in {'ui', 'user'}:
+                binding, active = self.service.collaboration.active_binding(source)
+                inputs = binding.get('_inputBindings', [])
+                if (not isinstance(inputs, list)
+                        or any(not isinstance(row, dict) or not isinstance(row.get('inputId'), str)
+                               or row['inputId'] not in active.get('inputIds', []) for row in inputs)):
+                    self.error('A direct handoff requires current admitted input bindings when supplied.')
+                ids = [row['inputId'] for row in inputs]
+                authority.update(runtimeSessionId=PRINCIPAL.get(), generationId=active['id'],
+                                 inputIds=ids, inputCoverage='complete' if ids else 'unavailable')
+        else:
+            authority['accessMode'] = 'full'
+        authority.update(workspace=source['workspace'], executionId=execution_id(source),
+                         interruptionRevision=source.get('interruptionRevision', 0))
         return authority
 
     def guard_source(self, authority):
         from .access_mode import execution_id
         source = self.service._session(authority['sessionId'], hydrate=False)
+        access = self.service.access_mode.snapshot(source)
         if (source['workspace'] != authority['workspace']
                 or execution_id(source) != authority['executionId']
                 or source.get('interruptionRevision', 0) != authority['interruptionRevision']
-                or not self.service.access_mode.full(source, authority['accessRevision'])):
-            self.error('The handoff source was stopped, replaced or its Full access changed.')
+                or access['revision'] != authority['accessRevision']
+                or access['mode'] != authority.get('accessMode', 'full')):
+            self.error('The handoff source was stopped, replaced or its access changed.')
         if blocked := self.service.assignments.blocked(source):
             self.error(blocked)
 
@@ -295,7 +334,7 @@ class NewChatHandoffs:
             return None
         row = self.load(context[1])
         creating = action == 'session.create'
-        if (not row or row.get('mode') != 'full'
+        if (not row or not row.get('authority')
                 or origin != row['authority']['origin'] or caller != row['sourceSessionId']
                 or context[2] != action or row['status'] != ('creating' if creating else 'delivering')
                 or command_id != row['createCommandId' if creating else 'inputId']
@@ -310,14 +349,14 @@ class NewChatHandoffs:
                 'createCommandId': row['createCommandId']}
 
     def input_guard(self, sid, input_id):
-        """Recheck accepted Full work at native preparation/transport, without replay."""
+        """Recheck accepted direct work at native preparation/transport, without replay."""
         from .errors import AppError
         from .runtime import RuntimeStartupError
         found = self.service.db.execute(
             "SELECT value FROM new_chat_handoffs WHERE json_extract(value,'$.inputId')=?", (input_id,)).fetchone()
         try:
             row = json.loads(found[0]) if found else None
-            if not row or row.get('mode') != 'full' or row['targetSessionId'] != sid:
+            if not row or not row.get('authority') or row['targetSessionId'] != sid:
                 self.error('The saved handoff input is unavailable.')
             self.guard(row, delivery=True)
         except AppError as exc:
@@ -332,7 +371,7 @@ class NewChatHandoffs:
         # Admission already captured the native actor. Canonical delayed work is
         # guarded by that capture, not a root generation that may have finished.
         from .workspace_work_effects import APP_EFFECT
-        context = EXECUTION.set((self, row['requestId'], action, asyncio.current_task())) if row.get('mode') == 'full' else None
+        context = EXECUTION.set((self, row['requestId'], action, asyncio.current_task())) if row.get('authority') else None
         effect = APP_EFFECT.set(None) if context is not None else None
         try:
             return await self.service.dispatch(action, self.values(row, action),
@@ -347,59 +386,57 @@ class NewChatHandoffs:
 
     async def dispatch(self, action, args, origin, caller, *, include_state=True, admission_check=None):
         service = self.service
-        direct_agent = action == PREFIX + "start" and origin not in {"ui", "user"}
         authority = None
-        if direct_agent:
-            if not caller or args['sessionId'] != caller:
+        if action == PREFIX + "start":
+            if origin not in {'ui', 'user', 'agent', 'system'}:
+                self.error("Independent starts require a user, current agent or trusted system.", 403)
+            if origin not in {'ui', 'user'} and (not caller or args['sessionId'] != caller):
                 self.error("A handoff proposal must belong to the calling conversation.", 403)
-            source = service._session(caller, hydrate=False)
-            interruption = source.get("interruptionRevision", 0)
             # Retained observation does not recapture authority or renew work.
-            if not self.load(args['requestId']) and origin in {'agent', 'system'}:
-                source = service.collaboration.source({}, origin, caller, hydrate=False, allow_descendant=True)
+            if not self.load(args['requestId']):
+                source = (service._session(args['sessionId'], hydrate=False) if origin in {'ui', 'user'} else
+                          service.collaboration.source({}, origin, caller, hydrate=False, allow_descendant=True))
                 authority = self.capture(source, origin)
         async with service.lock:
             if admission_check:
                 admission_check()
             row = self.load(args["requestId"])
             if action in {PREFIX + "propose", PREFIX + "start"}:
-                mode = "full" if authority else "direct" if action == PREFIX + "start" else "review"
+                mode = "full" if authority and authority['accessMode'] == 'full' else "direct" if action == PREFIX + "start" else "review"
                 if origin not in {"ui", "user"} and args["sessionId"] != caller:
                     self.error("A handoff proposal must belong to the calling conversation.", 403)
-                service._session(args["sessionId"], hydrate=False)
+                source = service._session(args["sessionId"], hydrate=False)
                 # A retry observes its original mode, including after revocation.
                 if row:
                     self.authorize(row, origin, caller)
                     proposed = {key: value for key, value in args.items() if key != "clientId"}
                     compatible = row.get('mode', 'review') in ({'direct', 'full'} if action == PREFIX + 'start' else {'review'})
                     if (fingerprint(proposed) != row["proposalHash"] or not compatible
-                            or row.get('mode') != 'full' and not self.client_can_review(row, args.get("clientId", row["owner"]))):
+                            or not row.get('authority') and not self.client_can_review(row, args.get("clientId", row["owner"]))):
                         self.error("This request ID was already used for a different handoff.")
                     return self.response(row, include_state, duplicate=True)
                 if authority:
                     self.guard_source(authority)
-                elif direct_agent:
-                    source = service.collaboration.source({}, origin, caller, hydrate=False)
-                    blocked = service.assignments.blocked(source)
-                    if blocked:
-                        self.error(blocked)
-                    if (source.get("interruptionRevision", 0) != interruption
-                            or source.get("status") in {"stopping", "stopped", "interrupted", "error"}):
-                        self.error("The source conversation was stopped before this request was admitted.")
-                    service.collaboration.active_binding(source)
-                from .agent_canvas import target
-                owner = ('conversation:' + caller) if authority else target(
-                    service, args["sessionId"], args.get("clientId"), required=True,
-                    connected_only=origin not in {"ui", "user"})[0]
-                if not owner or (origin in {"ui", "user"} and owner != service.clients.current.get()):
-                    self.error("Use the attached client displaying the source conversation.", 403)
+                    if mode == 'direct' and origin not in {'ui', 'user'}:
+                        # Ask needs a current root at initial admission. After
+                        # acceptance, ordinary turn completion is not revocation.
+                        service.collaboration.active_binding(source)
+                        if source.get('status') in {'stopping', 'stopped', 'interrupted', 'error'}:
+                            self.error("The source conversation was stopped before this request was admitted.")
+                    owner = 'conversation:' + args['sessionId']
+                else:
+                    from .agent_canvas import target
+                    owner = target(service, args["sessionId"], args.get("clientId"), required=True,
+                                   connected_only=origin not in {"ui", "user"})[0]
+                    if not owner or (origin in {"ui", "user"} and owner != service.clients.current.get()):
+                        self.error("Use the attached client displaying the source conversation.", 403)
+                    pending = sum(row["status"] in UNFINISHED for row in self.visible(owner, args["sessionId"]))
+                    if pending >= 8:
+                        self.error("Review or cancel pending handoffs and inspect uncertain outcomes before proposing another.")
+                    if len(self.unfinished(owner)) >= MAX_REVIEW_REFERENCES:
+                        self.error("There are too many unfinished handoffs in this client. Review pending requests and inspect uncertain outcomes before proposing more.")
                 if not args["text"].strip() or not args["title"].strip():
                     self.error("Give this handoff a title and initial brief.")
-                pending = sum(row["status"] in UNFINISHED for row in self.visible(owner, args["sessionId"]))
-                if pending >= 8:
-                    self.error("Review or cancel pending handoffs and inspect uncertain outcomes before proposing another.")
-                if len(self.unfinished(owner)) >= MAX_REVIEW_REFERENCES:
-                    self.error("There are too many unfinished handoffs in this client. Review pending requests and inspect uncertain outcomes before proposing more.")
                 try:
                     checked = self.target(args)
                 except (OSError, ValueError):
@@ -470,7 +507,7 @@ class NewChatHandoffs:
             with service.clients.bind(row["executionClientId"]):
                 creation = await self.perform(row, 'session.create')
                 async with service.lock:
-                    if row.get('mode') == 'full':
+                    if row.get('authority'):
                         target = service._session(row['targetSessionId'], hydrate=False)
                         row.update(targetAccessRevision=service.access_mode.snapshot(target)['revision'],
                                    targetExecutionRevision=target.get('executionRevision', 0))

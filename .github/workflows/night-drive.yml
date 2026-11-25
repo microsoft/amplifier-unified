@@ -6,14 +6,10 @@ on:
     paths:
       - 'components/web-client.source.json'
       - 'scripts/web_client_*.py'
-      - 'components/web-client/commands.json'
       - 'examples/appearances/night-drive.amplifier.css'
       - 'amplifier_web/appearance_activity.py'
       - 'amplifier_web/browser_state.py'
-      - 'components/web-client/src/app-appearance-state.js'
-      - 'components/web-client/src/window-controls-overlay.css'
       - 'tests/web/night-drive-browser.mjs'
-      - 'components/web-client/tests/app-appearance-state.test.mjs'
       - 'tests/test_appearance_activity.py'
       - '.github/workflows/night-drive.yml'
 permissions:

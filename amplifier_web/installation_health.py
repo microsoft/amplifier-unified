@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import json
 from pathlib import Path
 import subprocess
 import sys
+import time
 from types import SimpleNamespace
 
 from . import __version__
@@ -86,6 +88,24 @@ def matches_health(value, home, expected):
             and (not expected['revision'] or value.get('revision') == expected['revision']))
 
 
+def started_identity(home, expected):
+    """The app version that this installation starts, for a caller that is its launcher.
+
+    A Windows launcher keeps the version that setup installed, and starts the
+    active app generation. After any in-app update the two differ. The host
+    must then match the generation that this launcher itself selects, not the
+    launcher's own version. Any other caller keeps its own identity.
+    """
+    from .application_generations import active, bootstrap_identity
+    try:
+        target = active(home)
+        if target and target.get("bootstrap") == bootstrap_identity(sys.prefix):
+            return {**expected, "version": target["version"], "revision": target["revision"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return expected
+
+
 async def status(home, wait=0):
     # A fresh service has not necessarily created its control token or TLS
     # material yet. Apply the readiness budget to initialization as well.
@@ -105,22 +125,26 @@ async def _status_once(home, wait=0):
     from .update_readiness import probe_targets, running_identity
     import yaml
     expected = running_identity()
+    problem = None
     try:
         initial_state = await asyncio.to_thread(service_state, home)
-    except (OSError, RuntimeError, subprocess.SubprocessError):
-        initial_state = 'unavailable'
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        initial_state, problem = 'unavailable', error
     if initial_state == 'unavailable':
+        from .windows_service import TaskNotConfirmed
+        if isinstance(problem, TaskNotConfirmed):
+            # Task Scheduler answered. The task exists and is not used: say that,
+            # not that the service manager is out of reach.
+            return {'ok': False, 'service': initial_state, 'message': str(problem),
+                    'nextStep': 'Restart Windows, then read the status again.' if problem.retry else
+                                f'Review the task {problem.entry} in Task Scheduler. Amplifier uses '
+                                'only a task that it can confirm as its own.',
+                    'entry': {'name': problem.entry, 'retry': problem.retry}}
         from .reset import service_manager_help
         return {'ok': False, 'service': initial_state, 'message': "The background service manager could not be reached.",
                 'nextStep': service_manager_help() if sys.platform == 'linux' else 'Sign in to your desktop account and retry service status.'}
     if sys.platform == 'win32':
-        # Do not send the control bearer to an unverified loopback listener.
-        # Scheduler Running/EnginePID is not authenticated host-process proof.
-        return {'ok': False, 'service': initial_state, 'responding': None, 'probeAttempted': False,
-                'processVerified': False, 'qualificationPending': True,
-                'message': 'Windows task state: ' + initial_state + '. Authenticated host/process '
-                           'correlation is not yet qualified; task registration is not readiness.',
-                'nextStep': 'Keep native Windows qualification pending; do not treat this task as a healthy host.'}
+        return await _windows_status(home, started_identity(home, expected), initial_state)
     try:
         config = load_server_config(home)
         manager = SimpleNamespace(home=home, service=SimpleNamespace(server_config=config, port=config['port']))
@@ -178,6 +202,168 @@ async def _status_once(home, wait=0):
             "listenerUrls": [], "listenerChecks": listener_checks, **diagnostics,
             "message": f"Unified is not ready yet (background service: {state}).",
             "nextStep": "Run amplifier-unified service logs to see why startup has not completed."}
+
+
+async def _windows_status(home, expected, state):
+    """Correlate private task receipt, real PID, listener and authenticated app."""
+    import aiohttp
+    from urllib.parse import urlsplit
+    from . import browser_entry, windows_service
+    from .windows_task_runtime import listener_owned, observe
+    from .deployment import load_server_config
+    result = {"ok": False, "service": state, "responding": False,
+              "probeAttempted": False, "processVerified": False,
+              "message": "Windows background host is not ready.",
+              "nextStep": "Run amplifier-unified service status --verbose; preserve the failed stage before retrying."}
+    async def stopped(spec):
+        """The task is not running: add the saved reason, if no later start exists.
+
+        A task that runs without a listening host yet is a host that is starting.
+        An older failure is not its reason, so that case returns the plain result.
+        """
+        from .windows_task_runtime import last_failure
+        failure = await asyncio.to_thread(last_failure, spec) if spec else None
+        if not failure:
+            return result
+        at = datetime.fromtimestamp(failure["at"])  # This computer's local time.
+        when = f"{at:%B} {at.day} at {at.hour % 12 or 12}:{at:%M} {'AM' if at.hour < 12 else 'PM'}"
+        reason = (": " + failure["message"] if failure["message"]
+                  else f" with an unexpected error ({failure['errorType']}).")
+        return {**result, "lastFailure": failure,
+                "message": f"{result['message']} Amplifier's background app stopped on {when}{reason}"}
+    try:
+        task, spec = await asyncio.to_thread(windows_service._read, home)
+        if not spec or task.get("state") != 4 or task.get("instances") != 1:
+            return await stopped(spec)
+        record = await asyncio.to_thread(observe, spec)
+        if not record or record["phase"] != "listening":
+            return result
+        config = load_server_config(home)
+        # This canonical boundary validates private CA-layout/leaf identity
+        # before the existing control credential is read.
+        urls, pin = browser_entry._owner_probe_targets(home, config)
+        if not isinstance(pin, aiohttp.Fingerprint):
+            return result
+        for url in urls:
+            address = urlsplit(url)
+            if address.scheme != "https":
+                continue
+            if not await asyncio.to_thread(listener_owned, record, address.hostname, address.port):
+                continue
+            token = browser_entry._control_token(home, spec.sid)
+            result["probeAttempted"] = True
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2),
+                                             trust_env=False) as client:
+                async with client.get(url, ssl=pin, allow_redirects=False,
+                                      headers={"Authorization": "Bearer " + token,
+                                               "Host": address.netloc}) as response:
+                    value = await response.json() if response.status == 200 else None
+            current_task, current_spec = await asyncio.to_thread(windows_service._read, home)
+            current = await asyncio.to_thread(observe, spec)
+            if (current_spec == spec and current_task.get("state") == 4
+                    and current_task.get("instances") == 1 and current == record
+                    and await asyncio.to_thread(listener_owned, record, address.hostname, address.port)
+                    and matches_health(value, home, expected)):
+                return {**result, "ok": True, "service": "running", "responding": True,
+                        "processVerified": True, "pid": record["pid"], "created": record["created"],
+                        "url": url.removesuffix("/api/health"),
+                        "publicUrls": config["public_origins"], "publicUrlsVerified": False,
+                        "message": "Unified's owner-logon host is running and responding on this computer."}
+    except (OSError, ValueError, RuntimeError, aiohttp.ClientError, TimeoutError):
+        pass
+    return result
+
+
+async def windows_working(home, *, wait=15.0):
+    """How many chats this installation's own running app is working on.
+
+    The same private boundary as browser entry: HTTPS to loopback, pinned to
+    this installation's own leaf, with the owner credential. None when no host
+    answers as this installation or when it does not report a count. It reads
+    Task Scheduler never.
+
+    One read has a time limit of 3 seconds. A busy host can give no answer in
+    that time: on hosted test machines its loop stayed in one database commit
+    for about 11 seconds at the longest, some seconds after a start. With
+    None the uninstall goes on and does not ask; a chat that is at work is
+    then stopped with no question. So the reads are made in rounds, one
+    read at a time, and a later round can read again an address whose read
+    ended with `TimeoutError`, as the time limit ends it. The first round
+    has every address, in the order of the list; a later round keeps that
+    order. What one read does:
+
+    - It ends with `TimeoutError`: its address is in the next round, when
+      one starts.
+    - Its answer has status 200, this app's name, this installation's data
+      identity and an `activity` dictionary: the function ends. The result
+      is `working` of that dictionary when that is an `int` (no `bool`) of 0
+      or more, and None when it is not.
+    - It ends with an `aiohttp.ClientError`, `OSError` or `ValueError` that
+      is no `TimeoutError` (a refused connection, a connection that is cut
+      off, an answer that is not JSON), or its answer is another one (a
+      status that is not 200, another app or installation, no `activity`
+      dictionary): its address is in no later round.
+    - It ends with an error of another kind: the function ends, as before
+      this change. Its last clause gives None for a `RuntimeError` and a
+      `yaml.YAMLError`; any other error goes to the caller.
+
+    A round starts after the first only when a read of the round before
+    ended with `TimeoutError`, and only while fewer than `wait` seconds
+    have gone by since the clock was read before the first read. The bound
+    does not end a round that has started. An installation from the setup
+    file has one address. With the default `wait`, five reads that each
+    take 3 seconds reach the bound: about 15 seconds. Reads that take
+    longer can be fewer, and the whole can take longer. When the last round
+    has ended and no answer ended the function, the result is None, as it
+    was after one read.
+
+    No read is made again unless it ended with `TimeoutError`. That end does
+    not prove that a host is there: the limit can end a read while it
+    connects, and while it waits for the answer. A busy host is one cause.
+    Another program at that port after the host has gone is one, and a
+    computer that gives this program no time is one.
+    A refusal ends the reads of its address. It takes time too: a hosted
+    Windows test machine refused a port with no listener after about 2
+    seconds.
+    """
+    import aiohttp
+    import yaml
+    from . import browser_entry
+    from .auth import data_identity
+    from .deployment import load_server_config
+    try:
+        urls, pin = browser_entry._owner_probe_targets(home, load_server_config(home))
+        if not isinstance(pin, aiohttp.Fingerprint):
+            return None
+        token = browser_entry._control_token(home, browser_entry.current_owner_sid())
+        identity = data_identity(home)
+        # The module's `time`, not the event loop's clock: a case gives this function a clock of its own and
+        # leaves the loop's clock, which aiohttp's time limits use, as it is.
+        deadline = time.monotonic() + wait
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3), trust_env=False) as client:
+            while True:
+                silent = []
+                for url in urls:
+                    try:
+                        async with client.get(url, ssl=pin, allow_redirects=False, params={"activity": "1"},
+                                              headers={"Authorization": "Bearer " + token}) as response:
+                            value = await response.json() if response.status == 200 else None
+                    except TimeoutError:
+                        # Before the next clause: a time limit is an OSError, and aiohttp's own are a ClientError.
+                        silent.append(url)
+                        continue
+                    except (aiohttp.ClientError, OSError, ValueError):
+                        continue
+                    if (isinstance(value, dict) and value.get("app") == "amplifier-unified"
+                            and value.get("dataIdentity") == identity and isinstance(value.get("activity"), dict)):
+                        working = value["activity"].get("working")
+                        return working if type(working) is int and working >= 0 else None
+                if not silent or time.monotonic() >= deadline:
+                    break
+                urls = silent
+    except (OSError, ValueError, RuntimeError, yaml.YAMLError):
+        pass
+    return None
 
 
 def display(result, *, as_json=False, verbose=False):

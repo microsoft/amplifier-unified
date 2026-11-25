@@ -31,6 +31,7 @@ CHAT_FILTERS = ('navChatScope', 'navSort', 'navFilter', 'navStatusFilter', 'navL
     'navArchive', 'navCollection', 'navChatPage', 'navShowAgentCreated', 'navGroup', 'navAge')
 WORKSPACE_FILTERS = ('navWorkspaceBrowseFor', 'navWorkspacePath', 'navWorkspaceFilter',
     'navWorkspacePage', 'navWorkspaceMode', 'navWorkspaceArchive')
+READING_RESOURCES = frozenset({'recentNavigation', 'pinnedNavigation'})
 
 
 def encoded(value):
@@ -290,6 +291,21 @@ class ShellResources:
         from .chat_navigation import age_scope
         return age_scope(state)[1]
 
+    def _reading_key(self, resource, scoped, instance, bootstrap):
+        """Quiet-sidebar reading identity, not an exact catalog-page key.
+
+        Match the bundled client's readingResources fences. Selection and
+        semantic activity revisions invalidate pages, but not these owner IDs.
+        """
+        view = scoped['view']
+        pinned = instance.get('scope', {}).get('mode') == 'pinned'
+        workspace = next((row['id'] for row in self.shell.service.state.get('workspaces', [])
+            if row['id'] == scoped.get('selectedWorkspaceId') and row.get('available') is True
+            and isinstance(row.get('path'), str) and row['path']), None) if pinned else None
+        return (bootstrap, 'workspace' if pinned else 'all', workspace, view.get('navAge', 'all'),
+                bool(view.get('navShowAgentCreated')) if resource == 'recentNavigation' else None,
+                (view.get('navPinnedPage') or 0) if resource == 'pinnedNavigation' else None)
+
     @staticmethod
     def _record(value, previous, previous_revision=0):
         wire = encoded(value).encode()
@@ -303,10 +319,11 @@ class ShellResources:
                 'value': deepcopy(value), '_digest': digest, '_bytes': size}
 
     @staticmethod
-    def _entry(generation, own, pending, prior):
+    def _entry(generation, own, pending, prior, reading=None):
         same = prior.get('generation') == generation and prior.get('resources') == own and prior.get('pending', {}) == pending
         versions = {**prior.get('versions', {}), **{key: value['revision'] for key, value in own.items()}}
         return {'generation': generation, 'resources': own, 'pending': pending, 'versions': versions,
+            'reading': reading or {},
             'stateRevision': prior.get('stateRevision', 0) + (not same)}
 
     def snapshot(self, identity):
@@ -316,8 +333,8 @@ class ShellResources:
         if registration is None or registration['scope'] != scope_for(state):
             return None
         client, composition, instances, bootstrap = self._prepare(identity, registration['recovery'])
-        return self._prepared_snapshot(identity, state=state, client=client,
-            composition=composition, instances=instances, bootstrap=bootstrap)
+        return self.shell.service.directory.read_frame(self._prepared_snapshot, identity,
+            state=state, client=client, composition=composition, instances=instances, bootstrap=bootstrap)
 
     def _prepared_snapshot(self, identity, *, state, client, composition, instances, bootstrap):
         registration = self.clients[identity]
@@ -390,7 +407,7 @@ class ShellResources:
             prior = registration['instances'].get(name, {})
             previous = prior.get('resources', {}) if prior.get('generation') == generation else {}
             previous_keys = registration['keys'].get(name, {}) if prior.get('generation') == generation else {}
-            own, own_keys, pending = {}, {}, {}
+            own, own_keys, pending, reading = {}, {}, {}, {}
             if custom:
                 key = (bootstrap, state.get('revision'), navigation_revision, self._epochs(GLOBAL_KEYS),
                        encoded(client.get('views', {}).get(name, {})))
@@ -453,9 +470,27 @@ class ShellResources:
                             if (resource in previous and old_key and old_key[0] == key[0]
                                     and old_key[1][2:] == key[1][2:]):
                                 own[resource] = previous[resource]
+                # Keep only the most recent bounded page's IDs per interested
+                # quiet-sidebar resource. Never carry old activity, counts or
+                # query validity across selection; a completed page replaces
+                # rather than accumulates owners. Dropping demand drops its IDs.
+                context_ids = visible_ids(own)
+                for resource in registration['wanted'] & READING_RESOURCES:
+                    reading_key = self._reading_key(resource, scoped, instance, bootstrap)
+                    ids = None
+                    if resource in own:
+                        ids = tuple(sorted(visible_ids({resource: own[resource]})))
+                    elif resource in pending:
+                        old_reading = prior.get('reading', {}).get(resource)
+                        if old_reading and old_reading['key'] == reading_key:
+                            ids = old_reading['ids']
+                    if ids is not None:
+                        reading[resource] = {'key': reading_key, 'ids': ids}
+                        context_ids.update(ids)
                 context_key = (bootstrap, self._epochs(GLOBAL_KEYS), navigation_revision,
                     encoded(scoped['view']), encoded(client.get('views', {}).get(name, {})),
-                    tuple(registration['scope']), tuple(sorted((key, value['revision']) for key, value in own.items())))
+                    tuple(registration['scope']), tuple(sorted(context_ids)),
+                    tuple(sorted((key, value['revision']) for key, value in own.items())))
                 own_keys['context'] = context_key
                 if previous_keys.get('context') == context_key:
                     own['context'] = previous['context']
@@ -463,11 +498,12 @@ class ShellResources:
                     count(self.shell.service, 'shell.resources.context.build')
                     with measure(self.shell.service, 'shell.resources.context', synchronous=True):
                         built = self.shell.navigation(client, instance, identity=identity,
-                            navigation_resources=frozenset(), context_visible_ids=visible_ids(own))
+                            navigation_resources=frozenset(), context_visible_ids=context_ids)
                     own['context'] = self._record(context_value(built), previous.get('context'))
-            instances[name] = self._entry(generation, own, pending, prior)
+            instances[name] = self._entry(generation, own, pending, prior, reading)
             keys[name] = own_keys
-        size = sum(value['_bytes'] for instance in instances.values() for value in instance['resources'].values())
+        size = sum(sum(value['_bytes'] for value in instance['resources'].values())
+                   + len(encoded(instance.get('reading', {})).encode()) for instance in instances.values())
         if size > MAX_CLIENT_BYTES or self.total_bytes - registration['bytes'] + size > MAX_TOTAL_BYTES:
             raise ResourceLimit()
         envelope = {'hostInstanceId': self.shell.service.instance_id, 'clientId': identity,

@@ -1,4 +1,5 @@
 """Explicit new-task scheduling through the same UI/agent action paths."""
+import asyncio
 import copy
 import json
 import uuid
@@ -7,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from amplifier_web.service import AppService, AppError
-from test_schedules import Runtime, attach, config, finish
+from test_schedules import Runtime, attach, config, finish, schedule
 from test_task_continuity import controls
 
 
@@ -49,6 +50,142 @@ async def create(app, sid, now, **extra):
     preview = (await app.dispatch('schedule.preview', args))['result']
     created = (await app.dispatch('schedule.create', {**args, 'expectedRevision': 0, 'previewHash': preview['previewHash']}, command_id='create-new-task'))['result']['schedule']
     return created, preview
+
+
+@pytest.mark.parametrize('destination', ['new_task', 'same_task'])
+async def test_slow_worker_preparation_keeps_one_admission(tmp_path, monkeypatch, destination):
+    app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
+    try:
+        monkeypatch.setattr('amplifier_web.schedules.LEASE_RENEW_INTERVAL', .001)
+        renewed = asyncio.Event()
+        renew = app.schedules.store.renew
+
+        def observe_renewal(at):
+            assert renew(at)
+            renewed.set()
+            return True
+
+        async def cold_start():
+            for _ in range(2):
+                now[0] += 24
+                renewed.clear()
+                await asyncio.wait_for(renewed.wait(), timeout=2)
+
+        if destination == 'new_task':
+            await create(app, sid, now[0])
+            dispatch = app.dispatch
+
+            async def delayed_dispatch(action, *args, **kwargs):
+                if action == 'task.create' and kwargs.get('origin') == 'scheduler':
+                    assert app.schedules.store.runs(sid)[0]['creationConfirmed']
+                    await cold_start()
+                return await dispatch(action, *args, **kwargs)
+
+            monkeypatch.setattr(app, 'dispatch', delayed_dispatch)
+        else:
+            await app.dispatch('task.create', {'sessionId': sid, 'expectedRevision': 0, 'objective': 'Watch the report'},
+                               command_id='create-source-task')
+            await schedule(app, sid, now[0])
+            monkeypatch.setattr(app.management, 'ensure_runtime', lambda owner: cold_start())
+
+        monkeypatch.setattr(app.schedules.store, 'renew', observe_renewal)
+        now[0] += 61
+        await app.schedules.tick()
+        run, = app.schedules.store.runs(sid)
+        assert run['phase'] == 'accepted'
+        assert len(runtime.inputs) == 1 and runtime.inputs[0][1]['inputId'] == run['inputId']
+        await app.schedules.tick()
+        assert len(runtime.inputs) == 1
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('takeover', [False, True])
+async def test_lease_loss_after_confirmed_creation_stops_task_and_input(tmp_path, monkeypatch, takeover):
+    from amplifier_scheduling.store import ScheduleStore
+
+    app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
+    other = ScheduleStore(app.data_dir / 'schedules.sqlite3')
+    try:
+        record, _ = await create(app, sid, now[0], notificationPolicy='failures_only')
+        dispatch = app.dispatch
+
+        async def lose_lease(action, *args, **kwargs):
+            if action == 'task.create' and kwargs.get('origin') == 'scheduler':
+                assert app.schedules.store.runs(sid)[0]['creationConfirmed']
+                now[0] += 31
+                if takeover:
+                    assert other.acquire(now[0])
+                assert not app.schedules.store.renew(now[0])
+            return await dispatch(action, *args, **kwargs)
+
+        monkeypatch.setattr(app, 'dispatch', lose_lease)
+        now[0] += 61
+        await app.schedules.tick()
+        run, = app.schedules.store.runs(sid)
+        assert run['phase'] == ('unknown' if takeover else 'skipped')
+        if not takeover:
+            assert 'lease expired or changed owner before task creation' in run['detail']
+        assert run['creationConfirmed'] and not run.get('taskId') and not runtime.inputs
+        assert app.schedules.store.get(sid, record['id'])['status'] == 'needs_review'
+        assert run['notificationDecision']['notify']
+        assert [message['id'] for message in app.state['scheduleNotifications']] == [run['id'] + ':notice']
+        await app.schedules.tick()
+        assert not runtime.inputs
+    finally:
+        other.close()
+        await app.close()
+
+
+async def test_cancelled_tick_releases_renewal_without_replaying_preparation(tmp_path, monkeypatch):
+    app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
+    entered = asyncio.Event()
+    renewal_stopped = asyncio.Event()
+    dispatch, renew = app.dispatch, app.schedules._renew_lease
+
+    async def hold_task(action, *args, **kwargs):
+        if action == 'task.create' and kwargs.get('origin') == 'scheduler':
+            entered.set()
+            await asyncio.Future()
+        return await dispatch(action, *args, **kwargs)
+
+    async def observe_renewal():
+        try:
+            await renew()
+        finally:
+            renewal_stopped.set()
+
+    try:
+        await create(app, sid, now[0])
+        monkeypatch.setattr(app, 'dispatch', hold_task)
+        monkeypatch.setattr(app.schedules, '_renew_lease', observe_renewal)
+        now[0] += 61
+        tick = asyncio.create_task(app.schedules.tick())
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        tick.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await tick
+        assert renewal_stopped.is_set()
+        run, = app.schedules.store.runs(sid)
+        assert run['phase'] == 'unknown' and run['creationConfirmed']
+        await app.schedules.tick()
+        assert not runtime.inputs
+    finally:
+        await app.close()
+
+
+async def test_policy_skip_stays_quiet_under_failure_notifications(tmp_path, monkeypatch):
+    app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
+    try:
+        record, _ = await create(app, sid, now[0], missedRunPolicy='skip', notificationPolicy='failures_only')
+        now[0] += 600
+        await app.schedules.tick()
+        run, = app.schedules.store.runs(sid)
+        assert run['phase'] == 'skipped' and not runtime.inputs
+        assert app.schedules.store.get(sid, record['id'])['status'] == 'active'
+        assert not app.state.get('scheduleNotifications')
+    finally:
+        await app.close()
 
 
 async def test_new_tasks_are_distinct_user_owned_and_preserve_source_and_draft(tmp_path, monkeypatch):

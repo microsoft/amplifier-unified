@@ -87,7 +87,8 @@ async def query(request):
 def main():
     output=os.fdopen(os.dup(sys.stdout.fileno()),'w')
     os.dup2(sys.stderr.fileno(),sys.stdout.fileno());sys.stdout=sys.stderr
-    try:result=asyncio.run(query(json.loads(sys.stdin.read())))
+    from amplifier_web.probe_git import query as owned_query
+    try:result=asyncio.run(owned_query(query(json.loads(sys.stdin.read()))))
     except Exception as exc:result={'error':type(exc).__name__}
     output.write(json.dumps(result)+'\n');output.flush()
 if __name__=='__main__':main()

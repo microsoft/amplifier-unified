@@ -21,6 +21,7 @@ import uuid
 from typing import Any, Awaitable, Callable
 
 from .runtime_protocol import INPUT_CONTROLS, MAX_MESSAGE_BYTES, encode_message
+from .update_drain import UpdateDeferred
 from .performance_diagnostics import measure, measured
 
 _CURRENT_GENERATION = object()
@@ -132,6 +133,9 @@ class RuntimeOperationPending(RuntimeError):
 
 class RuntimeStartupError(RuntimeError):
     """This attempt failed preparation before the worker submitted its input."""
+
+
+_PREVIOUS_SETTINGS_IN_USE = "This chat's worker is still using its previous settings. Retry your message when the worker is free."
 
 
 class RuntimeHostClosingError(RuntimeError):
@@ -246,16 +250,39 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         return kind, {**base, **{key: event[key] for key in ('status', 'source', 'detail') if key in event}}
     if kind in {'session.naming','session.naming.progress'}:
         return kind, {**base,**{key:event[key] for key in ('name','description','completedInputs','nameRevision') if key in event}}
+    if kind == 'session.naming.finished':
+        return kind, base
     if kind == "execution.event":
         event = event.get("event", {})
-        allowed = ("id", "revision", "producerId", "budgetRevision", "admittedAt", "parentId", "turnId", "sessionId", "rootSessionId", "kind", "phase", "label",
+        allowed = ("id", "revision", "producerId", "budgetRevision", "admittedAt", "parentId", "turnId", "admissionInputId", "generationId", "purpose", "sessionId", "rootSessionId", "kind", "phase", "label",
             "toolCallId", "provider", "model", "parentProvider", "routing", "runId", "startedAt", "endedAt", "usage", "summary", "input", "output", "error", "lifecycle", "failure", "liveObservation")
         public = {key:event[key] for key in allowed if key in event and (key not in {"input", "output", "error"} or event.get("kind") == "tool")}
+        if event.get('kind') == 'llm' and 'modelOutcome' in event:
+            from .model_outcome import public_outcome
+            public.update(public_outcome(event['modelOutcome']))
+        if (event.get('kind') == 'llm' and not event.get('purpose') and
+                event.get('sessionId') == event.get('rootSessionId') == session_id):
+            if event.get('phase') == 'running' and 'turnModelSettings' in event:
+                from .turn_model_settings import public_receipt
+                public['turnModelSettings'] = public_receipt(event['turnModelSettings'], public.get('model'))
+            if event.get('phase') == 'completed' and isinstance(event.get('promptCostBasis'), dict):
+                from .next_message_impact import observation
+                seen = observation(event)
+                public['promptCostBasis'] = {k: seen[k] for k in ('instance','traits','portableHistoryTokens','modelWindow') if k in seen}
+        if event.get("phase") == "running" and event.get("incompleteHistoryDispatched") is True:
+            public["incompleteHistoryDispatched"] = True
         from .tool_observations import metadata as tool_metadata
         public.update(tool_metadata(event))
         if event.get('kind') == 'tool' and event.get('label') == 'todo' and 'statusPlan' in event:
             from .status_protocol.hook import accepted_plan
             public['statusPlan'] = accepted_plan({'todos': event['statusPlan']})
+        if (event.get('kind') == 'tool' and event.get('label') == 'todo'
+                and event.get('phase') == 'completed' and 'reportedPlan' in event
+                and event.get('sessionId') == event.get('rootSessionId') == session_id):
+            from .chat_plan import accepted_report
+            reported = accepted_report({'todos': event['reportedPlan']})
+            if reported is not None:
+                public['reportedPlan'] = reported
         if event.get('kind') == 'tool' and event.get('label') in {'image_generate', 'nano-banana'}:
             from .image_generation import metadata
             image = metadata(event.get('imageGeneration'))
@@ -286,6 +313,8 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
             **metadata(event),
             **{key: event[key] for key in ("scheduled_monitor_input_id", "scheduled_monitor_only", "observation_input_id", "observation_id") if key in event}}
     if kind in {"generation.started", "generation.finished", "generation.failed", "generation.detached"}:
+        if 'observedAt' in event:
+            base['observedAt'] = event.get('observedAt')
         identity = event.get("sessionId") or event.get("session_id") or session_id
         root = event.get("rootSessionId") or event.get("root_session_id") or session_id
         return "runtime.generation", {**base, "sessionId": identity, "rootSessionId": root, "event": kind,
@@ -299,7 +328,10 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
     if kind in {"steering.sent", "steering.accepted", "steering.applied", "steering.pending", "steering.failed", "steering.held", "steering.unknown", "native.outcome_unknown"}:
         return "runtime.steering", {**base, "event": kind, **{key: event[key] for key in
             ("input_id", "response_id", "steer_id", "accepted", "reason", "execution_replayed",
-             "target_generation_id", "disposition", "generation_id", "delivery") if key in event}}
+             "target_generation_id", "disposition", "generation_id", "delivery", "interruptionRevision") if key in event}}
+    if kind in {"input.queued", "input.held", "input.unknown"} and event.get('delivery') in {'request_boundary', 'native'}:
+        return "runtime.steering", {**base, "event": kind, **{key: event[key] for key in
+            ("input_id", "generation_id", "target_generation_id", "delivery", "reason", "interruptionRevision") if key in event}}
     if kind.startswith("job."):
         statuses = {"queued": "queued", "returned": "completed", "failed": "error",
                     "cancelled": "cancelled", "cancel_requested": "stopping", "recovered": "interrupted"}
@@ -321,11 +353,22 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
             "callId": event.get("callId"), "kind": "session", "updatedAt": event.get("time"),
             **({"routing": public_routing(event["routing"])} if "routing" in event else {}),
             **{key: event[key] for key in ("runId", "parentSessionId", "reportId", "reports", "reportTruncated", "reportSourceChars", "reportWindow", "event") if key in event}}
-    statuses = {"session.ready": "ready", "session.idle": "idle", "session.closed": "stopped",
+    if kind == "session.closed":
+        # Native loop closure is availability evidence, not a human Stop.
+        # The owning reader can add that fact only from its retained stop reason.
+        return "runtime.warmth", {**base, "status": "cold"}
+    statuses = {"session.ready": "ready", "session.idle": "idle",
                 "input.delivered": "working"}
     if kind in statuses:
         return "runtime.status", {**base, "status": statuses[kind], "event": kind,
-            **({"inputId": event["input_id"]} if "input_id" in event else {})}
+            **({"inputId": event["input_id"]} if "input_id" in event else {}),
+            **({key: event[key] for key in ('input_id', 'generation_id', 'target_generation_id',
+                'delivery', 'interruptionRevision') if key in event} if kind == 'input.delivered' else {})}
+    if kind == 'command.rejected' and 'callback_kind' in event:
+        from .support_diagnostics import callback_rejection_detail
+        detail = callback_rejection_detail(event)
+        return 'runtime.error', {**base, 'event': kind, 'errorType': None,
+                                 'error': detail.get('reason', kind), **detail}
     if kind in {"provider.error", "persistence.failed", "command.rejected", "native.error"}:
         return "runtime.error", {**base, "error": event.get("reason") or event.get("error_type") or kind,
                                   "event": kind, "errorType": event.get("error_type")}
@@ -354,6 +397,7 @@ class RuntimeManager:
         self._execution_state = None
         self._configuration_revision = lambda: 0
         self._input_configuration = None
+        self.boundary_reply_timeout = 1
         self.home = None
         from .runtime_retention import WorkerRetention
         self.retention = WorkerRetention(self, retention)
@@ -365,28 +409,104 @@ class RuntimeManager:
         if not isinstance(servers, dict):
             raise ValueError("Ephemeral MCP servers must be a mapping")
         servers = copy.deepcopy(servers)
-        async with self._admission(session_id):
-            prior = self._ephemeral_mcp.get(session_id)
-            row = self.workers.get(session_id)
-            if row and row["process"].returncode is None:
-                if row.get("ephemeral_mcp_binding"):
-                    if prior == (attachment_id, servers):
-                        return
-                    raise ValueError("The existing worker still owns another MCP attachment; wait for its retirement before reattaching")
-                if servers:
-                    raise ValueError("MCP attachment requires a fresh native worker; existing work was not stopped")
-            if prior and prior[0] != attachment_id:
-                raise ValueError("This native session already has an MCP attachment")
-            if servers:
-                self._ephemeral_mcp[session_id] = (attachment_id, servers)
-            else:
-                self._ephemeral_mcp.pop(session_id, None)
+        retiring = None
+        while True:
+            async with self._admission(session_id):
+                prior = self._ephemeral_mcp.get(session_id)
+                row = self.workers.get(session_id)
+                if retiring is not None and (row is not None or prior is not None):
+                    raise ValueError("MCP attachment owner changed or retirement was not confirmed; no binding was replaced")
+                if row and row["process"].returncode is None:
+                    if row.get("ephemeral_mcp_binding"):
+                        if prior == (attachment_id, servers):
+                            return
+                        # Only a released attachment may retire its settled worker.
+                        # The worker's own handshake also checks active child work.
+                        if prior or not self.retention.eligible(row) or self.retention.protected(session_id):
+                            raise ValueError("The existing worker still owns another MCP attachment; wait for its retirement before reattaching")
+                        retiring = self.retention.schedule(session_id, row)
+                    elif servers:
+                        raise ValueError("MCP attachment requires a fresh native worker; existing work was not stopped")
+                if retiring is None or row is None:
+                    if prior and prior[0] != attachment_id:
+                        raise ValueError("This native session already has an MCP attachment")
+                    if servers:
+                        self._ephemeral_mcp[session_id] = (attachment_id, servers)
+                    else:
+                        self._ephemeral_mcp.pop(session_id, None)
+                    return
+            # Keep retirement owned by the manager if this attachment goes away.
+            # Recheck the binding and worker after the acknowledged handshake.
+            await asyncio.wait_for(asyncio.shield(retiring), self.retention.reply_timeout)
 
     def release_ephemeral_mcp(self, session_id, attachment_id):
         """Release future use; an admitted worker owns cleanup of its live tools."""
         prior = self._ephemeral_mcp.get(session_id)
         if prior and prior[0] == attachment_id:
             self._ephemeral_mcp.pop(session_id)
+
+    async def retire_attachment(self, session_id, attachment_id, *, guard):
+        """Conditionally retire this attachment's exact native owner, never Stop.
+
+        Keep its live tools until the worker acknowledges quiescence. A caller
+        timeout or cancellation leaves reconciliation and the binding intact.
+        """
+        lock = self._locks.setdefault(session_id, asyncio.Lock())
+        if lock.locked():
+            return 'busy'
+        async with lock:
+            if self._closed or guard() or self.retention.protected(session_id):
+                return 'busy'
+            self._check_preparation_cleanup(session_id)
+            binding = self._ephemeral_mcp.get(session_id)
+            if binding and binding[0] != attachment_id:
+                return 'busy'
+            row = self.workers.get(session_id)
+            if row is not None:
+                if row.get('closing') or row.get('stop_task'):
+                    return 'unknown'
+                if not self.retention.due(session_id, row):
+                    return 'busy'
+                mounted = row.get('ephemeral_mcp_binding')
+                if mounted and (not binding or mounted != attachment_id):
+                    return 'busy'
+                pending = self.retention.schedule(session_id, row)
+            else:
+                pending = None
+        if pending is not None:
+            try:
+                result = await asyncio.wait_for(asyncio.shield(pending), self.retention.reply_timeout)
+            except TimeoutError:
+                return 'unknown'
+            if result is not True:
+                return 'busy' if result is False else 'unknown'
+        async with lock:
+            if (self._closed or guard() or self.retention.protected(session_id)
+                    or self.workers.get(session_id) is not None
+                    or self._ephemeral_mcp.get(session_id) != binding):
+                return 'busy'
+            if binding is not None:
+                self._ephemeral_mcp.pop(session_id)
+            return 'retired'
+
+    async def retire_idle(self, session_id, owner_id, *, guard):
+        """Retire an exact settled owner by the existing acknowledged handshake."""
+        async with self._locks.setdefault(session_id, asyncio.Lock()):
+            if guard():
+                return False
+            row = self.workers.get(session_id)
+            if (not row or row.get('runtimeOwnerId') != owner_id
+                    or not self.retention.eligible(row) or session_id in self._ephemeral_mcp):
+                return False
+            pending = self.retention.schedule(session_id, row)
+        # A caller timeout/cancellation is not permission to cancel ownership
+        # reconciliation or to treat the worker as absent.
+        try:
+            return await asyncio.wait_for(asyncio.shield(pending), self.retention.reply_timeout)
+        except asyncio.CancelledError:
+            if not self._closed and not asyncio.current_task().cancelling():
+                return False  # Conversation Stop superseded this retirement.
+            raise
 
     def _check_mcp_attachment(self, session_id, row):
         binding = row.get("ephemeral_mcp_binding")
@@ -413,7 +533,7 @@ class RuntimeManager:
         if current.get('hostMatches') is False and not allow_fenced:
             raise ValueError('The saved execution host differs from this local host. Cross-host execution is unavailable.')
         if current['fenced'] and not allow_fenced:
-            raise ValueError('The task execution handoff is pending or unknown. Inspect and reconcile it before starting more work.')
+            raise ValueError('The task execution handoff is pending or unconfirmed. Choose Check move in Task execution folder to read its saved facts without repeating work. An unconfirmed writer release still needs recovery by its original owner.')
         if session is not None and (
             session.get('executionRevision', 0) != current['revision']
             or (session.get('workingDirectory') or session.get('workspace')) != current['directory']
@@ -436,7 +556,7 @@ class RuntimeManager:
     def promote_generation(self, generation, *, protected=None):
         """A host promotion changes future starts, never mounted code in place.
 
-        Old workers remain leased until their own park/retire handshake proves
+        Old workers remain leased until their own retire handshake proves
         there are no active jobs, approvals, queued inputs or uncertain effects.
         This boundary is usable by future host/agent protocol adapters as well.
         """
@@ -493,12 +613,38 @@ class RuntimeManager:
 
     async def start(self, session: dict, emit: Emitter, *, preserve_emit=False, guard=None, preserve_configuration=False):
         sid = session["id"]
-        async with self._admission(sid):
-            await self._start_locked(session, emit, preserve_emit=preserve_emit, guard=guard,
-                **({'preserve_configuration': True} if preserve_configuration else {}))
+        while True:
+            async with self._admission(sid):
+                if guard is not None: guard()
+                current = self.workers.get(sid)
+                if (current and current["process"].returncode is None
+                        and current["ready"].done() and not current["ready"].cancelled()
+                        and not current["ready"].exception()):
+                    from .shared_state import mounted_configuration_stamp
+                    baseline = current.get('configurationStamp')
+                    if baseline is not None and mounted_configuration_stamp(
+                            current['start_session']['workspace'], current['runtime_id'],
+                            self.home or os.environ.get("AMPLIFIER_WEB_HOME", Path.home() / ".amplifier-unified"),
+                            extra_paths=current.get('configurationInputs', ())) != baseline:
+                        if (not self.retention.eligible(current) or self.retention.protected(sid)
+                                or sid in self._ephemeral_mcp):
+                            raise RuntimeStartupError(_PREVIOUS_SETTINGS_IN_USE)
+                        pending = self.retention.schedule(sid, current)
+                    else:
+                        pending = None
+                else:
+                    pending = None
+                if pending is None:
+                    await self._start_locked(session, emit, preserve_emit=preserve_emit, guard=guard,
+                        **({'preserve_configuration': True} if preserve_configuration else {}))
+                    return
+            await asyncio.wait_for(asyncio.shield(pending), self.retention.reply_timeout)
+            if self.workers.get(sid) is current:
+                raise RuntimeStartupError(_PREVIOUS_SETTINGS_IN_USE)
 
     @asynccontextmanager
     async def _admission(self, sid):
+        refused = None
         while True:
             async with self._locks.setdefault(sid, asyncio.Lock()):
                 if self._closed:
@@ -515,7 +661,9 @@ class RuntimeManager:
                     pending = stopping
                 elif retirement is not None and not retirement.done():
                     pending = retirement
-                elif row and row.get('update_pending') and self.retention.eligible(row) and not self.retention.protected(sid):
+                elif (row and row.get('update_pending') and self.retention.eligible(row)
+                        and row is not refused and not self.retention.protected(sid)
+                        and sid not in self._ephemeral_mcp):
                     # Admission wins races with the periodic retirement sweep.
                     # Wait for the same acknowledged handshake before new work.
                     pending = self.retention.schedule(sid, row)
@@ -526,7 +674,12 @@ class RuntimeManager:
             # Never admit work to that closing owner, including after a user
             # Stop. Waiting outside the lock neither cancels nor replays it.
             try:
-                await asyncio.wait_for(asyncio.shield(pending), self.retention.reply_timeout)
+                result = await asyncio.wait_for(asyncio.shield(pending), self.retention.reply_timeout)
+                if result is False:
+                    # A held resource refused retirement. Let this admission
+                    # reach its retained owner (including cleanup controls),
+                    # rather than immediately repeating the same retirement.
+                    refused = row
             except asyncio.CancelledError:
                 if self._closed and not asyncio.current_task().cancelling():
                     raise RuntimeHostClosingError() from None
@@ -545,6 +698,8 @@ class RuntimeManager:
             raise RuntimeHostClosingError()
         sid = session["id"]
         self._check_preparation_cleanup(sid)
+        if self._preparations.get(sid, {}).get('input_configuration'):
+            raise RuntimeStartupError('Next message preparation is already in progress. No input was sent.')
         self._check_execution(sid, session)
         configuration_revision = self._configuration_revision()
         self._retired.pop(sid, None)
@@ -574,11 +729,21 @@ class RuntimeManager:
         proc = lease = windows_owner = startup_stderr_task = None
         startup_stderr = []
         if guard is not None: guard()
-        preparation = {"stopped": self._closed, "shutdown": self._closed, "task": None, "started_at": time.monotonic()}
+        if self._preparations.get(sid, {}).get('input_configuration'):
+            raise RuntimeStartupError('Next message preparation is already in progress. No input was sent.')
+        preparation = {"stopped": self._closed, "shutdown": self._closed, "task": None,
+                       "runtimeOwnerId": str(uuid.uuid4()), "started_at": time.monotonic()}
         self._preparations[sid] = preparation
         heartbeat = asyncio.create_task(self._preparation_progress(sid, preparation, emit))
         try:
             try:
+                # A folder whose path Windows cannot hold in the chat's saved files: say so, in
+                # place of a worker that stops at its first write. Before anything is reserved.
+                from .session_files import chat_files_identity, chat_folder_too_long
+                too_long = None if session.get('externalAgent') else chat_folder_too_long(
+                    session.get('workspace'), chat_files_identity(session))
+                if too_long:
+                    raise RuntimeStartupError(too_long + ' This attempt did not send your message.')
                 generation = active_release(home).get('current')
                 reservation = acquire(home, generation, os.getpid())
                 source_generation = generation
@@ -695,10 +860,12 @@ class RuntimeManager:
                 await emit("runtime.status", {"sessionId": sid, "status": "stopped",
                     "phase": "runtime-setup", "detail": "Preparation cancelled before input admission."})
                 raise
+            if isinstance(exc, UpdateDeferred):
+                raise  # The saved input belongs to the updater. No worker failed.
             # Qualification and spawn failures happen before a worker/readers
             # exist. Settle every caller (input, controls and background warmup)
             # here, not just send(), and retain the sanitized probe facts.
-            from .worker_diagnostics import save_startup_failure, diagnostic_reference, setup_failure_detail
+            from .worker_diagnostics import save_startup_failure, diagnostic_reference, setup_failure_detail, _startup_exception_facts
             from .update_diagnostics import exception_type, probe_record, PROBE_PREFIX
             from .session_health import failure_details
             facts = getattr(exc, 'diagnostic_facts', {})
@@ -714,13 +881,17 @@ class RuntimeManager:
                 {'runtime_id': session.get('runtimeSessionId') or session.get('nativeIdentity') or sid,
                  'phase': 'runtime-setup'}, None,
                 failure=setup_failure_detail(exc),
-                home=home)
+                home=home, exception=exc)
             failure = RuntimeStartupError(public)
+            failure.startupAttemptId = preparation['runtimeOwnerId']
+            failure.startupFailureFacts = _startup_exception_facts(exc)
             if diagnostic:
                 failure.diagnostic_path = diagnostic
                 failure.args = (public + f' Startup details were saved locally to {diagnostic}.',)
             await emit('runtime.error', {'sessionId': sid, 'error': str(failure),
                 'errorType': 'RuntimeStartupError', 'phase': 'worker_startup',
+                'startupAttemptId': preparation['runtimeOwnerId'],
+                'startupFailureFacts': _startup_exception_facts(exc),
                 **diagnostic_reference(failure)})
             raise failure from exc
         finally:
@@ -739,7 +910,7 @@ class RuntimeManager:
                             candidate.unlink(missing_ok=True)
                         except OSError:
                             pass  # Preserve the original failed setup diagnosis.
-        row = {"process": proc, "emit": emit, "runtimeOwnerId": str(uuid.uuid4()), "configurationRevision": configuration_revision, "generation": generation, "source_generation": source_generation, "update_pending": update_pending, "ready": asyncio.get_running_loop().create_future(),
+        row = {"process": proc, "emit": emit, "runtimeOwnerId": preparation['runtimeOwnerId'], "configurationRevision": configuration_revision, "generation": generation, "source_generation": source_generation, "update_pending": update_pending, "ready": asyncio.get_running_loop().create_future(),
                "pending": {}, "inflight": set(), "inputId": None, "closing": False, "stderr": startup_stderr, "bridge_tasks": set(),
                "started_at": time.monotonic(), "phase": "runtime-setup",
                "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies."}
@@ -756,7 +927,7 @@ class RuntimeManager:
         row["heartbeat"] = asyncio.create_task(self._progress(sid, row))
         # The worker restores normal history from its checkpoint. Sending the
         # browser's execution logs, catalogs and attachment history is redundant.
-        config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','interruptionRevision','bundle','selection','forkContext','replaceSavedSelection','bundleReplacement') if key in session}
+        config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','interruptionRevision','bundle','selection','forkContext','replaceSavedSelection','bundleReplacement','composerImageReferences') if key in session}
         config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
         config['configurationPendingRevision'] = session.get('configurationPendingRevision', 0)
         config['ownerSessionId'] = sid  # Identity only; workers read current standing policy themselves.
@@ -771,7 +942,7 @@ class RuntimeManager:
         # private worker command receives this attachment's transient settings.
         if mcp_attachment is not None:
             config['ephemeralMcpServers'] = mcp_attachment[1]
-        row['parked'] = False
+        row['idle'] = False
         self.retention.wake()
         if session.get('forkContext'):
             config['messages'] = session.get('messages', [])
@@ -793,11 +964,15 @@ class RuntimeManager:
                     "This attempt did not send your message."
                 ) from exc
             await asyncio.wait_for(asyncio.shield(row["ready"]), self.startup_timeout)
+        except UpdateDeferred:
+            # Replacement overtook spawn. Retiring this unused child is maintenance, not a user Stop.
+            await self.stop(sid, reason='update')
+            raise
         except TimeoutError as exc:
-            await self.stop(sid)
+            await self.stop(sid, reason='startup')
             raise RuntimeError(f"Amplifier preparation exceeded {self.startup_timeout:g} seconds and was stopped before accepting your message. Check the configured bundle, then retry.") from exc
         except BaseException as exc:
-            await self.stop(sid, reason='shutdown' if self._closed else 'stopped')
+            await self.stop(sid, reason='shutdown' if self._closed else 'startup')
             if (isinstance(exc, asyncio.CancelledError) and self._closed
                     and row.get('stop_reason') == 'shutdown' and not asyncio.current_task().cancelling()):
                 # close() cancelled this owner's readiness future, not the
@@ -842,6 +1017,22 @@ class RuntimeManager:
         stream = _worker_pipes(row).stdin
         stream.write(encode_message(data))
         await stream.drain()
+
+    def stop_computer(self, sid):
+        """Enqueue a safety fence to an existing worker; never acquire/start it.
+
+        This is transport submission, not native release confirmation. The
+        worker independently retains the real controller settlement.
+        """
+        row = self.workers.get(sid)
+        if row and row["process"].returncode is None:
+            _worker_pipes(row).stdin.write(encode_message({"op": "computer.stop"}))
+
+    def resume_computer(self, sid):
+        """Explicit host latch reset only; bundle halt recovery stays separate."""
+        row = self.workers.get(sid)
+        if row and row["process"].returncode is None:
+            _worker_pipes(row).stdin.write(encode_message({"op": "computer.resume"}))
 
     async def _bridge(self, sid, row, data, *, dequeued_ns=None):
         from .performance_diagnostics import PhaseTiming, BRIDGE_TIMING, timing_metadata, TIMING_ENABLED
@@ -923,6 +1114,7 @@ class RuntimeManager:
         stdout = _worker_pipes(row).stdout
         lines = BufferedLines(row['windows_owner'].stdout if row.get('windows_owner') else stdout)
         turns = ObservationTurns()
+        worker_failure = None
 
         def terminal_event(data):
             if not isinstance(data, dict) or data.get('op') or data.get('type') != 'execution.event':
@@ -937,7 +1129,10 @@ class RuntimeManager:
             for key in ('sessionId', 'rootSessionId'):
                 if payload.get(key) == row.get('runtime_id'):
                     payload[key] = sid
-            return normalize_event({**data, 'event': payload}, sid, row['inputId'])
+            event = normalize_event({**data, 'event': payload}, sid, row['inputId'])
+            if event and row.get('runtimeOwnerId'):
+                event[1]['runtimeOwnerId'] = row['runtimeOwnerId']
+            return event
 
         def receipt_event(data):
             event = terminal_event(data)
@@ -1099,14 +1294,31 @@ class RuntimeManager:
                         # The HTTP caller may already have timed out. Reconcile
                         # only this send's receipt, without changing turn state.
                         await row['emit']('runtime.delivery', {'sessionId': sid, 'inputId': input_id})
-                elif data.get("type") == "runtime.parked":
-                    row["parked"] = True
-                    row["parked_at"] = self.retention.clock()
-                    self.retention.wake()
-                    await row['emit']('runtime.warmth', {'sessionId': sid, 'status': 'warm'})
-                elif data.get("type") == "runtime.reactivated":
-                    row["parked"] = False
-                    await row['emit']('runtime.warmth', {'sessionId': sid, 'status': 'active'})
+                elif data.get("type") == "computer.settlement":
+                    # This pipe belongs to the retained execution owner. Keep
+                    # opaque custody facts even if Stop later reaps that process;
+                    # process exit is not a desktop release acknowledgement.
+                    if (type(data.get("settled")) is bool and data.get("state") in {"settled", "stopping"}
+                            and isinstance(data.get("episodes"), list)
+                            and len(data["episodes"]) <= 64
+                            and (data["settled"] is False or not data["episodes"])):
+                        receipt = {key: data[key] for key in
+                                   ("state", "settled", "episodes", "omittedEpisodes") if key in data}
+                        if data.get("scope") == "cleanup":
+                            receipt["scope"] = "cleanup"
+                        row["computerSettlement"] = receipt
+                        from .host.config import app_home, write_private
+                        home = Path(self.home or app_home())
+                        destination = home / "runtime-reports" / row["runtime_id"] / "computer-settlement.json"
+                        try:
+                            write_private(destination, json.dumps(receipt))
+                        except (OSError, ValueError):
+                            _LOG.warning("Could not persist unresolved computer custody for %s", sid)
+                        if not receipt["settled"]:
+                            await row["emit"]("runtime.activity", {"sessionId": sid, "phase": "stopping",
+                                "detail": ("Computer cleanup is unconfirmed; its owner remains retained."
+                                    if receipt.get("scope") == "cleanup" else
+                                    "Computer release is unconfirmed; its cleanup owner remains retained.")})
                 elif data.get("type") == "runtime.progress":
                     if not row["ready"].done() and not row["closing"]:
                         row["phase"] = data.get("phase", row["phase"])
@@ -1130,7 +1342,20 @@ class RuntimeManager:
                                 and identity.get("sessionId") == row.get("runtime_id")
                                 and type(identity.get("pid")) is int and identity["pid"] > 0):
                             row["native_worker_pid"] = identity["pid"]
+                            native_owner = identity.get('owner')
+                            if (isinstance(native_owner, dict) and native_owner.get('pid') == identity['pid']
+                                    and native_owner.get('app') == 'amplifier-unified'
+                                    and native_owner.get('acquisition_id')):
+                                row['native_writer'] = {key: native_owner.get(key) for key in
+                                    ('hostname', 'app', 'pid', 'acquisition_id')}
                         row["ready"].set_result(data.get("report", {}))
+                    # Private mount inputs never enter public readiness/state.
+                    if isinstance(data.get("configurationInputs"), list) and isinstance(data.get("configurationStamp"), list):
+                        row["configurationInputs"] = data["configurationInputs"]
+                        row["configurationStamp"] = data["configurationStamp"]
+                    row["idle"] = True
+                    row["idle_at"] = self.retention.clock()
+                    self.retention.wake()
                     await row["emit"]("runtime.status", {"sessionId": sid, "status": "ready", "phase": "ready",
                         "detail": "Amplifier is ready.", "elapsedSeconds": int(time.monotonic() - row["started_at"]),
                         "runtimeOwnerId": row['runtimeOwnerId'], "configurationRevision": row['configurationRevision'],
@@ -1141,6 +1366,10 @@ class RuntimeManager:
                     await row['emit']('runtime.ownership', {'sessionId': sid,
                         **{key: data[key] for key in ('status', 'source', 'detail') if key in data}})
                 elif data.get("type") == "runtime.error":
+                    if row.get('startup_failure_reported'):
+                        # A failed readiness future is done, but is not READY.
+                        # Teardown must not replace that attempt's first cause.
+                        continue
                     if 'terminalFailure' in data:
                         # This is supplemental metadata, not a new failure or
                         # startup exception. Invalid/unsupported captures cannot
@@ -1151,11 +1380,27 @@ class RuntimeManager:
                             await row['emit'](*normalized)
                         continue
                     from .session_health import failure_details
+                    from .worker_diagnostics import validate_command_failure_facts
+                    # Retain the originating worker error separately from the
+                    # host's later EOF. Only closed facts survive; no worker
+                    # prose/paths enter the causal witness or change admission.
+                    if worker_failure is None:
+                        # Shutdown can fail secondarily. Later/better-shaped
+                        # evidence must not replace the first observed cause.
+                        facts = validate_command_failure_facts(data.get('failureFacts'))
+                        source = data.get('failureSource')
+                        worker_failure = {
+                            'source': source if type(source) is str and source in {'execution', 'stdin'} else 'other',
+                            'factsStatus': 'valid' if facts is not None else
+                                'invalid' if 'failureFacts' in data else 'missing',
+                            **(facts if facts is not None else {'errors': [], 'truncated': False})}
                     failure = _worker_error(data)
                     diagnostic = None
                     startup = not row['ready'].done()
+                    startup_facts = None
                     if startup and not isinstance(failure, SessionInUseError):
-                        from .worker_diagnostics import receipt_path, save_startup_failure
+                        from .worker_diagnostics import receipt_path, save_startup_failure, validate_startup_failure_facts
+                        startup_facts = validate_startup_failure_facts(data.get('startupFailureFacts'))
                         diagnostic = receipt_path(data.get("diagnosticReceipt"))
                         if diagnostic is None:
                             # A handled worker error can race the final stderr.
@@ -1184,6 +1429,9 @@ class RuntimeManager:
                             failure = RuntimeStartupError(public)
                         if diagnostic:
                             failure.diagnostic_path = diagnostic
+                        failure.startupAttemptId = row['runtimeOwnerId']
+                        if startup_facts is not None:
+                            failure.startupFailureFacts = startup_facts
                     error = str(failure)
                     reported_error = error
                     if not row["ready"].done():
@@ -1192,15 +1440,39 @@ class RuntimeManager:
                         await row["emit"]("runtime.ownership", {"sessionId": sid, "status": "blocked", "owner": failure.owner})
                     else:
                         from .module_failures import ConfiguredModuleError
+                        execution_failure = None
+                        if not startup and isinstance(data.get('executionFailure'), dict):
+                            from .support_diagnostics import public_execution_failure
+                            execution_failure = public_execution_failure(data['executionFailure'])
+                            if execution_failure and execution_failure['runtimeSessionId'] != row['runtime_id']:
+                                execution_failure = None
                         await row["emit"]("runtime.error", {"sessionId": sid, "error": error,
                             **({"errorType": "RuntimeStartupError"} if startup else
                                {"errorType": failure_details(error, data["errorType"])["errorType"]} if data.get("errorType") else {}),
                             **({'phase': 'worker_startup'} if startup else {}),
+                            **({'event': 'persistence.failed'} if data.get('event') == 'persistence.failed' else {}),
+                            **({'executionFailure': execution_failure,
+                                **({'generationId': execution_failure['generationId']}
+                                   if execution_failure.get('generationId') else {})}
+                               if execution_failure else {}),
+                            **({'startupAttemptId': row['runtimeOwnerId'],
+                                **({'startupFailureFacts': startup_facts} if startup_facts is not None else {})}
+                               if startup else {}),
                             **({"diagnosticReceipt": diagnostic.name} if diagnostic else {}),
                             **({"moduleFailures": failure.failures} if isinstance(failure, ConfiguredModuleError) else {})})
+                        if startup:
+                            row['startup_failure_reported'] = True
                 elif data.get("type") == "history.revised":
                     await row["emit"]("history.revised", {**data, "sessionId": sid})
                 elif data.get("type") in {"approval.requested", "approval.resolved"} and data.get("id"):
+                    # Only this live worker channel supplies ordinary tool
+                    # scopes. Never accept them from saved/display event data.
+                    data = dict(data)
+                    scope = data.pop('toolScope', None)
+                    scopes = row.setdefault('approvalScopes', {})
+                    scopes.pop(data['id'], None)
+                    if data['type'] == 'approval.requested' and isinstance(scope, dict):
+                        scopes[data['id']] = scope
                     await row["emit"](data["type"], {**data, "sessionId": sid})
                 else:
                     if data.get('type') == 'execution.event' and isinstance(data.get('event'), dict):
@@ -1212,9 +1484,18 @@ class RuntimeManager:
                                 data['event'][key] = sid
                     emitter = data.get("sessionId") or data.get("session_id") or row["runtime_id"]
                     root_emitter = data.get("rootSessionId") or data.get("root_session_id") or row["runtime_id"]
+                    if emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
+                        if data.get("type") == "session.idle":
+                            row["idle"] = True
+                            row["idle_at"] = self.retention.clock()
+                            self.retention.wake()
+                        elif data.get('type') == 'session.naming.finished':
+                            self.retention.wake()
+                        elif data.get("type") in {"generation.started", "input.delivered"}:
+                            row["idle"] = False
                     if data.get("type") == "input.delivered" and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
                         row["inputId"] = data.get("input_id")
-                    if (data.get("type") == "input.delivered" or data.get("type", "").startswith("steering.")) and (emitter != row["runtime_id"] or root_emitter != row["runtime_id"]):
+                    if (data.get("type", "").startswith(("input.", "steering.")) or data.get('type') == 'native.outcome_unknown') and (emitter != row["runtime_id"] or root_emitter != row["runtime_id"]):
                         continue  # Child input cannot mutate root admission provenance.
                     if data.get("type", "").startswith("generation.") or data.get("type") == "collaboration.checkpoint":
                         data = dict(data)
@@ -1223,12 +1504,14 @@ class RuntimeManager:
                         data["sessionId"] = sid if identity == row["runtime_id"] else identity
                         data["rootSessionId"] = sid if root == row["runtime_id"] else root
                     normalized = normalize_event(data, sid, row["inputId"])
-                    if (normalized and normalized[0] == 'runtime.status'
-                            and normalized[1].get('status') == 'stopped'
-                            and row.get('stop_reason') in {'configuration', 'shutdown', 'retention'}):
-                        # Closing a process for maintenance is not a user Stop.
-                        normalized = ('runtime.warmth', {'sessionId': sid, 'status': 'cold'})
+                    if (normalized and data.get('type') == 'session.closed'
+                            and row.get('stop_reason') == 'stopped'):
+                        normalized = ('runtime.status', {'sessionId': sid,
+                            'status': 'stopped', 'event': 'session.closed'})
                     if normalized:
+                        if row.get('runtimeOwnerId') and (normalized[0] in {'execution.event', 'runtime.generation'}
+                                or normalized[0] == 'runtime.status' and normalized[1].get('event') == 'input.delivered'):
+                            normalized[1]['runtimeOwnerId'] = row['runtimeOwnerId']
                         if normalized[0] == 'worker.updated' and not normalized[1].get('activityOnly'):
                             # Only lifecycle receipts on this process's pipe
                             # bind its native jobs/children. Progress and peer
@@ -1287,7 +1570,7 @@ class RuntimeManager:
             error = f'Amplifier worker communication failed ({type(exc).__name__}). Work was not replayed.'
             if cleanup_error is not None:
                 error += ' Windows worker cleanup is unconfirmed; ownership is retained.'
-            if not row['closing']:
+            if not row['closing'] and not row.get('startup_failure_reported'):
                 await row['emit']('runtime.error', {'sessionId':sid,'error':error,'errorType':'WorkerCommunicationError' if row['ready'].done() else 'RuntimeStartupError',
                     **({'phase': 'worker_startup'} if not row['ready'].done() else {})})
             if not row["ready"].done():
@@ -1316,13 +1599,14 @@ class RuntimeManager:
                             'schema': 1, 'origin': 'reader_disconnect',
                             'factsStatus': 'not_applicable' if reader_reason == 'eof' else 'valid',
                             **reader_facts,
+                            **({'workerFailure': worker_failure} if worker_failure is not None else {}),
                             'reader': {'reason': reader_reason, 'phase': reader_phase,
                                 'frame': reader_frame, 'exitObserved': reader_exit is not None,
                                 'exitCode': reader_exit if type(reader_exit) is int and
                                     -(2**31) <= reader_exit < 2**32 else None,
                                 'closing': row.get('closing') is True,
                                 'stopReason': (row['stop_reason'] if type(row.get('stop_reason')) is str
-                                    and row['stop_reason'] in {'stopped', 'configuration', 'shutdown', 'retention'}
+                                    and row['stop_reason'] in {'stopped', 'configuration', 'shutdown', 'retention', 'startup', 'update'}
                                     else 'none' if row.get('stop_reason') is None else 'other'),
                                 'cleanup': reader_cleanup}}
                         future.set_exception(error)
@@ -1333,7 +1617,8 @@ class RuntimeManager:
         shutdown = row.get('stop_reason') == 'shutdown'
         await row["emit"]("runtime.ended", {"sessionId": sid, "status": 'interrupted' if shutdown else status,
             **({'runtimeOwnerId': row['runtimeOwnerId']} if row.get('runtimeOwnerId') else {}),
-            **({'reason': 'shutdown'} if shutdown else {}), "backgroundCallIds": sorted(row.get("backgroundCalls", ()))})
+            **({'reason': row['stop_reason']} if row.get('stop_reason') else {}),
+            "backgroundCallIds": sorted(row.get("backgroundCalls", ()))})
         # The reader can be cancelled while delivery waits for the service
         # lock. Only successful delivery suppresses the stop-path retry.
         row["executionEnded"] = True
@@ -1374,7 +1659,7 @@ class RuntimeManager:
         # Handoff holds this same admission lock while releasing its writer.
         # The host fence persists until the durable execution-state commit, so
         # queued controls cannot resurrect the old checkout in the gap.
-        safe = op in {'approval', 'coordination.approval', 'worker.stop', 'park', 'retire', 'dependencies', 'desktop.readiness', 'handoff.boundary'} or (
+        safe = op in {'approval', 'coordination.approval', 'worker.stop', 'retire', 'dependencies', 'desktop.readiness', 'handoff.boundary'} or (
             op == 'control' and args.get('operation') in {
                 'operations.cancel', 'kernels.interrupt', 'kernels.close',
                 'task.pause', 'task.block', 'task.complete',
@@ -1407,8 +1692,9 @@ class RuntimeManager:
         # A caller timing out or disconnecting does not cancel work already
         # handed to the worker. Keep it busy until the reply or process exit.
         row["inflight"].add(identity)
-        if op not in {"park", "retire", "dependencies", "desktop.readiness", "delivery", "approval", "coordination.approval", "handoff.boundary"}:
-            row["parked"] = False
+        # In-flight receipt ownership protects admission. Only actual native
+        # delivery/generation changes the idle hint: duplicates and no-op
+        # controls need not wake the loop or emit another session.idle.
         try:
             # Capture host authority at admission, before execution can emit a
             # generation. Event arrival must never recapture a later Stop epoch.
@@ -1427,9 +1713,9 @@ class RuntimeManager:
         except BaseException as exc:
             # A partial transport write has an unknown outcome. Keep the
             # in-flight fence until its reply or process exit, just like timeout.
-            if op == 'retire' and isinstance(exc, Exception):
-                # A partial retirement write can still get a late reply. Its
-                # reconciler keeps the original future until reply or exit.
+            if op in {'retire', 'handoff.boundary'} and isinstance(exc, Exception):
+                # A partial lifecycle write can still get a late reply. Its
+                # original owner keeps the future until that reply or exit.
                 return row, identity, future
             row["pending"].pop(identity, None)
             raise
@@ -1437,7 +1723,7 @@ class RuntimeManager:
 
     async def _reply(self, row, identity, future, *, op, args):
         try:
-            timeout = 75 if op == "control" and args.get("operation") == "memory.consolidate" else None if op == "retire" or op == "control" and args.get("operation") == "history.edit" else 180 if op == "control" and args.get("operation") in {"bundle.preview", "bundle.prepare"} else 600 if op == "control" and args.get("operation") == "tool.invoke" else 150 if op == "control" and args.get("operation") in {"configuration.providerModels","configuration.providerTest"} else 30
+            timeout = 75 if op == "control" and args.get("operation") == "memory.consolidate" else None if op in {"retire", "handoff.boundary"} or op == "control" and args.get("operation") == "history.edit" else 180 if op == "control" and args.get("operation") in {"bundle.preview", "bundle.prepare"} else 600 if op == "control" and args.get("operation") == "tool.invoke" else 150 if op == "control" and args.get("operation") in {"configuration.providerModels","configuration.providerTest"} else 30
             if op == "coordination.approval":
                 # The worker expires the human decision after 50 seconds.
                 timeout = 55
@@ -1451,8 +1737,8 @@ class RuntimeManager:
     async def prewarm(self, session, emit):
         if self._closed or not self.retention.settings["max_warm_workers"] or not self.retention.settings["idle_timeout_hours"]:
             return
-        # Repeated explicit preparation neither reacquires a loaded chat’s writer
-        # lock nor extends its idle lifetime. Actual input still validates state on wake.
+        # Repeated explicit preparation neither restarts a loaded owner nor
+        # extends its idle lifetime. Reads never call this explicit operation.
         if self.workers.get(session["id"], {}).get("process") is not None:
             row = self.workers[session["id"]]
             if row["process"].returncode is None:
@@ -1466,25 +1752,61 @@ class RuntimeManager:
             if row and row["process"].returncode is None:
                 return
             await self.start(session, emit)
-            await self._request(session["id"], "park")
 
     async def send(self, session, text, input_id, emit, *, admission_check=None):
-        if admission_check:
-            admission_check()
         update_gate = getattr(self, 'update_input_gate', lambda *args: None)
-        update_gate(session['id'], input_id)
-        configuration_guard = await self._start_for_input(session, emit,
-            **({'admission_check': admission_check} if admission_check else {}))
-        def guard():
+        def current_input():
+            current = self._check_execution(session['id'], session)
+            if current is not None and current.get('interruptionRevision', 0) != session.get('interruptionRevision', 0):
+                raise RuntimeStartupError('This input was stopped before admission. Nothing was sent.')
+            if admission_check:
+                admission_check()
             update_gate(session['id'], input_id)
+        current_input()
+        configuration_guard = None
+        def guard():
+            current_input()
             message = next((m for m in session.get('messages', []) if m.get('inputId') == input_id), {})
             getattr(self, 'update_message_guard', lambda sid, message: None)(session['id'], message)
             if configuration_guard:
                 configuration_guard()
-        return await self._request(session["id"], "send", guard=guard, text=text, input_id=input_id,
-            reply_context=next((m.get("replyTo") for m in session.get("messages",[]) if m.get("inputId")==input_id),None),
+        message = next((m for m in session.get("messages", []) if m.get("inputId") == input_id), {})
+        arguments = dict(text=text, input_id=input_id,
+            reply_context=message.get("replyTo"),
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
-            attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
+            attachments=message.get("attachments", []))
+        if message.get('recoveryAllowance') is not None:
+            if (message.get('inputOrigin') not in {'ui', 'user'} or message.get('role') != 'user'
+                    or message.get('handoffOrigin') or message.get('steering') or message.get('updateAdmission')
+                    or session.get('pendingModelSelection') or session.get('pendingBundleSelection')):
+                raise RuntimeStartupError('This recovery allowance requires a new ordinary message from this chat.')
+            arguments['recovery_allowance'] = message['recoveryAllowance']
+        if session.get('pendingModelSelection') or session.get('pendingBundleSelection') or session.get('fileAccessPending'):
+            # Future settings must not interrupt live guidance. Ask the actual
+            # owner to admit with its mounted configuration, or prove no effect
+            # while idle. Host display status/generation never picks the route.
+            pending = None
+            async with self._admission(session['id']):
+                guard()
+                row = self.workers.get(session['id'])
+                if (row and row['process'].returncode is None and not row.get('closing')
+                        and row['ready'].done() and not row['ready'].cancelled() and not row['ready'].exception()):
+                    pending = await self._admit(session['id'], 'send',
+                        {**arguments, 'configuration_if_idle': True})
+            if pending is not None:
+                result = await self._reply(*pending, op='send', args=arguments)
+                if not (isinstance(result, dict) and result.get('accepted') is False
+                        and result.get('effect') == 'none' and result.get('configurationRequired') is True):
+                    return result  # Accepted/unknown/failed input is never resubmitted.
+        if session.get('fileAccessPending'):
+            raise RuntimeStartupError('File permissions are awaiting application. No input was sent.')
+        from .next_message_configuration import saved_fork_choice
+        fork_choice = saved_fork_choice(session, message)
+        configuration_guard = await self._start_for_input(session, emit, admission_check=current_input,
+            **({'fork_choice': fork_choice} if fork_choice else {}))
+        if fork_choice and fork_choice.get('connection'):
+            arguments['applied_fork_choice'] = fork_choice
+        return await self._request(session["id"], "send", guard=guard, **arguments)
 
     async def steer(self, session, text, input_id, emit):
         """Target the existing worker only; steering can never start a worker."""
@@ -1494,13 +1816,9 @@ class RuntimeManager:
         args = {'operation': 'conversation.steer', 'arguments': {
             'text': text, 'inputId': input_id,
             'targetGenerationId': message['steering']['generationId'],
-            'allowNextTurn': message['steering'].get('allowNextTurn') is True,
             'reply_context': message.get('replyTo'), 'attachments': message.get('attachments', []),
             'context_binding': session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []})}}
         async with self._admission(sid):
-            if message['steering'].get('allowNextTurn') is True:
-                getattr(self, 'update_input_gate', lambda *args: None)(sid, input_id)
-                getattr(self, 'update_message_guard', lambda *args: None)(sid, message)
             row = self.workers.get(sid)
             if self._closed or not row or row['process'].returncode is not None or row.get('closing'):
                 return {'accepted': False, 'reason': 'The run is no longer available for steering.'}
@@ -1511,7 +1829,6 @@ class RuntimeManager:
     async def collaboration_input(self, session, arguments, guard, emit):
         """Explicit idle start plus guarded ordinary native admission."""
         update_gate = getattr(self, 'update_input_gate', lambda: None)
-        from .update_drain import UpdateDeferred
         try:
             update_gate()
         except UpdateDeferred:
@@ -1570,12 +1887,47 @@ class RuntimeManager:
             **({"approval_id": approval_id} if approval_id else {}))
 
     @measured('input.runtime.prepare', session=True)
-    async def _start_for_input(self, session, emit, *, admission_check=None):
+    async def _start_for_input(self, session, emit, *, admission_check=None, fork_choice=None):
         try:
             guard = None
             captured_revision = session.get('nextMessageRevision', 0)
-            if self._input_configuration and session.get('nextMessageRevision'):
-                session, guard = await self._input_configuration(session)
+            saved_binding = session.get('modelConnectionKey')
+            if self._input_configuration and (session.get('nextMessageRevision') or session.get('modelConnectionKey')):
+                if self._closed:
+                    raise RuntimeHostClosingError()
+                sid = session['id']
+                self._check_preparation_cleanup(sid)
+                if sid in self._preparations:
+                    raise RuntimeStartupError('Conversation preparation is already in progress. No input was sent.')
+                preparation = {'stopped': self._closed, 'shutdown': self._closed,
+                               'input_configuration': True,
+                               'runtimeOwnerId': str(uuid.uuid4()),
+                               'task': asyncio.create_task(self._input_configuration(session))}
+                self._preparations[sid] = preparation
+                try:
+                    session, guard = await preparation['task']
+                    if preparation['stopped']:
+                        raise RuntimeStartupError('This preparation was stopped. No input was sent.')
+                except asyncio.CancelledError:
+                    if not preparation['stopped']:
+                        raise
+                    if preparation.get('shutdown'):
+                        raise RuntimeHostClosingError() from None
+                    raise RuntimeStartupError('This preparation was stopped. No input was sent.') from None
+                except Exception as exc:
+                    from .worker_diagnostics import _startup_exception_facts
+                    # Capture the original preparation error, not its public
+                    # wrapper. No message/traceback/arguments cross this boundary.
+                    failure = exc if isinstance(exc, RuntimeStartupError) else RuntimeStartupError(
+                        'Next message preparation failed. No input was sent.')
+                    failure.startupAttemptId = preparation['runtimeOwnerId']
+                    failure.startupFailureFacts = _startup_exception_facts(exc.__cause__ or exc)
+                    if failure is exc:
+                        raise
+                    raise failure from exc
+                finally:
+                    if self._preparations.get(sid) is preparation:
+                        self._preparations.pop(sid)
             configuration_guard = guard
             if admission_check:
                 def guard():
@@ -1592,7 +1944,12 @@ class RuntimeManager:
                         'instance':(requested or session['selection'])['instance'],
                         'expectedConnectionKey':session['modelConnectionKey']
                     }, **guarded)
-                except (SessionInUseError, RuntimeStartupError, RuntimeHostClosingError):
+                    if (fork_choice and configuration_guard and not requested
+                            and fork_choice['selection'] == session.get('selection')):
+                        # Bind the resolved key, including a verified historical key migration.
+                        # The worker compares its native controls again on actual Send admission.
+                        fork_choice['connection'] = session['modelConnectionKey']
+                except (SessionInUseError, RuntimeStartupError, RuntimeHostClosingError, UpdateDeferred):
                     raise
                 except Exception as exc:
                     raise RuntimeStartupError(
@@ -1602,19 +1959,33 @@ class RuntimeManager:
                 await self.control(session['id'],'provider.select',{
                     **requested, **({'expectedConnectionKey':session['modelConnectionKey']} if session.get('modelConnectionKey') else {})
                 }, **guarded)
-            if configuration_guard:
+            adopted_binding = saved_binding and saved_binding != session.get('modelConnectionKey')
+            if configuration_guard and (captured_revision or adopted_binding):
                 guard()
                 await emit('runtime.nextMessageApplied', {'sessionId': session['id'],
-                    'revision': captured_revision, 'bundle': session.get('bundle'), 'selection': requested})
+                    'revision': captured_revision, 'bundle': session.get('bundle'), 'selection': requested,
+                    **({'bindingTransition': {'previous': saved_binding, 'current': session['modelConnectionKey'],
+                        'instance': (requested or session['selection'])['instance']},
+                        'bindingOnly': not captured_revision} if adopted_binding else {})})
             elif requested:
                 await emit('runtime.modelSelectionApplied',{'sessionId':session['id'],'selection':requested})
             return guard
-        except (SessionInUseError, RuntimeStartupError, RuntimeHostClosingError):
+        except (SessionInUseError, RuntimeStartupError, RuntimeHostClosingError, UpdateDeferred):
             raise
         except Exception as exc:
             failure = RuntimeStartupError('The conversation worker could not start. This attempt did not send your message.')
             if getattr(exc, 'diagnostic_path', None) is not None:
                 failure.diagnostic_path = exc.diagnostic_path
+            from .session_health import startup_failure_details
+            for key, value in startup_failure_details(vars(exc)).items():
+                setattr(failure, key, value)
+            from .module_failures import ConfiguredModuleError
+            if isinstance(exc, ConfiguredModuleError):
+                failure.failures = exc.failures
+            elif isinstance(exc, OSError) and not getattr(failure, 'startupFailureFacts', None):
+                from .worker_diagnostics import _startup_exception_facts
+                failure.startupAttemptId = str(uuid.uuid4())
+                failure.startupFailureFacts = _startup_exception_facts(exc)
             raise failure from exc
 
     async def delivery(self, session, input_id):
@@ -1631,8 +2002,13 @@ class RuntimeManager:
         return await asyncio.to_thread(saved_delivery, session, input_id)
 
     async def retry(self, session, text, input_id, emit, *, admission_check=None):
-        guard = await self._start_for_input(session, emit,
-            **({'admission_check': admission_check} if admission_check else {}))
+        def retry_admission():
+            if admission_check:
+                admission_check()
+            if update_gate := getattr(self, 'update_input_gate', None):
+                update_gate(session['id'], input_id)
+        retry_admission()
+        guard = await self._start_for_input(session, emit, admission_check=retry_admission)
         return await self._request(session['id'], 'retry', guard=guard, text=text, input_id=input_id,
             reply_context=next((m.get('replyTo') for m in session.get('messages',[]) if m.get('inputId')==input_id),None),
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
@@ -1668,24 +2044,86 @@ class RuntimeManager:
                 raise current from None
 
     async def handoff_boundary(self, session_id, request_id, *, cancel=False, receipt=None, update=False, configuration=False):
-        """Inspect only this existing worker; never warm or acquire a writer."""
+        """One original boundary reply owner, even after a caller stops waiting."""
         row = self.workers.get(session_id)
         expected = (receipt or {}).get('configurationWait') if configuration else (receipt or {}).get('updateWait')
         def guard():
             current = self.workers.get(session_id)
+            if current is not row:
+                raise ValueError('The original boundary worker changed; its request was not recreated.')
             if expected and (not current or current.get('runtimeOwnerId') != expected['owner']):
                 raise ValueError('The requesting runtime owner changed before its update boundary.')
+            if ((receipt or {}).get('boundaryOwner') and current is not None
+                    and current.get('runtimeOwnerId') != receipt['boundaryOwner']):
+                raise ValueError('The original checkout worker changed; its boundary was not recreated.')
         guard()
         if row is None:
-            return {'ready': True, 'waitingFor': [], 'continuationAllowed': False}
+            return {'ready': True, 'waitingFor': [], 'continuationAllowed': False,
+                    **({'cancelled': True} if cancel else {})}
         if row['process'].returncode is not None:
+            if cancel:
+                return {'cancelled': True}
             raise RuntimeError('The old worker exited before confirming its saved boundary.')
-        return await self._request(session_id, 'handoff.boundary', request_id=request_id, cancel=cancel,
-            receipt=receipt, **({'guard': guard} if expected else {}), **({'update': True} if update else {}),
-            **({'configuration': True} if configuration else {}))
+        waits = row.setdefault('boundary_waits', {})
+        key = request_id
+        waiting = waits.get(key)
+        if waiting is None:
+            waiting = {'cancel': cancel}
+            waits[key] = waiting
+            async def observe():
+                result = await self._request(session_id, 'handoff.boundary', request_id=request_id,
+                    cancel=cancel, receipt=receipt, guard=guard,
+                    **({'update': True} if update else {}), **({'configuration': True} if configuration else {}))
+                # Cancellation is ordered after the original marker/checkpoint.
+                # A late arm can never arrive after its acknowledged removal.
+                if not cancel and waiting['cancel']:
+                    result = await self._request(session_id, 'handoff.boundary', request_id=request_id,
+                        cancel=True, guard=guard)
+                return result
+            waiting['task'] = asyncio.create_task(observe())
+            # Retrieve failures after a disconnected waiter without losing them:
+            # the exact next observation still consumes this task's result.
+            waiting['task'].add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        elif cancel:
+            waiting['cancel'] = True
+            if waiting['task'].done() and not waiting['task'].cancelled():
+                try:
+                    cancelled = waiting['task'].result().get('cancelled')
+                except Exception:
+                    cancelled = False
+                if not cancelled:
+                    # Consume the original reply before ordering its removal.
+                    waits.pop(key)
+                    return await self.handoff_boundary(session_id, request_id, cancel=True, receipt=receipt,
+                                                       update=update, configuration=configuration)
+        try:
+            result = await asyncio.wait_for(asyncio.shield(waiting['task']), self.boundary_reply_timeout)
+        except TimeoutError:
+            return {'ready': False, 'waitingFor': ['boundary-reply'], 'requestPending': True}
+        if waits.get(key) is waiting:
+            waits.pop(key)
+        if waiting['cancel'] and not cancel:
+            return {'ready': False, 'waitingFor': ['cancelled'], 'cancelled': True}
+        return result
+
+    def boundary_cleanup(self, session_id, request_id, owner):
+        """Observe an exact retained removal reply; never send another request."""
+        row = self.workers.get(session_id)
+        if not owner or not row or row.get('runtimeOwnerId') != owner:
+            return None
+        waiting = row.get('boundary_waits', {}).get(request_id)
+        if not waiting or not waiting['cancel'] or not waiting['task'].done() or waiting['task'].cancelled():
+            return None
+        try:
+            if waiting['task'].result().get('cancelled') is True:
+                return {'boundaryId': request_id, 'runtimeOwnerId': owner, 'markerRemoved': True,
+                        'inputsReplayed': False}
+        except Exception:
+            pass
+        return None
 
     @contextmanager
-    def stopped_boundary(self, session):
+    def stopped_boundary(self, session, *, allow_fenced=False):
         """Hold existing native ownership while proving a stopped root is absent.
 
         Called under the service mutation lock. This non-awaiting inspection
@@ -1694,7 +2132,7 @@ class RuntimeManager:
         """
         from amplifier_foundation.session import SharedSessionStore
         sid = session['id']
-        self._check_execution(sid, session)
+        self._check_execution(sid, session, allow_fenced=allow_fenced)
         row = self.workers.get(sid)
         lock = self._locks.get(sid)
         if (self._closed or sid in self._preparations or lock and lock.locked()
@@ -1717,7 +2155,7 @@ class RuntimeManager:
         finally:
             held.release()
 
-    async def quiesce_for_handoff(self, session, request_id, *, transfer_destination=None):
+    async def quiesce_for_handoff(self, session, request_id, *, transfer_destination=None, guard=None):
         """Save and release a known local writer before moving execution cwd."""
         if _WINDOWS:
             raise RuntimeError('Session handoff and transfer fencing are unavailable on Windows; no ownership was changed.')
@@ -1725,12 +2163,18 @@ class RuntimeManager:
         sid = session['id']
         store = SharedSessionStore(session['workspace'], session.get('runtimeSessionId') or session.get('nativeIdentity') or sid)
         async with self._admission(sid):
+            if guard is not None: guard()
             row = self.workers.get(sid)
             released_owner = None
             try:
                 held = await asyncio.to_thread(store.acquire, app='amplifier-unified-handoff')
             except SessionBusyError as busy:
-                if not row or busy.owner.get('app') != 'amplifier-unified' or busy.owner.get('pid') != row['process'].pid:
+                if guard is not None: guard()
+                writer = row.get('native_writer') if row else None
+                if (self.workers.get(sid) is not row or not writer or row['process'].returncode is not None
+                        or writer.get('pid') != row.get('native_worker_pid')
+                        or any(busy.owner.get(key) != writer.get(key) for key in
+                               ('hostname', 'app', 'pid', 'acquisition_id'))):
                     # No release request, Stop or placement mutation occurred.
                     # Later failures must remain uncertain, even if they also
                     # report a busy writer after the release boundary.
@@ -1741,8 +2185,10 @@ class RuntimeManager:
                     raise RuntimeError(f'Checkout handoff could not confirm saved writer release ({result.status}). {result.message}')
                 held = await asyncio.to_thread(store.acquire, app='amplifier-unified-handoff')
             try:
-                # Parked workers already saved before relinquishing their lock.
                 # A released worker cannot write while this proof handle is held.
+                # Return the positive release proof even if task/Stop authority
+                # changed during release. The placement owner retains it before
+                # suppressing the unperformed move; it is not a no-effect error.
                 await self.stop(sid)
                 from .host_identity import local_host_identity, require_local_host
                 owner = held.owner
@@ -1757,9 +2203,17 @@ class RuntimeManager:
             finally:
                 await asyncio.to_thread(held.release)
 
-    async def approval(self, session_id, approval_id, decision, comment=None):
+    def approval_scope(self, session_id, approval_id):
+        row = self.workers.get(session_id)
+        if (not row or row.get('closing') or row.get('yielding') or row.get('yielded')
+                or row['process'].returncode is not None):
+            return None
+        return copy.deepcopy(row.get('approvalScopes', {}).get(approval_id))
+
+    async def approval(self, session_id, approval_id, decision, comment=None, expected_scope=None):
         return await self._request(session_id, "approval", approval_id=approval_id, decision=decision,
-                                   **({"comment": comment} if comment else {}))
+                                   **({"comment": comment} if comment else {}),
+                                   **({"expected_scope": expected_scope} if expected_scope is not None else {}))
 
     async def scheduled_input(self, session_id, arguments, guard):
         """Internal authorized schedule handoff using ordinary worker admission."""
@@ -1824,7 +2278,7 @@ class RuntimeManager:
             return {'status': 'unknown', 'sessionId': session_id, 'reason': 'Runtime inspection did not return. No work was started.'}
 
     async def provenance(self, session_id, modules=()):
-        """Inspect existing loaded origins; never start or unpark a worker."""
+        """Inspect existing loaded origins; never start a worker."""
         row = self.workers.get(session_id)
         if not row or row['process'].returncode is not None or not row['ready'].done() or row['ready'].cancelled():
             return {'status': 'unknown', 'sessionId': session_id, 'reason': 'No ready session runtime.'}
@@ -1964,7 +2418,7 @@ class RuntimeManager:
         self._check_preparation_cleanup(session_id)
         self._retired.pop(session_id, None)
         preparation = self._preparations.get(session_id)
-        if preparation:
+        if preparation and preparation.get('task') is not asyncio.current_task():
             if reason == 'stopped' or 'stop_reason' not in preparation:
                 preparation['stop_reason'] = reason
             if reason == 'stopped':
@@ -2054,9 +2508,10 @@ class RuntimeManager:
                 task.cancel()
         await asyncio.gather(row["reader"], row["stderr_task"], row["heartbeat"], *row["bridge_tasks"], return_exceptions=True)
         await self._execution_ended(session_id, row, "stopped")
-        cold = row.get('stop_reason') in {'configuration', 'shutdown', 'retention'}
+        cold = row.get('stop_reason') in {'configuration', 'shutdown', 'retention', 'update'}
         await row["emit"]("runtime.warmth" if cold else "runtime.status",
-                          {"sessionId": session_id, "status": "cold" if cold else "stopped"})
+                          {"sessionId": session_id, "status": "cold" if cold else "stopped",
+                           **({'phase': 'worker_startup'} if row.get('stop_reason') == 'startup' else {})})
         if self.workers.get(session_id) is row:
             self.workers.pop(session_id, None)
             if row.get('generation_lease'):

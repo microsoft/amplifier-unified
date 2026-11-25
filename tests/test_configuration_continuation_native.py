@@ -3,7 +3,7 @@
 Provider replies and goal evaluation are scripted. Process retirement/loading
 are transport adapters; they use the actual configuration save/readback controls
 but do not claim subprocess replacement or live-provider qualification. The
-native goal yield, checkpoint/park, writer lease and continuation admission run
+native goal yield, settled checkpoint, writer lease and continuation admission run
 without manufactured generation events or a fabricated boundary receipt.
 """
 import asyncio
@@ -72,7 +72,6 @@ class SettingsHost(OwnerUpdateHost):
             if guard:
                 guard()
             worker = self.roots[session['id']]
-            await worker.acquire_for_mutation()
             if self.needs_mount:
                 path = override_path(session['id'])
                 if path.exists():
@@ -199,13 +198,23 @@ async def test_native_settings_checkpoint_and_single_continuation(tmp_path, monk
             yielded = copy.deepcopy(worker.session.coordinator.session_state['goal'])
             assert yielded['turns_used'] == 3 and yielded['cap'] == 8 and yielded['continuations'] == 1
             assert worker._handoff_boundary['yieldedGoal'] == yielded
-            await configuration_continuation.settle_worker(app.management, sid, operation)
-            assert not app.management.configuration_record(sid, operation)['boundary']['ready']
             old_handle = worker.shared_handle
-            await host.checkpoint_and_park(worker)
-            assert not old_handle.active
+            await configuration_continuation.settle_worker(app.management, sid, operation)
+            record = app.management.configuration_record(sid, operation)
+            boundary = record['boundary']
+            assert boundary['ready'] and boundary['waitingFor'] == []
+            assert boundary['continuationAllowed']
+            # Inspection checkpoints the idle native runtime under its existing
+            # writer lease. Settings readiness does not park or release it.
+            assert worker.idle()
+            assert worker.shared_handle is old_handle and old_handle.active
+            old_handle.check()
             saved = json.loads(worker.controls.state_path().read_text())
-            assert saved['configurationCheckpoint']['operationId'] == operation
+            assert saved['configurationCheckpoint'] == {
+                'operationId': operation,
+                'intent': record['request']['source']['continuation'],
+                'boundary': boundary,
+            }
             assert saved['goal'] == yielded
             await host.wait_stage(worker, provider.resumed.wait(), 'verified settings continuation')
             assert provider.goal == yielded

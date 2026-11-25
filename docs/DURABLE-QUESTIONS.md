@@ -20,6 +20,7 @@ Discover exact schemas using `app_control` with `operation: "list_actions"` and
 | `question.list` | Read a bounded page with optional status filter; follow `nextOffset`. |
 | `question.read` | Inspect one question, answer provenance and delivery state. |
 | `question.answer` | Submit either `optionId` or `text`, bound to `sessionId`, question `id`, and exact `expectedRevision`. |
+| `question.dismiss` | Clear an answered question's delivery reminder using `sessionId`, question `id`, exact `expectedRevision` and immutable delivery `inputId`. Does not change the answer or delivery outcome. |
 | `question.cancel` | Close a pending question without an answer. |
 | `question.supersede` | Atomically close the old question and create a linked replacement. Late answers to the old question fail. |
 
@@ -50,8 +51,8 @@ is unaffected by these actions.
 
 Use one stable command ID to retry the same mutation. Retrying an accepted answer
 returns its current saved record and never sends another runtime input. Reusing
-the command ID with changed contents fails. New commands against answered,
-cancelled, superseded or stale revisions also fail.
+the command ID with changed contents fails. New answer/cancel/supersede commands
+against answered, cancelled, superseded or stale revisions also fail.
 
 ## Persistence and delivery
 
@@ -63,7 +64,9 @@ app owns locking and commits. Each JSON record includes:
 - `prompt`, `options`, `allowFreeText`, `required`, and `dependency`;
 - `createdBy`, and optional cancellation or replacement links;
 - `answer`, including the answered question revision, timestamp and provenance;
-- `delivery`, with a stable `question:<id>:answer` input ID, timestamp and status.
+- `delivery`, with a stable `question:<id>:answer` input ID, timestamp and status;
+- optional `reminderDismissal`, with that exact `inputId`, `dismissedAt`, `origin`
+  and `clientId`. This is a reminder disposition, not delivery evidence.
 
 Question transitions and the command receipt commit in the app transaction before
 runtime admission. Runtime delivery uses the existing conversation input path,
@@ -81,8 +84,11 @@ history or starting a runtime. The saved answer, question revision, provenance
 and exact artifact references do not change.
 
 Current question projections appear in `session.questions` for the browser and
-agent state. All pending and unconfirmed records plus recent history are shown;
-older records remain available through the question read/list actions. Questions
+agent state. All pending and unreviewed unconfirmed records plus the ten most
+recent records are shown. Dismissed answers no longer remain active solely
+because their delivery is unknown or rejected; older records remain available
+through the question read/list actions. Mounted artifact reviews also retain
+their question in the projection. Questions
 are stored in the app database, not in native session metadata or presentation
 files. Forks therefore do not inherit live questions or answer them for the source.
 
@@ -103,6 +109,25 @@ runtime/native-history evidence without resending or warming a worker. Missing
 or failed evidence leaves the answer visibly unconfirmed, including after
 reconnect; independent work can continue. An accepted input is not proof that
 the answer was processed or that dependent work completed.
+
+**Clear reminder** uses `question.dismiss`, not Check delivery, cancellation or
+resubmission. It saves a disposition in the existing question record, increments
+its revision and removes only that answer's active card/banner and question
+attention notice. The status remains `answered`, and its answer, provenance,
+original delivery classification and error stay intact and inspectable in closed
+history. No delivery check, runtime input, permission grant, dependency execution
+or completion follows from dismissal. Pending questions (including required ones),
+cancelled/superseded questions, outstanding `sending` answers, wrong session/input
+bindings and stale revisions are rejected.
+
+The input binding is `question:<id>:answer` and must match the saved delivery.
+The dismissal remains effective after reload or later unknown/rejected delivery
+updates; it never blanket-acknowledges a conversation's other notices. Exact
+positive acceptance evidence may still update delivery independently. Dismissal
+also accepts an already accepted answer at the same revision so a racing positive
+acknowledgement is harmless. Repeating dismissal at its current revision is a
+no-op; retrying the original stable command returns the current saved question.
+
 There is no automatic retry/replay or cross-host delivery
 reconciliation. Cross-host question transfer and operation-level dependency
 binding are integration work for the owning portability/continuation services.
@@ -111,7 +136,9 @@ binding are integration work for the owning portability/continuation services.
 
 `tests/test_questions.py` covers restart and hard process exit, stable receipts,
 wrong-session/stale/superseded answers, input validation, provenance, permission
-separation, independent work and draft preservation.
+separation, independent work and draft preservation. It also checks reminder
+dismissal through shared dispatch/agent binding, restart, exact identity/revision
+guards, late delivery races, preserved history and bounded current projection.
 `tests/test_question_handoffs.py` adds real service/transport-bound handoffs,
 original human provenance, cross-workspace/managed locations, changed Stop and
 location boundaries, supersession and exactly-once answer admission. The runtime

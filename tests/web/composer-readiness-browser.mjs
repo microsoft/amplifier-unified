@@ -25,10 +25,33 @@ try{
  await expect(send).toBeEnabled();
  await expect(composer).toHaveDraft('New draft while the restored chat loads');
  await expect(page.getByText('Saved CLI answer',{exact:true})).toBeVisible();
+ // Inspect the actual browser projection, not a fabricated row or fixture-only read.
+ const saved=await page.evaluate(()=>{
+  const state=window.amplifier.getState();
+  return state.sessions.find(row=>row.id===state.selectedSessionId).messages.filter(row=>row.text==='Saved CLI question');
+ });
+ assert.equal(saved.length,1);
+ assert.equal(saved[0].displayOnly,true,'Restored native history must use the display-only window');
+ assert.equal(saved[0].nativeInputId,'restored-native-input');
+ assert.equal(saved[0].inputId,undefined,'A saved native marker grants no command identity');
+ assert.deepEqual(saved[0].inputStatus,{
+  version:1,inputId:'restored-native-input',generationId:'restored-native-generation',
+  phase:'done',basis:'generation_finished',startedAt:1767268800,updatedAt:1767268842,endedAt:1767268842,
+ });
+ const savedRow=page.locator(`[data-message-id="${saved[0].id}"]`),status=savedRow.locator('.a-input-status');
+ const checkSaved=async()=>{
+  await expect(status).toHaveAttribute('data-input-phase','done');
+  await expect(status.locator('summary > [aria-live="polite"][aria-atomic="true"]')).toHaveText('Turn finished');
+  await expect(status.locator('.a-input-duration')).toHaveText(' · 0:42');
+  await expect(savedRow.getByRole('button',{name:'Copy message as Markdown',exact:true})).toHaveCount(1);
+  await expect(savedRow.locator('.a-message-actions button')).toHaveCount(1);
+  await expect(savedRow.getByRole('button',{name:/Edit message|Fork conversation|Reply to|React to/})).toHaveCount(0);
+ };
+ await checkSaved();await page.waitForTimeout(1200);await checkSaved();
  const ready=await inspect();assert.equal(ready.originalsUnchanged,true);assert.deepEqual(ready.started,[]);assert.deepEqual(ready.sent,[]);
  assert.equal(actions.filter(row=>row.action==='session.select').length,0,'No navigation was needed to restore Send');
  await send.click();await expect(page.getByText('Synthetic first response',{exact:true})).toBeVisible();
  const sent=await inspect();assert.equal(sent.sent.length,1);assert.equal(sent.sent[0].text,'New draft while the restored chat loads');
  assert.equal(actions.filter(row=>row.action==='conversation.send').length,1);assert.deepEqual(errors,[]);
- console.log('Composer readiness passed: restored selection, editable draft during loading, automatic Send recovery, original files retained, zero model work before explicit submission, exactly one send.');
+ console.log('Composer readiness passed: restored selection, editable draft during loading, automatic Send recovery, exact native display-only terminal status with fixed timer and copy-only controls, original files retained, zero model work before explicit submission, exactly one send.');
 }finally{await browser?.close();fixture.kill()}

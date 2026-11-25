@@ -7,6 +7,7 @@ import tomllib
 from types import SimpleNamespace
 
 import pytest
+from packaging.requirements import Requirement
 from packaging.markers import default_environment
 
 from amplifier_web import runtime_environment as runtime
@@ -21,6 +22,9 @@ NAME = 'fixture-component'
 URL = 'https://example.invalid/retained-component'
 OLD, NEW = 'a' * 40, 'b' * 40
 BASE = {'project': {'name': 'worker', 'version': '1'}}
+MEMORY = 'amplifier-memory'
+MEMORY_HOOK = 'amplifier-module-hooks-memory-inject'
+MEMORY_URL = 'https://github.com/microsoft/amplifier-bundle-memory'
 
 
 def encode(data):
@@ -34,6 +38,102 @@ def row(name=NAME, ref=OLD, subdirectory=''):
 
 def reference(ref=OLD):
     return NAME + ' @ git+' + URL + '@' + ref
+
+
+@pytest.mark.parametrize('provenance', ['installed Git distribution', 'installed Foundation cache module'])
+@pytest.mark.parametrize('ref', ['stable', OLD, '05082c89a171758f8d0fb9d8df630ea581e5bdb5'])
+def test_foundation_has_one_effective_source_policy(provenance, ref):
+    shipped = tomllib.loads(runtime.manifest_path().read_text())
+    foundation = 'https://github.com/microsoft/amplifier-foundation'
+    assert shipped['tool']['uv']['sources']['amplifier-foundation'] == {
+        'git': foundation, 'rev': 'main'}
+    assert shipped['tool']['uv']['sources']['amplifier-module-hooks-session-naming'] == {
+        'git': foundation, 'rev': 'main', 'subdirectory': 'modules/hooks-session-naming'}
+    # The canonical source owns the app default, not a second authored URL.
+    assert [value for value in shipped['tool']['uv']['override-dependencies']
+            if Requirement(value).name == 'amplifier-foundation'] == ['amplifier-foundation']
+    content = runtime.augmented_manifest(runtime.declared_manifest(extras=[]), [{
+        'kind':'runtime dependency','package':'amplifier-foundation',
+        'url':'https://example.invalid/fork','ref':ref,'provenance':provenance,
+        'subdirectory':'foundation'}])
+    data = tomllib.loads(content.decode())
+    assert data['tool']['uv']['sources']['amplifier-foundation'] == {
+        'git':'https://example.invalid/fork','rev':ref,'subdirectory':'foundation'}
+    overrides = [Requirement(value) for value in data['tool']['uv']['override-dependencies']
+                 if Requirement(value).name == 'amplifier-foundation']
+    assert [value.url for value in overrides] == [None]
+
+
+@pytest.mark.parametrize('choice', ['main', 'pin', 'fork-pin'])
+async def test_real_foundation_source_and_distinct_hook_pin(tmp_path, monkeypatch, choice, record_property):
+    """Actual uv: app root advances; a distinct same-repo hook stays pinned."""
+    uv = shutil.which('uv')
+    assert uv, 'Managed qualification must supply uv'
+    name, hook_name = 'amplifier-foundation', 'amplifier-module-hooks-session-naming'
+    repo=tmp_path/'foundation';repo.mkdir()
+    git(repo,'init','-b','main')
+    git(repo,'config','user.name','Fixture');git(repo,'config','user.email','fixture@example.invalid')
+    url=repo.as_uri()
+    def package(root, package, requirement=None):
+        root.mkdir(parents=True,exist_ok=True)
+        root.joinpath('pyproject.toml').write_text('[project]\nname='+json.dumps(package)+
+            '\nversion="1.0"\n'+('dependencies=['+json.dumps(requirement)+']\n' if requirement else '')+
+            '[build-system]\nrequires=[]\nbuild-backend="backend"\nbackend-path=["."]\n')
+        backend=BACKEND.replace('fixture_component',package.replace('-','_')).replace('fixture-component',package)
+        if requirement:backend=backend.replace('Version: 1.0\\n','Version: 1.0\\nRequires-Dist: '+requirement+'\\n')
+        root.joinpath('backend.py').write_text(backend)
+    package(repo,name)
+    git(repo,'add','.');git(repo,'commit','-m','root')
+    old=git(repo,'rev-parse','HEAD')
+    package(repo/'modules/hooks-session-naming',hook_name,name+' @ git+'+url+'@'+old)
+    git(repo,'add','.');git(repo,'commit','-m','pinned hook')
+    hook=git(repo,'rev-parse','HEAD')
+    (repo/'next').write_text('new root');git(repo,'add','.');git(repo,'commit','-m','advance root')
+    current=git(repo,'rev-parse','HEAD')
+    root_url, root_ref, expected = url, old if choice=='pin' else 'main', old if choice=='pin' else current
+    if choice=='fork-pin':
+        fork=tmp_path/'fork'
+        shutil.copytree(repo,fork)
+        (fork/'fork-only').write_text('owned distinct fork')
+        git(fork,'add','.');git(fork,'commit','-m','fork choice')
+        root_url, root_ref = fork.as_uri(), git(fork,'rev-parse','HEAD')
+        expected=root_ref
+    shipped=tomllib.loads(runtime.declared_manifest(extras=[]).decode())
+    # Preserve the shipped Foundation policy mechanism; replace only URLs with
+    # this owned local Git repository and omit unrelated worker dependencies.
+    uv_policy={'sources':{name:{'git':url,'rev':'main'},
+                         hook_name:{'git':url,'rev':hook,'subdirectory':'modules/hooks-session-naming'}},
+               'override-dependencies':[v.replace('https://github.com/microsoft/amplifier-foundation',url)
+                   for v in shipped['tool']['uv']['override-dependencies'] if Requirement(v).name==name]}
+    data={'project':{'name':'worker','version':'1','dependencies':[name,hook_name]},'tool':{'uv':uv_policy}}
+    # The bare transitive requirement follows this effective local source,
+    # not an independently authored upstream URL or the hook's commit.
+    content=runtime.augmented_manifest(encode(data),[{
+        'kind':'runtime dependency','package':name,'url':root_url,
+        'ref':root_ref,'provenance':'installed Git distribution'}])
+    monkeypatch.setenv('UV_NO_INDEX','1');monkeypatch.delenv('UV_OFFLINE',raising=False)
+    monkeypatch.setenv('UV_PYTHON_DOWNLOADS','never');monkeypatch.setenv('UV_CACHE_DIR',str(tmp_path/'uv-cache'))
+    if choice=='fork-pin':
+        # Compare the old independently authored override against the effective
+        # installed fork. Do not assume this inconsistency is a uv error.
+        legacy=tomllib.loads(content.decode())
+        legacy['tool']['uv']['override-dependencies']=[name+' @ git+'+url+'@main']
+        prior=runtime.prepare_project(tmp_path/'legacy','e'*32,content=encode(legacy))
+        result=subprocess.run([uv,'lock','--project',str(prior),'--python',sys.executable],
+                              capture_output=True,text=True,timeout=90)
+        record_property('legacyUvExit',result.returncode)
+        record_property('legacyStderrBytes',len(result.stderr.encode()))
+        record_property('legacyUvStderr',result.stderr)
+        if result.returncode==0:
+            record_property('legacySelectedEffectiveFork',runtime.locked_sources(prior)[name].fragment==expected)
+    project=runtime.prepare_project(tmp_path/'app','f'*32,content=content)
+    await updates.process(uv,'lock','--project',str(project),'--python',sys.executable,timeout=90)
+    locked=runtime.locked_sources(project)
+    assert locked[name].fragment==expected
+    assert locked[name].path==root_url.removeprefix('file://')
+    assert locked[hook_name].fragment==hook
+    from urllib.parse import parse_qs
+    assert parse_qs(locked[hook_name].query)['subdirectory']==['modules/hooks-session-naming']
 
 
 def test_generated_provenance_preserves_authored_policy_and_moving_sources():
@@ -88,7 +188,7 @@ async def test_refresh_refuses_unowned_or_changed_override_before_any_write(tmp_
     assert path.read_bytes() == before
 
 
-@pytest.mark.parametrize('case', ['moving-url', 'version-conflict', 'authored-constraint'])
+@pytest.mark.parametrize('case', ['moving-url', 'declared-moving-url', 'version-conflict', 'authored-constraint'])
 async def test_real_resolver_preserves_pin_and_rejects_hidden_incompatibility(tmp_path, monkeypatch, case):
     uv = shutil.which('uv')
     assert uv, 'This resolver regression requires the qualification environment to provide uv'
@@ -120,12 +220,17 @@ async def test_real_resolver_preserves_pin_and_rejects_hidden_incompatibility(tm
     monkeypatch.setenv('UV_PYTHON_DOWNLOADS', 'never')
     monkeypatch.setenv('UV_CACHE_DIR', str(tmp_path / 'uv-cache'))
     baseline = {**BASE}
+    root = row(ref=old)
+    if case == 'declared-moving-url':
+        baseline['project'] = {**BASE['project'], 'dependencies': [NAME]}
+        baseline['tool'] = {'uv': {'sources': {NAME: {'git': URL, 'rev': 'main'}}}}
+        root['provenance'] = 'installed Git distribution'
     if case == 'authored-constraint':
         baseline['tool'] = {'uv': {'constraint-dependencies': [NAME + '>=2']}}
-    content = runtime.augmented_manifest(encode(baseline), [row(ref=old), row('fixture-hook', old, 'hook')])
+    content = runtime.augmented_manifest(encode(baseline), [root, row('fixture-hook', old, 'hook')])
     project = runtime.prepare_project(tmp_path / 'app', 'e' * 32, content=content)
     command = [uv, 'sync', '--project', str(project), '--python', sys.executable]
-    if case == 'moving-url':
+    if case in {'moving-url', 'declared-moving-url'}:
         original = tomllib.loads(content.decode())
         del original['tool']['uv']['override-dependencies']
         del original['tool']['amplifier-unified']
@@ -147,6 +252,131 @@ async def test_real_resolver_preserves_pin_and_rejects_hidden_incompatibility(tm
         assert not (runtime.receipt_directory(tmp_path / 'app', 'e' * 32) / 'runtime.lock').exists()
     else:
         retained.verify(project)
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+async def test_real_worker_lock_keeps_app_memory_source_with_pinned_module(tmp_path, monkeypatch, legacy):
+    uv = shutil.which('uv')
+    assert uv, 'This resolver regression requires the qualification environment to provide uv'
+    shipped = tomllib.loads(runtime.manifest_path().read_text())
+    memory_requirement = next(value for value in shipped['project']['dependencies']
+                              if Requirement(value).name == MEMORY)
+    memory_overrides = [value for value in shipped['tool']['uv']['override-dependencies']
+                        if Requirement(value).name == MEMORY]
+
+    repo = tmp_path / 'memory'; repo.mkdir()
+    git(repo, 'init', '-b', 'main')
+    git(repo, 'config', 'user.name', 'Fixture')
+    git(repo, 'config', 'user.email', 'fixture@example.invalid')
+    root_backend = BACKEND.replace('fixture_component', 'amplifier_memory').replace(
+        'fixture-component', MEMORY)
+    local_url = repo.as_uri()
+    local_requirement = memory_requirement.replace(MEMORY_URL, local_url)
+    local_overrides = [value.replace(MEMORY_URL, local_url) for value in memory_overrides]
+    (repo / 'pyproject.toml').write_text('[project]\nname="' + MEMORY + '"\nversion="1.0"\n'
+        '[build-system]\nrequires=[]\nbuild-backend="backend"\nbackend-path=["."]\n')
+    (repo / 'backend.py').write_text(root_backend)
+    git(repo, 'add', '.'); git(repo, 'commit', '-m', 'memory root')
+    old = git(repo, 'rev-parse', 'HEAD')
+
+    hook = repo / 'modules/hooks-memory-inject'; hook.mkdir(parents=True)
+    dependency = MEMORY + ' @ git+' + local_url + '@' + old
+    hook.joinpath('pyproject.toml').write_text('[project]\nname="' + MEMORY_HOOK + '"\nversion="1.0"\n'
+        'dependencies=[' + json.dumps(dependency) + ']\n[build-system]\nrequires=[]\n'
+        'build-backend="backend"\nbackend-path=["."]\n')
+    hook.joinpath('backend.py').write_text(BACKEND.replace('fixture_component', MEMORY_HOOK.replace('-', '_')).replace(
+        'fixture-component', MEMORY_HOOK).replace('Version: 1.0\\n',
+        'Version: 1.0\\nRequires-Dist: ' + dependency + '\\n'))
+    git(repo, 'add', '.'); git(repo, 'commit', '-m', 'memory hook')
+    hook_revision = git(repo, 'rev-parse', 'HEAD')
+    (repo / 'revision.txt').write_text('new main')
+    git(repo, 'add', '.'); git(repo, 'commit', '-m', 'advance memory main')
+    current = git(repo, 'rev-parse', 'HEAD')
+
+    baseline = {'project': {'name': 'worker', 'version': '1',
+                            'requires-python': '>=3.13', 'dependencies': [local_requirement]},
+                'tool': {'uv': {'override-dependencies': local_overrides}}}
+    content = runtime.augmented_manifest(encode(baseline), [{
+        'kind': 'runtime dependency', 'package': MEMORY_HOOK, 'url': local_url,
+        'ref': hook_revision, 'subdirectory': 'modules/hooks-memory-inject',
+    }])
+    policy = tomllib.loads(content.decode())
+    applied_memory = [value for value in policy['tool']['uv']['override-dependencies']
+                      if Requirement(value).name == MEMORY]
+    assert applied_memory == local_overrides
+    assert MEMORY not in policy['tool']['amplifier-unified']['generated-source-overrides']
+
+    monkeypatch.setenv('UV_NO_INDEX', '1')
+    monkeypatch.delenv('UV_OFFLINE', raising=False)
+    monkeypatch.setenv('UV_PYTHON_DOWNLOADS', 'never')
+    monkeypatch.setenv('UV_CACHE_DIR', str(tmp_path / 'uv-cache'))
+    project = runtime.prepare_project(tmp_path / 'app', 'f' * 32, content=content)
+    await updates.process(uv, 'lock', '--project', str(project), '--python', sys.executable, timeout=90)
+    locked = runtime.locked_sources(project)
+    assert locked[MEMORY].fragment == current
+    assert locked[MEMORY_HOOK].fragment == hook_revision
+
+    # Exercise the actual next-generation entry point, not a replacement for
+    # update_manifest. Keep the app-authored Memory requirement AND override;
+    # only source URLs are redirected to this owned offline Git fixture.
+    from amplifier_web import runtime_source_policy as policy
+    from test_runtime_updates import Diagnostics
+    baseline['project']['dependencies'].append(MEMORY_HOOK)
+    baseline['tool']['uv']['sources'] = {
+        MEMORY_HOOK: {'git': local_url, 'rev': hook_revision,
+                      'subdirectory': 'modules/hooks-memory-inject'}}
+    manifest = tmp_path / 'app-worker.toml'
+    manifest.write_bytes(encode(baseline))
+    monkeypatch.setattr(runtime, 'manifest_path', lambda: manifest)
+    monkeypatch.setattr('amplifier_web.app_updates.installed_extras', lambda: [])
+    home = tmp_path / 'two-generation-app'
+    manager = SimpleNamespace(home=home, diagnostics=Diagnostics())
+    first = '1' * 32
+    receipt = runtime.receipt_directory(home, first)
+    receipt.mkdir(parents=True)
+    prepared = await runtime.stage(manager, first, [], finalize=False)
+    await updates.process(uv, 'sync', '--locked', '--project', str(prepared), timeout=90)
+    if legacy:
+        # The original freeze captured this exact unresolved-reference shape.
+        # Simulate only that older policy writer, not preparation or resolution.
+        original = policy.qualify_app_policies
+        async def old_writer(policies, *args):
+            return policies
+        monkeypatch.setattr(policy, 'qualify_app_policies', old_writer)
+    final = await qualification.freeze(manager, first, prepared)
+    if legacy:
+        monkeypatch.setattr(policy, 'qualify_app_policies', original)
+    qualification.verify_recorded(final, receipt)
+    recorded = json.loads((receipt / 'runtime-sources.json').read_text())[MEMORY]
+    assert recorded['ref'] == (current if legacy else 'main')
+    assert recorded['policyOrigin']['kind'] == ('unresolved-reference' if legacy else 'verified-app-declaration')
+    if legacy:
+        assert recorded['policyOrigin']['originalRef'] == 'main'
+    (home / 'updates/active.json').write_text(json.dumps({'current': first}))
+    before = {path: path.read_bytes() for path in receipt.iterdir() if path.is_file()}
+    frozen_lock = (final / 'uv.lock').read_bytes()
+    (repo / 'revision.txt').write_text('second generation branch advance')
+    git(repo, 'commit', '-am', 'advance after first freeze')
+    newest = git(repo, 'rev-parse', 'HEAD')
+    rows = await runtime.update_inventory(home)
+    memory = next(row for row in rows if row.get('package') == MEMORY)
+    hook = next(row for row in rows if row.get('package') == MEMORY_HOOK)
+    assert memory['eligible'] and memory['ref'] == 'main' and memory['current'] == current
+    assert not hook['eligible'] and hook['ref'] == hook_revision
+    second = '2' * 32
+    next_receipt = runtime.receipt_directory(home, second)
+    next_receipt.mkdir()
+    next_project = await runtime.stage(manager, second, [{**memory, 'status': 'update', 'latest': newest}],
+                                       finalize=False)
+    assert runtime.locked_sources(next_project)[MEMORY].fragment == newest
+    assert runtime.locked_sources(next_project)[MEMORY_HOOK].fragment == hook_revision
+    await updates.process(uv, 'sync', '--locked', '--project', str(next_project), timeout=90)
+    next_final = await qualification.freeze(manager, second, next_project)
+    qualification.verify_recorded(next_final, next_receipt)
+    assert json.loads((next_receipt / 'runtime-sources.json').read_text())[MEMORY]['ref'] == 'main'
+    assert {path: path.read_bytes() for path in before} == before
+    assert (final / 'uv.lock').read_bytes() == frozen_lock
+    qualification.verify_recorded(final, receipt)
 
 
 @pytest.mark.parametrize('case', ['direct', 'active-extra', 'inactive-extra', 'inactive-marker', 'unrelated', 'root'])

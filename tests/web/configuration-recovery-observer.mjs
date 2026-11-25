@@ -18,7 +18,7 @@ export function recoveryRequestObserver(base,actions){
     postRequests++;code='action_post_decode_failed';
     const body=request.postDataJSON();
     if(!body||typeof body!=='object'||Array.isArray(body)||
-       typeof body.action!=='string'||!/^[a-z][a-z0-9_.]{0,79}$/.test(body.action)||
+       typeof body.action!=='string'||body.action.length>80||!/^[a-z][a-zA-Z0-9_]*(?:\.[a-z][a-zA-Z0-9_]*)+$(?![\s\S])/.test(body.action)||
        (body.args!==undefined&&(!body.args||typeof body.args!=='object'||Array.isArray(body.args)))||
        (body.id!==undefined&&(typeof body.id!=='string'||!body.id||body.id.length>200))){
      fail(browser,'invalid_action_post');return;

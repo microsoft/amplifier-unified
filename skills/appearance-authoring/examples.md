@@ -1,75 +1,42 @@
 # Appearance authoring examples
 
-These are inputs and review cases, not commands to execute automatically. Read
-the installed action schemas before adding required client or revision fields.
-Companions resolve from the loaded skill directory.
+Inputs below are not automatic commands. Discover the installed `appearance.*`
+and `theme.*` schemas and intended browser/profile first. See the
+[production preservation boundary](../../docs/shell/appearance-contract.md#temporary-rollback-boundary).
 
-## New complete theme: Quiet study
+<a id="small-reference-delta-quiet-study"></a>
 
-Read [quiet-study.json](quiet-study.json). Its `name` and `definition` form a
-theme input. Both palettes contain the ten required six-digit hex values.
-`background` is omitted deliberately: this clears previous artwork rather than
-retaining another skin's decoration.
+## Small Reference delta: Quiet study
 
-After schema discovery, the dispatch envelope has this shape:
+[quiet-study.json](quiet-study.json) is a `name` / `css` preview/save input,
+not a ZIP manifest. It uses both color palettes through `light-dark()` over the
+bundled Reference. Preview with `appearance.preview` and intended `clientId`;
+end with `appearance.preview.cancel`. Save with `theme.save`, inspect its returned
+ID/fingerprint, then select that ID only at authorized captured profile/CAS.
+Do not use retired complete-theme definitions, token patches or `theme.apply`.
 
-```json
-{
-  "operation": "dispatch",
-  "args": {
-    "action": "theme.preview",
-    "args": {
-      "name": "Quiet study",
-      "definition": {
-        "version": 1,
-        "palette": {
-          "light": "...read the complete companion...",
-          "dark": "...read the complete companion..."
-        }
-      }
-    }
-  }
-}
-```
+## Geometry and paint
 
-The abbreviated palette above is explanatory, not a valid payload. Use the
-complete companion unchanged as the starting input, then include any target
-fields required by the discovered schema. Preview does not apply or save it.
-Use separate supported operations for those requested effects.
+Prefer supported tokens and stable parts. Read exact saved CSS before editing.
+For example, a deliberate delta can tune `--a-composer-radius: 12px`,
+`--a-message-radius: 10px`, `--a-message-gap: 24px`, `--a-panel-gap: 7px`.
+Paint `.a-message-body` or `[data-part="composer-surface"]`, not structural
+message/action rows, status or the form/model selectors. Reference still owns
+scrolling, masks, focus, control geometry and responsive layout.
 
-## Adapt a complete CSS skin without losing its identity
+Keep independent UI/heading/prose/code type roles and inspect actual fonts.
+Artwork disappears with decorations off/forced colors; reduced motion stops
+movement without removing operational feedback.
 
-Read the current saved CSS through the host. Copy it into the requested output,
-preserving the original. Change documented custom properties within its existing
-light and dark rules, for example:
+## ZIP with local assets
 
-```css
-/* Merge into BOTH existing scheme rules, not a standalone full skin. */
---a-composer-radius: 12px;
---a-card-radius: 10px;
---a-message-radius: 10px;
---a-message-gap: 24px;
---a-panel-gap: 7px;
---a-panel-radius: 10px;
-```
-
-Send the complete resulting stylesheet as `css`, not only this fragment. Do not
-combine `css`, `tokens` and `definition` in one theme request. Check narrow mode:
-host-owned responsive spacing and target sizes take precedence.
-
-For only an accent-color edit, prefer `tokens` and explicitly retain the current
-background. Do not claim that a partial palette edit created a complete theme.
-
-## Share styling with local assets
-
-Use an ordinary ZIP for assets that would be awkward to maintain inside one CSS
-file. Follow the full manifest and limits in the linked theme guide. This is a
-styling package, not a shell/component installer.
+Root `appearance.json`:
 
 ```json
 {
   "type": "appearance",
-  "formatVersion": 1,
+  "formatVersion": 2,
+  "base": "reference-v1",
   "name": "Quiet studio",
   "stylesheet": "theme.css",
   "assets": [
@@ -79,164 +46,36 @@ styling package, not a shell/component installer.
 }
 ```
 
-Put this at root `appearance.json`, next to `theme.css`. Include the exact asset
-and notice bytes at the declared paths. Reference the image with
-`url("assets/paper.png")` from that root stylesheet. Import validates and embeds
-supported references; it does not download missing assets.
+Include delta CSS and exact declared asset/notice bytes. `theme.css` can reference
+`url("assets/paper.png")`; the host validates and embeds it without network fetch
+or extraction. Import actual ZIP bytes as `packageBase64`. Read the saved entry,
+preview its exact resolved CSS, and select only within the requested profile.
+Export by that ID with `theme.export({id})`; ZIP is the sole envelope. Reimport
+actual exported bytes in disposable storage before claiming portability.
+Raw CSS import, format-1 ZIP and no-ID export are unsupported. Old files remain
+inert/undeleted. Explicit valid format-2 import saves into the current library
+without selecting it; an identical existing package may be reused.
 
-After discovering the installed schema, use `theme.import` with `packageBase64`
-containing the actual base64 ZIP bytes and no `css` argument. Check the returned
-library entry, preview its compiled CSS, and apply only when authorized. Export
-that saved ID with `format: "zip"` to retain its original assets and notices.
-Default/no-format export remains CSS. Inspect a real downloaded ZIP and reimport
-it into disposable storage before claiming a working portable package.
+ZIP is not a component installer. Preserve fonts/assets/licenses and attribution;
+a notice filename alone proves no rights. Package/schema acceptance is not visual
+or accessibility certification.
 
-Do not infer font rights from an OFL-looking filename. Retain the upstream
-copyright and license text, source revision and file hashes. For modified or
-subset fonts, check reserved names and format-conversion conditions. Render
-realistic text and controls in both schemes before choosing fonts; close-looking
-alternatives need not all become bundled dependencies.
+## Review cases
 
-## Selectors that preserve the host
+- Preview over a different look, then cancel; retain private editor and other
+  documents. Saved/imported is not selected or rendered.
+- Check both schemes/system, decorations/accessibility, narrow/zoom, keyboard,
+  long chat/code, composer expansion and actual pending/error/recovery controls.
+- Select in captured Global or This browser, verify whole-record storage ACK and
+  exact composition render ACK. Cross-tab/reload retain confirmed source/profile,
+  never previews or inherited editor access. Storage failure never writes Global.
+- An explicit accent may be reset with `patch: {accent: null}`. Switching to a
+  different appearance drops the old override; same-ID/unrelated changes retain
+  it. No hardcoded color is a reset. Stale Undo must not overwrite newer work.
+- Seed old theme/profile/cache/format-1 and recovered format-2 records in isolated
+  fixtures: startup/listing leaves them inert and byte-preserved. Missing new
+  Global reads complete defaults without a preference write; malformed new
+  records fail without silent repair or namespace rotation.
 
-Inspect the current DOM; these selectors are examples from the bundled web shell,
-not permission to override its layout:
-
-```css
-/* Change the bubble, not the row, footer, avatar or timestamp. */
-#amp-one .a-message.a-user > .a-message-body {
-  background: var(--a-tint);
-  color: var(--a-ink);
-}
-/* Assistant padding belongs inside its body; actions remain outside. */
-#amp-one .a-message.a-assistant > .a-message-body {
-  padding: 12px 16px;
-}
-/* The input surface is not the outer form, model selector or status row. */
-#amp-one [data-part="composer-surface"] {
-  background: var(--a-surface);
-}
-```
-
-For typography, inspect computed styles on actual message `p`/`span` elements.
-Changing only the shell font does not establish that chat text changed. Use a
-system mono stack when requested; do not add a network font dependency. Keep UI
-labels readable rather than applying chat typography indiscriminately.
-
-**Do not use** `conversation > * {position:relative; z-index:1}`. This moved the
-absolutely positioned navigator into normal flow and created a large gap.
-Do not compensate with guessed margins. Prefer the documented
-`--a-conversation-art` token for quiet artwork at the top of the conversation.
-For a custom full-panel decorative background layer, leave child layout alone:
-
-```css
-#amp-one [data-part="conversation"] {
-  position: relative;
-  isolation: isolate;
-}
-#amp-one [data-part="conversation"]::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  /* Supply quiet artwork here; leave all child positioning untouched. */
-}
-#amp-one[data-decorations="off"] [data-part="conversation"]::before {
-  display: none;
-}
-```
-
-For digital rain, three transparent embedded PNG tiles with uneven glyph spacing
-give depth without three DOM layers. Animate `background-position` by integer
-multiples of each tile's height for seamless loops; use distinct layer speeds.
-Keep light-mode glyphs subdued emerald, not neon glow. Tune density separately
-from opacity. Respect `prefers-reduced-motion: reduce` with static artwork and
-`forced-colors: active` with decoration removed. Custom pseudo-elements need their
-own decoration-off rule; the host cannot infer which custom pixels are artwork.
-Keep decorative lines away from labels and controls.
-
-### Inherit transcript edges, do not copy the mask
-
-```css
-#amp-one {
-  --a-conversation-art: linear-gradient(135deg, var(--a-tint), transparent 65%);
-  /* Omit transcript fade tokens and mask rules: use the shared baseline. */
-}
-```
-
-The host's message scroller owns conditional 18px top/24px bottom fades and
-forced-colors handling. Keyboard-visible focus and active editors suppress the
-mask; pointer/programmatic focus on a non-visible container does not. Optional
-`--a-transcript-fade-top` and `--a-transcript-fade-bottom` tune lengths within
-host limits; first confirm support in the installed baseline. No custom mask,
-overlay or scroll listener is needed. Short content must stay unfaded, and the
-bottom fade must disappear at the end. Preserve the scrollbar gutter, navigator,
-composer and final message actions.
-Remove obsolete masks only from the bundled skin being updated, not saved user
-copies. Background artwork is independent and need not be removed.
-
-### Optional logo tint with a matching high-contrast reset
-
-Keep the original host image. If a tint is requested, match the specificity of
-both scheme rules in the reset; a less-specific `#amp-one .a-brand img` reset
-loses to a scheme-qualified filter even when it appears later:
-
-```css
-#amp-one[data-theme-scheme="light"] .a-brand img {
-  filter: sepia(1) saturate(2) hue-rotate(120deg);
-}
-#amp-one[data-theme-scheme="dark"] .a-brand img {
-  filter: sepia(1) saturate(2) hue-rotate(120deg) brightness(1.2);
-}
-@media (forced-colors: active) {
-  #amp-one[data-theme-scheme="light"] .a-brand img,
-  #amp-one[data-theme-scheme="dark"] .a-brand img {
-    filter: none;
-  }
-}
-```
-
-The host resolves Device/system preference into `data-theme-scheme="light"` or
-`"dark"`. Supply explicit rules for both. Do not let an unqualified OS dark-mode
-media query override the user's explicit Light choice. Check all four combinations
-of OS light/dark and explicit Light/Dark, plus Device following each OS mode.
-
-## Small acceptance run
-
-1. Preview Quiet study over a theme with artwork. Confirm flat backgrounds in
-   light and dark; check system scheme follows the OS.
-2. Use long chats, a multiline unsent draft, code, buttons and an error fixture.
-   Check contrast, focus, navigator, bubble/footer bounds, input/model-selector/
-   status separation and local feedback at narrow and wide widths plus zoom.
-   Check transcript edges at top/middle/bottom and with short content. A pointer
-   **Review questions** action must retain fades when it focuses a non-visible
-   section; keyboard-visible focus and active editing must suppress them. Final
-   text/actions must be fully visible at the bottom. Static swatches cannot
-   establish these results.
-3. Toggle decorations in a disposable client, restore its initial preference,
-   and check reduced motion/forced colors. Record unsupported checks as unknown.
-4. If applying is authorized, compare committed output with preview and reload.
-   Revert through the host and verify the starting appearance returns without
-   altering conversations or drafts.
-5. Export the saved id, import into disposable library storage, read back exact
-   CSS/metadata and preview. Check stale fingerprints reject update/delete and
-   included entries remain read-only. A library save is not an apply or render.
-
-Keep evidence separate: package validation, loader discovery, browser rendering,
-interaction checks and user acceptance are different results. The example palette
-is a starting point, not certified accessibility or whole-app conformance.
-
-For a bundled addition such as Lightline, also check that the packaged stylesheet
-and metadata are discovered unchanged and saved user copies remain untouched.
-Its luminous ivory/platinum and obsidian/cyan palettes, warm user bubble, mono chat and
-static architectural treatment are a reference, not a mandatory style for new
-appearances. Inclusion never changes the user's current selection or preferences.
-
-For reference-led work, choose a real light-scene/material reference as carefully
-as the dark one. Lightline uses illuminated glass, white lacquer, silver and
-acrylic as light-mode materials, with graphite text and a dark blue-gray control
-accent for readability. These are authored adaptations, not sampled film colors.
-Keep geometry coherent across schemes, then verify each scheme's text, controls,
-selection and focus independently. A name change or desaturation alone is not
-light-mode design.
+Keep validity, installed discovery, source/build identity, observed interaction and
+human acceptance distinct. Quiet study is a starting delta, not certification.

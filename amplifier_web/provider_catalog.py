@@ -124,7 +124,8 @@ def _chatgpt_account(contents, config):
         return None
 
 
-def connection_key(workspace, module, config, source=None, *, home=None, _credential_generation=False):
+def connection_key(workspace, module, config, source=None, *, home=None, _credential_generation=False,
+                   _legacy_visibility=False, _binding_pair=False):
     """Stable private connection binding shared by host and worker processes.
 
     The connection binding ignores selection defaults, model filters and priority. Every other provider
@@ -138,6 +139,11 @@ def connection_key(workspace, module, config, source=None, *, home=None, _creden
     raw = copy.deepcopy(config or {})
     for name in ('priority', 'model', 'default_model', 'reasoning_effort', 'model_filters'):
         raw.pop(name, None)
+    if module == 'provider-openai' and not (_legacy_visibility or _binding_pair):
+        # These are OpenAI listing policy, not account/endpoint settings.
+        # Do not reinterpret same-named options on unrelated providers.
+        for name in ('hide_dated_models', 'filtered'):
+            raw.pop(name, None)
     credential = environment_credential(module, raw)
     if not raw.get(credential['field']) and credential['available']:
         raw[credential['field']] = '${' + credential['envVar'] + '}'
@@ -192,7 +198,52 @@ def connection_key(workspace, module, config, source=None, *, home=None, _creden
     relative=any(isinstance(value,str) and value and not Path(value).expanduser().is_absolute()
                  for name,value in leaves if any(part in name for part in ('path','file','directory')))
     scope=str(Path(workspace).resolve()) if relative or source and not str(source).startswith(('git+','https://','http://','/')) else None
-    return fingerprint(['provider-connection-v1',scope,module,source,raw,environment,files])
+    envelope = ['provider-connection-v1',scope,module,source,raw,environment,files]
+    previous = fingerprint(envelope)
+    if not _binding_pair:
+        return previous
+    if module != 'provider-openai':
+        return previous, previous
+    # Both digests share ONE captured materialization, environment, source and
+    # credential-file witness. Never re-read credentials after proving the old
+    # digest: external replacement is possible even without an await.
+    current_raw = {name:value for name,value in raw.items() if name not in ('hide_dated_models', 'filtered')}
+    current_leaves = list(fields(current_raw))
+    current_files = {name:value for name,value in files.items()
+                     if name.split('.')[1] not in ('hide_dated_models', 'filtered')}
+    relative = any(isinstance(value,str) and value and not Path(value).expanduser().is_absolute()
+                   for name,value in current_leaves if any(part in name for part in ('path','file','directory')))
+    current_scope = str(Path(workspace).resolve()) if relative or source and not str(source).startswith(('git+','https://','http://','/')) else None
+    current = fingerprint(['provider-connection-v1',current_scope,module,source,current_raw,environment,current_files])
+    return current, previous
+
+
+def _openai_legacy_visibility(config):
+    """Identity projection only; the provider still validates construction.
+
+    Match OpenAI's renamed-key and Boolean defaults without importing a provider
+    into the host. Invalid/unresolved values stay distinct from successful
+    discovery, even with explicit filters: OpenAI parses legacy values first.
+    """
+    from .host.config import expand_environment
+    values = []
+    unresolved = {}
+    for name in ('hide_dated_models', 'filtered'):
+        value = (config or {}).get(name)
+        try:value = expand_environment(value)
+        except ValueError:unresolved[name] = value
+        values.append(value)
+    # Materialization visits every field before the provider resolves aliases.
+    # A shadowed but unresolved alias is not a successful construction input.
+    if unresolved:return ['unresolved', unresolved, values]
+    value = values[0] if values[0] not in (None, '') else values[1]
+    if value is None or value == '':return True
+    if isinstance(value, bool):return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ('true', '1', 'yes'):return True
+        if normalized in ('false', '0', 'no'):return False
+    return ['invalid', value]
 
 
 def configuration_key(workspace, module, config, source=None, *, home=None):
@@ -210,6 +261,15 @@ def configuration_key(workspace, module, config, source=None, *, home=None):
         try:value = expand_environment(value)
         except ValueError:pass  # Preserve unresolved references, as connection_key does.
         scope[name] = value
+    if module == 'provider-openai':
+        legacy = _openai_legacy_visibility(config)
+        # None uses provider defaults; an explicit mapping (including {}) replaces
+        # them. Never copy family/shutdown policy into the host's catalog owner.
+        if scope.get('model_filters') is None:
+            scope.pop('model_filters', None)
+            scope['hide_dated_models'] = legacy
+        elif not isinstance(legacy, bool):
+            scope['hide_dated_models'] = legacy
     # The selected recommendation scope is cached, not an unfiltered second
     # catalog. Providers may derive listing defaults from model/default_model.
     # Conservatively retain those constructor inputs without copying their
@@ -220,10 +280,22 @@ def configuration_key(workspace, module, config, source=None, *, home=None):
         generation_identity(home) if home is not None else None])
 
 
+def mounted_provider_config(row):
+    """Hash provider intent, excluding only a proven host recording default.
+
+    Recording provenance is outside config. Explicit raw/raw_debug values remain
+    identity-bearing; neither the mounted plan nor its recording is changed.
+    """
+    from .provider_recording import apply_provider_recording
+    copied = copy.deepcopy(row)
+    apply_provider_recording({'providers': [copied]}, enabled=False)
+    return copied.get('config', {})
+
+
 def mounted_catalog_keys(home,workspace,rows,sources,*,binding=False):
     identity = connection_key if binding else configuration_key
     return {row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-'):
-        identity(workspace,row['module'],row.get('config',{}),
+        identity(workspace,row['module'],mounted_provider_config(row),
             sources[row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-')],home=home)
         for row in rows}
 
@@ -231,13 +303,64 @@ def mounted_catalog_keys(home,workspace,rows,sources,*,binding=False):
 def model_key(identity):
     return ('providers.models', identity)
 
-def configured_binding(home, workspace, instance, *, global_only=False):
+def configured_binding(home, workspace, instance, *, global_only=False, saved=None):
+    """Current binding, optionally proving a retained pre-filter-split digest.
+
+    The prior digest is reconstructed from the current exact connection, not
+    historical guesses. A listing edit before first verified adoption still
+    requires explicit review/save. No saved choice or mount is rewritten here.
+    """
     from .setup import SetupManager
     manager = SetupManager(home, global_only=global_only, allow_missing_workspace=True)
     with manager.read_snapshot(workspace):
         if not any(row['id'] == instance and row['enabled'] for row in manager.provider_rows(workspace)):
             return None
-        return manager.catalog_key({'id':instance}, workspace, binding=True)
+        if saved:
+            current, previous = manager.catalog_key({'id':instance}, workspace, binding=True, _binding_pair=True)
+            if saved not in (current, previous):
+                raise ValueError('The configured connection changed after this choice was saved. Review the connection and save the model again.')
+        else:
+            current = manager.catalog_key({'id':instance}, workspace, binding=True)
+        return current
+
+
+def _conversation_connections(home, workspace, session_id, *, global_only=False):
+    from .host.config import load_config, provider_mount_sources
+    config = load_config(workspace, home=home, session_id=session_id, global_only=global_only)
+    rows = config.configured_connections
+    source_rows = config.saved_connections
+    path = Path(home)/'sessions'/session_id/'configuration.json'
+    if path.exists():
+        saved = json.loads(path.read_text())
+        if 'providers' in saved:
+            rows = saved['providers']
+            source_rows = rows
+    # Disabled connections cannot donate an implementation to an enabled one.
+    # Match configured_binding/SetupManager's intended-mount roster, while
+    # retaining all rows below so disabled selections are still refused.
+    sources = provider_mount_sources([row for row in source_rows if row.get('enabled', True)], config.settings)
+    by_id = {row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-'):row for row in rows}
+    return by_id, sources
+
+
+def retained_conversation_binding(home, workspace, session_id, instance, expected, *, global_only=False):
+    """Prove an old digest from the retained plan, never impose shared defaults.
+
+    Unknown/current digests pass unchanged to the authoritative mounted guard.
+    Only an exact old OpenAI digest can be projected, and the mounted receipt
+    must still verify it before any persistent promotion or input.
+    """
+    rows, sources = _conversation_connections(home, workspace, session_id, global_only=global_only)
+    row = rows.get(instance)
+    if (not row or row.get('enabled') is False or row['module'] != 'provider-openai'
+            or not any(name in row.get('config', {}) for name in ('hide_dated_models', 'filtered'))):
+        return expected
+    config = mounted_provider_config(row)
+    current, previous = connection_key(workspace, row['module'], config, sources.get(instance),
+                                      home=home, _binding_pair=True)
+    if previous != expected:
+        return expected
+    return current
 
 
 def conversation_bindings(home, workspace, session_id, providers, *, global_only=False):
@@ -246,26 +369,14 @@ def conversation_bindings(home, workspace, session_id, providers, *, global_only
     No bundle preparation, provider import, transcript or worker is needed.
     The actual mount repeats the exact-identity check before input admission.
     """
-    from .host.config import load_config, provider_mount_sources
-    config = load_config(workspace, home=home, session_id=session_id, global_only=global_only)
-    rows = config.configured_connections
-    path = Path(home)/'sessions'/session_id/'configuration.json'
-    if path.exists():
-        saved = json.loads(path.read_text())
-        if 'providers' in saved:
-            rows = saved['providers']
-    # Disabled connections cannot donate an implementation to an enabled one.
-    # Match configured_binding/SetupManager's intended-mount roster, while
-    # retaining all rows below so disabled selections are still refused.
-    sources = provider_mount_sources([row for row in rows if row.get('enabled', True)], config.settings)
-    by_id = {row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-'):row for row in rows}
+    by_id, sources = _conversation_connections(home, workspace, session_id, global_only=global_only)
     result = {}
     for provider in providers:
         row = by_id.get(provider['id'])
         if row is None or row.get('enabled') is False:
             result[provider['id']] = {'eligible':False,'reason':'This conversation does not include this configured connection.'}
             continue
-        key = connection_key(workspace,row['module'],row.get('config',{}),
+        key = connection_key(workspace,row['module'],mounted_provider_config(row),
             sources.get(provider['id']),home=home)
         if key != provider.get('connectionKey'):
             result[provider['id']] = {'eligible':False,
@@ -283,7 +394,7 @@ def require_mounted_binding(coordinator, instance, expected, *, catalog=False):
         rows = coordinator.config.get('providers', [])
         row = next((row for row in rows if (
             row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-')) == instance), None)
-        current = connection_key(captured['workspace'], row['module'], row.get('config', {}),
+        current = connection_key(captured['workspace'], row['module'], mounted_provider_config(row),
             captured['sources'].get(instance), home=captured.get('home')) if row else None
         if current != expected:
             raise ValueError('The saved connection credentials changed or are unavailable. No input was sent; review the connection and sign in again if needed.')
@@ -350,23 +461,33 @@ class ProviderCatalog:
             if fingerprint(key) not in retained:
                 self._forget(key)
 
-    def peek(self, key):
+    def _retained_record(self, key):
+        """Borrow only inside a synchronous catalog projection, never to callers."""
         at = self.loaded_at.get(key, self.failed_at.get(key))
         if at is not None and not self._retained(at):
             self._forget(key)
             self.saved.pop(fingerprint(key), None)
+        if key in self.entries:
+            value, error = self.entries[key]
+            return value, error, self.loaded_at.get(key), self.failed_at.get(key)
+        row = self.saved.get(fingerprint(key))
+        if row and self._retained(row['at']):
+            return row['result'], row.get('error'), row.get('loadedAt'), row.get('failedAt')
+        if row:
+            self.saved.pop(fingerprint(key), None)
+        return None, None, None, None
+
+    def peek(self, key):
+        value, error, loaded, failed = self._retained_record(key)
         if key not in self.entries:
             row = self.saved.get(fingerprint(key))
-            if row and self._retained(row['at']):
-                self.entries[key] = (copy.deepcopy(row['result']), row.get('error'))
-                if row.get('loadedAt') is not None:
-                    self.loaded_at[key] = row['loadedAt']
-                if row.get('failedAt') is not None:
-                    self.failed_at[key] = row['failedAt']
+            if row:
+                self.entries[key] = (copy.deepcopy(value), error)
+                if loaded is not None:
+                    self.loaded_at[key] = loaded
+                if failed is not None:
+                    self.failed_at[key] = failed
                 self.sizes[key] = len(json.dumps(row).encode()) + len(fingerprint(key)) + 8
-            elif row:
-                self.saved.pop(fingerprint(key), None)
-        value, _ = self.entries.get(key, (None, None))
         return copy.deepcopy(value)
 
     def fresh(self, key):
@@ -375,7 +496,50 @@ class ProviderCatalog:
 
     def _fresh(self, key):
         """Inspect freshness without copying the inventory a second time."""
-        return key not in self.failed_at and key in self.loaded_at and (self.ttl is None or 0 <= self.clock() - self.loaded_at[key] < self.ttl)
+        return self._fresh_record(self.loaded_at.get(key), self.failed_at.get(key))
+
+    def _fresh_record(self, loaded, failed):
+        return failed is None and loaded is not None and (self.ttl is None or 0 <= self.clock() - loaded < self.ttl)
+
+    def purpose_recommendation(self, key, module, purpose):
+        """Return one detached scalar hint, not a copy of the model inventory.
+
+        Roster reads grow with configured connections, not model body bytes.
+        Inspect optional metadata before walking IDs. Retained disk results can
+        be projected without hydrating/copying/encoding the full catalog again.
+        """
+        value, error, loaded, failed = self._retained_record(key)
+        if (error or not self._fresh_record(loaded, failed) or not isinstance(value, dict)
+                or not value.get('modelsSupported')
+                or value.get('modelsProvenance') not in {'provider-api', 'configured', 'static'}):
+            return None
+        metadata = value.get('providerMetadata') or {}
+        if not isinstance(metadata, dict) or metadata.get('module') != module:
+            return None
+        info = metadata.get('modelListInfo') or {}
+        provenance = value['modelsProvenance']
+        if (not isinstance(info, dict) or type(info.get('version')) is not int or info['version'] != 1
+                or info.get('source') != provenance):
+            return None
+        purposes = info.get('purpose_recommendations')
+        ranked = purposes.get(purpose) if isinstance(purposes, dict) else None
+        if (not isinstance(ranked, list) or not 1 <= len(ranked) <= 32
+                or any(not isinstance(model, str) or not model.strip() or len(model) > 200
+                       for model in ranked) or len(set(ranked)) != len(ranked)):
+            return None
+        models = value.get('models') or []
+        if not isinstance(models, list):
+            return None
+        # Count only the bounded ranked IDs. Never copy model bodies or infer
+        # aliases, family, suitability or ranking from other catalog fields.
+        counts = dict.fromkeys(ranked, 0)
+        for model in models:
+            identity = model.get('id') if isinstance(model, dict) else None
+            if isinstance(identity, str) and identity in counts:
+                counts[identity] += 1
+        model = next((model for model in ranked if counts[model] == 1), None)
+        return ({'model': model, 'provenance': provenance, 'basis': 'provider-purpose'}
+                if model is not None else None)
 
     def discard(self, key):
         self._forget(key)

@@ -31,7 +31,8 @@ MAX_COMPLETED = 64  # Terminal-response retries, not retained catalogs.
 CAPABILITIES = {
     'observations': {'version': 1, 'sessions': '/api/sessions?view=observation',
                      'attention': '/api/attention', 'activity': '/api/activity',
-                     'maxPageSize': MAX_PAGE, 'conditionalRequests': True, 'incrementalCounts': True},
+                     'maxPageSize': MAX_PAGE, 'conditionalRequests': True, 'incrementalCounts': True,
+                     'identity': True, 'dismissals': {'version': 1, 'action': 'presentation.dismiss'}},
 }
 
 
@@ -220,6 +221,13 @@ class Observations:
         notices = tuple(public_notice(row, item, slot)
                         for slot in range(session_item_count(row))
                         if (item := session_item_at(row, read, slot)) is not None) if role != 'internal' else ()
+        from .client_presentation import descriptor, plain
+        session['dismissal'] = descriptor('activity', row)
+        if session['dismissal']:
+            display = row.get('activityPresentation') or {}
+            session['display'] = {'summary': plain(display.get('summary')) or ('Preparing…' if session['activity']['preparing'] else 'Thinking…')}
+        notices = tuple({**item, 'pinned': row['id'] in pins,
+                         'dismissal': descriptor('attention', row, item)} for item in notices)
         return (session, row.get('workspace'), notices)
 
     def refresh(self):
@@ -313,8 +321,10 @@ class Observations:
             return self.directory_key(collection,self.directory_revision)
         return f'{self.service.instance_id}:{collection}:{self.generations[collection]}'
 
-    def directory_key(self, collection, revisions):
-        digest = hashlib.sha256(json.dumps(revisions[collection],sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    def directory_key(self, collection, revisions, db=None):
+        from .client_presentation import revision as presentation_revision
+        receipt_revision = presentation_revision(db or self.service.directory.db) if collection in {'sessions', 'attention'} else 0
+        digest = hashlib.sha256(json.dumps([revisions[collection],receipt_revision],sort_keys=True,separators=(',',':')).encode()).hexdigest()
         return f'{self.service.instance_id}:{collection}:{digest}'
 
     def require_client(self):
@@ -422,7 +432,7 @@ class Observations:
                     # Native discovery can commit on another thread between
                     # refresh and BEGIN. Label exactly these pinned read views.
                     from .history_directory_observations import revision as directory_revision
-                    actual = self.directory_key(collection,directory_revision(reader,reader._frozen_state))
+                    actual = self.directory_key(collection,directory_revision(reader,reader._frozen_state),reader.db)
                     if actual != revision:
                         revision = actual
                         owner = self.service.clients.current.get()
@@ -507,6 +517,10 @@ class Observations:
                 slot += 1
                 if slot >= len(notices):
                     position, slot = position + 1, 0
+        if isinstance(snapshot['rows'], DirectoryFacts):
+            from .client_presentation import project_receipts
+            db = snapshot['rows'].directory.db
+            items = [project_receipts(db, item, ())[0] for item in items]
         value = {'revision': snapshot['revision'], 'items': items,
                  'nextCursor': self.cursor(query, [position, slot], snapshot['revision'], lease_id) if has_row(position) else None}
         return value if value['nextCursor'] else self.finish(query, token, lease_id, value)
@@ -578,25 +592,32 @@ class Observations:
                            {'revision': snapshot['revision'], 'status': 'ready', 'nextCursor': None, **value})
 
     def response(self, request, value, status=200):
+        value = {**value, 'hostIdentity': data_identity(self.service.data_dir), 'hostInstanceId': self.service.instance_id}
         etag = '"' + hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest() + '"'
         headers = {'ETag': etag, 'Cache-Control': 'private, no-cache', 'Vary': 'Authorization, Cookie, X-Amplifier-Client'}
         if etag in [part.strip() for part in request.headers.get('If-None-Match', '').split(',')]:
             return web.Response(status=304, headers=headers)
         return web.json_response(value, headers=headers, status=status)
 
+    def read_frame(self, project, *args):
+        # Retain the old adapter's single-request scalar preparation at the
+        # canonical resources. Independent requests still observe fresh facts.
+        directory = getattr(self.service, 'directory', None)
+        return directory.read_frame(project, *args) if directory is not None else project(*args)
+
     async def sessions(self, request):
         self.require_client()
-        return self.response(request, self.page('sessions', request.query))
+        return self.response(request, self.read_frame(self.page, 'sessions', request.query))
 
     async def attention(self, request):
         self.require_client()
-        return self.response(request, self.page('attention', request.query))
+        return self.response(request, self.read_frame(self.page, 'attention', request.query))
 
     async def summary(self, request):
         self.require_client()
         if set(request.query) - {'scope', 'clientId', 'cursor'} or any(len(request.query.getall(k)) != 1 for k in request.query):
             raise AppError('Unsupported activity parameter.')
-        value = self.activity(request.query.get('scope', 'roots'), request.query.get('cursor'))
+        value = self.read_frame(self.activity, request.query.get('scope', 'roots'), request.query.get('cursor'))
         return self.response(request, value, 202 if value['status'] == 'collecting' else 200)
 
 

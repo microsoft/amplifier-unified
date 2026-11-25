@@ -8,12 +8,129 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
 import time
 
 from .update_diagnostics import RUNTIME_SOURCE_REASONS, failure_guidance
 
 DETERMINISTIC = RUNTIME_SOURCE_REASONS - {'runtime-source-changed'} | {
     'host-component-conflict', 'missing-configured-environment', 'incompatible-conversation-loop'}
+
+PREPARED_WAITING = 'Application release validated. Waiting for work to finish before restarting.'
+PREPARED_STARTING = 'Application release validated. No work is running. Amplifier installs the update and restarts by itself.'
+STALE_STAGE_KEYS = ('Amplifier did not switch component versions. The version that it would switch to may still hold '
+                    'an old copy of the keys file, and Amplifier could not replace or remove that copy. Amplifier '
+                    'did not check that version with the old copy. Current components remain active.')
+
+# Attempt IDs of the app replacements that THIS process executes at this moment.
+# Never saved. `updates.activation` in saved or restored state is a copy for
+# readers. It is never the evidence that hides a replacement marker.
+_EXECUTING = set()
+
+
+def claim_replacement(attempt):
+    _EXECUTING.add(attempt)
+
+
+def release_replacement(attempt):
+    """Synchronous and total. The owner calls it before any wait when it ends."""
+    _EXECUTING.discard(attempt)
+
+
+def _replacing(state):
+    """A replacement that this process executes now, in a state that still says so."""
+    marker = state.get('pendingReplacement')
+    return bool(isinstance(marker, dict) and isinstance(marker.get('attemptId'), str)
+                and marker['attemptId'] in _EXECUTING
+                and state.get('phase') == 'activating' and not state.get('error')
+                and not state.get('pendingRestart'))
+
+
+def _prepared(state):
+    """The saved state of a validated app that nothing has started to install."""
+    return bool(state.get('pendingApp') and state.get('phase') == 'app-staged'
+                and not state.get('error') and not state.get('pendingRestart')
+                and state.get('pendingReplacement') is None
+                and (state.get('application') or {}).get('canInstall') is not False)
+
+
+def _starting(state):
+    """A prepared app that the owner's next pass activates by itself."""
+    if not _prepared(state) or state.get('blockers'):
+        return False
+    from .update_readiness import valid_update_intent
+    from .updates import UpdateManager
+    # Match the saved holds before tick/app reach activation. Operation locks
+    # themselves are not a hold: staging publishes while it owns that lock.
+    # A prepared state excludes every branch of awaiting_restart(): it has no
+    # marker, no pending restart and no error phase.
+    if (not valid_update_intent(state.get('applicationIntent'))
+            or (state.get('pendingSmartTools') and not UpdateManager.independent_tool_results(state)
+                and (state.get('applicationIntent') or {}).get('scope') != 'app')):
+        return False
+    drain = state.get('drain') or {}
+    return not (drain.get('phase') in {'draining', 'replacing', 'releasing'}
+                or drain.get('phase') == 'waiting' and any(
+                    not row.get('ready') and not row.get('suppressed')
+                    for row in drain.get('workers', {}).values()))
+
+
+def activation(manager):
+    """Derive live app progress from resident state, never from saved ownership."""
+    state = manager.service.state['updates']
+    if _replacing(state):
+        return 'installing'
+    if not _prepared(state):
+        return None
+    if state.get('blockers'):
+        return 'waiting'
+    # A closed manager and an unreadable handoff commit are facts of this
+    # process. The saved state does not hold them.
+    if (getattr(manager, 'closed', False) or getattr(manager, '_manual_handoff_commit_unknown', False)
+            or not _starting(state)):
+        return None
+    return 'starting'
+
+
+def browser_view(updates):
+    """Adapt live app progress for the bundled page without changing saved state.
+
+    The page reads any replacement marker as an unconfirmed outcome and any
+    prepared app as waiting for work. The server knows these two states better.
+    Remove this view when the page reads updates.activation itself.
+
+    `activation` is derived at the manager's own publications. Other owners
+    publish `updates` too, so the field alone is never enough. `installing`
+    also needs this process to execute that exact attempt (_EXECUTING), and
+    `starting` needs every saved condition that allowed it. A claim that fails
+    this changes nothing: the page then gets the real marker, phase and error.
+
+    The page offers "Interrupt work and restart" whenever it gets
+    `forceRestartTarget`. It gets none when no work delays the update, and none
+    on Windows, where a forced restart is always refused (update_restart.require).
+    The saved field stays: task.waitForUpdate names it.
+    """
+    claim = updates.get('activation')
+    live = bool(claim == 'installing' and _replacing(updates)
+                or claim == 'starting' and _starting(updates))
+    drain = updates.get('drain') or {}
+    if drain.get('safeUpdate') and drain.get('phase') != 'released':
+        from .safe_update import adoption_target
+        expected = adoption_target(drain)
+        result = updates.get('applicationResult') or {}
+        updates = {**updates, 'forceRestartTarget': None, 'safeResumeTarget': None, 'safeUpdateStatus': {
+            'phase': drain['phase'], 'queued': len(drain['messages']),
+            'waiting': len({r['sessionId'] for r in updates.get('blockers', []) if r.get('sessionId')}),
+            'appReady': result.get('phase') == 'restart-ack' and all(result.get(k) == expected.get(k) for k in ('attemptId', 'revision'))}}
+    if not live and (updates.get('forceRestartTarget') is None or sys.platform != 'win32'):
+        return updates
+    view = {**updates, 'forceRestartTarget': None}
+    if live:
+        if view.get('safeResumeTarget'):
+            view['safeResumeTarget'] = None
+        view['phase'] = 'activating'
+        view.pop('pendingReplacement', None)
+    return view
 
 
 def configuration(manager):
@@ -23,8 +140,35 @@ def configuration(manager):
     return configuration_key(config.settings, manager.home), config
 
 
-def active_evidence(manager):
-    """Read existing immutable qualification and actual graph; never prepare it."""
+def read_connection(manager):
+    """Read whether a component update must wait for an AI connection.
+
+    Unreadable settings make no claim: the update's own preparation reports them.
+    """
+    from .profile_catalog import connection as selected
+    try:
+        return selected(configuration(manager)[1])
+    except Exception:  # Includes the settings parser's own error type.
+        return {}
+
+
+def active_evidence(manager, *, explain_configuration=False, allow_additions=False):
+    """Verify the selected graph, never prepare it or admit changed declarations.
+
+    Preparation requires the default, configuration-matching proof. The health
+    owner can also explain a verified older installation whose current settings
+    no longer match, without resurrecting failures predating its activation.
+
+    `allow_additions` is about a package that the generation's record does not
+    name. The default compares exactly, and a preparation asks that way
+    (update_partial.Preparation.verify_baseline): one package more ends its
+    proof. Only the health read (refresh) asks with True, as a
+    conversation-worker start does (runtime_qualification.active_install_overrides).
+    A connection check can install one more package into this environment, and
+    that is not a failed update. A recorded package that is missing or changed
+    ends the proof with either value. The proof names the recorded packages
+    only, never an added one.
+    """
     from .updates import active_release
     from .runtime_environment import project_path
     from .runtime_qualification import verify_recorded
@@ -57,23 +201,30 @@ def active_evidence(manager):
                 or marker.get('generationSchema') != 1 or marker.get('workerProtocol') != 1
                 or not graph or any(not isinstance(row, dict) or not row.get('name') for row in graph)
                 or not profiles.get('profiles')
+                or not isinstance(profiles.get('configuration'), str)
+                or not re.fullmatch('[a-f0-9]{64}', profiles['configuration'])
                 or not 0 < marker['createdAt'] <= pointer['at']
                 or activation and not 0 < activation['startedAt'] <= marker['createdAt'] <= pointer['at'] <= activation['completedAt']):
             return {}
         _, config = configuration(manager)
-        if profiles.get('configuration') != configuration_key(config.settings, manager.home, stage):
+        observed_configuration = configuration_key(config.settings, manager.home, stage)
+        configuration_changed = profiles.get('configuration') != observed_configuration
+        if configuration_changed and not explain_configuration:
             return {}
         project = project_path(manager.home, generation)
         if (project / 'uv.lock').read_bytes() != (stage / 'runtime.lock').read_bytes():
             return {}
-        verify_recorded(project, stage)
+        # Compare with the record that was read and validated above: a record
+        # that disappears after that read must not skip the comparison.
+        verify_recorded(project, stage, expected=graph, allow_additions=allow_additions)
         # An observation that raced a new pointer/configuration is not evidence
         # for whichever installation won that race.
         if active_release(manager.home) != pointer:
             return {}
         _, current_config = configuration(manager)
-        if profiles['configuration'] != configuration_key(current_config.settings, manager.home, stage):
+        if observed_configuration != configuration_key(current_config.settings, manager.home, stage):
             return {}
+        limitation = {'configurationChanged': True} if configuration_changed else {}
         from urllib.parse import urlsplit
         components = {row['name'] for row in graph}
         for row in graph:
@@ -86,13 +237,81 @@ def active_evidence(manager):
             # history therefore yields a neutral limitation, never healthy proof.
             return {'generation': generation, 'activationUnknown': True,
                     'qualifiedAt': marker['createdAt'], 'configuration': profiles['configuration'],
-                    'packages': {row['name'] for row in graph}, 'components': components}
+                    'packages': {row['name'] for row in graph}, 'components': components, **limitation}
         return {'generation': generation, 'verifiedAt': activation['completedAt'],
                 'startedAt': activation['startedAt'],
                 'configuration': profiles['configuration'], 'attemptId': activation['attemptId'],
-                'packages': {row['name'] for row in graph}, 'components': components}
+                'packages': {row['name'] for row in graph}, 'components': components, **limitation}
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return {}  # Unknown evidence is not a healthy installed graph.
+
+
+def _never_selected(pointer):
+    """True while the pointer has never named a component generation."""
+    return not pointer.get('current') and not pointer.get('previous')
+
+
+def setup_evidence(manager):
+    """Verify setup's own record on an installation that never selected a generation.
+
+    Setup installs the declared worker dependencies and records them. No
+    generation is selected until the first component update, so the generation
+    proof above is always empty there, and no check can produce it.
+
+    This applies the checks of a conversation-worker start to that record: lock,
+    manifest, recorded packages and installer policy. Packages are compared by
+    name, version and source, and a local checkout also by its tracked content;
+    the files of an installed wheel are not read, and packages that were added
+    after setup are not compared with anything.
+    It is not a qualification. It carries no activation time, so it cannot
+    supersede a recorded failure, and preparation never consults it.
+    """
+    import subprocess
+    from .installation_runtime import status
+    from .runtime_environment import receipt_directory
+    from .updates import active_release
+    try:
+        pointer = active_release(manager.home)
+        if not _never_selected(pointer):
+            # A selected generation is verified by its own receipts only. An
+            # installation that went back from a generation keeps its report.
+            return {}
+        record = receipt_directory(manager.home) / 'runtime-installed.json'
+        recorded = record.read_bytes()
+        observed = status(manager.home)
+        if (observed.get('ok') is not True or observed.get('prepared') is not True
+                or observed.get('generation') is not None
+                or type(observed.get('packageCount')) is not int or observed['packageCount'] < 1
+                # The packages were compared with exactly the record read above ...
+                or observed.get('recordSha256') != hashlib.sha256(recorded).hexdigest()
+                or record.read_bytes() != recorded  # ... and it did not change since.
+                or active_release(manager.home) != pointer):
+            return {}
+        return {'setupRecord': True, 'packageCount': observed['packageCount']}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError):
+        return {}  # Unknown evidence is not a healthy installed graph.
+
+
+def cached_evidence(manager):
+    """The proof of the last refresh, as far as it still applies.
+
+    Setup's record is a proof only while the pointer has never named a
+    generation. An activation writes the pointer, then promotes the workers,
+    and publishes and refreshes only after that; a failed promotion publishes
+    no selection at all. So the published copy is not enough: a held setup
+    proof is checked against the pointer itself, one small file read for each
+    use. The proof of a generation is returned as it is.
+    """
+    evidence = getattr(manager, '_active_update_evidence', None) or {}
+    if not evidence.get('setupRecord'):
+        return evidence
+    if manager.service.state['updates'].get('release'):
+        return {}
+    from .updates import active_release
+    try:
+        return evidence if _never_selected(active_release(manager.home)) else {}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}  # An unreadable pointer is not "no generation".
 
 
 def preparation_key(manager, rows):
@@ -149,7 +368,7 @@ def environment_repaired(manager, batch):
     import os
     import stat
     from .host.config import missing_environment_available
-    failure = manager.diagnostics.state.get('lastFailure') or {}
+    failure = batch.get('failure') or manager.diagnostics.state.get('lastFailure') or {}
     if ((batch.get('retry') or {}).get('mode') != 'changed-inputs'
             or failure.get('attemptId') != batch.get('attemptId')
             or (failure.get('reason') or failure.get('probe', {}).get('reason')) != 'missing-configured-environment'):
@@ -189,27 +408,22 @@ def environment_repaired(manager, batch):
         return False  # Absent/expired/malformed evidence never grants retry.
 
 
-def retry_decision(batch, key, *, now=None):
+def retry_decision(batch, key):
     retry = batch.get('retry') or {}
+    if retry.get('mode') == 'fresh-intent':
+        return None  # The old candidate was retired, not retried.
     if retry.get('mode') == 'inspect':
         return 'inspect'  # Changed inputs cannot prove an uncertain effect absent.
     if retry.get('inputKey') != key:
         return None
-    if retry.get('mode') in {'changed-inputs', 'inspect'}:
-        return retry['mode']
-    if retry.get('retryAt', 0) > (time.time() if now is None else now):
-        return 'backoff'
-    return None
+    # Saved legacy deadlines/counters are not evidence of a changed input.
+    # The same failure owner admits a deliberate Install; Check and ticks do not.
+    return 'changed-inputs' if retry else None
 
 
-def record_retry(batch, key, failure, previous=None):
-    reason = failure.get('reason') or failure.get('probe', {}).get('reason')
-    previous = previous or {}
-    count = previous.get('attempts', 0) + 1 if previous.get('inputKey') == key else 1
-    mode = ('inspect' if failure.get('status') == 'interrupted' else
-            'changed-inputs' if reason in DETERMINISTIC else 'backoff')
-    batch['retry'] = {'inputKey': key, 'mode': mode, 'attempts': count,
-                      'retryAt': time.time() + min(3600, 60 * 2 ** min(count - 1, 6))}
+def record_retry(batch, key, failure):
+    batch['retry'] = {'inputKey': key, 'mode':
+                      'inspect' if failure.get('status') == 'interrupted' else 'changed-inputs'}
 
 
 def pointer_witness(manager):
@@ -227,27 +441,27 @@ def pointer_witness(manager):
 
 def pending_preparation(diagnostics):
     """One unresolved component operation, independent of the display batch."""
-    if 'componentPreparation' in diagnostics:
-        return diagnostics['componentPreparation']
-    batch = diagnostics.get('batch', {})
+    batch = diagnostics.get('componentPreparation', diagnostics.get('batch', {}))
     return batch if (batch.get('retry') or {}).get('mode') == 'inspect' else None
 
 
 def retain_preparation(diagnostics):
     """Preserve exact existing proof before another domain replaces its batch."""
     import copy
-    if 'componentPreparation' in diagnostics:
+    if (diagnostics.get('componentPreparation', {}).get('retry') or {}).get('mode') == 'inspect':
         return
     batch = diagnostics.get('batch', {})
-    if (batch.get('retry') or {}).get('mode') != 'inspect':
+    if batch.get('kind') != 'ecosystem' or not batch.get('retry'):
         return
     terminal = next((row for row in reversed(diagnostics.get('events', []))
         if row.get('attemptId') == batch.get('attemptId') and
-        row.get('phase') == 'ecosystem-stage' and row.get('status') == 'interrupted'), None)
+        row.get('phase') == 'ecosystem-stage' and row.get('status') in {'failed','interrupted'}), None)
     diagnostics['componentPreparation'] = copy.deepcopy({
         'attemptId': batch.get('attemptId'), 'kind': batch.get('kind'),
         'revision': diagnostics.get('revision'), 'retry': batch.get('retry'),
-        'preparation': batch.get('preparation'), 'terminal': terminal})
+        'preparation': batch.get('preparation'), 'terminal': terminal,
+        'failure': diagnostics.get('lastFailure') if
+            diagnostics.get('lastFailure', {}).get('attemptId') == batch.get('attemptId') else None})
 
 
 async def candidate_copy(proof, operation, *args):
@@ -273,22 +487,44 @@ async def candidate_copy(proof, operation, *args):
         proof['copySettled'] = task.done() and not task.cancelled()
 
 
-def reconcile_preparation(manager):
-    """Permit fresh intent only after a proven inactive, settled copy attempt.
+def preparation_owner_stopped(manager, proof):
+    """Require a different host run AND passive proof its process has exited.
 
-    Called under the update lock. Never resumes the old candidate or infers
-    settlement for legacy/unknown fetch, validation, activation or rollback.
+    A different instance ID alone is not process-exit evidence (another host
+    may exist). Missing/legacy ownership, PID reuse and liveness uncertainty
+    retain the fence. Never signal a Windows process to test its liveness.
+    """
+    from .generation_leases import _process_exists
+    host = getattr(manager.service, 'instance_id', None)
+    owner, pid = proof.get('host'), proof.get('hostPid')
+    if (not isinstance(host, str) or not host or not isinstance(owner, str)
+            or not owner or owner == host or type(pid) is not int or not 0 < pid <= 0xFFFFFFFF):
+        return False
+    try:
+        return not _process_exists(pid)
+    except (OSError, OverflowError, ValueError):
+        return False
+
+
+def reconcile_preparation(manager):
+    """Retire inert preparation, never resume it or establish update success.
+
+    Called under the update lock. A settled snapshot can be retired by explicit
+    intent in its own host; later preparation requires a successor host. Neither
+    path permits a validated candidate, activation or rollback effects.
     """
     diagnostics = manager.diagnostics.state
     batch = diagnostics.get('componentPreparation') or {}
     proof = batch.get('preparation') or {}
     state = manager.service.state['updates']
     candidate = proof.get('candidate')
+    stopped = preparation_owner_stopped(manager, proof)
+    settled_copy = proof.get('boundary') == 'copy-only' and proof.get('copySettled') is True
     if (diagnostics.get('storageUnavailable') or batch.get('kind') != 'ecosystem'
             or not batch.get('attemptId')
             or not isinstance(candidate, str) or not re.fullmatch('[a-f0-9]{32}', candidate)
             or batch.get('revision') != candidate
-            or proof.get('boundary') != 'copy-only' or proof.get('copySettled') is not True
+            or not (settled_copy or stopped and proof.get('boundary') in {'copy-only', 'preparing'})
             or not proof.get('interruptedAt') or 'activeBefore' not in proof
             or any(state.get(key) for key in ('pendingApp', 'pendingRelease', 'pendingRollback',
                                               'pendingRestart', 'pendingReplacement', 'pendingSmartTools'))
@@ -299,7 +535,8 @@ def reconcile_preparation(manager):
         stage = manager.directory / 'releases' / candidate
         if (stage.is_symlink() or stage.resolve() != manager.directory.resolve() / 'releases' / candidate
                 or [stage.stat().st_dev, stage.stat().st_ino] != proof.get('directoryIdentity')
-                or any((stage / name).exists() for name in ('plan.json', 'validated.json'))
+                or any((stage / name).exists() or (stage / name).is_symlink()
+                       for name in (('validated.json',) if stopped else ('plan.json', 'validated.json')))
                 or candidate in (active_release(manager.home).get('current'), active_release(manager.home).get('previous'))
                 or pointer_witness(manager) != proof['activeBefore']):
             return False
@@ -333,19 +570,62 @@ def failure_events(state):
     return rows
 
 
-def current(state, evidence=None, *, manual_verified=None):
-    """Pure projection of operation/desired/active state; no IO and no read flags."""
+def current(state, evidence=None, *, manual_verified=None, explicit_retry=False, connection=None):
+    """Pure projection of operation/desired/active state; no IO and no read flags.
+
+    One fact is not in the state: whether this process executes the app
+    replacement that a marker names (_EXECUTING). Without it the marker reads
+    as an unconfirmed outcome.
+    """
     evidence = evidence or {}
+    connection = connection or {}
     seq = state.get('sequence') or {}
     app = state.get('application') or {}
     diagnostics = state.get('diagnostics') or {}
     batch = diagnostics.get('batch') or {}
     retry = batch.get('retry') or {}
     phase = state.get('phase')
-    def result(status, title, detail, *, action=None, component=None):
-        return {'status': status, 'title': title, 'detail': detail,
+    def result(status, title, detail, *, action=None, component=None, failure=None):
+        retry_check = state.get('retryCheck') or {}
+        if (status in {'action-required', 'protected'} and failure
+                and retry_check.get('result') == 'retried' and retry_check.get('attemptId')
+                and retry_check['attemptId'] == failure.get('attemptId')):
+            detail += ' Amplifier checked the sources again before this attempt.'
+        if status == 'current' and retry_check.get('result') == 'nothing-to-install':
+            detail += ' Amplifier checked the sources again. Nothing is left to install.'
+        if (status in {'action-required', 'protected'} and failure and failure.get('kind') == 'ecosystem'
+                and type(retry_check.get('at')) in {int, float} and type(failure.get('at')) in {int, float}
+                and retry_check['at'] > failure['at']):
+            # The earlier record keeps its priority. Say what the later request did.
+            if retry_check.get('result') == 'nothing-to-install':
+                detail += ' Amplifier checked the sources again. Nothing is left to install.'
+            elif retry_check.get('result') == 'not-started':
+                detail += ' Amplifier checked the sources again. No new attempt started.'
+        if (failure and failure.get('kind') == 'ecosystem' and connection.get('needed')
+                and (failure.get('reason') or (failure.get('probe') or {}).get('reason')) != 'ai-connection-needed'):
+            # A record of this exact refusal carries the same guidance already.
+            detail += ' No AI connection is set up yet. A component update starts only after you set one up in Settings.'
+        value = {'status': status, 'title': title, 'detail': detail,
                 'actionRequired': status in {'action-required', 'protected', 'unverified'},
                 'action': action, 'component': component}
+        limitation = {key: True for key in ('activationUnknown', 'configurationChanged')
+                      if evidence.get(key) is True}
+        if limitation:
+            value['proofLimitation'] = limitation
+        if failure:
+            # Reuse the support-report allowlist; no exception text, source URLs
+            # or private paths become current-health metadata.
+            from .update_report import event
+            selected = event(failure)
+            value['selectedFailure'] = selected
+            for source, target in (('kind', 'failureKind'), ('attemptId', 'failureAttemptId'),
+                                   ('phase', 'failurePhase'), ('at', 'failureAt')):
+                if source in selected:
+                    value[target] = selected[source]
+        return value
+    if state.get('activation') == 'installing' and _replacing(state):
+        return result('working', 'Updating Amplifier',
+                      state.get('detail') or 'Installing the app update and restarting…')
     if state.get('pendingReplacement') is not None:
         return result('unverified', 'Installation needs verification',
                       'The application replacement outcome is not confirmed. Work remains protected; inspect the update diagnostics before another installation.', action='diagnostics')
@@ -358,23 +638,38 @@ def current(state, evidence=None, *, manual_verified=None):
     if phase in {'checking', 'staging', 'validating', 'activating'}:
         return result('working', 'Checking for updates' if phase == 'checking' else 'Updating Amplifier',
                       state.get('detail') or 'Preparing and checking the requested update.')
+    if state.get('error') == STALE_STAGE_KEYS:
+        # An activation or a rollback that changed nothing (updates._activate).
+        # A rollback has no pending release, and an earlier failure record must
+        # not speak in place of this text.
+        return result('action-required', 'Update needs attention', STALE_STAGE_KEYS, action='diagnostics')
     if state.get('pendingApp') or state.get('pendingRelease'):
+        if any(row.get('kind') == 'checkout-handoff' or row.get('reasonCode') in {
+                'management-tasks-unavailable', 'management-lock-unavailable', 'runtime-observer-unavailable'}
+                for row in state.get('blockers', [])):
+            return result('action-required', 'Update needs attention',
+                          'Automatic restart is paused because Amplifier cannot confirm earlier work has finished. The current app is kept.',
+                          action='diagnostics')
+        if state.get('activation') == 'starting' and _starting(state):
+            return result('working', 'Updating Amplifier', PREPARED_STARTING)
         return result('action-required' if state.get('error') else 'waiting',
                       'Update needs attention' if state.get('error') else 'Update ready; waiting for work',
                       state.get('error') or 'The qualified update continues automatically when its activation boundary is ready.',
                       action='diagnostics' if state.get('error') else None)
     if pending_preparation(diagnostics):
         return result('action-required', 'Component preparation was interrupted',
-                      'Automatic component work is paused. A deliberate update can start a new candidate only after settled copy-only preparation is verified; other uncertain effects require diagnostic review.',
+                      'Component updates are paused. Restart Amplifier, then check for updates. A new host can retire an inactive candidate only when its recorded owner has stopped; unknown ownership or other uncertain outcomes need diagnostic review.',
                       action='diagnostics')
     outcomes = state.get('componentResults') or []
     retained = [row for row in outcomes if row.get('status') in {'failed', 'dependency-held'}]
     if retained and not state.get('available'):
         updated = sum(row.get('status') == 'updated' for row in outcomes)
         return result('action-required', 'Some components kept their working versions',
-                      f'{updated} source records updated; {len(retained)} retained after a source failure or dependency hold. '
-                      'New work uses the qualified combination. Check manually to retry; prior failures remain in history.',
-                      action='sources')
+                      f'{updated} source records updated; {len(retained)} retained after a source failure or dependency hold. ' +
+                      ('New work uses the qualified combination. Install explicitly to retry; prior failures remain in history.'
+                       if explicit_retry else
+                       'New work uses the qualified combination. Check source availability before retrying; prior failures remain in history.'),
+                      action='install' if explicit_retry else 'sources')
     local_changes = [r for r in state.get('items', []) if r.get('status') == 'local_changes']
     issues = [r for r in state.get('items', []) if r.get('status') == 'check_failed'
               and r.get('id') != 'application' and r.get('kind') != 'app']
@@ -400,14 +695,32 @@ def current(state, evidence=None, *, manual_verified=None):
         and application_result.get('version') == app.get('current')
         and 0 < application_batch.get('startedAt', 0)
             <= application_result.get('verifiedAt', 0) <= application_batch.get('completedAt', 0))
+    application_success = (application_verified
+        and isinstance(app.get('current'), str) and re.fullmatch(r'\d+\.\d+\.\d+', app['current'])
+        and isinstance(app.get('runningRevision'), str) and re.fullmatch('[a-f0-9]{40}', app['runningRevision'])
+        and isinstance(application_result.get('attemptId'), str)
+        and re.fullmatch('[a-f0-9]{32}', application_result['attemptId']))
     def currently_verified(row):
         manual = state.get('manualHandoff') or {}
         if (manual.get('phase') == 'manual-handoff-reconciled'
                 and manual_verified is not None and manual_verified == manual.get('requestId')
                 and manual.get('revision') == app.get('runningRevision')
-                and manual.get('version') == app.get('current')
-                and row == manual.get('refusal')):
-            return True  # Exact historical pre-effect refusal, not generic recovery.
+                and manual.get('version') == app.get('current')):
+            refusal = manual.get('refusal') or {}
+            if row == refusal:
+                return True  # Exact historical pre-effect refusal, not generic recovery.
+            # The same verified installed payload can establish current readiness
+            # after older pre-effect discovery/restart refusals too. Do not use
+            # this as an acknowledgement, history rewrite, or replacement proof.
+            from .update_diagnostics import sanitized_application_extras
+            requested = sanitized_application_extras(row.get('applicationExtras'))
+            installed = sanitized_application_extras(refusal.get('applicationExtras'))
+            if (row.get('kind') == 'application' and row.get('status') == 'failed'
+                    and row.get('phase') in {'target-discovery', 'restart-capability'}
+                    and requested is not None and installed is not None
+                    and set(requested) <= set(installed)
+                    and 0 < row.get('at', 0) < refusal.get('at', 0) <= manual.get('verifiedAt', 0)):
+                return True
         # A later complete, applicable operation proves current readiness for
         # generic preparation/OS failures too, not just a reason-code allowlist.
         # Missing packages and unknown app feature scope remain unverified.
@@ -442,19 +755,50 @@ def current(state, evidence=None, *, manual_verified=None):
         failure = max(remaining, key=lambda row: row.get('at', 0), default=diagnostics.get('lastFailure') or {})
         reason = failure.get('reason') or failure.get('probe', {}).get('reason')
         component = failure.get('package') or failure.get('probe', {}).get('package') or failure.get('component')
-        if retry.get('mode') == 'backoff' and retry.get('retryAt', 0) > time.time() and phase != 'interrupted':
-            return result('retrying', 'Update will retry later', 'The current installation is kept. A transient failure is waiting for a bounded retry; details remain in history.')
+        if (application_success and evidence and not state.get('error') and phase not in {'error', 'interrupted'}
+                and failure.get('kind') == 'ecosystem'
+                and 0 < failure.get('at', 0) < application_batch['startedAt']):
+            # The app's verified restart does not resolve a component attempt.
+            # Keep that attention, but name its domain and date instead of
+            # implying that the successfully installed app update just failed.
+            from datetime import datetime, timezone
+            at = failure['at']
+            date = (datetime.fromtimestamp(at, timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+                    if at < 253402300800 else 'an earlier time')
+            detail = (f'Application {app["current"]} is installed and its restart was verified. '
+                      f'A component update from {date} still needs review. '
+                      'This is not a failure of the application update. ')
+            if evidence.get('activationUnknown'):
+                detail += 'The selected component graph matches its qualification, but its activation receipt is no longer retained. '
+            if evidence.get('configurationChanged'):
+                detail += 'The current source configuration also differs from that qualification. '
+            detail += failure_guidance(failure) or 'Inspect this earlier component attempt in diagnostics before retrying.'
+            return result('protected' if reason in DETERMINISTIC else 'action-required',
+                          'Application updated; earlier component issue needs review', detail,
+                          action='sources' if reason in DETERMINISTIC else 'diagnostics',
+                          component=component, failure=failure)
         if reason in DETERMINISTIC:
             return result('protected', 'Component source needs review',
                           failure_guidance(failure) or 'A source or configuration conflict prevented this update. Current components remain active. Review source settings or share diagnostics; unchanged automatic attempts are paused.',
-                          action='sources', component=component)
+                          action='sources', component=component, failure=failure)
         return result('action-required', 'Update could not finish',
                       failure_guidance(failure) or state.get('error') or 'The prior attempt has no applicable verified outcome. Current installation is retained; inspect diagnostics before retrying.',
-                      action='diagnostics', component=component)
+                      action='diagnostics', component=component, failure=failure)
     if any(row.get('failure') for row in state.get('pendingSmartTools', [])):
         return result('action-required', 'Some tools were not updated',
                       'Their current versions remain installed. Review the failed tool to retry or keep its current version.',
                       action='tools')
+    if (connection.get('needed') and not state.get('appAvailable') and not seq.get('nextStage')
+            and any(row.get('status') == 'update' and row.get('kind') not in {'app', 'smart tool'}
+                    and row.get('id') != 'application' for row in state.get('items', []))):
+        # Not a failure and not an attempt: a component update qualifies the
+        # selected conversation profile, which has no provider yet. Application
+        # and Smart Tool updates do not wait.
+        return result('waiting', 'Components update after you set up an AI connection',
+                      'The application release could not be checked. The component update waits for another reason. Amplifier checks new components together with an AI connection, and none is set up yet. Set up an AI connection in Settings. The component update can then start.'
+                      if app.get('status') == 'check_failed' else
+                      'Nothing failed. Amplifier checks new components together with an AI connection, and none is set up yet. Set up an AI connection in Settings. The update can then start.',
+                      action='connect')
     if state.get('available') or seq.get('nextStage') or any(
             (seq.get(tier) or {}).get('available') for tier in ('included', 'other')):
         return result('available', 'Updates available',
@@ -466,8 +810,21 @@ def current(state, evidence=None, *, manual_verified=None):
                       app.get('detail') or 'The application release could not be checked. Component results remain separate; check for updates again.',
                       action='check', component='Amplifier Unified')
     if local_changes or seq.get('stage') == 'complete' and app.get('status') == 'current':
+        if evidence.get('configurationChanged'):
+            # Nothing failed, and nothing is required of the person: a saved AI
+            # connection gives this state. A quiet status, so no unread mark.
+            # Known here: the key of the settings is not the key of the record,
+            # and each recorded package is installed as recorded (the health
+            # read accepts a package more: active_evidence, allow_additions).
+            # Not known: that the person changed a setting. A new app version
+            # can compute another key for the same settings. The text holds
+            # with automatic checks on and off, and it promises no result of
+            # the next check.
+            return result('unchecked', 'The components need a new check for your current settings',
+                          'The components that Amplifier recorded are installed as recorded. Amplifier has no record that it checked them with your current AI connections and other settings. A new AI connection is one cause. The next update check looks for the components that your current settings need. To check now, select Check for updates.',
+                          action='check')
         if evidence.get('activationUnknown'):
-            return result('unchecked', 'Current components kept',
+            return result('unchecked', 'Application is up to date' if application_success else 'Current components kept',
                           'The installed graph matches its recorded qualification. Its older activation receipt is no longer retained, so full activation verification is unavailable. No reinstall is requested.')
         if not evidence:
             return result('unverified', 'Component verification is incomplete',
@@ -475,33 +832,101 @@ def current(state, evidence=None, *, manual_verified=None):
         if local_changes:
             return result('unchecked', 'Custom sources kept',
                           'Local source changes are kept as configured and are not replaced automatically. Source details remain available; no repair is required for intentional customization.')
+        if evidence.get('setupRecord'):
+            # A new installation: the check found nothing newer, and setup's
+            # record still matches. Do not call these components qualified.
+            return result('current', 'You’re up to date',
+                          'No newer version of the app or its components was found. The components that setup recorded are installed as recorded.')
         return result('current', 'You’re up to date', 'The current application and qualified components are ready. Earlier attempts remain in history; configured fixed versions are kept.')
     return result('unchecked', 'Check for updates', 'The full desired component state has not been checked.', action='check')
 
 
-def publish(manager):
-    state = manager.service.state['updates']
-    evidence = getattr(manager, '_active_update_evidence', {})
+def projection(manager, *, state=None, evidence=None):
+    """One selection for publication and passive support reports."""
+    state = manager.service.state['updates'] if state is None else state
+    evidence = cached_evidence(manager) if evidence is None else evidence
     # Settings mutations invalidate proof immediately without a graph scan on
     # each publication. Only an owner check/activation can establish it again.
     revision = manager.service.state.get('configurationRevision')
     if getattr(manager, '_update_health_configuration_revision', revision) != revision:
-        if current(state, evidence)['status'] in {'current', 'unchecked'}:
-            state['currentStatus'] = {'status': 'unchecked', 'title': 'Checking current configuration',
+        # A known configuration limitation is pending revalidation too. Removing
+        # only that limitation must still leave an otherwise quiet projection;
+        # a newer failure or uncertain operation keeps its ordinary priority.
+        prior = {**evidence, 'configurationChanged': False} if evidence.get('configurationChanged') else evidence
+        if current(state, prior)['status'] in {'current', 'unchecked'}:
+            return {'status': 'unchecked', 'title': 'Checking current configuration',
                 'detail': 'Update health will refresh against the changed settings. Existing components remain active.',
                 'actionRequired': False, 'action': None, 'component': None}
-            return
         evidence = {}
-    state['currentStatus'] = current(state, evidence,
-        manual_verified=getattr(manager, '_manual_handoff_verified', None))
+    return current(state, evidence,
+        manual_verified=getattr(manager, '_manual_handoff_verified', None),
+        explicit_retry=(getattr(manager, '_update_health_configuration_revision', revision) == revision
+                        and getattr(manager, '_retained_retry_available', False)),
+        connection=(getattr(manager, '_update_connection', None)
+                    if getattr(manager, '_update_health_configuration_revision', revision) == revision else None))
+
+
+PROOF_UNREAD = {'status': 'working', 'title': 'Checking components',
+                'detail': 'Amplifier is checking the components that it uses now.',
+                'actionRequired': False, 'action': None, 'component': None}
+
+
+def publish(manager):
+    """Write the page's value of the selection.
+
+    The owner selects a component generation and publishes that before it has
+    read the proof of that generation (updates._activate). Until that read
+    ends, the held proof is the one of the generation before. It cannot say
+    whether an earlier component failure record is history. A result that was
+    chosen from such a record is not published in that time; the page gets
+    the working value. A failure of the operation itself (an error, or the
+    phase `error` or `interrupted`) and every other result are published as
+    they are. Only that switch sets and ends this time. Another health read
+    (the owner's pass) can end while the switch runs; it did not read the new
+    selection, so it does not end the time (`refresh` never does).
+    A switch that is cancelled ends that time too. When a switch ends with
+    its selection published and without its last publication (the result of
+    its own read, or its own failure), it asks the update owner for the read:
+    the owner's next pass that no hold stops reads and publishes the result
+    (updates._activate, tick).
+    The support report reads `projection`, so it is not changed.
+    """
+    state = manager.service.state['updates']
+    value = projection(manager)
+    if (getattr(manager, '_update_proof_unread', False) and not state.get('error')
+            and state.get('phase') not in {'error', 'interrupted'}
+            and value.get('failureKind') == 'ecosystem'):
+        value = dict(PROOF_UNREAD)
+    state['currentStatus'] = value
 
 
 async def refresh(manager):
+    """Read the installed proof and the facts beside it; the caller publishes."""
     import asyncio
     revision = manager.service.state.get('configurationRevision')
-    evidence = await asyncio.to_thread(active_evidence, manager)
+    # Health accepts a package that the record does not name (active_evidence).
+    evidence = await asyncio.to_thread(active_evidence, manager, explain_configuration=True,
+                                       allow_additions=True)
+    if not evidence:
+        # With no selected generation, setup's record is the only installed proof.
+        evidence = await asyncio.to_thread(setup_evidence, manager)
+    from .update_partial import retained_after_check
+    from .update_sequence import verify_app_selection
+    def retry_action():
+        try:
+            rows = getattr(manager, 'inventory', [])
+            verify_app_selection(manager, rows)
+            return retained_after_check(manager, rows, retry_retained=False)
+        except (OSError, ValueError, TypeError, KeyError):
+            return False  # Missing/stale selection proof never offers a retry.
+    retry_available = await asyncio.to_thread(retry_action)
+    waiting = await asyncio.to_thread(read_connection, manager)
     if revision == manager.service.state.get('configurationRevision'):
         manager._active_update_evidence = evidence
         manager._update_health_configuration_revision = revision
+        manager._retained_retry_available = retry_available
+        manager._update_connection = waiting
     else:
         manager._active_update_evidence = {}
+        manager._retained_retry_available = False
+        manager._update_connection = None

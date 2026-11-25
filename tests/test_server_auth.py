@@ -76,14 +76,36 @@ async def test_health_identity_is_only_disclosed_to_control_bearer(aiohttp_clien
         assert response.status == 200
         body = await response.json()
         assert "dataIdentity" not in body
-        assert "runtime" not in body
+        assert "runtime" not in body and "activity" not in body
         assert "revision" not in body and "instanceId" not in body
-    response = await client.get("/api/health", headers={"Authorization": "Bearer " + app["control_token"]})
+        # The activity count is the owner's, with or without the request for it.
+        assert "activity" not in await (await client.get("/api/health?activity=1", headers=headers)).json()
+    owner = {"Authorization": "Bearer " + app["control_token"]}
+    response = await client.get("/api/health", headers=owner)
     assert response.status == 200
     body = await response.json()
     assert body["dataIdentity"] == data_identity(tmp_path)
     assert body["instanceId"] == app['service'].update_manager.running_identity['instanceId']
     assert body['revision'] == app['service'].update_manager.running_identity['revision']
+    # An ordinary owner health probe does not scan conversations.
+    assert "activity" not in body
+    # The owner's uninstall asks before a normal stop interrupts running work.
+    asked = await (await client.get("/api/health?activity=1", headers=owner)).json()
+    assert asked["activity"] == {"working": 0} and asked["dataIdentity"] == body["dataIdentity"]
+    sessions = app['service'].state['sessions']
+    saved = list(sessions)
+    # Counted with the update gate's own predicates: a, c, f, j and k are working.
+    sessions.extend({'id': name, 'status': status, **extra} for name, status, extra in (
+        ('a', 'working', {}), ('b', 'idle', {}), ('c', 'stopping', {}), ('d', 'interrupted', {}),
+        ('e', 'error', {}), ('f', 'starting', {}), ('g', 'ready', {}), ('h', 'stopped', {}),
+        ('i', 'read-only', {}), ('j', 'ready', {'execution': {'turns': [{'phase': 'running'}]}}),
+        ('k', 'idle', {'workers': [{'status': 'idle'}, {'status': 'queued'}]}),
+        ('l', 'idle', {'workers': [{'status': 'idle', 'persistent': True}]})))
+    try:
+        response = await client.get("/api/health?activity=1", headers=owner)
+        assert (await response.json())["activity"] == {"working": 5}
+    finally:
+        sessions[:] = saved  # Synthetic rows only for this read; the app closes its real ones.
 
 
 async def test_login_rejects_cross_origin_before_pam(aiohttp_client, tmp_path):
@@ -402,3 +424,63 @@ async def test_pwa_metadata_is_public_but_conversations_and_canvas_stay_private(
     login = await client.get('/login?error=1')
     assert login.headers['Cache-Control'] == 'no-store'
     assert 'Could not sign in.' in await login.text()
+
+
+async def test_real_host_applies_sign_out_all_browsers_to_requests_and_open_streams(aiohttp_client, tmp_path, monkeypatch, recwarn):
+    import asyncio
+    from amplifier_web import auth
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    assert app["sessions"].epoch == 0 and not app["session_watch"].done()
+    cookie = {"Cookie": f"amplifier_unified_session={new_session(app['session_secret'])}"}
+    assert (await client.get("/api/state", headers=cookie)).status == 200
+    stream = await client.get("/api/events", headers=cookie)
+    assert stream.status == 200
+    assert await stream.content.readany()  # The stream is open and delivering.
+    # The owner's command writes the private record; it sends the host nothing.
+    real = time.time
+    monkeypatch.setattr(auth.time, "time", lambda: real() + 5)
+    saved = auth.sign_out_all(tmp_path)
+    # Until the host has applied it, a sign-in ticket or code opens no session.
+    assert app["sessions"].epoch == 0 and auth.sign_in(app) is None and auth.sign_in(app, remote=True) is None
+    # The running host notices by itself (its watcher looks every two seconds).
+    for _ in range(100):
+        if app["sessions"].epoch == saved:
+            break
+        await asyncio.sleep(0.1)
+    assert app["sessions"].epoch == saved
+    # The running application's own keys are not changed (a later aiohttp refuses that).
+    assert not [str(row.message) for row in recwarn.list if "Changing state" in str(row.message)]
+    # The same cookie is refused, for the API and for a page.
+    assert (await client.get("/api/state", headers=cookie)).status == 401
+    page = await client.get("/", headers=cookie, allow_redirects=False)
+    assert page.status == 307 and page.headers["Location"].startswith("/login")
+    # The open stream was ended by the host.
+    await asyncio.wait_for(stream.content.read(), 5)
+    assert stream.content.at_eof()
+    # A sign-in after the sign-out works.
+    monkeypatch.setattr(auth.time, "time", lambda: real() + 10)
+    fresh = {"Cookie": f"amplifier_unified_session={new_session(app['session_secret'])}"}
+    assert (await client.get("/api/state", headers=fresh)).status == 200
+    opened = {"Cookie": f"amplifier_unified_session={auth.sign_in(app)}"}
+    assert (await client.get("/api/state", headers=opened)).status == 200
+
+
+@pytest.mark.parametrize("method,path", [
+    ("GET", "/login"), ("POST", "/api/browser-entry/code"), ("POST", "/api/browser-entry/code/redeem"),
+    ("POST", "/api/browser-entry/key/redeem")])
+async def test_default_host_serves_no_sign_in_by_code_at_an_address_for_other_devices(aiohttp_client, tmp_path, method, path):
+    """Remote access is off by default: the host answers only at this computer's own names."""
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    assert app["server_config"]["public_origins"] == [] and app["server_config"]["bind"] == ["127.0.0.1"]
+    assert app["permitted_hosts"] == frozenset({"127.0.0.1", "localhost", "::1"})
+    client = await aiohttp_client(app)
+    other = "pc.tail1234.ts.net:8941"
+    response = await client.request(method, path, allow_redirects=False, data="csrf=x&code=ABCDEFGHJK", headers={
+        "Host": other, "Origin": "https://" + other, "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": "Bearer " + app["control_token"]})
+    # Refused at the host boundary, before the sign-in page or either code endpoint runs.
+    assert response.status == 403 and (await response.json())["error"] == "This Host is not configured."
+    assert "Set-Cookie" not in response.headers

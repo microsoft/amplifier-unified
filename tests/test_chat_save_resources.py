@@ -61,17 +61,24 @@ async def close_without_checkpoint(app):
     assert committed_restart_evidence(app) == before
 
 
+def record_atomic_write_sizes(monkeypatch):
+    writes = []
+    atomic = SessionStore._atomic
+
+    def observe(path, content):
+        atomic(path, content)
+        writes.append(path.stat().st_size)
+
+    monkeypatch.setattr(SessionStore, '_atomic', staticmethod(observe))
+    return writes
+
+
 def test_small_progress_writes_do_not_duplicate_large_message_body(app_factory, monkeypatch):
     app, rows = large_chat(app_factory)
     row = rows[0]
     messages = row['messages']
     expected = copy.deepcopy(messages)
-    writes = []
-    atomic = SessionStore._atomic
-    def observe(path, text):
-        writes.append(len(text.encode()))
-        return atomic(path, text)
-    monkeypatch.setattr(SessionStore, '_atomic', staticmethod(observe))
+    writes = record_atomic_write_sizes(monkeypatch)
     row['streaming'] = 'small progress'
     app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
     assert sum(writes) < 150_000
@@ -392,13 +399,8 @@ async def test_large_accounting_resource_reuses_content_but_keeps_nested_edits(a
         for i in range(400)]}
     app._publish()
     original = committed(app, row['id'])['_coldFields']['execution']
-    writes = []
-    atomic = SessionStore._atomic
-    def observe(path, text):
-        writes.append(len(text.encode()))
-        return atomic(path, text)
     with monkeypatch.context() as m:
-        m.setattr(SessionStore, '_atomic', staticmethod(observe))
+        writes = record_atomic_write_sizes(m)
         row['streaming'] = 'small update'
         app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
     assert committed(app, row['id'])['_coldFields']['execution'] == original

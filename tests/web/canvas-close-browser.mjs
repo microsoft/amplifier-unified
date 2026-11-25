@@ -52,21 +52,32 @@ try{
   await action('canvas.versions.revise',{id:first.id,expectedRevision:1,content:'# Alpha revised\n\nSaved revision.'});
   const second=await action('canvas.show',{kind:'markdown',title:'Beta report',content:'# Beta retained\n\nOther open document.'});
   const panel=page.locator('#workspace-canvas');
+  // Strip traversal is specifically Tabs; Compact exercises its visible
+  // current-document close and all-document list, never hidden retained tabs.
+  const layout=width<500?'compact':'tabs',menu=panel.locator('.a-canvas-more');
+  await menu.locator('summary').click();
+  await menu.getByRole('combobox',{name:'Canvas navigation',exact:true}).selectOption(layout);
+  await page.keyboard.press('Escape');await page.locator('#canvas-toggle').focus();
+  await expect(panel).toHaveAttribute('data-navigation',layout);
   await expect(panel.getByRole('heading',{name:'Beta retained',exact:true})).toBeVisible();
   await page.mouse.move(0,899);
   await capture((observe?'before':'after')+'-'+width);
   report.geometry.push({width,controls:await panel.locator('button').evaluateAll(nodes=>nodes.filter(el=>el.getClientRects().length).map(el=>{const r=el.getBoundingClientRect();return {label:el.getAttribute('aria-label'),text:el.textContent,role:el.getAttribute('role'),x:r.x,y:r.y,width:r.width,height:r.height}}))});
   if(observe){
-   await panel.getByRole('button',{name:'Open documents, 2 open',exact:true}).click();
+   await panel.locator('button.a-open-documents').click();
    await expect(page.getByRole('dialog',{name:'Open documents',exact:true})).toBeVisible();
    await capture('before-open-documents-'+width);
    await context.close();continue;
   }
   // Keep the actual DOM target addressable during the deliberate hidden-control
   // negative. Geometry, not accessibility-tree absence/timeouts, is the oracle.
-  const closeTab=title=>panel.locator('.a-canvas-document-tabs').getByRole('button',{name:`Close tab ${title}`,exact:true,includeHidden:true});
-  const dismiss=panel.getByRole('button',{name:'Close canvas panel',exact:true,includeHidden:true});
-  const overview=panel.getByRole('tab',{name:'Chat overview',exact:true});
+  const closeTab=title=>layout==='compact'
+   ?panel.getByRole('button',{name:`Close tab ${title}`,exact:true,includeHidden:true}).and(panel.locator('.a-canvas-close-current'))
+   :panel.locator('.a-canvas-document-tabs').getByRole('button',{name:`Close tab ${title}`,exact:true,includeHidden:true});
+  // One header toggle hides the pane; per-document close controls stay in
+  // Canvas. Neither operation is a substitute for the other.
+  const dismiss=page.locator('#canvas-toggle');
+  const overview=panel.locator('.a-chat-overview-trigger');
   const toggle=page.locator('#canvas-toggle');
   const artifactRows=async()=>{const s=await state();return s.canvasArtifacts.filter(row=>row.sessionId===s.selectedSessionId)};
   const versions=async()=>Promise.all([[first.id,1],[first.id,2],[second.id,1]].map(async([id,version])=>{
@@ -83,20 +94,26 @@ try{
   const targetGeometry=locator=>locator.evaluate(el=>{
    const r=el.getBoundingClientRect(),points=[[r.x+4,r.y+4],[r.right-4,r.y+4],[r.right-4,r.bottom-4],[r.x+4,r.bottom-4],[r.x+r.width/2,r.y+r.height/2]];
    const hits=points.map(([x,y])=>{const node=document.elementFromPoint(x,y);return {x,y,inside:el.contains(node),target:node?.getAttribute('aria-label')||node?.className}});
-   return {width:r.width,height:r.height,left:r.left,right:r.right,hits,
+   const owner=el.closest('#workspace-canvas')||el.closest('header');
+   const chrome=[...owner.querySelectorAll('.a-canvas-chrome,.a-canvas-head,.a-canvas-navigation,.a-open-documents,.a-canvas-close-current,.a-canvas-more,.a-canvas-head>[aria-label],#canvas-toggle')].map(node=>{
+    const b=node.getBoundingClientRect(),s=getComputedStyle(node);
+    return {class:node.className,label:node.getAttribute('aria-label'),left:b.left,right:b.right,width:b.width,height:b.height,minWidth:s.minWidth,flex:s.flex,display:s.display,overflow:s.overflow};
+   });
+   return {width:r.width,height:r.height,left:r.left,right:r.right,hits,chrome,
     hit:r.left>=0&&r.right<=innerWidth+1&&r.top>=0&&r.bottom<=innerHeight+1&&hits.every(point=>point.inside)};
   });
   const reachable=async(locator,settle=false)=>{
    let box=await targetGeometry(locator);
-   if(settle&&!(box.width>=44&&box.height>=44&&box.hit)){
+   const minimum=width<500?{width:44,height:44}:await locator.evaluate(el=>el.id==='canvas-toggle'?{width:32,height:32}:{width:28,height:30});
+   if(settle&&!(box.width>=minimum.width&&box.height>=minimum.height&&box.hit)){
     const initial=box;
     // Native strip scrolling changes the Overview width for 140ms. Wait on
     // the exact same corner-hit invariant, never click through an obstruction.
-    await expect.poll(async()=>{box=await targetGeometry(locator);return box.width>=44&&box.height>=44&&box.hit},
-     {timeout:1500,message:'Close control must have an unclipped 44px hit target: '+JSON.stringify(initial)}).toBe(true);
+    await expect.poll(async()=>{box=await targetGeometry(locator);return box.width>=minimum.width&&box.height>=minimum.height&&box.hit},
+     {timeout:1500,message:'Close control must have an unclipped hit target: '+JSON.stringify({minimum,initial})}).toBe(true);
     (report.settledTargets??=[]).push({width,initial,settled:box});
    }
-   assert.ok(box.width>=44&&box.height>=44&&box.hit,'Close control must have an unclipped 44px hit target');
+   assert.ok(box.width>=minimum.width&&box.height>=minimum.height&&box.hit,'Close control must have an unclipped hit target '+JSON.stringify(minimum));
   };
   const use=async locator=>{await reachable(locator,true);if(width<500)await locator.tap();else await locator.click()};
   const headerContained=async()=>{
@@ -120,18 +137,16 @@ try{
    await overview.click();
    const saved=panel.locator('.a-saved-artifact').filter({hasText:title});
    await saved.click();
-   await expect(panel.getByRole('tab',{name:title,exact:true})).toHaveAttribute('aria-selected','true');
+   if(layout==='tabs')await expect(panel.getByRole('tab',{name:title,exact:true})).toHaveAttribute('aria-selected','true');
+   else await expect(panel.locator('button.a-open-documents')).toContainText(title);
    await expect(panel.getByRole('heading',{name:title==='Beta report'?'Beta retained':'Alpha revised',exact:true})).toBeVisible();
   };
-  await expect(dismiss).toContainText('Close Canvas');
-  const label=await dismiss.evaluate(el=>{
-   const span=el.querySelector('span'),range=document.createRange();range.selectNodeContents(span);
-   const r=range.getBoundingClientRect(),b=el.getBoundingClientRect(),s=span.getBoundingClientRect();
-   return {text:span.textContent,labelWidth:r.width,buttonWidth:b.width,
-    contained:r.left>=s.left-1&&r.right<=s.right+1&&r.left>=b.left&&r.right<=b.right,
-    clipped:span.scrollWidth>span.clientWidth+1};
-  });
-  assert.equal(label.text,'Close Canvas');assert.ok(label.contained&&!label.clipped);
+  await expect(dismiss).toHaveAccessibleName('Hide canvas');
+  await expect(dismiss).toHaveAttribute('aria-controls','workspace-canvas');
+  await expect(dismiss).toHaveAttribute('aria-expanded','true');
+  await expect(dismiss).toHaveAttribute('data-action','canvas.visibility');
+  const label=await dismiss.evaluate(el=>({name:el.getAttribute('aria-label'),title:el.title,icon:!!el.querySelector('svg')}));
+  assert.equal(label.icon,true,'Approved compact icon still has a named, distinct hide affordance');
   report.geometry.push({width,label});
   await headerContained();
   await reachable(dismiss);await reachable(closeTab('Beta report'));
@@ -140,33 +155,43 @@ try{
    // reject the pre-fix discovery failure, not merely accept existing actions.
    // Preserve layout/scroll position: this negative removes discoverability,
    // not width. display:none would also clamp the document strip's scroll.
-   const hidden=await page.addStyleTag({content:'.a-canvas-tab-close,.a-canvas-dismiss{visibility:hidden!important}'});
-   await assert.rejects(()=>reachable(closeTab('Beta report')),/unclipped 44px/);
-   await assert.rejects(()=>reachable(dismiss),/unclipped 44px/);
+   const hidden=await page.addStyleTag({content:'.a-canvas-tab-close,#canvas-toggle{visibility:hidden!important}'});
+   await assert.rejects(()=>reachable(closeTab('Beta report')),/unclipped hit target/);
+   await assert.rejects(()=>reachable(dismiss),/unclipped hit target/);
    await hidden.evaluate(el=>el.remove());
    await reachable(dismiss);await reachable(closeTab('Beta report'));
    report.checks.push({name:'Missing visible close controls rejected by the same oracle',status:'passed'});
   }
   await use(closeTab('Beta report'));
+  await expect.poll(async()=>(await artifactRows()).find(row=>row.id===second.id).tabOpen).toBe(false);
   await expect(panel.getByRole('tab',{name:'Beta report',exact:true})).toHaveCount(0);
-  await expect(panel.getByRole('tab',{name:'Alpha report',exact:true})).toHaveAttribute('aria-selected','true');
+  assert.equal((await state()).canvas.id,first.id);
   await expect(panel).toBeVisible();await preserved();
   await reopen('Beta report');
   // Native Tab navigation reaches the adjacent close button without a shortcut.
-  const beta=panel.getByRole('tab',{name:'Beta report',exact:true});
+  const beta=layout==='tabs'?panel.getByRole('tab',{name:'Beta report',exact:true}):panel.locator('button.a-open-documents');
   await beta.focus();await page.keyboard.press('Tab');
   await expect(closeTab('Beta report')).toBeFocused();await reachable(closeTab('Beta report'));
   await page.keyboard.press('Enter');
-  await expect(beta).toHaveCount(0);await expect(panel.getByRole('tab',{name:'Alpha report',exact:true})).toBeFocused();
+  await expect.poll(async()=>(await artifactRows()).find(row=>row.id===second.id).tabOpen).toBe(false);
+  if(layout==='tabs'){await expect(beta).toHaveCount(0);await expect(panel.getByRole('tab',{name:'Alpha report',exact:true})).toBeFocused()}
+  else{await expect(beta).toBeFocused();await expect(beta).toContainText('Alpha report')}
   await reopen('Beta report');
   // Closing another tab must not replace the selected document.
-  await closeTab('Alpha report').scrollIntoViewIfNeeded();
-  await use(closeTab('Alpha report'));
-  await expect(beta).toHaveAttribute('aria-selected','true');assert.equal((await state()).canvas.id,second.id);
+  if(layout==='tabs'){
+   await closeTab('Alpha report').scrollIntoViewIfNeeded();await use(closeTab('Alpha report'));
+   await expect(beta).toHaveAttribute('aria-selected','true');
+  }else{
+   await panel.locator('button.a-open-documents').tap();
+   const dialog=page.getByRole('dialog',{name:'Open documents',exact:true}),close=dialog.getByRole('button',{name:'Close tab Alpha report',exact:true});
+   await use(close);await page.keyboard.press('Escape');
+  }
+  assert.equal((await state()).canvas.id,second.id);
+  await expect.poll(async()=>(await artifactRows()).find(row=>row.id===first.id).tabOpen).toBe(false);
   await expect(panel.getByRole('tab',{name:'Alpha report',exact:true})).toHaveCount(0);
   await preserved();await reopen('Alpha report');
   // Keyboard traversal, not programmatic focus on the target close control.
-  await panel.getByRole('tab',{name:'Alpha report',exact:true}).focus();
+  await (layout==='tabs'?panel.getByRole('tab',{name:'Alpha report',exact:true}):panel.locator('button.a-open-documents')).focus();
   for(let attempt=0;attempt<40&&!await dismiss.evaluate(el=>el===document.activeElement);attempt++)await page.keyboard.press('Tab');
   await expect(dismiss).toBeFocused();await reachable(dismiss);await capture('keyboard-close-panel-'+width);
   await page.keyboard.press('Enter');
@@ -188,7 +213,7 @@ try{
   assert.equal((await state()).view.canvasFocused,false);
   await toggle.click();await expect(panel).toBeVisible();await preserved();
   // Last tab close leaves saved material discoverable in the still-open panel.
-  await closeTab('Alpha report').scrollIntoViewIfNeeded();await use(closeTab('Alpha report'));
+  if(layout==='tabs')await closeTab('Alpha report').scrollIntoViewIfNeeded();await use(closeTab('Alpha report'));
   await closeTab('Beta report').scrollIntoViewIfNeeded();await use(closeTab('Beta report'));
   await expect(panel).toBeVisible();await expect(panel.locator('.a-canvas-document-tabs [role=tab]')).toHaveCount(0);
   await preserved();await reopen('Alpha report');

@@ -11,6 +11,7 @@ import json
 import re
 import tomllib
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from packaging.requirements import Requirement
 
@@ -20,6 +21,13 @@ RECEIPT = 'partial-sources.json'
 def key(row):
     from .updates import source_key
     return source_key(row['url'], row['ref'])
+
+
+def _local_runtime(row):
+    """Local Git provenance stays in inventory, outside remote acquisition groups."""
+    url = row.get('url')
+    return (row.get('kind') == 'runtime dependency'
+            and isinstance(url, str) and urlsplit(url).scheme == 'file')
 
 
 def settled_fetch(error):
@@ -33,6 +41,7 @@ def settled_fetch(error):
 def availability(row):
     return (row.get('status') == 'check_failed' and row.get('availabilityFailure') is True
             and row.get('eligible') and row.get('url') and row.get('ref')
+            and isinstance(row.get('current'), str)
             and re.fullmatch('[a-f0-9]{40}', row.get('current', '')))
 
 
@@ -42,7 +51,8 @@ class Preparation:
         self.inventory = inventory
         self.groups = {}
         for row in inventory:
-            if row.get('url') and row.get('ref') and row.get('kind') != 'smart tool':
+            if (row.get('url') and row.get('ref') and row.get('kind') != 'smart tool'
+                    and not _local_runtime(row)):
                 self.groups.setdefault(key(row), []).append(row)
         self.retained = {}
         self.results = {}
@@ -94,7 +104,8 @@ class Preparation:
         rows = await self.manager.inventory_sources(indexed=True)
         for identity, previous in missing.items():
             copies = [dict(row, latest=previous.get('desired')) for row in rows
-                      if row.get('url') and row.get('ref') and key(row) == identity]
+                      if row.get('url') and row.get('ref') and not _local_runtime(row)
+                      and key(row) == identity]
             if not copies or any(row.get('current') != previous['revision'] for row in copies):
                 raise ValueError('An unchecked retained source no longer matches its qualified identity.')
             self.groups[identity] = copies
@@ -243,7 +254,8 @@ class Preparation:
         await self.hold_dependents()
         from .deployment import write_private
         for row in self.inventory:
-            if row.get('status') == 'update' and row.get('kind') != 'smart tool' and row['id'] not in self.results:
+            if (row.get('status') == 'update' and row.get('kind') != 'smart tool'
+                    and not _local_runtime(row) and row['id'] not in self.results):
                 kind = 'git' if row.get('url') and not row.get('registryManaged') else 'registry' if row.get('registryManaged') else 'runtime'
                 self.results[row['id']] = {'status': 'awaiting-adoption', 'revision': row['latest'], 'revisionKind': kind}
         write_private(self.stage / RECEIPT, json.dumps({'version': 1,
@@ -353,8 +365,10 @@ def pin_manifest(content, retained):
             if package_name(req.name) == name:
                 from .selected_runtime_dependencies import git_source
                 prior = git_source(req.url)
-                if (req.marker or req.extras or prior is None or key(prior) != key(policy)
-                        or prior.get('subdirectory', '') != policy.get('subdirectory', '')):
+                bare_source = source and not req.url and not req.specifier
+                if (req.marker or req.extras or not bare_source and
+                        (prior is None or key(prior) != key(policy)
+                         or prior.get('subdirectory', '') != policy.get('subdirectory', ''))):
                     raise ValueError('An authored override protects the retained dependency.')
                 overrides.remove(old)
         overrides.append(value)
@@ -364,6 +378,11 @@ def pin_manifest(content, retained):
 
 async def stage_sources(manager, stage, candidates):
     """Prepare groups independently; only known settled fetch exits can retain."""
+    # Unselected local provenance is not a remote acquisition, but selecting it
+    # must still fail before any fetch or inherited-retention mutation.
+    for row in candidates:
+        if row.get('url') and row.get('ref') and row.get('kind') != 'smart tool':
+            key(row)
     plan = Preparation(manager, stage, manager.inventory)
     await plan.inherit_unchecked()
     for identity, rows in plan.groups.items():
@@ -456,20 +475,28 @@ def retained_after_check(manager, rows, *, retry_retained):
     from .updates import active_release
     generation = active_release(manager.home).get('current')
     if not generation:
-        return
+        return False
     partial = read(manager.directory / 'releases' / generation)
     if not partial or partial.get('selection') != sorted({r['appSelection'] for r in rows if r.get('appSelection')}):
-        return
+        return False
     retained = {key(value['source']): value for value in partial['results'].values()
                 if value['status'] in {'failed', 'dependency-held'}}
+    retry_available = False
     for row in rows:
-        prior = retained.get(key(row)) if row.get('url') and row.get('ref') else None
+        prior = retained.get(key(row)) if row.get('url') and row.get('ref') and not _local_runtime(row) else None
         if (not prior or prior['status'] not in {'failed', 'dependency-held'}
                 or not row.get('url') or key(row) != key(prior['source'])
                 or row.get('current') != prior['revision']):
             continue
-        # A deliberate manual Check/Install may try again; automatic checks
-        # require a genuinely new desired source revision.
         if not retry_retained and row.get('status') == 'update' and row.get('latest') == prior.get('desired'):
             row.update(status='check_failed', sourceUpdate=prior['status'], availabilityFailure=True,
-                       detail='The working version is retained. Check manually to retry this source.')
+                       detail='The working version is retained. Install explicitly to retry this source.')
+        # One predicate owns both the visible explicit action and its admission.
+        if (row.get('status') == 'check_failed' and row.get('eligible') is True
+                and row.get('availabilityFailure') is True and row.get('sourceUpdate') == prior['status']
+                and isinstance(row.get('latest'), str) and re.fullmatch('[a-f0-9]{40}', row['latest'])
+                and row['latest'] != row['current'] and row.get('latest') == prior.get('desired')):
+            retry_available = True
+            if retry_retained:
+                row.update(status='update')
+    return retry_available

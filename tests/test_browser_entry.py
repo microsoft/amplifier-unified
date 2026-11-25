@@ -44,7 +44,7 @@ def test_hash_only_binding_expiry_capacity_and_atomic_replay():
     ticket = store.issue(binding(), "/safe?tab=one")
     assert list(store._grants) == [hashlib.sha256(ticket.encode()).digest()]
     assert ticket not in repr(store._grants)
-    with pytest.raises(entry.BrowserEntryUnavailable, match="busy"):
+    with pytest.raises(entry.BrowserEntryUnavailable, match="too many browser openings"):
         store.issue(binding())
     for key in ("instance_id", "data_identity", "owner_sid", "origin"):
         assert store.consume(ticket, replace(binding(), **{key: "wrong"})) is None
@@ -119,6 +119,10 @@ def owner(tmp_path, monkeypatch):
     app["permitted_hosts"] = frozenset({"127.0.0.1", "localhost", "::1"})
     app["service"] = SimpleNamespace(data_dir=tmp_path, update_manager=SimpleNamespace(
         running_identity={"instanceId": "b" * 32, "version": __version__, "revision": REVISION}))
+    from amplifier_web.deployment import DEFAULT_SERVER
+    from amplifier_web.instance_branding import InstanceBranding
+    app["service"].instance_branding = InstanceBranding(tmp_path, DEFAULT_SERVER)
+    app["sessions"] = auth.Sessions()  # No sign-out yet, as on a new installation.
     entry.initialize(app)
     app.router.add_post(entry.ISSUE_PATH, entry.issue)
     app.router.add_post(entry.REDEEM_PATH, entry.redeem)
@@ -421,7 +425,7 @@ async def test_launcher_unknown_post_is_not_replayed(tmp_path, monkeypatch):
             assert kwargs["headers"]["Origin"] == ORIGIN
             raise TimeoutError("Unknown POST; never retry")
     monkeypatch.setattr(aiohttp, "ClientSession", Client)
-    with pytest.raises(entry.BrowserEntryUnavailable, match="no retry"):
+    with pytest.raises(entry.BrowserEntryUnavailable, match="The request was not repeated"):
         await entry.owner_browser_url(tmp_path, {})
     assert calls == [("get", ORIGIN + "/api/health"), ("post", ORIGIN + entry.ISSUE_PATH)]
 
@@ -469,9 +473,168 @@ async def test_launcher_package_mismatch_never_issues(tmp_path, monkeypatch, loc
         def post(self, *a, **kw):
             pytest.fail("Mismatched package/host identity must never issue")
     monkeypatch.setattr(aiohttp, "ClientSession", Client)
-    with pytest.raises(entry.BrowserEntryUnavailable, match="identity"):
+    with pytest.raises(entry.BrowserEntryUnavailable, match="No Amplifier of this version and this data folder answered"):
         await entry.owner_browser_url(tmp_path, {})
     assert calls == ["get"]
+
+
+class Calls(list):
+    """The requests and pauses in their order; `starts` holds the time at which each health request began."""
+    starts = ()
+
+
+def restarting_host(monkeypatch, tmp_path, answers, *, post=None, cost=0.0, late=0.0, addresses=1):
+    """A host that changes under the owner request. Each health answer is a
+    package version, or an exception for a listener that is away. Time is the
+    test's own: a pause takes its seconds plus `late`, a health request `cost`."""
+    from amplifier_web import update_readiness
+    pin = aiohttp.Fingerprint(bytes(range(32)))
+    targets = [ORIGIN + "/api/health", "https://[::1]:8941/api/health"][:addresses]
+    monkeypatch.setattr(entry, "_owner_probe_targets", lambda *a: (targets, pin))
+    monkeypatch.setattr(entry, "current_owner_sid", lambda: SID)
+    monkeypatch.setattr(entry, "read_owner_control_token", lambda *a: "c" * 64)
+    monkeypatch.setattr(update_readiness, "running_identity", lambda: {"version": __version__, "revision": None})
+    calls, clock, pending = Calls(), [0.0], list(answers)
+    calls.starts = []
+    async def pause(seconds):
+        calls.append(("pause", seconds))
+        clock[0] += seconds + late
+    monkeypatch.setattr(entry.asyncio, "sleep", pause)
+    monkeypatch.setattr(entry.time, "monotonic", lambda: clock[0])
+    class Response:
+        def __init__(self, body, status=200):
+            self.body, self.status = body, status
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            pass
+        async def json(self):
+            return self.body
+    class Client(Response):
+        def __init__(self, **kwargs):
+            assert kwargs["trust_env"] is False
+        def get(self, url, **kwargs):
+            assert kwargs["ssl"] is pin and kwargs["allow_redirects"] is False
+            answer = pending.pop(0) if len(pending) > 1 else pending[0]
+            calls.append(("get", answer if isinstance(answer, str) else type(answer).__name__))
+            calls.starts.append(clock[0])
+            clock[0] += cost
+            if not isinstance(answer, str):
+                raise answer
+            return Response({"ok": True, "app": "amplifier-unified", "version": answer, "revision": None,
+                             "instanceId": "b" * 32, "dataIdentity": auth.data_identity(tmp_path)})
+        def post(self, url, **kwargs):
+            assert kwargs["ssl"] is pin and kwargs["headers"]["Origin"] in {ORIGIN, "https://[::1]:8941"}
+            calls.append(("post", kwargs["json"]["version"]))
+            if post is not None:
+                return post(Response)
+            return Response({"ticket": "t" * 43})
+    monkeypatch.setattr(aiohttp, "ClientSession", Client)
+    return calls
+
+
+async def test_open_waits_for_the_host_that_an_update_brings_up_and_asks_for_one_grant(tmp_path, monkeypatch):
+    # The clean-room first start of November 15: the new generation is active,
+    # the earlier host still answers for some seconds, then no host answers,
+    # then the host of this package version listens.
+    calls = restarting_host(monkeypatch, tmp_path, ["0.0.1", "0.0.1", away, away, __version__])
+    announced = []
+    url = await entry.owner_browser_url(tmp_path, {}, wait=entry.HOST_WAIT, waiting=lambda: announced.append(1))
+    assert url == ORIGIN + "/login#ticket=" + "t" * 43
+    assert calls == [("get", "0.0.1"), ("pause", 1.0), ("get", "0.0.1"), ("pause", 1.0),
+                     ("get", "ClientConnectionError"), ("pause", 1.0), ("get", "ClientConnectionError"),
+                     ("pause", 1.0), ("get", __version__), ("post", __version__)]
+    assert announced == [1]  # Said once, not at every pause.
+
+
+@pytest.mark.parametrize("answer", ["0.0.1", aiohttp.ClientConnectionError("refused"), TimeoutError()])
+async def test_open_stops_at_its_limit_without_a_grant_request(tmp_path, monkeypatch, answer):
+    calls = restarting_host(monkeypatch, tmp_path, [answer])
+    with pytest.raises(entry.BrowserEntryUnavailable, match="No Amplifier of this version and this data folder answered"):
+        await entry.owner_browser_url(tmp_path, {}, wait=3)
+    # Health requests at 0, 1 and 2 seconds. At 3 seconds the wait is over: none starts.
+    assert [name for name, _ in calls] == ["get", "pause"] * 3 and calls.starts == [0.0, 1.0, 2.0]
+    assert sum(seconds for name, seconds in calls if name == "pause") == 3
+
+
+async def test_open_never_pauses_past_its_limit(tmp_path, monkeypatch):
+    calls = restarting_host(monkeypatch, tmp_path, ["0.0.1"])
+    with pytest.raises(entry.BrowserEntryUnavailable, match="No Amplifier of this version and this data folder answered"):
+        await entry.owner_browser_url(tmp_path, {}, wait=2.5)
+    # The last pause is the rest of the limit, not a whole second.
+    assert [seconds for name, seconds in calls if name == "pause"] == [1.0, 1.0, 0.5]
+    assert calls.starts == [0.0, 1.0, 2.0]
+
+
+away = aiohttp.ClientConnectionError("refused")
+
+
+@pytest.mark.parametrize("wait,cost,late,starts", [
+    # Requests that take time, two local addresses. First round at 0 and 2
+    # seconds. After the pause it is second 5: the first address is asked, the
+    # request ends at second 7, and the second address is not asked any more.
+    (6, 2.0, 0.0, [0.0, 2.0, 5.0]),
+    # The same, with a limit that the pause itself reaches: no second round.
+    (5, 2.0, 0.0, [0.0, 2.0]),
+    # A pause that ends late (a PC that was asleep): no request after it.
+    (3, 0.0, 10.0, [0.0, 0.0]),
+    # The first round is complete even when its first request uses the whole wait.
+    (1, 4.0, 0.0, [0.0, 4.0]),
+])
+async def test_after_the_first_round_no_health_request_starts_at_or_after_the_limit(
+        tmp_path, monkeypatch, wait, cost, late, starts):
+    calls = restarting_host(monkeypatch, tmp_path, [away], cost=cost, late=late, addresses=2)
+    with pytest.raises(entry.BrowserEntryUnavailable, match="No Amplifier of this version and this data folder answered"):
+        await entry.owner_browser_url(tmp_path, {}, wait=wait)
+    assert calls.starts == starts
+    assert all(start < wait for start in calls.starts[2:])  # Every request after the first round.
+    assert not any(name == "post" for name, _ in calls)
+
+
+async def test_open_without_a_wait_asks_every_local_address_once_and_never_pauses(tmp_path, monkeypatch):
+    # The foreground start is its own host: one look, as before this wait existed.
+    calls = restarting_host(monkeypatch, tmp_path, [away], cost=2.0, addresses=2)
+    with pytest.raises(entry.BrowserEntryUnavailable, match="No Amplifier of this version and this data folder answered"):
+        await entry.owner_browser_url(tmp_path, {})
+    assert calls == [("get", "ClientConnectionError")] * 2 and calls.starts == [0.0, 2.0]
+
+
+async def test_the_typed_code_command_shares_the_owner_request_and_does_not_wait(tmp_path, monkeypatch):
+    # `amplifier-unified browsers code` answers a person at a terminal: one look
+    # at each local address, no pause, then its own text.
+    calls = restarting_host(monkeypatch, tmp_path, [away], cost=2.0, addresses=2)
+    with pytest.raises(entry.BrowserEntryUnavailable, match="amplifier-unified browsers code"):
+        await entry.owner_browser_code(tmp_path, {}, "https://pc.example.ts.net")
+    assert calls == [("get", "ClientConnectionError")] * 2 and calls.starts == [0.0, 2.0]
+
+
+async def test_a_host_on_the_second_local_address_gets_the_one_grant_request(tmp_path, monkeypatch):
+    calls = restarting_host(monkeypatch, tmp_path, [away, __version__], addresses=2)
+    url = await entry.owner_browser_url(tmp_path, {}, wait=entry.HOST_WAIT)
+    assert url == "https://[::1]:8941/login#ticket=" + "t" * 43
+    assert calls == [("get", "ClientConnectionError"), ("get", __version__), ("post", __version__)]
+
+
+@pytest.mark.parametrize("failure,phrase", [("timeout", "The request was not repeated"), ("refused", "^changed$"),
+                                            ("malformed", "The request was not repeated")])
+async def test_a_refused_or_unconfirmed_grant_request_is_never_repeated_while_waiting(
+        tmp_path, monkeypatch, failure, phrase):
+    def post(Response):
+        if failure == "timeout":
+            raise TimeoutError("Unknown POST")
+        return Response({"error": "changed"}, status=409) if failure == "refused" else Response({"ticket": "short"})
+    calls = restarting_host(monkeypatch, tmp_path, ["0.0.1", __version__], post=post)
+    with pytest.raises(entry.BrowserEntryUnavailable, match=phrase):
+        await entry.owner_browser_url(tmp_path, {}, wait=entry.HOST_WAIT)
+    assert calls == [("get", "0.0.1"), ("pause", 1.0), ("get", __version__), ("post", __version__)]
+
+
+def test_the_wait_and_the_confirmation_text_are_fixed_values():
+    # A guard on two values, not a measurement. In the clean room the new
+    # host listened 16 seconds after its generation became active.
+    assert entry.HOST_WAIT == 60
+    # Launchers that setup installed read this exact line. Do not change it.
+    assert entry.OPENED == "Amplifier opened in your browser."
 
 
 @pytest.mark.parametrize("source", [
@@ -590,22 +753,86 @@ def test_explicit_cli_open_no_secret_output(tmp_path, monkeypatch, capsys, no_op
     monkeypatch.setattr(entry, "is_windows", lambda: True)
     calls = []
     url = ORIGIN + "/login#ticket=" + "a" * 43
-    async def grant(*a):
-        calls.append("issue")
+    async def grant(*a, wait, waiting):
+        calls.append(("issue", wait))
+        waiting()
         return url
     monkeypatch.setattr(entry, "owner_browser_url", grant)
     monkeypatch.setattr(cli.webbrowser, "open", lambda value: calls.append(value) or True)
     monkeypatch.setattr(sys, "argv", ["amplifier-unified", "--data-dir", str(tmp_path),
                                     *(["--no-open"] if no_open else []), "open"])
     cli.main()
-    assert calls == ([] if no_open else ["issue", url])
+    # The explicit command waits for a restarting host; the browser opens once.
+    assert calls == ([] if no_open else [("issue", entry.HOST_WAIT), url])
     captured = capsys.readouterr()
     assert "ticket=" not in captured.out + captured.err
+    # The confirmation is on standard output, and only after the browser accepted.
+    assert (entry.OPENED in captured.out.splitlines()) is (not no_open)
+    assert entry.OPENED not in captured.err
+    assert ("Waiting up to a minute" in captured.err) is (not no_open)
+
+
+def test_a_wait_message_that_cannot_be_written_does_not_stop_the_open(tmp_path, monkeypatch, capsys):
+    # The message is for a person at a terminal. When nobody reads the output
+    # (a closed pipe), the wait must go on and the browser must still open.
+    monkeypatch.setattr(entry, "is_windows", lambda: True)
+    class Closed:
+        def write(self, text):
+            raise BrokenPipeError("closed")
+        def flush(self):
+            raise BrokenPipeError("closed")
+    opened = []
+    async def grant(*a, wait, waiting):
+        waiting()
+        return ORIGIN + "/login#ticket=" + "a" * 43
+    monkeypatch.setattr(entry, "owner_browser_url", grant)
+    monkeypatch.setattr(cli.webbrowser, "open", lambda value: opened.append(1) or True)
+    monkeypatch.setattr(sys, "argv", ["amplifier-unified", "--data-dir", str(tmp_path), "open"])
+    monkeypatch.setattr(sys, "stderr", Closed())
+    cli.main()
+    assert opened == [1] and entry.OPENED in capsys.readouterr().out.splitlines()
+
+
+@pytest.mark.parametrize("failure", ["host", "browser-refused", "browser-error"])
+def test_explicit_cli_open_confirms_nothing_when_the_browser_did_not_open(tmp_path, monkeypatch, capsys, failure):
+    monkeypatch.setattr(entry, "is_windows", lambda: True)
+    opened = []
+    async def grant(*a, **kw):
+        if failure == "host":
+            raise entry.BrowserEntryUnavailable(entry.NO_ANSWER)
+        return ORIGIN + "/login#ticket=" + "a" * 43
+    def browser(value):
+        opened.append(value)
+        if failure == "browser-error":
+            raise OSError(value)
+        return False
+    monkeypatch.setattr(entry, "owner_browser_url", grant)
+    monkeypatch.setattr(cli.webbrowser, "open", browser)
+    monkeypatch.setattr(sys, "argv", ["amplifier-unified", "--data-dir", str(tmp_path), "open"])
+    with pytest.raises(SystemExit) as stopped:
+        cli.main()
+    assert stopped.value.code and "ticket=" not in str(stopped.value.code)
+    assert len(opened) == (0 if failure == "host" else 1)  # Never a second attempt.
+    captured = capsys.readouterr()
+    assert entry.OPENED not in captured.out and "ticket=" not in captured.out + captured.err
+
+
+def test_foreground_start_opens_at_once_and_does_not_wait_for_another_host(tmp_path, monkeypatch, capsys):
+    # The serving process is its own host: nothing to wait for, no confirmation line.
+    monkeypatch.setattr(entry, "is_windows", lambda: True)
+    waits = []
+    async def grant(*a, wait, waiting):
+        waits.append(wait)
+        return ORIGIN + "/login#ticket=" + "a" * 43
+    monkeypatch.setattr(entry, "owner_browser_url", grant)
+    monkeypatch.setattr(cli.webbrowser, "open", lambda value: True)
+    cli._open_browser_safely(Namespace(no_open=False), tmp_path, {})
+    assert waits == [0.0] and entry.OPENED not in capsys.readouterr().out
 
 
 def test_backend_exception_never_displays_grant(tmp_path, monkeypatch):
     monkeypatch.setattr(entry, "is_windows", lambda: True)
-    async def grant(*a):
+    async def grant(*a, **kw):
         return ORIGIN + "/login#ticket=" + "a" * 43
     monkeypatch.setattr(entry, "owner_browser_url", grant)
     def broken(value):
@@ -740,7 +967,7 @@ async def test_native_unrelated_listener_and_proxy_never_receive_bearer(
             monkeypatch.setenv(name, str(target.make_url("/")))
         monkeypatch.setenv("NO_PROXY", "")
         monkeypatch.setenv("no_proxy", "")
-        with pytest.raises(entry.BrowserEntryUnavailable, match="identity"):
+        with pytest.raises(entry.BrowserEntryUnavailable, match="No Amplifier of this version and this data folder answered"):
             await entry.owner_browser_url(home, config)
         assert received == []
         assert trusted_received == (["Bearer " + token] if mode == "redirect" else [])
@@ -847,7 +1074,7 @@ async def owner_url(home, config):
             await handler(types.SimpleNamespace(headers={"Authorization": "Bearer synthetic"}))
         except web.HTTPFound:
             pass
-    raise Unavailable("identity mismatch")
+    raise Unavailable("No Amplifier of this version and this data folder answered on this PC.")
 @contextlib.contextmanager
 def directory(*args, **kwargs): yield
 entry = types.SimpleNamespace(BrowserEntryUnavailable=Unavailable, owner_browser_url=owner_url,

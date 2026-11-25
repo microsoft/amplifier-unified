@@ -18,7 +18,7 @@ from .live_clients import client_context
 from .setup_page import detect_platform, render_setup_page
 from .tls import ca_bytes
 from .request_timing import request_timing
-from .static_files import BundledFileResponse, BundledStaticResource
+from .static_files import BundledStaticResource
 from . import browser_entry
 
 
@@ -28,6 +28,9 @@ _READ_ONLY_WAIT_ACTIONS = frozenset({
     "workspace.work.wait", "assignment.tasks.wait", "coordination.wait",
     "operations.wait", "recall.wait",
 })
+
+_ICON_RENDER_LIMIT = 4
+_ICON_PENDING_LIMIT = 64
 
 
 def _set_response_headers(response: web.StreamResponse, request: web.Request) -> web.StreamResponse:
@@ -44,11 +47,11 @@ def _set_response_headers(response: web.StreamResponse, request: web.Request) ->
     # document. Keep the login form same-origin without leaking referrers to
     # other sites; do not weaken the Origin check to accept opaque origins.
     response.headers["Referrer-Policy"] = "same-origin" if path in {"/login", "/devices", "/devices/pair"} or path.startswith('/connect') else "no-referrer"
-    response.headers["Cache-Control"] = "no-store" if path.startswith(("/api/", "/share/", "/devices", "/connect")) or path in {"/login", "/oauth/mcp/callback", "/oauth/mcp/complete"} else "no-cache"
+    response.headers["Cache-Control"] = "no-store" if path.startswith(("/api/", "/share/", "/devices", "/connect", "/instance-icon/")) or path in {"/login", "/manifest.webmanifest", "/oauth/mcp/callback", "/oauth/mcp/complete"} else "no-cache"
     response.headers.setdefault("Content-Security-Policy", f"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; frame-src 'self' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' {sockets} https://api.openai.com wss://api.openai.com; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'")
     if path == "/login" and browser_entry.is_windows():
         response.headers["Content-Security-Policy"] = (
-            "default-src 'none'; script-src 'self'; style-src 'self'; "
+            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; manifest-src 'self'; "
             "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
         )
     from .device_connections import response_headers
@@ -108,8 +111,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         for host in ("localhost", "127.0.0.1", "[::1]")
     )
     app["session_secret"] = session_secret(data_dir)
+    from .auth import Sessions
+    app["sessions"] = Sessions.load(data_dir)
     app["control_token"] = control_token(data_dir)
-    service = AppService(data_dir, runtime=runtime, workspace=workspace)
+    service = AppService(data_dir, runtime=runtime, workspace=workspace, server_config=config)
     service.port = config["port"]
     service.server_config = config
     from .profiling_host import ProfilingHost
@@ -123,6 +128,12 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     if hasattr(runtime, 'retention'):
         service.state['runtime']['retention'] = dict(runtime.retention.settings)
     app["service"] = service
+    from .linked_instances import install as setup_linked_instances
+    setup_linked_instances(app, service)
+    from .acp_server import setup_routes as setup_acp
+    setup_acp(app)
+    from .room_context import setup_routes as setup_room_context
+    setup_room_context(app)
     browser_entry.initialize(app)
 
     async def mcp_oauth_callback(request):
@@ -169,6 +180,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         service.management.background(service.management.command("providers.list", {}))
     from .updates import UpdateManager
     service.update_manager = UpdateManager(service)
+    from .windows_launcher_follow import at_start; at_start(service.update_manager)
     if background_updates:
         service.update_manager.task = asyncio.create_task(service.update_manager.loop())
     streams = set()
@@ -299,10 +311,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             from .message_interactions import annotate
             from .peer_attribution import derive, display_annotations
             rows = derive(session, result['messages'], service.peer_attribution.resolve)
-            annotation_source = {'messageAnnotations': display_annotations(session)}
+            annotation_source = {'messageAnnotations': display_annotations(session, (row.get('id') for row in rows))}
             messages = []
             for row in rows:
-                item = compact(annotate(annotation_source, row), session['id'], 'messages', TEXT_LIMIT)
+                item = compact(annotate(annotation_source, row, status_source=session), session['id'], 'messages', TEXT_LIMIT)
                 if row.get('attribution'):
                     item['attribution'] = row['attribution']
                 messages.append(item)
@@ -480,6 +492,11 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             response["dataIdentity"] = data_identity(service.data_dir)
             response.update({key: service.update_manager.running_identity[key] for key in ('revision', 'instanceId')})
             response["runtime"] = dict(service.state["runtime"])
+            if request.query.get("activity") == "1":
+                # Only on request: the owner's uninstall asks before a normal
+                # stop interrupts work. Ordinary health probes do not scan chats.
+                from .update_blockers import working_sessions
+                response["activity"] = {"working": working_sessions(service)}
         return web.json_response(response)
 
     async def performance_diagnostics(request):
@@ -514,13 +531,12 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         return await serve(request, service, streams)
 
     async def attachment(request):
-        from .attachments import file_path
+        from .attachment_download import download
         try:
-            path, row = file_path(service.data_dir, request.match_info["identity"])
-        except (ValueError, FileNotFoundError):
-            raise AppError("Attachment not found", 404)
+            response, row = await asyncio.to_thread(download, service.data_dir, request.match_info["identity"])
+        except (ValueError, OSError):
+            raise AppError("Attachment not found", 404) from None
         from urllib.parse import quote
-        response = web.FileResponse(path)
         response.headers["Content-Type"] = row["mime"]
         response.headers["Content-Disposition"] = ("inline" if row["mime"].startswith("image/") else "attachment") + "; filename*=UTF-8''" + quote(row["name"])
         return response
@@ -700,6 +716,9 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_post("/login", post_login)
     app.router.add_post(browser_entry.ISSUE_PATH, browser_entry.issue)
     app.router.add_post(browser_entry.REDEEM_PATH, browser_entry.redeem)
+    app.router.add_post(browser_entry.CODE_PATH, browser_entry.code_issue)
+    app.router.add_post(browser_entry.CODE_REDEEM_PATH, browser_entry.code_redeem)
+    app.router.add_post(browser_entry.KEY_REDEEM_PATH, browser_entry.key_redeem)
     app.router.add_get("/setup", setup)
     app.router.add_get("/api/ca", certificate)
     app.router.add_get("/ca.crt", certificate)
@@ -737,8 +756,6 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     setup_clients(app, streams)
     from .client_observations import setup_routes as setup_observations
     setup_observations(app)
-    from .companion import setup_routes as setup_companion
-    setup_companion(app)
 
     async def shell_state(request):
         from .shell_modules import IDENTITY
@@ -821,19 +838,87 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         service.voice_service = setup_routes(app)
 
     static = Path(__file__).parent / "static"
+    manifest_path = static / 'manifest.webmanifest'
+    manifest_template = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.exists() else None
+    icon_encodes = asyncio.Semaphore(_ICON_RENDER_LIMIT)
+    icon_pending = 0
+
+    async def instance_manifest(request):
+        if manifest_template is None:
+            raise AppError("Frontend assets are missing. Build frontend before packaging.", 503)
+        accents = request.query.getall('accent', [])
+        accent = accents[0] if len(accents) == 1 else None
+        return web.json_response(service.instance_branding.manifest(manifest_template, accent),
+                                 content_type='application/manifest+json')
+
+    async def instance_icon(request):
+        nonlocal icon_pending
+        from functools import partial
+        from .instance_branding import SIZES
+        size = int(request.match_info['size'])
+        if size not in SIZES:
+            raise web.HTTPNotFound()
+        accents = request.query.getall('accent', [])
+        accent = accents[0] if len(accents) == 1 else None
+        # v is a cache buster, not an immutable version: installed clients can
+        # retain old URLs. Cache hits need neither an executor nor a render slot.
+        content = service.instance_branding.cached_icon(size, accent)
+        if content is not None:
+            return web.Response(body=content, content_type='image/png')
+        # Queue ordinary multi-tab bursts without submitting unbounded executor
+        # work, but cap public waiting requests during a sustained flood.
+        if icon_pending >= _ICON_PENDING_LIMIT:
+            raise web.HTTPServiceUnavailable(headers={'Retry-After': '1'})
+        icon_pending += 1
+        try:
+            await icon_encodes.acquire()
+        finally:
+            icon_pending -= 1
+        try:
+            content = service.instance_branding.cached_icon(size, accent)
+            if content is None:
+                future = asyncio.get_running_loop().run_in_executor(
+                    None, partial(service.instance_branding.icon, size, accent))
+        except BaseException:
+            icon_encodes.release()
+            raise
+        if content is not None:
+            icon_encodes.release()
+            return web.Response(body=content, content_type='image/png')
+
+        def finished(future):
+            # Keep the slot until the thread actually finishes even if its
+            # HTTP waiter was cancelled; a waiting request can then proceed.
+            icon_encodes.release()
+            # Retrieve any exception if the original HTTP waiter was cancelled.
+            if not future.cancelled():
+                future.exception()
+
+        future.add_done_callback(finished)
+        content = await asyncio.shield(future)
+        return web.Response(body=content, content_type='image/png')
+
+    app.router.add_get('/manifest.webmanifest', instance_manifest)
+    app.router.add_get('/instance-icon/{size:32|180|192|512}.png', instance_icon)
 
     async def index(request):
         file = static / "index.html"
         if not file.exists():
             raise AppError("Frontend assets are missing. Build frontend before packaging.", 503)
-        return BundledFileResponse(file)
+        return web.Response(text=service.instance_branding.document(file.read_text(encoding='utf-8')),
+                            content_type='text/html')
 
     app.router.add_get("/", index)
+    app.router.add_get("/index.html", index)
     if static.exists():
         app.router.register_resource(BundledStaticResource("", static, show_index=False))
 
     async def shutdown(app):
         service.begin_shutdown()
+        watch = app.get("session_watch")
+        if watch is not None:
+            watch.cancel()
+            await asyncio.gather(watch, return_exceptions=True)
         waiting = list(streams | call_waiters | action_waiters)
         for task in waiting:
             task.cancel()
@@ -842,6 +927,12 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.on_shutdown.append(shutdown)
 
     async def confirm_started(app):
+        from .auth import watch_sessions
+        app["session_watch"] = asyncio.create_task(watch_sessions(app, streams))
+        if background_work:
+            # Resume only durable, positively unsubmitted shared-room work.
+            # Configuration and runtime ownership are installed before attach.
+            service._task(service.external_conversations.resume_pending())
         from .update_readiness import wait_for_readiness, recovery_candidate
         if recovery_candidate(service.update_manager):
             service.update_manager.readiness_task = asyncio.create_task(

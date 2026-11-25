@@ -33,9 +33,12 @@ dependencies = [
 [tool.uv]
 # Core publishes native wheels; never compile it while installing this app.
 no-build-package = ["amplifier-core"]
-# Follow the same Foundation branch while bundles resolve their modules.
+# Foundation's one effective source is the sources table below (including an
+# installed fork/pin carried into a new candidate). Apply it transitively without
+# independently restating its repository or ref here.
 override-dependencies = [
-  "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
+  "amplifier-foundation",
+  "amplifier-memory @ git+https://github.com/microsoft/amplifier-bundle-memory@main",
 ]
 
 [[tool.uv.index]]
@@ -44,6 +47,8 @@ default = true
 
 [tool.uv.sources]
 amplifier-module-loop-live = { git = "https://github.com/microsoft/amplifier-module-loop-live", rev = "main" }
+# Fresh defaults follow the same source as Memory. Installed pins/forks and
+# existing generations retain their selected sources and receipts.
 amplifier-foundation = { git = "https://github.com/microsoft/amplifier-foundation", rev = "main" }
 amplifier-module-hooks-session-naming = { git = "https://github.com/microsoft/amplifier-foundation", rev = "main", subdirectory = "modules/hooks-session-naming" }
 amplifier-module-loop-streaming = { git = "https://github.com/microsoft/amplifier-module-loop-streaming", rev = "main" }

@@ -13,6 +13,17 @@ class Runtime:
     async def close(self):pass
 
 
+async def test_recovery_status_projection_identifies_its_own_read_command(app):
+    from unittest.mock import AsyncMock
+    session = app._session()
+    app.management.ensure_runtime = AsyncMock()
+    app.runtime.control = AsyncMock(return_value={'state': 'refused', 'readCommandId': 'untrusted'})
+    args = {'sessionId': session['id'], 'operation': 'context.recovery.status', 'args': {}}
+    await app.management.perform('runtime.control', args, command_id='issued-read')
+    assert app.state['runtimeControl'][session['id']]['context.recovery.status'] == {
+        'state': 'refused', 'readCommandId': 'issued-read'}
+
+
 @pytest.mark.parametrize('forged', [False, True])
 async def test_explicit_recovery_forwards_trusted_command_not_request_identity(app, monkeypatch, forged):
     from unittest.mock import AsyncMock

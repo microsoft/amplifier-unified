@@ -46,6 +46,86 @@ def fixture(tmp_path, monkeypatch, count=140):
 
 
 @pytest.mark.asyncio
+async def test_loading_work_window_defers_terminal_workers_without_losing_evidence(tmp_path, monkeypatch):
+    from amplifier_web import browser_detail
+    from amplifier_web.browser_state import SnapshotCopies
+
+    class Report(str):
+        def __deepcopy__(self, memo):
+            raise AssertionError('A deferred terminal report was copied')
+
+    owner, session, _, _ = fixture(tmp_path, monkeypatch, count=1)
+    statuses = ['completed'] * 201 + ['cancelled'] * 5 + ['error'] + ['interrupted'] * 3
+    session['workers'] = [{'id': f'w-{i}', 'callId': f'c-{i % 133}',
+        'kind': 'job' if i < 109 else 'session', 'name': f'Worker {i}', 'status': status,
+        'report': Report('Retained report ' + 'x' * 700),
+        'reportReceipts': [{'id': f'report-{i}', 'text': 'Durable receipt'}]}
+        for i, status in enumerate(statuses)]
+    session.update(status='working', activity={'phase': 'tools', 'label': 'Current work',
+        'activeTools': [{'callId': 'current-tool', 'tool': 'read', 'startedAt': 1}]},
+        runtimeEvents=[{'type': 'runtime.tool', 'phase': 'pre', 'callId': 'current-tool', 'tool': 'read'}])
+    original = json.dumps(session, sort_keys=True)
+    legacy = browser_detail.project(session)
+    owner.projector.gate = asyncio.Event()
+    pending = owner.request('s')
+    try:
+        await asyncio.sleep(0)
+        assert not pending.done()
+        overlay = owner.project(session)
+        assert overlay['workProjection'] == {'status': 'loading', 'current': False}
+        assert all(not overlay['execution'][key] for key in ('nodes', 'turns', 'segments'))
+
+        def unexpected_hash(text):
+            raise AssertionError('A deferred terminal report was hashed')
+
+        with monkeypatch.context() as patch:
+            patch.setattr(browser_detail, 'digest', unexpected_hash)
+            loading = SnapshotCopies().detach(browser_detail.project(session, work_overlay=overlay), 'web')
+        assert loading['workers'] == []
+        assert loading['workerSummary']['bounded'] is True
+        assert loading['workerSummary']['total'] == loading['workerSummary']['finished'] == 210
+        assert len(loading['workerSummary']['recentFinished']) == 5
+        assert loading['workProjection'] == overlay['workProjection']
+        assert loading['executionWindow'] == overlay['executionWindow']
+        assert loading['execution'] == overlay['execution']
+        assert loading['status'] == session['status']
+        assert loading['activity'] == session['activity'] and loading['runtimeEvents'] == session['runtimeEvents']
+        assert len(json.dumps(loading).encode()) < len(json.dumps(legacy).encode()) / 10
+        assert json.dumps(session, sort_keys=True) == original
+
+        explicit = browser_detail.page(session, 'workers')
+        assert explicit['total'] == 210 and len(explicit['items']) == 100
+        reference = explicit['items'][-1]['reportDetail']
+        assert browser_detail.read_text(session, reference)['value'] == session['workers'][-1]['report']
+
+        # Active/unknown observations and the terminal override for the same
+        # call remain available to the existing controls during loading.
+        retained = [{'id': state, 'status': state, 'kind': 'session'}
+                    for state in ('running', 'idle', 'pending', 'new-state')]
+        retained += [{'id': 'late', 'callId': 'mixed', 'kind': 'session', 'status': 'working'},
+                     {'id': 'done', 'callId': 'mixed', 'kind': 'job',
+                      'event': 'job.returned', 'status': 'completed'},
+                     {'status': 'completed', 'name': 'Unidentified observation'}]
+        session['workers'].extend(retained)
+        with monkeypatch.context() as patch:
+            patch.setattr(browser_detail, 'digest', unexpected_hash)
+            current = browser_detail.project(session, work_overlay=overlay)
+        assert current['workers'] == retained
+        assert current['workerSummary']['total'] == 217
+        assert loading['workerSummary']['total'] == 210 and loading['workers'] == []
+
+        owner.projector.gate.set()
+        await pending
+        ready = browser_detail.project(session, work_overlay=owner.project(session))
+        assert ready['workProjection']['status'] == 'ready'
+        assert ready['execution']['turns'] and ready['workerSummary']['bounded']
+        assert ready['workers'] == retained
+        assert json.dumps({**session, 'workers': session['workers'][:210]}, sort_keys=True) == original
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
 async def test_initial_and_older_windows_never_change_execution_or_history(tmp_path, monkeypatch):
     owner, session, path, _ = fixture(tmp_path, monkeypatch)
     original = json.dumps(session, sort_keys=True)
@@ -656,3 +736,79 @@ async def test_connected_web_work_ready_evicts_outer_cache_without_shell_registr
                 await socket.close()
         finally:
             await client.close()
+
+
+@pytest.mark.asyncio
+async def test_oversized_legacy_placement_restores_qualified_model_steps_from_cold_owner(tmp_path, monkeypatch):
+    import sqlite3
+    from amplifier_web import saved_execution_window as legacy
+    from amplifier_web.cold_display import ColdRecord, MARKER, execution_reference
+    from amplifier_web.resource_files import detach
+
+    owner, initial, _, service = fixture(tmp_path, monkeypatch, count=1)
+    db = service.db = sqlite3.connect(tmp_path / 'state.sqlite')
+    db.execute('CREATE TABLE state_resources (id TEXT PRIMARY KEY, value TEXT NOT NULL)')
+    turn = {'id': 't', 'anchorMessageId': 'user', 'inputId': 'user', 'phase': 'completed',
+            'startedAt': 1, 'endedAt': 500}
+    model = {'id': 'last', 'kind': 'llm', 'turnId': 't', 'provider': 'anthropic', 'model': 'example',
+             'sessionId': 's', 'rootSessionId': 's', 'producerId': 'worker', 'liveObservation': True,
+             'phase': 'completed', 'startedAt': 200, 'endedAt': 201, 'usage': {'inputTokens': 17}}
+    # Preserve an app-only tool containing a very large legacy payload next to a
+    # genuine model receipt, and reject a canonical row with no host placement.
+    nodes = [dict(model, id=f'model-{i}', startedAt=i+1, endedAt=i+2) for i in range(130)]
+    large_id = 'tool-' + 'k' * 214
+    nodes += [{'id': large_id, 'kind': 'tool', 'turnId': 't', 'label': 'Build', 'startedAt': 199,
+               'input': 'private tool body' * 270000}, model, dict(model, id='canonical', canonicalHistory=True)]
+    old_turn = {**turn, 'id': 'older', 'startedAt': 0}
+    nodes[0]['turnId'] = 'older'
+    turns = [old_turn] + [{**turn, 'id': f'unrelated-{i}'} for i in range(23)] + [turn]
+    reference = execution_reference(db, {'nodes': nodes, 'turns': turns, 'plan': {'obsolete': True},
+                                        'retiredUsageNodes': [model], 'currentTurnId': 't'})
+    assert reference['bytes'] > legacy.PAGE_BYTES
+    reference.pop('bytes')  # Historical references need only the content identity.
+    initial.pop('execution')
+    session = ColdRecord({**initial, MARKER: {'execution': reference}}, db)
+    service._session = lambda identity, hydrate=False: session
+    try:
+        await owner.read('s', _initial=True)
+        frame = owner.project(session)
+        assert frame['workProjection']['status'] == 'ready'
+        assert 'plan' not in frame['execution']
+        group = next(row for row in frame['execution']['segments'] if row['turnId'] == 't')
+        assert group['partialWindow'] and group['nodeCounts'] is None
+        rows = owner.live_pages.read(session, group['id'])['items']
+        assert len(rows) == 100
+        assert {row['id'] for row in rows} >= {'last', large_id}
+        assert next(row for row in rows if row['id'] == 'last')['usage'] == {'inputTokens': 17}
+        assert all(row['id'] != 'canonical' for row in rows)
+        assert 'private tool body' not in json.dumps([frame, rows])
+        assert frame['executionWindow']['unavailableRanges'][-1]['source'] == 'saved-execution'
+        saved = owner.resident_tree(session)
+        assert saved['nodes'][0]['id'] == 'model-0' and saved['nodes'][-1]['id'] == 'last'
+        with pytest.raises(ValueError):
+            saved['nodes'][:130]
+        oldest = owner.live_pages.read_groups(session, frame['executionWindow']['before'])
+        assert 'older' in {turn['id'] for turn in oldest['turns']}
+        earlier = next(row for row in oldest['items'] if row['turnId'] == 'older')
+        assert [item['id'] for item in owner.live_pages.read(session, earlier['id'])['items']] == ['model-0']
+        assert 'retiredUsageNodes' not in saved
+        assert not dict.__contains__(session, 'execution') and session[MARKER]['execution'] == reference
+        # Explicit new event page with the same pinned immutable input reuses the
+        # accepted display pages without a second full decode or a database write.
+        with monkeypatch.context() as patch:
+            patch.setattr(legacy, 'open_tree', lambda *args: pytest.fail('legacy snapshot decoded twice'))
+            await owner.read('s')
+        assert owner.resident_tree(session) is saved
+        assert db.execute('SELECT count(*) FROM state_resources').fetchone()[0] == 1
+        source = detach(db, reference['$resource'])
+        with (source.directory / (source.identity + '.json')).open('r+b') as stream:
+            stream.write(b'x')
+        # A third read rejects altered placement yet still admits the
+        # independently verified native tool event.
+        native = await owner.read('s')
+        assert owner.resident_tree(session) == {}
+        assert native['unavailableRanges'][-1]['reason'] == 'source_unavailable'
+        assert len(owner.nodes('s', native['items'][0]['id'])['items']) == 1
+    finally:
+        await owner.close()
+        db.close()

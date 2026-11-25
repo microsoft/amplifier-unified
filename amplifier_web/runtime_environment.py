@@ -193,7 +193,12 @@ def shared_build_policies(home, generation, graph):
         return {}
     builds = Path(environment['AMPLIFIER_SOURCE_STORE']).resolve() / 'builds'
     bindings = {}
-    base = receipt_directory(home, generation) / 'foundation/cache/.source-bindings'
+    # The Foundation home of this generation. With no generation that is the
+    # data folder itself (updates.foundation_home): a new installation's
+    # conversations write their bindings there. Setup's receipt folder
+    # (updates/baseline-runtime) holds no Foundation home.
+    owner = receipt_directory(home, generation) if generation else Path(home)
+    base = owner / 'foundation/cache/.source-bindings'
     for path in base.glob('*.json'):
         if path.is_symlink():
             raise ValueError('External shared source binding')
@@ -301,6 +306,24 @@ def inventory(home, *, installed=None, graph=None):
                        'label': 'Refresh included components', 'status': 'update', 'eligible': True,
                        'current': 'legacy-policy', 'latest': policy_refresh['configuration'],
                        'usage': 'configured', 'usageEvidence': ['Check versions used by your current setup']})
+    # A behavior/module selection can change without any tracked Git branch
+    # moving. Offer ordinary guarded qualification, not a permanent unverified
+    # health card or an implicit rewrite of the old generation's receipt.
+    descriptor = receipt_directory(home, generation) / 'profiles-qualified.json'
+    if descriptor.is_file() and not any(row.get('id') == 'runtime:environment' for row in rows):
+        qualified = json.loads(descriptor.read_text()).get('configuration')
+        if isinstance(qualified, str) and re.fullmatch('[a-f0-9]{64}', qualified):
+            from .host.config import read_config
+            from .runtime_profiles import configuration_key
+            config = read_config(home, home=home, global_only=True)
+            desired = configuration_key(config.settings, home, descriptor.parent)
+            if desired != qualified:
+                rows.insert(0, {'id': 'runtime:environment', 'kind': 'runtime environment',
+                               'label': 'Qualify current component configuration',
+                               'status': 'update', 'eligible': True,
+                               'current': qualified, 'latest': desired,
+                               'usage': 'configured',
+                               'usageEvidence': ['Changed app-level component declarations']})
     return rows
 
 
@@ -381,9 +404,11 @@ async def update_inventory(home):
         for root, index in indexes.items():
             if await process('git', 'ls-files', '--stage', '-z', cwd=root, timeout=10, raw=True) != index:
                 raise ProtectedRuntimeSource('', 'runtime-source-changed')
+    from .runtime_source_policy import recover_app_policies
+    rows = await recover_app_policies(home, generation, inventory(home, installed=policy, graph=graph), graph, process)
     if active_release(home).get('current') != generation:
         raise ProtectedRuntimeSource('', 'runtime-source-changed')
-    return inventory(home, installed=policy, graph=graph)
+    return rows
 
 
 async def update_manifest(home):
@@ -433,23 +458,30 @@ def augmented_manifest(content, rows):
             # Preserve a concrete installed override rather than silently
             # replacing it with the app's default repository/branch.
             if row.get('provenance') in {'installed Git distribution', 'installed Foundation cache module'} and (
-                source.get('git') != row['url'] or (source.get('branch') or source.get('rev')) != row['ref']
+                source.get('git') != row['url'] or (source.get('branch') or source.get('rev') or source.get('tag')) != row['ref']
                 or source.get('subdirectory', '') != row.get('subdirectory', '')
             ):
                 sources[declared[name]] = {'git': row['url'], 'rev': row['ref'],
                                           **({'subdirectory': row['subdirectory']} if row.get('subdirectory') else {})}
                 changed = True
-            continue
+            effective = sources[declared[name]]
+            if (not pinned(row['ref']) or effective.get('git') != row['url']
+                    or effective.get('rev') != row['ref']
+                    or effective.get('subdirectory', '') != row.get('subdirectory', '')):
+                continue
         uri = 'git+' + row['url'] + '@' + row['ref']
         if row.get('subdirectory'):
             uri += '#subdirectory=' + row['subdirectory']
         reference = name + ' @ ' + uri
-        references.append(reference)
+        if name not in declared:
+            references.append(reference)
         if pinned(row['ref']):
             # A direct requirement alone cannot preserve a retained pin when a
             # module declares the same dependency at a moving Git ref. Apply
             # this existing choice transitively without changing authored policy.
             existing = [value for value in overrides if package_name(Requirement(value).name) == name]
+            if name in declared and len(existing) == 1 and Requirement(existing[0]) == Requirement(name):
+                continue  # An authored bare override already applies the effective source transitively.
             if existing and (len(existing) != 1 or Requirement(existing[0]) != Requirement(reference)):
                 raise ProtectedRuntimeSource(name)
             if not existing:
@@ -464,6 +496,7 @@ def augmented_manifest(content, rows):
         data['dependency-groups'] = {'unified-managed-runtime': sorted(set(references))}
         changed = True
     if generated:
+        changed = True
         owner = data.setdefault('tool', {}).setdefault('amplifier-unified', {})
         if 'generated-source-overrides' in owner:
             raise ValueError('The runtime manifest already owns generated source overrides.')

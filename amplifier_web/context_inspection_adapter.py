@@ -159,7 +159,11 @@ class ContextInspection:
             'providerEstimate': evidence(budget.get('estimated_input_tokens'), 'provider_budget',
                 'Existing provider fit decision, not the local text heuristic.' if budget.get('estimated_input_tokens') is not None else missing_budget),
         }
+        if window and row.get('promptCostBasis'):
+            row['promptCostBasis']['modelWindow'] = window
         header = {key: row.get(key) for key in ('sessionId', 'provider', 'model', 'startedAt', 'phase')}
+        if row.get('promptCostBasis'):
+            header['promptCostBasis'] = row['promptCostBasis']
         header.update(callId=row['id'], usage={}, limits={
             'modelWindow': window,
             'requestInputAllowance': budget.get('input_limit_tokens'),

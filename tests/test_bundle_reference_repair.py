@@ -120,15 +120,18 @@ async def test_startup_admission_lock_defers_ownerless_stale_status(app):
     assert (await canonicalize(app, apply=True))['counts'] == {'changed': 1}
 
 
-async def test_parked_and_retired_cached_references_become_canonical(app):
+async def test_idle_writer_blocks_repair_and_retired_references_become_canonical(app):
     await app.dispatch('session.create', {'bundle': 'Work'})
     session = app._session()
     sid = session['id']
     native(Path(session['workspace']), sid)
-    row = {'process': SimpleNamespace(returncode=None), 'parked': True, 'start_session': {'bundle': 'Work'}}
+    row = {'process': SimpleNamespace(returncode=None), 'idle': True, 'start_session': {'bundle': 'Work'}}
     app.runtime.workers[sid] = row
     app.runtime._retired[sid] = ({'bundle': 'Work'}, None)
     try:
+        assert (await canonicalize(app, apply=True))['counts'] == {'busy': 1}
+        assert row['start_session']['bundle'] == 'Work'
+        row['process'].returncode = 0
         assert (await canonicalize(app, apply=True))['complete']
         assert row['start_session']['bundle'] == 'work'
         assert app.runtime._retired[sid][0]['bundle'] == 'work'

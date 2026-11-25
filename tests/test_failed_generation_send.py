@@ -16,7 +16,7 @@ from test_service import Runtime
 @pytest.fixture
 async def failed(tmp_path):
     runtime = Runtime()
-    runtime.send = AsyncMock()
+    runtime.send = AsyncMock(return_value={'accepted': True})
     runtime.steer = AsyncMock(side_effect=TimeoutError('Unconfirmed transport'))
     manager = RuntimeManager()
     runtime.stopped_boundary = manager.stopped_boundary
@@ -127,7 +127,7 @@ async def test_absence_is_required_before_any_new_input(failed, block):
 
 async def test_explicit_generation_target_does_not_become_new_work(failed):
     app, runtime, _, session = failed
-    await fresh(app, expectedGenerationId='lost', allowNextTurn=True)
+    await fresh(app, expectedGenerationId='lost')
     runtime.steer.assert_awaited_once()
     runtime.send.assert_not_awaited()
     assert not session['collaborationGeneration']['terminal']

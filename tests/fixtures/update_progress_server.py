@@ -143,6 +143,28 @@ async def main(home):
                 reason='runtime-installed-source-mismatch',package='amplifier-foundation',
                 resolutionMismatches=['revision'])
             await manager.publish(phase='error',error=failure_guidance(failure))
+        elif stage in {'historical-component', 'activation-history-only'}:
+            # Presentation-only generation proof and app ACK. No installation,
+            # activation or source resolution is performed by these transitions.
+            old = {'kind': 'ecosystem', 'phase': 'ecosystem-runtime-lock', 'status': 'failed',
+                   'id': '6' * 32, 'attemptId': '7' * 32, 'at': 1794346934.01}
+            ack = {'kind': 'application', 'phase': 'restart-ack', 'attemptId': '5' * 32,
+                   'revision': '2' * 40, 'startedAt': 1794821240.2, 'completedAt': 1794821240.3,
+                   'applicationExtras': []}
+            diagnostics.state.clear()
+            diagnostics.state.update(lastFailure={}, activeFailures=(
+                {'old': {'latest': old}} if stage == 'historical-component' else {}),
+                completedBatches=[ack], events=[])
+            manager._active_update_evidence = {
+                'generation': '1' * 32, 'activationUnknown': True, 'qualifiedAt': 1794470895,
+                'packages': set(), 'components': set()}
+            manager._update_health_configuration_revision = service.state.get('configurationRevision')
+            await manager.publish(phase='checked', error=None, available=0, items=[],
+                pendingApp=None, pendingRestart=None, pendingReplacement=None, pendingRelease=None,
+                pendingSmartTools=[], sequence={'stage': 'complete', 'install': False},
+                application={'status': 'current', 'current': '0.100.2', 'runningRevision': '2' * 40},
+                applicationResult={'phase': 'restart-ack', 'attemptId': '5' * 32,
+                    'revision': '2' * 40, 'version': '0.100.2', 'verifiedAt': 1794821240.24})
         elif stage=='application-confirmed':
             # Browser presentation fixture only. The real readiness proof and
             # persisted receipt are exercised by test_update_readiness.py.

@@ -2,6 +2,11 @@
   "schemaVersion": 1,
   "scenarios": [
     {
+      "id": "last-reported-plan",
+      "command": ["node", "tests/web/last-reported-plan-browser.mjs"],
+      "env": {"AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python"}
+    },
+    {
       "id": "agent-chat-navigation",
       "command": ["node", "tests/web/chat-library-browser.mjs", "--agent-navigation-only"],
       "env": {"AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python"}
@@ -210,6 +215,14 @@
       }
     },
     {
+      "id": "update-configuration-hold",
+      "command": ["node", "tests/web/update-configuration-hold-browser.mjs"],
+      "env": {
+        "AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python",
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/update-configuration-hold"
+      }
+    },
+    {
       "id": "update-restart",
       "command": [
         "node",
@@ -385,6 +398,14 @@
       ],
       "env": {
         "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/provider-selection"
+      }
+    },
+    {
+      "id": "model-change-history",
+      "command": ["node", "tests/web/model-change-browser.mjs"],
+      "env": {
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/model-change-history",
+        "AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python"
       }
     },
     {
@@ -664,6 +685,14 @@
       ],
       "env": {
         "AMPLIFIER_TEST_OUTPUT_DIR": "{root}/output/browser-checks/tool-previews"
+      }
+    },
+    {
+      "id": "grouped-work-inspector",
+      "command": ["node", "tests/web/grouped-work-inspector-browser.mjs"],
+      "env": {
+        "AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python",
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/grouped-work-inspector"
       }
     },
     {
@@ -1004,6 +1033,14 @@
       ]
     },
     {
+      "id": "session-health-request-failure",
+      "command": ["node", "tests/web/session-health-browser.mjs", "--request-failure"]
+    },
+    {
+      "id": "session-health-completed-runtime-fault",
+      "command": ["node", "tests/web/session-health-browser.mjs", "--completed-runtime-fault"]
+    },
+    {
       "id": "session-health-module-failure",
       "command": [
         "node",
@@ -1184,9 +1221,26 @@
       "env": {
         "EVIDENCE_DIR": "{root}/output/browser-checks/voice-work-message"
       }
+    },
+    {
+      "id": "external-multiparty",
+      "command": ["node", "tests/web/external-multiparty-browser.mjs"],
+      "env": {
+        "AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python",
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/external-multiparty"
+      }
+    },
+    {
+      "id": "external-approval",
+      "command": ["node", "tests/web/external-approval-browser.mjs"],
+      "env": {
+        "AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python",
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/external-approval"
+      }
     }
   ],
   "scenarioOrder": [
+    "last-reported-plan",
     "agent-chat-navigation",
     "agent-chat-navigation-settings",
     "navigation-waiting",
@@ -1201,6 +1255,7 @@
     "automation-hub",
     "peer-attribution",
     "device-pairing",
+    "linked-instances",
     "standard-ux-keyboard-reflow",
     "approval-layout",
     "approval-lifecycle",
@@ -1210,6 +1265,7 @@
     "standard-ux-voice-settings",
     "smart-tool-updates",
     "update-restart",
+    "update-configuration-hold",
     "update-effects",
     "active-client-performance",
     "state-transport",
@@ -1222,6 +1278,7 @@
     "selected-context",
     "registry-validation",
     "empty-host",
+    "appearance-lifecycle",
     "empty-host-fail-create",
     "empty-host-lost-create",
     "new-chat",
@@ -1229,17 +1286,20 @@
     "chat-reference",
     "draft-provider-refresh",
     "provider-selection",
+    "model-change-history",
     "provider-native",
     "immediate-direction",
     "draft-discovery-recovery",
-    "action-spacing",
     "sidebar-controls",
+    "sidebar-responsive",
     "new-chat-recovery",
     "feedback",
     "feedback-followup",
     "composer-readiness",
     "dormant-controls",
     "composer-primary-action",
+    "composer-return",
+    "composer-return-mounted",
     "surface-context",
     "desktop-readiness",
     "memory-personalization",
@@ -1247,6 +1307,7 @@
     "portability",
     "testing-settings",
     "settings",
+    "installation-repair",
     "configuration-recovery-components",
     "configuration-recovery",
     "settings-completeness",
@@ -1267,6 +1328,7 @@
     "delegate-work-stream",
     "tool-details",
     "tool-previews",
+    "grouped-work-inspector",
     "canonical-work",
     "interim-replies",
     "tool-outcomes",
@@ -1278,13 +1340,22 @@
     "chat-title",
     "message-outbox",
     "update-message-delivery",
+    "retained-update-recovery",
     "attachment-consumption",
     "attachment-experience",
     "message-delivery",
+    "shared-notices-motion",
+    "context-degradation",
+    "input-status",
+    "action-spacing",
+    "shared-controls",
+    "settings-action-spacing",
+    "settings-draft-focus",
     "delivery-warning",
     "legacy-outbox-notice",
     "delivery-reconciliation",
     "delivery-new-chat",
+    "retained-activity",
     "canvas-media",
     "inline-media-transition",
     "artifact-one-surface",
@@ -1312,8 +1383,11 @@
     "canvas-apps",
     "canvas-drawing",
     "session-health",
+    "conversation-error",
     "session-health-context-limit",
     "session-health-context-limit-active-worker",
+    "session-health-request-failure",
+    "session-health-completed-runtime-fault",
     "session-health-module-failure",
     "activity-feedback",
     "capacity",
@@ -1323,6 +1397,7 @@
     "connectors",
     "test-environments",
     "assignment-adoption",
+    "worktree-move",
     "access-mode",
     "storage-cleanup-settings",
     "model-capacity-settings",
@@ -1335,7 +1410,15 @@
     "canvas-close",
     "chat-scroll-call-boundaries",
     "semantic-settings",
+    "changelog-days",
     "history-refresh",
-    "voice-work-message"
+    "voice-work-message",
+    "external-multiparty",
+    "shared-room",
+    "work-hierarchy",
+    "external-approval",
+    "attachment-preview",
+    "transcript-suggestion-mounted",
+    "transcript-suggestion-boot"
   ]
 }

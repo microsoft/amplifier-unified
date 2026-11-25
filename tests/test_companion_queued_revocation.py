@@ -30,7 +30,7 @@ async def test_device_client_binding_survives_app_restart(aiohttp_client, tmp_pa
     other = manager.poll(pending['id'], verifier)
     foreign = {'Authorization': 'Bearer ' + other['token']}
     assert (await attach(second, foreign, 'native-review')).status == 403
-    assert (await second.get('/api/companion', headers={**foreign, 'X-Amplifier-Client': 'native-resumed'})).status == 403
+    assert (await second.get('/api/attention', headers={**foreign, 'X-Amplifier-Client': 'native-resumed'})).status == 403
 
 
 @pytest.mark.parametrize('operation', ['create', 'send'])

@@ -3,9 +3,10 @@
 The web client's authored source, version and static-artifact packaging belong to
 [microsoft/amplifier-client-web](https://github.com/microsoft/amplifier-client-web).
 Unified selects and assembles that source through its
-[component delivery entrypoint](../../components/README.md). While repository
-publication awaits review, the selected in-repository copy supplies the same
-source. It is generated delivery, not another place to maintain the client.
+[component delivery entrypoint](../../components/README.md). The source record pins
+an accepted public repository revision and production-input digest; preparation
+fetches it into disposable `.build/web-client`. Unified commits the assembled
+assets, not a second source tree.
 [CB](../../contracts/component-boundaries.v1.md) and
 [CD](../../contracts/client-development.v1.md) govern this ownership boundary.
 
@@ -57,7 +58,7 @@ build task finishes.
 | Source or check | Owner |
 | --- | --- |
 | Authored application source, public pages, client version and packaging | Web client repository |
-| Temporary source delivery and tested default assembly | Unified distribution |
+| Exact public source selection and tested default assembly | Unified distribution |
 | Real AppService fixtures, installed composition and server-dependent browser checks | Unified integration owner |
 | Shared catalogs, branding and shell SDK | Their existing Unified source paths |
 | Family/client contracts | Existing contract owners, referenced rather than copied |

@@ -152,9 +152,10 @@ class ClientViews:
             self.records[identity] = record
             self.dirty.add(identity)
             if resume:
-                shell = self.service.shell.get("client", resume)
+                shell = self.service.shell.client(resume)
                 if shell:
                     shell.update(preview=None, reported=None)
+                    shell.pop('preferenceCommand', None)
                     self.service.shell.put("client", identity, shell)
         # Retire the saved modal route on upgrade. Do not auto-open a new
         # Canvas document over a retained viewer or its edits; the existing
@@ -292,8 +293,9 @@ class ClientViews:
             self.dirty.add(identity)
         return self.records.get(identity) if identity is not None else None
 
-    def draft(self, session_id, text, document=...):
-        record = self.record()
+    def prepare_draft(self, session_id, text, document=...):
+        """Validate retained quoted commentary before a mixed view edit commits."""
+        record = self.records[self.current.get()]
         if document is ...:
             previous = record.get("draftDocuments", {}).get(session_id or "")
             old_text = record.get("drafts", {}).get(session_id or "", "")
@@ -305,6 +307,11 @@ class ClientViews:
                 document = copy.deepcopy(previous)
                 if text != old_text:
                     document['segments'].append({'type': 'text', 'text': text[len(old_text):]})
+        return document
+
+    def draft(self, session_id, text, document=...):
+        document = self.prepare_draft(session_id, text, document)
+        record = self.record()
         record.setdefault("drafts", {})[session_id or ""] = text
         documents = record.setdefault("draftDocuments", {})
         if document is None:
@@ -394,6 +401,11 @@ class ClientViews:
                               "hostInstanceId": self.service.instance_id, "reconnect": "snapshot"}
         if record['kind'] == 'web':
             snapshot['client']['build'] = self.service.installed_build.project()
+            appearance = self.service.appearance.read(self.current.get())
+            snapshot['appearance'] = appearance
+            if appearance.get('availability') != 'failed':
+                snapshot['view'] = {**snapshot.get('view', {}), **{
+                    key: value for key, value in appearance['effective'].items() if key in ('scheme', 'layout')}}
         snapshot["computerVisual"] = self.service.computer_visual.project(self.current.get())
         snapshot["draftAttachments"] = copy.deepcopy(record.get("attachments", {}).get("", []))
         snapshot["attachmentDraftId"] = self.attachment_draft_id()
@@ -483,6 +495,35 @@ class ClientViews:
         written = self.save(identity, defer_ack=True)
         db.commit()
         self.acknowledge(written)
+
+    def publish_presentation(self, identity, previous_revision, receipt, *, include_state):
+        """Publish committed layout or Canvas changes to the initiating client's subscriptions."""
+        service = self.service
+        revision = receipt['revision']
+        # The caller updated or invalidated its own projection. Unchanged peers
+        # keep their expensive history projections, and receive no frame.
+        for key, snapshot in service._client_snapshots.items():
+            if snapshot['revision'] == previous_revision:
+                service._client_snapshots[key] = {**snapshot, 'revision': revision}
+        shared = getattr(service, '_browser_snapshot', None)
+        if shared and shared['revision'] == previous_revision:
+            service._browser_snapshot = {**shared, 'revision': revision}
+
+        browser = None
+        for queue in service.queues:
+            if service.queue_clients.get(queue) != identity:
+                continue
+            session_id = service.queue_sessions.get(queue)
+            if session_id is None:
+                current = browser = service.browser_state()
+            else:
+                current = service.session_state(session_id)
+            if queue.full():
+                queue.get_nowait()
+            queue.put_nowait(current)
+        if include_state:
+            return {**receipt, 'state': browser or service.browser_state()}
+        return receipt
 
     def save(self, identity=None, *, defer_ack=False):
         pending = set(self.dirty) if identity is None else self.dirty.intersection({identity})

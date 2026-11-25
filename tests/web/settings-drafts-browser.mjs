@@ -60,7 +60,9 @@ try{
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{workSurface:'chat'}}));
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
  await showComposerOption(page,'provider');
- await expect(page.getByRole('button',{name:'Add connection',exact:true})).toBeVisible();
+ // The compact panel manages connections through the canonical Settings entry.
+ await expect(page.getByRole('combobox',{name:/^Connection/})).toBeVisible();
+ await showComposerOption(page,'advanced');
  await page.getByRole('button',{name:'Manage connections',exact:true}).click();
  await expect(page.locator('[data-part=ai-connections]')).toBeVisible();
  }

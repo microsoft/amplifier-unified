@@ -1,5 +1,6 @@
 """Known detail commits write only their records; unknown scope checkpoints all."""
 from amplifier_web.state_records import load as load_saved_state
+import asyncio
 import copy
 import json
 import sqlite3
@@ -97,6 +98,57 @@ async def test_scoped_detail_does_not_encode_or_write_unrelated_global(app_facto
     durable = load(app.db)
     assert durable['revision'] == app.state['revision']
     assert durable['runtimeControl'][rows[1]['id']] == app._state['runtimeControl'][rows[1]['id']]
+
+
+async def test_serialization_timing_counts_only_resolved_save_owners(app_factory, monkeypatch):
+    from amplifier_web import session_projection
+    app, rows = chats(app_factory)
+    before = load_saved_state(app.db)
+    clock = [0.0]
+    original = session_projection.persist
+    def persist(*args, **kwargs):
+        try:
+            return original(*args, **kwargs)
+        finally:
+            clock[0] += .2
+    with monkeypatch.context() as patch:
+        patch.setattr('amplifier_web.performance_diagnostics.time.monotonic', lambda: clock[0])
+        patch.setattr(session_projection, 'persist', persist)
+        app._save_changes(sessions={rows[0]['id'], 'not-resident'})
+        app._save_changes()
+        app._save_full(reason='Controlled diagnostic full save')
+    timings = [row for row in app.performance_diagnostics.snapshot()['slowOperations']
+               if row['operation'] == 'state.serialize'][-3:]
+    assert [(row['scope'], row['owners']) for row in timings] == [
+        ('explicit', 1), ('explicit', 0), ('full', len(app._state['sessions']))]
+    assert timings[0]['messages'] == 1 and timings[0]['messageOwners'] == 1
+    assert timings[1]['messages'] == timings[1]['messageUnavailableOwners'] == 0
+    assert load_saved_state(app.db) == before
+
+
+@pytest.mark.parametrize('failure', [ValueError, asyncio.CancelledError])
+async def test_serialization_shape_does_not_change_failed_save_rollback(app_factory, monkeypatch, failure):
+    from amplifier_web import session_projection
+    app, rows = chats(app_factory)
+    before = load_saved_state(app.db)
+    revision = app._state['revision']
+    clock = [0.0]
+    error = failure('Controlled serialization failure')
+    def fail(*args, **kwargs):
+        clock[0] += .2
+        raise error
+    with monkeypatch.context() as patch:
+        patch.setattr('amplifier_web.performance_diagnostics.time.monotonic', lambda: clock[0])
+        patch.setattr(session_projection, 'persist', fail)
+        with pytest.raises(failure) as caught:
+            app._save_changes(sessions={rows[0]['id']})
+    assert caught.value is error
+    assert app._state['revision'] == revision
+    assert load_saved_state(app.db) == before
+    assert app._publish_save_scope is None
+    row = next(row for row in reversed(app.performance_diagnostics.snapshot()['slowOperations'])
+               if row['operation'] == 'state.serialize')
+    assert row['scope'] == 'explicit' and row['owners'] == 1 and row['messages'] == 1
 
 
 async def test_unaffected_client_revision_advances_without_rebuild_or_old_frame_mutation(app_factory, monkeypatch):

@@ -1,5 +1,5 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
-import {showComposerOption} from './composer-options-helpers.mjs';
+import {composerOptionsPanel,showComposerOption} from './composer-options-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -12,7 +12,7 @@ const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch
 const picker=()=>page.getByLabel('Registered root bundles',{exact:true});
 const runtimeCalls=()=>page.request.get('http://127.0.0.1:8963/fixture/runtime-calls').then(r=>r.json());
 const options=page.getByRole('button',{name:'Model and reasoning settings',exact:true});
-const openOptions=async()=>{if(!await page.getByRole('dialog',{name:'Chat options',exact:true}).isVisible())await options.click();await showComposerOption(page,'bundle');await expect(picker()).toBeVisible()};
+const openOptions=async()=>{if(!await composerOptionsPanel(page).isVisible())await options.click();await showComposerOption(page,'bundle');await expect(picker()).toBeVisible()};
 try{
  await page.goto('http://127.0.0.1:8963');await showFixtureConversation(page);await options.waitFor();const source=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  await openOptions();

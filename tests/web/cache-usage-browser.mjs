@@ -37,7 +37,14 @@ try{
  await page.screenshot({animations:'disabled',path:'/tmp/amplifier-cache-usage-desktop.png'});
  await page.getByRole('button',{name:'Check for updates',exact:true}).click();
  await expect.poll(async()=>await (await page.request.get(url+'/fixture')).json()).toEqual(['check']);
- await page.getByRole('button',{name:'Update Amplifier',exact:true}).click();
+ // The check publishes authoritative health for the deliberately failed source
+ // rows. The same install action is then labeled "Try update again"; wait for
+ // that terminal publication, not just the fixture's earlier call recording.
+ await page.waitForFunction(()=>window.amplifier.getState().updates?.phase==='checked');
+ const install=page.locator('button[data-action="updates.install"]');
+ await expect(install).toHaveAccessibleName('Try update again');
+ await expect(install).toBeEnabled();
+ await install.click();
  await expect.poll(async()=>await (await page.request.get(url+'/fixture')).json()).toEqual(['check','install']);
  await page.setViewportSize({width:390,height:844});
  await page.getByRole('heading',{name:'Other cached sources',exact:true}).locator('..').scrollIntoViewIfNeeded();

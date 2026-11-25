@@ -40,6 +40,10 @@ def backend(monkeypatch):
             value['job'] = {'version': 1, 'id': args['requestId'], 'state': 'passed', 'terminal': True}
         return value
     monkeypatch.setattr(owner, 'invoke', invoke)
+    # These authority tests use a controlled transport. Exact same-process
+    # loaded-input and durable-permit proof has its own installed-helper tests.
+    monkeypatch.setattr(owner, 'invoke_cleanup',
+        lambda app, config, row, action, args, permit: owner.invoke(config, app.data_dir, row, action, args))
     return calls
 
 
@@ -482,7 +486,7 @@ def test_operator_config_is_exact_private_managed_core(app, tmp_path, monkeypatc
     assert status == 'ready' and configured['incus']['validated'] and configured['python'] == str(python)
     target.write_text(json.dumps({**value, 'backend': 'incus', 'incus': incus}))
     assert owner.configuration(app)[1] == 'unavailable'  # No mixed/implicit backend selection.
-    for bad in [{**value, 'retentionMode': 'full'}, {**value, 'retentionMode': 'invalid'}, {**value, 'image': 'arbitrary-image'}, {**value, 'commit': 'c' * 40}, {**value, 'dockerHost': 'tcp://remote:2375'}]:
+    for bad in [{**value, 'retentionMode': 'full'}, {**value, 'retentionMode': 'invalid'}, {**value, 'image': 'invalid image'}, {**value, 'commit': 'c' * 40}, {**value, 'dockerHost': 'tcp://remote:2375'}]:
         target.write_text(json.dumps(bad))
         assert owner.configuration(app)[1] == 'unavailable'
     target.write_text(json.dumps(value)); target.chmod(0o644)

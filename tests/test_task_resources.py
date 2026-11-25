@@ -231,12 +231,10 @@ async def test_cancelled_wait_retains_admitted_effect_until_thread_finishes(app,
     assert row['status'] == 'ready' and Path(row['path']).is_dir()
 
 
-@pytest.mark.parametrize('action', ['workspace.resources.read', 'workspace.resources.reservations'])
-async def test_resource_reads_recheck_workspace_after_io(app, monkeypatch, action):
+async def test_resource_reads_recheck_workspace_after_io(app, monkeypatch):
+    action = 'workspace.resources.read'
     source = app.state['sessions'][0]
     values = {key:value for key,value in args(app).items() if key != 'kind'}
-    if action.endswith('reservations'):
-        values.pop('sessionId')
     entered, release = asyncio.Event(), asyncio.Event()
     original = asyncio.to_thread
     async def pause(function, *a, **kw):

@@ -7,6 +7,7 @@ import pytest
 from amplifier_web.service import AppService, AppError
 from amplifier_web.shell_modules import DEFAULT, API, PROFILE
 from test_chat_navigation import state_fixture, chat
+from test_appearance_preferences import report as appearance_report, ack as appearance_ack
 
 
 @pytest.fixture
@@ -20,6 +21,20 @@ async def service(tmp_path):
         session.update(workspace=paths[session['workspaceId']], messages=[])
     yield app
     await app.close()
+
+
+@pytest.fixture
+async def attached_browser(service):
+    """Exercise the web storage protocol only in tests that edit appearance."""
+    identity = 'browser-one'
+    service.clients.attach(identity)
+    with service.clients.bind(identity):
+        queue = service.subscribe()
+    try:
+        await appearance_report(service, client=identity)
+        yield identity
+    finally:
+        service.unsubscribe(queue)
 
 
 async def settled_resources(app, identity):
@@ -134,7 +149,8 @@ async def test_age_import_is_narrow_once_and_survives_reload(service, surface, l
 
 
 @pytest.mark.asyncio
-async def test_prepare_preview_apply_report_revert_and_stale_revision(service):
+async def test_prepare_preview_apply_report_revert_and_stale_revision(service, attached_browser):
+    before = service.appearance.read(attached_browser)
     composition = deepcopy(DEFAULT)
     composition['instances'].reverse()
     composition['presentation'] = {'scheme': 'dark', 'layout': 'work', 'density': 'compact', 'accent': '#123456'}
@@ -147,17 +163,38 @@ async def test_prepare_preview_apply_report_revert_and_stale_revision(service):
     first = await service.dispatch('shell.changes.apply', args, command_id='apply-one')
     retry = await service.dispatch('shell.changes.apply', args, command_id='apply-one')
     assert retry == first
-    assert first['result']['status'] == 'awaiting-browser'
+    assert first['result']['status'] == 'awaiting-storage'
+    assert not first['result']['stored'] and not first['result']['activated']
+    assert service.shell.client(attached_browser)['revision'] == 0
+    assert service.shell.client(attached_browser)['composition'] == DEFAULT
+    pending = service.appearance.read(attached_browser)
+    assert pending['effective'] == before['effective']
+    assert pending['command']['after']['values'] == {**before['effective'], **composition['presentation']}
+    stored = await appearance_ack(service, client=attached_browser)
+    assert stored['stored'] and stored['activated'] and not stored['rendered']
+    assert service.shell.client(attached_browser)['revision'] == 1
+    assert service.appearance.read(attached_browser)['effective'] == pending['command']['after']['values']
+    assert service.appearance.read(attached_browser)['shared'] == before['shared']
     with pytest.raises(AppError, match='changed'):
         await command(service, 'shell.changes.apply', **args)
     with pytest.raises(AppError, match='different arguments'):
         await service.dispatch('shell.changes.apply', {**args, 'expectedRevision': 1}, command_id='apply-one')
     await command(service, 'shell.report', clientId='browser-one', revision=1, instances={'workspaces': 'ready', 'chats': 'ready'})
-    assert service.shell.client('browser-one')['lastGood'] == composition
+    assert service.shell.client('browser-one')['lastGood'] == {**composition, 'presentation': {}}
     await command(service, 'shell.report', clientId='browser-one', revision=0, instances={'workspaces': 'error'})
     assert service.shell.client('browser-one')['reported']['status'] == 'ready'
-    await command(service, 'shell.changes.revert', clientId='browser-one', changeId=change, expectedRevision=1)
+    reverted = await command(service, 'shell.changes.revert', clientId='browser-one', changeId=change, expectedRevision=1)
+    assert reverted['result']['status'] == 'awaiting-storage'
+    assert service.shell.client(attached_browser)['revision'] == 1
+    assert service.appearance.read(attached_browser)['effective'] == pending['command']['after']['values']
+    await appearance_ack(service, client=attached_browser)
+    assert service.shell.client(attached_browser)['revision'] == 2
     assert service.shell.client('browser-one')['composition'] == DEFAULT
+    restored = service.appearance.read(attached_browser)
+    assert restored['activeScope'] == before['activeScope']
+    assert restored['local']['values'] == before['local']['values']
+    assert restored['effective'] == before['effective']
+    assert restored['shared'] == before['shared']
 
 
 @pytest.mark.asyncio
@@ -483,33 +520,85 @@ async def test_sort_and_pin_order_use_shared_commands_and_keep_other_views(servi
         await command(service,'session.pinOrder',ids=['alpha'])
 
 
-async def test_committed_appearance_survives_new_window_recovery_and_restart(service):
-    from amplifier_web.shell_modules import ShellModules
+async def test_committed_appearance_survives_new_window_recovery_and_restart(service, attached_browser):
+    before = service.appearance.read(attached_browser)
     composition = deepcopy(DEFAULT)
     composition['presentation'] = {'scheme': 'light', 'interfaceDetail': 'minimal'}
     change = await prepare(service, composition)
-    await command(service, 'shell.changes.apply', clientId='browser-one', changeId=change, expectedRevision=0)
-    service.shell = ShellModules(service)
-    assert service.shell.client('fresh-window')['composition']['presentation'] == composition['presentation']
+    applied = await command(service, 'shell.changes.apply', clientId='browser-one', changeId=change, expectedRevision=0)
+    assert applied['result']['status'] == 'awaiting-storage'
+    assert service.appearance.read(attached_browser)['effective'] == before['effective']
+    await appearance_ack(service, client=attached_browser)
+    confirmed = service.appearance.read(attached_browser)
+    assert confirmed['effective'] == {**before['effective'], **composition['presentation']}
     dark = deepcopy(composition)
     dark['presentation']['scheme'] = 'dark'
     change = await prepare(service, dark, revision=1)
     await command(service, 'shell.changes.preview', clientId='browser-one', changeId=change, expectedRevision=1)
-    assert service.shell.client('during-preview')['composition']['presentation']['scheme'] == 'light'
+    assert service.appearance.read(attached_browser)['renderedPreferences']['scheme'] == 'dark'
+    assert service.appearance.read(attached_browser)['effective'] == confirmed['effective']
+    # A new document restores a whole confirmed browser record, not a host-global
+    # default or another document's temporary preview.
+    service.clients.attach('fresh-window')
+    fresh = service.appearance.read('fresh-window')
+    assert fresh['local']['values'] is None and not fresh['local']['reported']
+    await appearance_report(service, client='fresh-window', activeScope=confirmed['activeScope'],
+                            values=confirmed['local']['values'],
+                            storageVersion=confirmed['local']['storageVersion'])
+    assert service.appearance.read('fresh-window')['effective'] == confirmed['effective']
+    assert service.appearance.read('fresh-window')['preview'] is None
+    assert service.shell.client('fresh-window')['preview'] is None
     await command(service, 'shell.recover', clientId='browser-one', target='default', expectedRevision=1)
-    assert service.shell.client('browser-one')['composition']['presentation']['scheme'] == 'light'
+    assert service.shell.client(attached_browser)['preview'] is None
+    assert service.appearance.read(attached_browser)['effective'] == confirmed['effective']
+    assert service.appearance.read(attached_browser)['shared'] == before['shared']
+    await service.close()
+    restarted = AppService(service.data_dir, workspace=service.default_workspace)
+    try:
+        restarted.clients.attach('after-restart')
+        current = restarted.appearance.read('after-restart')
+        assert current['namespace'] == confirmed['namespace']
+        assert current['generation'] != confirmed['generation']
+        assert current['local']['values'] is None and not current['local']['reported']
+        await appearance_report(restarted, client='after-restart', activeScope=confirmed['activeScope'],
+                                values=confirmed['local']['values'],
+                                storageVersion=confirmed['local']['storageVersion'])
+        restored = restarted.appearance.read('after-restart')
+        assert restored['effective'] == confirmed['effective']
+        assert restored['shared'] == before['shared']
+        assert restored['preview'] is None
+        assert restarted.shell.client('after-restart')['preview'] is None
+    finally:
+        await restarted.close()
 
 
-async def test_existing_tab_appearance_migrates_without_inheriting_content(service):
-    from amplifier_web.shell_modules import ShellModules
-    saved = service.shell.client('legacy')
-    saved['composition']['presentation'] = {'scheme': 'light'}
-    saved['baselineView']['navFilter'] = 'private tab navigation'
-    service.shell.put('client', 'legacy', saved)
-    service.shell = ShellModules(service)
+async def test_existing_tab_preserves_components_without_promoting_legacy_appearance(service):
+    composition = deepcopy(DEFAULT)
+    composition['instances'].reverse()
+    composition['presentation'] = {'scheme': 'light'}
+    views = {'chats': {'view': {'navFilter': 'retained module filter'}, 'generation': 3}}
+    saved = {'revision': 3, 'composition': composition, 'lastGood': deepcopy(composition),
+             'baselineView': {'navFilter': 'private tab navigation'}, 'views': views,
+             'preview': {'id': 'legacy-preview', 'composition': deepcopy(composition)},
+             'preferenceCommand': {'id': 'legacy-storage'}, 'reported': {'status': 'ready'}}
+    raw = json.dumps(saved)
+    service.db.execute('INSERT INTO shell_records VALUES (?,?,?)', ('client', 'legacy', raw))
+    service.db.commit()
+    service.clients.attach('legacy')
+    service.clients.attach('resumed', resume='legacy')
+    resumed = service.shell.client('resumed')
+    assert resumed['composition']['instances'] == composition['instances']
+    assert resumed['views'] == views
+    assert resumed['baselineView'] == saved['baselineView']
+    assert resumed['composition']['presentation'] == resumed['lastGood']['presentation'] == {}
+    assert resumed['preview'] is None and resumed['reported'] is None
+    assert 'preferenceCommand' not in resumed
+    from amplifier_web.appearance_preferences import DEFAULTS
+    assert service.appearance.read('resumed')['effective'] == DEFAULTS
     fresh = service.shell.client('new')
-    assert fresh['composition']['presentation'] == {'scheme': 'light'}
+    assert fresh['composition']['presentation'] == {}
     assert fresh['baselineView'].get('navFilter') != 'private tab navigation'
+    assert service.db.execute("SELECT value FROM shell_records WHERE kind='client' AND id='legacy'").fetchone()[0] == raw
 
 
 async def test_nested_shell_command_does_not_hold_owner_lock_or_overwrite_later_view(service, monkeypatch):
@@ -551,19 +640,36 @@ async def test_nested_shell_command_does_not_hold_owner_lock_or_overwrite_later_
         await asyncio.gather(pending, return_exceptions=True)
 
 
-async def test_presentation_command_uses_current_preview_in_one_owner_unit(service):
+async def test_presentation_command_uses_current_preview_structure_and_patches_profile_atomically(service, attached_browser):
+    before = service.appearance.read(attached_browser)
     preview = deepcopy(DEFAULT)
+    preview['instances'].reverse()
     preview['presentation'] = {'scheme': 'dark', 'density': 'compact'}
     change = await prepare(service, preview)
     await command(service, 'shell.changes.preview', clientId='browser-one', changeId=change, expectedRevision=0)
+    assert service.appearance.read(attached_browser)['renderedPreferences'] == {
+        **before['effective'], **preview['presentation']}
+    assert service.appearance.read(attached_browser)['effective'] == before['effective']
     args = {'clientId': 'browser-one', 'instanceId': 'core.settings.appearance', 'generation': 0,
             'action': 'presentation.update', 'args': {'expectedRevision': 0, 'patch': {'scheme': 'light'}}}
     result = await asyncio.wait_for(service.dispatch('shell.command', args, command_id='presentation-owner'), 5)
     assert result['accepted']
+    assert result['result']['status'] == 'awaiting-storage'
+    assert service.shell.client(attached_browser)['revision'] == 0
+    assert service.shell.client(attached_browser)['preview']['composition'] == preview
+    pending = service.appearance.read(attached_browser)['command']
+    assert await service.dispatch('shell.command', args, command_id='presentation-owner') == result
+    assert service.appearance.read(attached_browser)['command'] == pending
+    await appearance_ack(service, client=attached_browser)
     client = service.shell.client('browser-one')
     assert client['preview'] is None and client['revision'] == 1
-    assert client['composition']['presentation'] == {'scheme': 'light', 'density': 'compact'}
+    assert client['composition']['instances'] == preview['instances']
+    assert client['composition']['presentation'] == {}
+    assert service.appearance.read(attached_browser)['effective'] == {**before['effective'], 'scheme': 'light'}
+    assert service.appearance.read(attached_browser)['shared'] == before['shared']
     assert await service.dispatch('shell.command', args, command_id='presentation-owner') == result
+    assert service.appearance.read(attached_browser)['command']['id'] == pending['id']
+    assert service.appearance.read(attached_browser)['command']['status'] == 'stored'
 
 
 @pytest.mark.parametrize('change', ['package', 'host'])

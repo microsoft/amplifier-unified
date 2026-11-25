@@ -1,20 +1,36 @@
 """A checkout move waits for native work to settle; it never cancels a tool."""
 import copy
+from contextlib import AsyncExitStack
 
 
-async def inspect(worker, request_id, cancel=False, *, update=False, configuration=False, expected=None):
+async def inspect(worker, request_id, cancel=False, *, update=False, configuration=False, expected=None, arm_only=False):
     continuing = update or configuration
-    async with worker.command_lock:
+    # Registration/removal is synchronous on the worker loop. In particular a
+    # tool requesting its own move may already own command_lock. Never wait for
+    # that tool in order to give it the pending receipt it needs to finish.
+    if cancel:
         marker = getattr(worker, '_handoff_boundary', None)
-        if cancel:
-            if marker and marker['id'] == request_id:
-                marker['unregister']()
-                worker._handoff_boundary = None
-            return {'cancelled': True}
+        if marker and marker['id'] == request_id:
+            marker['unregister']()
+            worker._handoff_boundary = None
+        return {'cancelled': True}
+    if not arm_only and worker.command_lock.locked():
+        # Enrolment acknowledges the original marker, not readiness. Update
+        # callers subsequently use observeOnly and must not see an acknowledged
+        # intent whose hook was never installed.
+        armed = await inspect(worker, request_id, update=update, configuration=configuration,
+                              expected=expected, arm_only=True)
+        if armed['waitingFor'] != ['generation']:
+            return armed
+        return {'ready': False, 'waitingFor': ['command']}
+    async with AsyncExitStack() as stack:
+        if not arm_only:
+            await stack.enter_async_context(worker.command_lock)
+        marker = getattr(worker, '_handoff_boundary', None)
         if marker and marker['id'] != request_id:
             raise ValueError('Another checkout move owns this runtime boundary.')
         if not worker.session or not worker.runtime:
-            return {'ready': worker.parked, 'waitingFor': ['runtime']}
+            return {'ready': False, 'waitingFor': ['runtime']}
         coordinator = worker.session.coordinator
         if expected and expected.get('observeOnly'):
             if not marker:
@@ -96,6 +112,24 @@ async def inspect(worker, request_id, cancel=False, *, update=False, configurati
                 name='unified-checkout-boundary', priority=0)
             worker._handoff_boundary = {'id': request_id, 'unregister': unregister, 'update': continuing,
                 'hadGoal': bool(coordinator.session_state.get('goal'))}
+            if update and (expected or {}).get('saveAndYield'):
+                async def request_yield(event, data):
+                    marker = worker._handoff_boundary
+                    if (not marker or marker['id'] != request_id or marker.get('yieldRequested')
+                            or not current_update() or not worker.runtime.generation
+                            or worker.runtime.generation.get('id') != requested_generation):
+                        return HookResult()
+                    marker['yieldRequested'] = True
+                    return HookResult(action='inject_context', ephemeral=True, context_injection_role='system',
+                        context_injection='A safe app update is waiting. Finish the current operation, '
+                            'save your progress and remaining steps, then end this turn. '
+                            'Keep the unfinished task active so it can resume after the update.')
+                remove_prompt = coordinator.hooks.register('provider:request', request_yield,
+                    name='unified-safe-update-yield', priority=6)
+                def remove_boundary_hooks():
+                    remove_prompt()
+                    unregister()
+                worker._handoff_boundary['unregister'] = remove_boundary_hooks
             if configuration:
                 worker._handoff_boundary.update(configuration=True, intent=copy.deepcopy(expected))
             if continuing:
@@ -103,20 +137,17 @@ async def inspect(worker, request_id, cancel=False, *, update=False, configurati
         if continuing:
             from .handoff_drain import _freeze
             _freeze(worker)
-        loop = coordinator.get('orchestrator')
-        waiting = []
-        if worker.runtime.generation: waiting.append('generation')
-        if worker.bridges: waiting.append('tool-replies')
-        if worker.approvals: waiting.append('approval')
-        if worker.operation_ids or worker.operation_controls: waiting.append('operations')
-        if worker.runtime.queued_inputs or not worker.runtime.inbox.empty(): waiting.append('inputs')
-        if loop and (loop.pending or loop._active_jobs()): waiting.append('children')
-        if worker.naming and worker.naming.pending and not worker.naming.pending.done(): waiting.append('naming')
-        if worker.remounting or worker.ownership.yielding: waiting.append('ownership')
-        # Park is the positive checkpoint + release evidence. An idle UI event
-        # alone does not establish that children or the calling tool settled.
-        if not worker.parked: waiting.append('checkpoint')
         marker = worker._handoff_boundary
+        if arm_only:
+            return {'ready': False, 'waitingFor': ['generation']}
+        waiting = worker.waiting_for()
+        # Checkout inspection is only a candidate, not a saved-history proof.
+        # Its existing cooperative release saves under the exact writer lease.
+        # Settings/updates still need their positive checkpoint and fresh recheck.
+        if continuing and not waiting and not await worker.checkpoint_idle():
+            waiting.append('checkpoint')
+        if worker._handoff_boundary is not marker:
+            return {'ready': False, 'waitingFor': ['cancelled'], 'cancelled': True}
         if configuration and not marker['updateCurrent']():
             raise ValueError('New input or changed task intent superseded the settings boundary.')
         # A goal may reach its cap or complete while the calling turn settles.
@@ -141,8 +172,8 @@ async def inspect(worker, request_id, cancel=False, *, update=False, configurati
 def checkpoint_configuration(worker):
     """Save one recovery proof while the native history writer lease is held.
 
-    Called only after the ordinary settled-worker history checkpoint, before
-    releasing its lease. A lost host reply can then read the same operation.
+    Called only after the ordinary settled-worker history checkpoint while
+    retaining its lease. A lost host reply can then read the same operation.
     """
     marker = getattr(worker, '_handoff_boundary', None) or {}
     if not marker.get('configuration') or not marker['updateCurrent']():

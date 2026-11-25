@@ -56,6 +56,13 @@ def synthetic_discovery():
                 'effective': {'instance': PROVIDER_ID, 'model': MODEL_ID},
                 'providers': [{'id': PROVIDER_ID, **metadata()}]}
 
+    async def ensure_routing_catalog(self, workspace):
+        # Opening ordinary Settings also reads routing.list. Suppress only its
+        # external Foundation download, not the production local routing reader.
+        # No invented matrices/roles and no persistent runtime preparation.
+        return None
+
     with patch.object(SetupManager, 'probe', probe), \
+            patch.object(SetupManager, 'ensure_routing_catalog', ensure_routing_catalog), \
             patch.object(draft_defaults, 'resolve_defaults', resolve_defaults):
         yield

@@ -10,12 +10,12 @@ and [DC](../../contracts/desktop-client.v1.md) own the promises.
 | Consumer / owner | Current scope | Owns | Does not own |
 | --- | --- | --- | --- |
 | [Amplifier for Mac](https://github.com/microsoft/amplifier-client-macos) | Released 0.1.0 early preview; native quick chat, notifications and optional Tempo; full workspace opens web/PWA | AppKit interaction, OS credentials, notifications, navigation adapter, signing and updates | Shared attention/history, command admission, provider/model decisions |
-| Windows client | Planned; no repository or implementation assigned by this record | Future platform-specific client, installation and acceptance | A second definition of desktop status, reply recovery or host permissions |
+| [Amplifier for Windows](https://github.com/bkrabach/amplifier-client-windows) | Early development preview; native tray and optional Tempo companion; full workspace stays in the web client | Windows-specific client source, installation and acceptance | A second definition of desktop status, reply recovery or host permissions |
 | Unified host and bundled web | Existing shared APIs and workspace | Pairing/revocation, command admission, chat classification, attention receipts and exact-chat links | Platform materials, local credentials or client update installers |
 
 Tempo names an optional interaction surface, not the family-wide app identity.
-The Mac app is Amplifier for Mac. Windows naming and implementation choices remain
-open; no Windows parity or deliverable is claimed here.
+The apps are Amplifier for Mac and Amplifier for Windows. The Windows repository
+is the current source home, not evidence of a qualified release or Mac parity.
 
 ## Current public seam
 
@@ -33,7 +33,7 @@ Canonical specifications:
 Mac-specific consumption and exact reviewed revisions belong in its
 [compatibility record](https://github.com/microsoft/amplifier-client-macos/blob/main/docs/compatibility.md).
 Windows should choose the current supported public observation resources after
-reviewing their compatibility; do not copy the temporary `/api/companion` adapter
+reviewing their compatibility; do not restore the retired `/api/companion` adapter
 or treat a future AHP lane as a prerequisite for an independent desktop client.
 No app identifier, platform artwork or release location is a new host permission.
 
@@ -53,7 +53,8 @@ The initial Mac acceptance used an owned synthetic host fixture with pairing
 changes overlaid on its source. It was not an untouched released-host matrix.
 The oldest compatible host release is **not yet qualified**. The fixture's version
 label must not become a minimum-version claim. Latest main is likewise not a test.
-Windows has no source, device, package or host-pair qualification in this record.
+This record contains no qualification for a Windows source revision, device,
+package or client/host pairing.
 
 ## Shared acceptance journeys
 
@@ -77,7 +78,7 @@ result and limitations. The platform repo retains sanitized evidence and gaps.
 | --- | --- | --- |
 | DSK1: qualify Mac preview gaps | Mac client; existing host APIs | DJ1–7 mapped to Mac clauses, fresh cold Reply/warm PWA, accessibility/display/network and performance evidence; retain untested cases |
 | DSK2: establish compatibility floor | Host + each independently released client | Exact released-host matrix including pairing absence, unsupported protocol, revocation and bounded observations; no inferred minimum |
-| DSK3: start Windows client | Future Windows owner; shared DC/CX/CS and public APIs | Platform vision/contracts, OS mechanism choices, explicit supported subset, fixture peer and Windows DJ1–7 evidence before parity claims |
+| DSK3: qualify Windows client scope | Windows client repo; shared DC/CX/CS and public APIs | Platform vision/contracts, OS mechanism choices, explicit supported subset, fixture peer and Windows DJ1–7 evidence before parity claims |
 | DSK4: integrated workspace | Client + bundled web owners; separate design | Versioned trusted-origin bridge, sign-in, files and navigation acceptance; no arbitrary native API exposure |
 | DSK5: optional device execution | Shared UI-use/provider and canonical computer-use owners, host authorization, platform client | Separately revocable execution grants, exact device/profile/tab identity, local Stop/Take over and unknown-effect recovery; chat credentials alone are insufficient |
 
@@ -89,8 +90,8 @@ journeys. Its supported surfaces and omissions must be explicit.
 
 This documentation change identifies an existing client and extracts existing
 desktop promises; it changes no wire fields, runtime, permissions or release policy.
-Mac maintainers own platform evidence; Unified maintainers own shared seams.
-The Windows owner is unassigned. Future shared changes use the
+Mac and Windows client maintainers own their platform evidence; Unified
+maintainers own shared seams. Future shared changes use the
 [CD impact record](development-plan.md#shared-change-impact-record).
 
 This applies the method already adopted in [direction](direction.md): explicit

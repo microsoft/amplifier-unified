@@ -41,6 +41,8 @@ def compact_receipt(result, *, action, session_id, revision, client_id=None, com
         paths.append('/voice')
     elif action.startswith('permissions.'):
         paths.append('/permissions')
+    elif action.startswith('instanceBranding.'):
+        paths.append('/instanceBranding')
 
     access = {
         'note': 'Admission and the exact action result are preserved. Pending or accepted does not prove completion or rendering. Read only the relevant state if further verification is needed; do not replay an uncertain action.',

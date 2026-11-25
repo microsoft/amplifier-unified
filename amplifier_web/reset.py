@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager, ExitStack, suppress
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -517,6 +518,54 @@ def verify(prefix, env):
             env=env, timeout=120)
 
 
+def prepare_saved_configurations(prefix, home, backup, env, moves):
+    """Use only the verified new installation to interpret legacy saved plans."""
+    sessions = home / "sessions"
+    if sessions.is_symlink():
+        raise ValueError("Saved configurations are external; refusing to retire their sources.")
+    # Keep empty installations independent of ordinary app imports, including
+    # the synthetic install probe. Pending requests also retain source intent.
+    if not any(path for name in ("configuration.json", "effective-configuration.json",
+                                 "pending-configuration.json")
+               for path in sessions.glob("*/" + name)):
+        return
+    destination = backup / "portable-configurations"
+    progress("Preserving saved conversation sources")
+    try:
+        command(prefix / "bin/python", "-I", "-c",
+                "import json,sys; from amplifier_web.recovery import stage_reset_configurations; "
+                "stage_reset_configurations(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3])",
+                home, json.dumps(REGENERABLE), destination, env=env, timeout=300)
+    except subprocess.SubprocessError as error:
+        raise RuntimeError("Saved conversation sources could not be prepared for reset. "
+                           "No cache was retired. See the repair report for the affected "
+                           "plan or preparation error.") from error
+    entries = json.loads((destination / "prepared.json").read_text())
+    prepared = []
+    for entry in entries:
+        relative = Path(entry["path"])
+        if (len(relative.parts) != 3 or relative.parts[0] != "sessions"
+                or relative.parts[1] in {".", ".."}
+                or relative.name not in {"configuration.json", "effective-configuration.json"}):
+            raise ValueError("Invalid prepared configuration path.")
+        path = home / relative
+        if any(part.is_symlink() for part in (path, path.parent)):
+            raise ValueError("Saved configuration is redirected; no cache was retired.")
+        observed = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(65536), b""):
+                observed.update(chunk)
+        if observed.hexdigest() != entry["before"]:
+            raise ValueError("Saved configuration changed during reset; no cache was retired.")
+        prepared.append((path, backup / relative, destination / relative))
+    for path, saved, staged in prepared:
+        saved.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        shutil.copy2(path, saved)
+        saved.chmod(0o600)
+        moves.append((path, saved))
+        staged.replace(path)
+
+
 def assert_no_processes(prefix, home):
     """Older hosts/workers predate the shared lease; never remove their files."""
     output = command("ps", "-axo", "pid=,command=", capture=True).stdout
@@ -679,6 +728,7 @@ def _repair(home, uv, tool_root, bin_root, source, env, service, no_start, opera
         progress("Checking installed components")
         verify(prefix, env)
         progress("Installed components checked", done=True)
+        prepare_saved_configurations(prefix, home, backup, env, moves)
         for name in REGENERABLE:
             path = home / name
             if path.exists() or path.is_symlink():

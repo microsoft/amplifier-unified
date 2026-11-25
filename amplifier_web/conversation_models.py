@@ -54,7 +54,7 @@ def publish_catalogs(management, entries):
     return changed
 
 
-async def browse(management, session, *, refresh=False, instance=None):
+async def browse(management, session, *, refresh=False, instance=None, include_history=True):
     from .draft_defaults import resolve_defaults
     service = management.service
     sid = session['id']
@@ -66,7 +66,7 @@ async def browse(management, session, *, refresh=False, instance=None):
     # which conversation or Settings surface requested it. No runtime startup.
     result = await resolve_defaults(service.data_dir, session['workspace'], pending_bundle['bundle'] if pending_bundle else session.get('bundle'),
         service.state['settings'].get('appBundle'), session_id=session.get('runtimeSessionId') or session.get('nativeIdentity') or sid,
-        catalog=True, refresh=refresh, instance=instance, catalog_cache=management.provider_catalog,
+        catalog=True, refresh=refresh, instance=instance, cache_only=True, catalog_cache=management.provider_catalog,
         desired_bundle=bool(pending_bundle), global_only=session.get('location',{}).get('kind')=='managed')
     if result.get('providers') and not (session.get('pendingModelSelection') or session.get('selection') or reported_selection(service, session) or result.get('effective')):
         # Ordinary display/refresh must not prepare a whole bundle just to
@@ -79,18 +79,31 @@ async def browse(management, session, *, refresh=False, instance=None):
     result['connectionBindings'] = conversation_bindings(service.data_dir, session['workspace'],
         session.get('runtimeSessionId') or session.get('nativeIdentity') or sid, result.get('providers', []),
         global_only=session.get('location',{}).get('kind')=='managed')
+    from .next_message_impact import impact, observation, prior_request
+    archived = None
+    if include_history and '_lastPromptUsage' not in session:
+        archived = await asyncio.to_thread(prior_request, service.data_dir, session)
     async with service.lock:
         if (revision != service.state.get('configurationRevision', 0)
                 or desired_revision != service._session(sid, hydrate=False).get('nextMessageRevision', 0)
                 or interruption_revision != service._session(sid, hydrate=False).get('interruptionRevision', 0)):
             return
-        current = service._session(sid)
+        current = service._session(sid, hydrate=False)
         selection = current.get('selection') if 'selection' in current else result.get('selection')
         result.update(effective=current.get('pendingModelSelection') or selection or reported_selection(service, current) or result.get('effective', {}),
                       pinned=bool(selection), phase='ready', configurationRevision=revision,
                       nextMessageRevision=desired_revision)
         control = service.state.setdefault('runtimeControl', {}).setdefault(sid, {})
-        changed = control.get('configuration.catalog') != result
+        if archived and '_lastPromptUsage' not in current:
+            from .next_message_impact import context_summary
+            current['_lastPromptUsage'] = observation(archived)
+            current['lastRequestContext'] = context_summary(current['_lastPromptUsage'])
+        mounted = (current.get('runtimeReport') or {}).get('provider_choices', ())
+        hint = impact(current.get('_lastPromptUsage'), result.get('providers', ()), mounted)
+        hint_changed = current.get('nextMessageImpact') != hint
+        if hint_changed:
+            current['nextMessageImpact'] = hint
+        changed = hint_changed or control.get('configuration.catalog') != result
         control['configuration.catalog'] = result
         catalog_changed = publish_catalogs(management, entries)
         if changed or catalog_changed:
@@ -105,7 +118,7 @@ async def select(management, session, requested):
     if not selected:
         raise ValueError('Choose a provider and model')
     async with service.lock:
-        current = service._session(session['id'])
+        current = service._session(session['id'], hydrate=False)
         if not management.configuration_idle(current):
             raise ValueError('Finish active work before changing this conversation model')
         # Validation of mounted capabilities and compaction happens on Send.
@@ -115,6 +128,7 @@ async def select(management, session, requested):
             global_only=current.get('location',{}).get('kind')=='managed')
         current['selection'] = copy.deepcopy(selected)
         current['pendingModelSelection'] = copy.deepcopy(selected)
+        current.pop('pendingChoiceAuthority', None)  # Independent owner choice supersedes peer model intent.
         current['nextMessageRevision'] = current.get('nextMessageRevision', 0) + 1
         current['nextMessageStatus'] = 'saved'
         current.pop('nextMessageError', None)
@@ -151,7 +165,7 @@ async def request_browse(management, session, *, refresh=False, instance=None):
             while True:
                 observed=requested[sid][0]
                 try:
-                    await browse(management,service._session(sid),refresh=observed[1],instance=observed[3])
+                    await browse(management,service._session(sid, hydrate=False),refresh=observed[1],instance=observed[3])
                 except asyncio.CancelledError:
                     raise
                 except Exception:

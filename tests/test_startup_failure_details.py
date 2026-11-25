@@ -48,6 +48,148 @@ async def test_send_keeps_private_startup_log_location_after_admission_fails(tmp
         await restored.close()
 
 
+async def test_host_failure_before_start_saves_only_bounded_cause(tmp_path, monkeypatch):
+    runtime = RuntimeManager(retention={'prewarm_on_select': False})
+    app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    monkeypatch.setattr(runtime, 'start', AsyncMock(side_effect=FileNotFoundError(2, 'private-detail')))
+    try:
+        await app.dispatch('session.create', {})
+        with pytest.raises(AppError) as rejected:
+            await app.dispatch('conversation.send', {'text': 'hello'}, command_id='host-start')
+        assert rejected.value.receipt['delivery'] == 'failed'
+        failure = app._session()['failure']
+        assert failure['startupFailureFacts']['errors'] == [{'class': 'FileNotFoundError', 'errno': 2}]
+        assert 'private-detail' not in json.dumps(failure)
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('facts', [
+    {'errors': [{'class': 'RuntimeError'}, {'class': 'PermissionError', 'errno': 13}], 'truncated': False},
+    None,
+    {'errors': [{'class': 'PrivateSecretClass', 'message': 'private'}], 'truncated': False},
+])
+@pytest.mark.parametrize('module', [False, True])
+async def test_startup_facts_survive_reader_saved_failure_inspection_and_reopen(tmp_path, monkeypatch, facts, module):
+    """A synthetic protocol peer; no provider, production session or retry."""
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    event = {'type': 'runtime.error', 'error': 'Unclassified private startup payload'}
+    if facts is not None:
+        event['startupFailureFacts'] = facts
+    if module:
+        event.update(code='module_load_failed', moduleFailures=[
+            {'module': 'tool-fixture', 'type': 'tool', 'reason_code': 'validation_failed'}])
+    cleanup = {'type': 'runtime.error', 'error': 'secondary private cleanup payload',
+               'startupFailureFacts': {'errors': [{'class': 'ValueError'}], 'truncated': False}}
+    fixture = ('import sys; sys.stdin.readline(); print(' + repr(json.dumps(event)) +
+               ',flush=True); print(' + repr(json.dumps(cleanup)) + ',flush=True)')
+    runtime = RuntimeManager(command=[sys.executable, '-c', fixture], retention={'prewarm_on_select': False})
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    valid = facts is not None and facts['errors'][0]['class'] == 'RuntimeError'
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        with pytest.raises(AppError):
+            await app.dispatch('conversation.send', {'text': 'Saved unsent input'}, command_id='facts-start')
+        failure = copy.deepcopy(app._session()['failure'])
+        assert failure['category'] == 'worker_startup'
+        assert ('startupFailureFacts' in failure) == valid
+        if valid:
+            assert failure['startupFailureFacts'] == facts
+            import uuid
+            assert str(uuid.UUID(failure['startupAttemptId'])) == failure['startupAttemptId']
+        report = (await app.dispatch('session.inspect', {'id': sid}))['result']
+        assert report['failure'] == failure
+        assert 'private' not in json.dumps(report)
+        assert not runtime.workers
+        await app.close()
+        app = AppService(tmp_path, workspace=tmp_path)
+        report = (await app.dispatch('session.inspect', {'id': sid}))['result']
+        assert report['failure'] == failure
+        assert app._session()['messages'][0]['delivery']['status'] == 'failed'
+    finally:
+        await app.close()
+
+
+async def test_stop_owns_candidate_configuration_preparation_before_start(tmp_path):
+    import asyncio
+    from amplifier_web.runtime import RuntimeStartupError
+    entered, settled = asyncio.Event(), asyncio.Event()
+    runtime = RuntimeManager(command=[sys.executable, '-c', 'raise AssertionError("must not spawn")'])
+    async def prepare(session):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            settled.set()
+    runtime.bind_input_configuration(prepare)
+    async def emit(*args):
+        pass
+    task = asyncio.create_task(runtime._start_for_input(
+        {'id': 'cold', 'workspace': str(tmp_path), 'nextMessageRevision': 1}, emit))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        # A warmup/start cannot replace the callback's cancellation owner.
+        with pytest.raises(RuntimeStartupError, match='already in progress'):
+            await runtime.start({'id': 'cold', 'workspace': str(tmp_path)}, emit)
+        await runtime.stop('cold')
+        assert settled.is_set()
+        with pytest.raises(RuntimeStartupError, match='stopped'):
+            await task
+        assert not runtime._preparations and not runtime.workers
+    finally:
+        await runtime.close()
+
+
+async def test_closed_runtime_never_starts_candidate_configuration(tmp_path):
+    from amplifier_web.runtime import RuntimeHostClosingError
+    runtime = RuntimeManager()
+    callback = AsyncMock()
+    runtime.bind_input_configuration(callback)
+    runtime.begin_shutdown()
+    with pytest.raises(RuntimeHostClosingError):
+        await runtime._start_for_input({'id': 'closed', 'nextMessageRevision': 1}, AsyncMock())
+    callback.assert_not_awaited()
+    await runtime.close()
+
+
+async def test_startup_publication_cannot_overwrite_later_configuration_owner(tmp_path):
+    import asyncio
+    from amplifier_web.runtime import RuntimeStartupError
+    publishing, release, preparing, settled = (asyncio.Event() for _ in range(4))
+    runtime = RuntimeManager(command=[sys.executable, '-c', 'raise AssertionError("must not spawn")'])
+    async def emit(*args):
+        publishing.set()
+        await release.wait()
+    async def prepare(session):
+        preparing.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            settled.set()
+    runtime.bind_input_configuration(prepare)
+    session = {'id': 'cold', 'workspace': str(tmp_path)}
+    startup = asyncio.create_task(runtime.start(session, emit))
+    callback = None
+    try:
+        await asyncio.wait_for(publishing.wait(), 2)
+        callback = asyncio.create_task(runtime._start_for_input({**session, 'nextMessageRevision': 1}, emit))
+        await asyncio.wait_for(preparing.wait(), 2)
+        release.set()
+        with pytest.raises(RuntimeStartupError, match='already in progress'):
+            await startup
+        await runtime.stop('cold')
+        with pytest.raises(RuntimeStartupError, match='stopped'):
+            await callback
+        assert settled.is_set() and not runtime._preparations and not runtime.workers
+    finally:
+        release.set()
+        if callback is not None and not callback.done():
+            callback.cancel()
+        await asyncio.gather(startup, *( [callback] if callback else []), return_exceptions=True)
+        await runtime.close()
+
+
 @pytest.mark.parametrize('entry', ['send', 'controls', 'warmup'])
 async def test_preworker_qualification_failure_is_saved_and_settles_status(tmp_path, monkeypatch, entry):
     from amplifier_web import runtime_profiles
@@ -204,6 +346,38 @@ async def test_failed_retry_without_new_worker_detail_does_not_reuse_old_error(t
         await app.close()
 
 
+@pytest.mark.parametrize('distinct', [False, True])
+async def test_startup_error_keeps_distinct_public_detail_without_exact_duplicate(tmp_path, distinct):
+    from amplifier_web.runtime import RuntimeStartupError
+
+    summary = 'The conversation worker could not start. No input was sent.'
+    detail = 'Startup details were saved locally to /safe/worker.log.' if distinct else summary
+    class Runtime:
+        async def send(self, session, text, input_id, emit):
+            await emit('runtime.error', {'sessionId': session['id'], 'error': detail,
+                                        'errorType': 'RuntimeStartupError', 'phase': 'worker_startup'})
+            raise RuntimeStartupError(summary) from ValueError('private-exception-chain')
+
+        async def close(self):
+            pass
+
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        with pytest.raises(AppError) as rejected:
+            await app.dispatch('conversation.send', {'text': 'Saved input'}, command_id='public-detail')
+        error = str(rejected.value)
+        assert error.count(summary) == 1
+        assert error.count(detail) == 1
+        assert 'Your message has been saved.' in error
+        assert 'private-exception-chain' not in error
+        assert app._session()['error'] == error
+        duplicate = await app.dispatch('conversation.send', {'text': 'Saved input'}, command_id='public-detail')
+        assert duplicate['duplicate'] and duplicate['error'] == error
+    finally:
+        await app.close()
+
+
 @pytest.mark.parametrize('detail, category, label', [
     ('AuthenticationError: provider authentication failed', 'authentication', 'AuthenticationError'),
     ('RateLimitError: provider limit reached', 'rate_limit', 'RateLimitError'),
@@ -237,5 +411,79 @@ async def test_specific_classified_startup_error_keeps_its_guidance(tmp_path, mo
         assert 'private-provider-payload' in (tmp_path / 'logs/workers' / session['diagnosticReceipt']).read_text()
         assert session['messages'][0]['delivery']['status'] == 'failed'
         assert not runtime.workers
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize(('cold_execution', 'active_turn', 'start_in_tail'), [
+    (False, True, True), (True, True, True), (True, False, True), (True, True, False), (True, False, False)])
+async def test_failed_new_input_preserves_open_turn_and_update_hold(tmp_path, monkeypatch, cold_execution, active_turn, start_in_tail):
+    from amplifier_web import update_blockers
+    from amplifier_web.cold_display import MARKER, execution_reference
+    from amplifier_web.execution import ensure_turn
+    from amplifier_web.runtime import RuntimeStartupError
+    from amplifier_web.session_health import causal_timeline
+    from test_service import Runtime
+
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'native'))
+    runtime = Runtime()
+    app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        session = app._session()
+        sid = session['id']
+        generation = {'sessionId': sid, 'rootSessionId': sid, 'generation_id': 'existing-generation'}
+        ensure_turn(session, 'existing-input', 'Original request')
+        await app.on_runtime_event('runtime.generation', {**generation, 'event': 'generation.started',
+                                   'initial_input_id': 'existing-input', 'runtimeOwnerId': 'existing-worker'})
+        await app.on_runtime_event('runtime.status', {'sessionId': sid, 'event': 'input.delivered',
+                                   'status': 'working', 'inputId': 'existing-input'})
+        if not start_in_tail:
+            session['generations'] = []
+        if not active_turn:
+            # A legacy owner can have a native start with no terminal but an interrupted display turn.
+            session['execution']['turns'][0]['phase'] = 'interrupted'
+            session['status'] = 'interrupted'
+        if cold_execution:
+            # The current execution can live behind a stored resource when the chat is reopened.
+            tree = session.pop('execution')
+            session.setdefault(MARKER, {})['execution'] = execution_reference(app.db, tree)
+            assert 'execution' not in dict.keys(session)
+
+        async def fail_before_admission(_session, text, input_id, emit):
+            # A startup error can arrive on the new worker's pipe before send() rejects.
+            await emit('runtime.status', {'sessionId': sid, 'status': 'starting', 'phase': 'runtime-setup'})
+            await emit('runtime.error', {'sessionId': sid, 'phase': 'worker_startup', 'errorType': 'RuntimeStartupError'})
+            await emit('runtime.ended', {'sessionId': sid, 'runtimeOwnerId': 'failed-worker', 'status': 'interrupted'})
+            await emit('runtime.status', {'sessionId': sid, 'status': 'stopped', 'phase': 'worker_startup'})
+            raise RuntimeStartupError('New input was not admitted')
+
+        runtime.send = fail_before_admission
+        with pytest.raises(AppError) as rejected:
+            await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'Follow-up'}, command_id='new-input')
+
+        assert rejected.value.receipt['delivery'] == 'failed'
+        assert session['messages'][-1]['delivery']['status'] == 'failed'
+        if not active_turn:
+            assert session['status'] == 'error' and session['failure']['category'] == 'worker_startup'
+            assert session['execution']['turns'][0]['phase'] == 'interrupted'
+            assert update_blockers.working_sessions(app) == 0
+            return
+        assert session['status'] == 'working' and not session.get('failure')
+        assert session['collaborationGeneration']['terminal'] is False
+        original = next(turn for turn in session['execution']['turns'] if turn['id'] == 'existing-input')
+        assert original['phase'] == 'running' and not original.get('endedAt')
+        assert update_blockers.working_sessions(app) == 1
+        faults = [e for e in session['runtimeEvents'] if e['type'] == 'runtime.error']
+        assert len(faults) == 2 and faults[-1]['inputId'] == 'new-input'
+        assert all(e['scope'] == 'runtime' and not e.get('generationId') for e in faults)
+        assert all(e.get('type') != 'runtime.error' for e in causal_timeline(session))
+
+        await app.on_runtime_event('runtime.generation', {**generation, 'event': 'generation.finished',
+                                   'input_ids': ['existing-input'], 'disposition': 'manager_turn_finished'})
+        await app.on_runtime_event('runtime.status', {'sessionId': sid, 'event': 'session.idle', 'status': 'idle'})
+        assert session['collaborationGeneration']['completed'] is True
+        assert next(turn for turn in session['execution']['turns'] if turn['id'] == 'existing-input')['phase'] == 'completed'
+        assert update_blockers.working_sessions(app) == 0
     finally:
         await app.close()

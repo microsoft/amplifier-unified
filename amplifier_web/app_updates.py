@@ -112,7 +112,8 @@ else:
  # without host site-packages, environment paths, or user-site metadata.
  with tempfile.TemporaryDirectory() as cwd:
   result=subprocess.run([sys.executable,"-I","-S","-c",worker_probe,str(p)],
-                        cwd=cwd,capture_output=True,text=True,timeout=15)
+                        cwd=cwd,capture_output=True,text=True,timeout=15,
+                        creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
  assert result.returncode==0
  facts["workerImportsAvailable"]=True
  facts.update(ok=True,stage="complete")
@@ -145,7 +146,7 @@ def version_tuple(value):
 def supersedes_staged(release, pending):
     """Only a newer published app may supersede an unactivated app candidate."""
     latest = version_tuple(release.get('latest'))
-    staged = version_tuple(pending.get('latest'))
+    staged = version_tuple(pending.get('latest') or pending.get('version'))
     return bool(not pending.get('featureSelection') and release.get('status') == 'update'
                 and release.get('canInstall') is not False and latest and staged and latest > staged
                 and re.fullmatch('[a-f0-9]{40}', str(release.get('revision', '')))
@@ -160,25 +161,31 @@ async def check_staged(manager):
     leaves the previously qualified target usable, including while offline.
     """
     state = manager.service.state['updates']
-    pending = state['pendingApp']
+    pending_app = state.get('pendingApp')
+    pending = pending_app or manager.running_identity
     await manager.publish(applicationCheckPending=True, lastAttempt=time.time())
     try:
         release = await check()
         previous = state.get('application', {})
         if release.get('status') == 'check_failed':
-            await manager.publish(applicationCheckWarning='Could not check for a newer release. The prepared update is still available.')
+            await manager.publish(applicationCheckWarning=(
+                'Could not check for a newer release. The prepared update is still available.'
+                if pending_app else 'Could not check for a newer application release. The staged Smart Tool is kept.'))
             return
         # A stale mirror/older channel result must not discard a newer known
         # target, downgrade a candidate, or relabel a moved tag as validated.
         known = previous if supersedes_staged(previous, pending) else pending
-        if (supersedes_staged(release, known)
-                or (release.get('revision') == known.get('revision')
-                    and version_tuple(release.get('latest')) == version_tuple(known.get('latest')))):
+        matches = (release.get('revision') == known.get('revision')
+                   and version_tuple(release.get('latest')) == version_tuple(known.get('latest')))
+        if supersedes_staged(release, known) or (
+                matches and (pending_app or supersedes_staged(release, manager.running_identity))):
             release['runningRevision'] = manager.running_identity['revision']
             items = [release if row.get('id') == 'application' else row for row in state.get('items', [])]
             if not any(row.get('id') == 'application' for row in items):
                 items.append(release)
-            await manager.publish(application=release, items=items, appAvailable=True)
+            counts = {} if pending_app else {
+                'available': max(1, state.get('available', 0) + int(not state.get('appAvailable')))}
+            await manager.publish(application=release, items=items, appAvailable=True, **counts)
         await manager.publish(lastCheck=time.time(), applicationCheckWarning=None)
     finally:
         await manager.publish(applicationCheckPending=False, pendingAppCheckAt=time.time())
@@ -301,7 +308,7 @@ async def github_read(path, *, raw=False, timeout=30):
 
 
 RELEASE_CHECK_STAGES = frozenset({'release_metadata', 'release_revision', 'components'})
-RELEASE_CHECK_REASONS = frozenset({'timeout', 'git_missing', 'invalid_response', 'unavailable'})
+RELEASE_CHECK_REASONS = frozenset({'timeout', 'git_missing', 'invalid_response', 'unavailable', 'certificate', 'roots_unavailable'})
 _RELEASE_CHECK_DETAILS = {
     'release_metadata': 'Could not read published-release metadata. Check this host’s network access to GitHub, then check for updates again.',
     'release_revision': 'Published-release metadata was read, but its Git tag could not be verified. Check Git and this host’s access to the public repository, then check for updates again.',
@@ -361,6 +368,11 @@ async def check():
                 'invalid_response' if isinstance(error,(ValueError,KeyError)) else 'unavailable')
         detail=('Git is not available to this running host. Install Git or use the installer-managed launcher, then check for updates again.'
                 if reason=='git_missing' else _RELEASE_CHECK_DETAILS[stage])
+        from .update_checks import RegistryLookupFailure, lookup_guidance
+        if stage=='components' and isinstance(error,RegistryLookupFailure):
+            # The registry lookup of a component failed: say which kind, in plain words.
+            reason=error.reason
+            detail=lookup_guidance(reason,application=True)
         return {**base,'status':'check_failed','checkStage':stage,'checkReason':reason,
                 'detail':detail+' No update was installed by this check.'}
 
@@ -376,7 +388,9 @@ async def stage(manager, *, feature=None, request_id=None):
     except Exception:
         phase=manager.diagnostics.state.get('latest',{}).get('phase','stage')
         if manager.diagnostics.state.get('latest',{}).get('status')!='failed':manager.diagnostics.record(phase,'failed',errorType='ValueError')
-        await manager.publish(phase='error',error='Application update failed during '+phase.replace('-',' ')+'. The running host was retained.')
+        from .update_command_details import guidance
+        await manager.publish(phase='error',error='Application update failed during '+phase.replace('-',' ')+'. The running host was retained.'+
+                              guidance(manager.diagnostics.state.get('lastFailure', {})))
         raise
 
 
@@ -390,7 +404,8 @@ async def _stage(manager, *, selected=None, extras):
     revision=release['revision']
     if not re.fullmatch('[0-9a-f]{40}',revision):raise ValueError('Invalid release revision')
     generation=uuid.uuid4().hex
-    folder=manager.directory/'applications'/revision/generation
+    from .application_generations import directory
+    folder=directory(manager.home, revision, generation)
     folder.mkdir(parents=True,exist_ok=True,mode=0o700)
     env={**git_environment(),'UV_TOOL_DIR':str(folder/'tools'),'UV_TOOL_BIN_DIR':str(folder/'bin')}
     uv=shutil.which('uv')
@@ -408,6 +423,16 @@ async def _stage(manager, *, selected=None, extras):
         manager.diagnostics.sync('host-components-record',write_private,folder/'host-components.txt',components.requirements(host_graph,extras=dependency_extras))
         resolution_args=['--refresh','--overrides',str(folder/'host-components.txt'),
                          '--with-requirements',str(folder/'host-components.txt')]
+    from .safe_update import component_restart, require_host_graph
+    drain = manager.service.state['updates'].get('drain') or {}
+    required_retry = component_restart(drain, release)
+    if required_retry:
+        # Resolve the versions selected by this update even if a branch or index
+        # advances while the staged app is waiting. Preserve source subdirectories.
+        requested = [{'name': name, **spec} for name, spec in sorted(drain['requiredHost'].items())]
+        overrides = folder / 'required-host.txt'
+        manager.diagnostics.sync('host-components-record', write_private, overrides, components.requirements(requested))
+        resolution_args.extend(['--overrides', str(overrides)])
     await manager.publish(phase='staging',detail='Installing the app release in an isolated environment…',error=None)
     # Ordinary updates consume published bytes. Same-app additions preserve an
     # existing Git source or the exact qualified wheel, never a newer release.
@@ -428,22 +453,32 @@ async def _stage(manager, *, selected=None, extras):
         raise ValueError('Candidate component graph does not match the selected application')
     if artifact is not None and app.get('delivery') != {key: artifact[key] for key in ('url', 'sha256')}:
         raise ValueError('Candidate component graph does not match the verified release artifact')
+    if required_retry:
+        require_host_graph(drain, graph)
     if selected:
         from .app_features import require_preserved_components
         require_preserved_components(graph, host_graph)
         from .app_feature_probe import DEPENDENCY_PROBE
         await manager.diagnostics.run('candidate-dependencies',process,python,'-I','-c',DEPENDENCY_PROBE,*extras,timeout=30)
+    from . import app_worker_qualification
+    worker_selection = app_worker_qualification.prepared(manager.home)
+    worker_readiness = None
+    if worker_selection and worker_selection['readiness'] == 'prepared':
+        worker_readiness = await manager.diagnostics.run('candidate-worker-start', app_worker_qualification.qualify,
+            manager.home, python, folder, worker_selection)
     manager.diagnostics.sync('candidate-components-record',write_private,folder/'components.txt',components.requirements(graph))
     artifact_proof = {}
     if artifact is not None:
         from .application_generations import bootstrap_identity
         artifact_proof = {'artifact': artifact, 'installation': bootstrap_identity(python.parent.parent)}
-    manager.diagnostics.sync('candidate-record',write_private,folder/'validated.json',json.dumps({'revision':revision,'version':installed,'hostVersion':__version__,'attemptId':manager.diagnostics.state['attemptId'],'extras':extras,'generation':generation,'componentGraph':graph,'componentDigest':components.digest(graph),'hostGraph':host_graph,'hostDigest':components.digest(host_graph),**artifact_proof,**({'managedBrowser':browser_receipt} if browser_receipt else {}),**({'featureSelection':selected} if selected else {})}))
+    manager.diagnostics.sync('candidate-record',write_private,folder/'validated.json',json.dumps({'revision':revision,'version':installed,'hostVersion':__version__,'attemptId':manager.diagnostics.state['attemptId'],'extras':extras,'generation':generation,'componentGraph':graph,'componentDigest':components.digest(graph),'hostGraph':host_graph,'hostDigest':components.digest(host_graph),'retainedWorker':worker_selection,'retainedWorkerResult':worker_readiness,**artifact_proof,**({'managedBrowser':browser_receipt} if browser_receipt else {}),**({'featureSelection':selected} if selected else {})}))
     manager.diagnostics.clear_failure()
     manager.diagnostics.record('stage','succeeded',observedVersion=installed)
     intent = manager.service.state['updates'].get('applicationIntent')
+    # The publication derives the text: with no work running it says that the update starts now.
+    from .update_health import PREPARED_WAITING
     await manager.publish(phase='app-staged',pendingApp={**release,'attemptId':manager.diagnostics.state['attemptId'],'generation':generation,'extras':extras,
-        **({'updateIntent': copy.deepcopy(intent)} if intent is not None else {})},detail='Application release validated. Waiting for work to finish before restarting.')
+        **({'updateIntent': copy.deepcopy(intent)} if intent is not None else {})},detail=PREPARED_WAITING)
     if selected:
         from .app_features import record
         await record(manager, selected['requestId'], 'qualified', selection=selected,
@@ -465,16 +500,23 @@ async def _activate_serialized(manager, *, force=None):
     async with manager.lock:
         state = manager.service.state['updates']
         pending = state.get('pendingApp') or {}
-        if force is None and supersedes_staged(state.get('application', {}), pending):
+        from .safe_update import waiting, component_restart
+        pinned = waiting(state) or component_restart(state.get('drain') or {}, pending)
+        if force is None and not pinned and supersedes_staged(state.get('application', {}), pending):
             # A check may finish while activation waits for the runtime owner.
             # Let the existing install intent qualify that newer target first.
             # Explicit force confirmation remains bound to its exact candidate.
             manager.wakeup.set()
             return
         selected = pending.get('featureSelection')
+        revoked = None
         try:
             with ExitStack() as holds:
-                await _activate(manager, force=force, holds=holds)
+                try:
+                    await _activate(manager, force=force, holds=holds)
+                finally:
+                    # Before the handlers below wait for anything.
+                    revoked = _end_replacement(manager)
         except Exception as error:
             from .update_restart import RestartRejected
             if isinstance(error, RestartRejected):
@@ -495,10 +537,55 @@ async def _activate_serialized(manager, *, force=None):
                     error='The staged application changed or could not be validated. Install again to prepare a new candidate.',
                     detail='The running host and previous candidate evidence were preserved.')
             raise
+        finally:
+            if revoked is not None:
+                try:
+                    async with manager.service.lock:
+                        if manager._derive_state() or revoked:
+                            manager.service._publish_changes(globals={'updates'})
+                except Exception:
+                    # The claim is withdrawn already, in memory. Only the saved
+                    # copy can lag, and a new host derives the claim again.
+                    pass
+
+
+def _end_replacement(manager):
+    """This process no longer executes a replacement. Synchronous: it waits for nothing.
+
+    None: no replacement began. Otherwise whether the published claim changed.
+    A cancellation, a failed state write or a failed derivation after this
+    cannot leave an unconfirmed marker shown as a running update.
+    """
+    attempt, manager._replacing = getattr(manager, '_replacing', None), None
+    if attempt is None:
+        return None
+    from .update_health import release_replacement, publish as publish_health
+    release_replacement(attempt)
+    state = manager.service.state['updates']
+    if state.get('activation') != 'installing':
+        return False
+    state['activation'] = None
+    try:
+        publish_health(manager)
+    except Exception:
+        pass
+    return True
+
 
 async def installed_target():
     """Only replace the uv tool environment that owns this running host."""
     uv=shutil.which('uv')
+    background = None
+    if os.name == 'nt':
+        from .windows_service import installed_target as background_target
+        from .host.config import app_home
+        background = await asyncio.to_thread(background_target, app_home())
+    if background is not None:
+        if not uv:
+            raise ValueError('The private background installation is missing its uv helper.')
+        prefix, launcher = background
+        return uv, str(launcher), Path(sys.prefix) / 'Scripts/python.exe', {
+            'version': __version__, 'installation': str(prefix), 'source': None}
     # Avoid PATHEXT manufacturing ".EXE" in an otherwise canonical pathname.
     # The native owner deliberately compares exact component spellings.
     executable=shutil.which('amplifier-unified.exe' if os.name=='nt' else 'amplifier-unified')
@@ -564,23 +651,35 @@ async def _activate(manager, *, force=None, holds=None):
                 from .update_restart import RestartRejected
                 raise RestartRejected('The earlier application handoff still needs verification. Its outcome and work gate were preserved.')
             return
-        message=('Automatic Windows application replacement is not available. '
-                 'The running host and prepared candidate are unchanged. '
-                 'Use a qualified manual installation handoff; restarting the '
-                 'current launcher alone does not install this candidate.')
-        manager.diagnostics.begin('application',revision,release.get('attemptId'),
-                                  application_extras=release.get('extras'))
-        manager.diagnostics.record('restart-capability','failed',
-                                   errorType='RuntimeError')
-        await manager.publish(phase='error',error=message,
-            detail='No application pointer, installed package, worker or process was replaced. '
-                   'The staged receipt is retained; automatic activation will not retry it.')
-        if force is not None:
-            from .update_restart import RestartRejected
-            raise RestartRejected(message)
-        return
+        from .windows_service import update_owner
+        owner = await asyncio.to_thread(update_owner, manager.home)
+        if owner is None or force is not None:
+            message=('Automatic Windows application replacement is not available. '
+                     'The running host and prepared candidate are unchanged. '
+                     'Use a qualified manual installation handoff; restarting the '
+                     'current launcher alone does not install this candidate.')
+            manager.diagnostics.begin('application',revision,release.get('attemptId'),
+                                      application_extras=release.get('extras'))
+            manager.diagnostics.record('restart-capability','failed',
+                                       errorType='RuntimeError')
+            drain = manager.service.state['updates'].get('drain') or {}
+            if drain.get('safeUpdate') and drain.get('phase') == 'waiting' and all(
+                    release.get(key) == value for key, value in drain['target'].items()):
+                # Keep the candidate for the manual installer. No replacement
+                # began, so its queued work can safely return to this host.
+                drain['restartRefused'] = True
+                manager.wakeup.set()
+            await manager.publish(phase='error',error=message,
+                detail='No application pointer, installed package, worker or process was replaced. '
+                       'The staged receipt is retained; automatic activation will not retry it.')
+            if force is not None:
+                from .update_restart import RestartRejected
+                raise RestartRejected(message)
+            return
     folder=manager.directory/'applications'/revision
-    if generation:folder=folder/generation
+    if generation:
+        from .application_generations import directory
+        folder=directory(manager.home, revision, generation)
     marker=folder/'validated.json'
     # Validate one snapshot before closing the runtime or touching the install.
     try:
@@ -628,17 +727,22 @@ async def _activate(manager, *, force=None, holds=None):
             raise ValueError('The installed host components changed after validation; prepare a new candidate')
         if (folder/'components.txt').read_text()!=components.requirements(graph):
             raise ValueError('The component resolution changed after validation')
+        from .safe_update import component_restart, require_host_graph
+        drain = manager.service.state['updates'].get('drain') or {}
+        if component_restart(drain, release):
+            require_host_graph(drain, graph)
         if selected:
             from .app_features import require_preserved_components
             require_preserved_components(graph, host_graph)
     if force is None:
         from .update_drain import prepare
-        if not await prepare(manager, release):return
-        from .update_blockers import operation_holds
-        try:
-            held_configuration = operation_holds(manager.service)
-        except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
+        if not await prepare(manager, release):
+            async with manager.service.lock:
+                if manager._derive_state():
+                    manager.service._publish_changes(globals={'updates'})
             return
+        from .update_blockers import operation_holds
+        held_configuration = operation_holds(manager.service)
     manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'),
                               application_extras=validated.get('extras'))
     uv,executable,installed_python,previous=await manager.diagnostics.run('target-discovery',installed_target)
@@ -658,12 +762,22 @@ async def _activate(manager, *, force=None, holds=None):
         from .application_generations import bootstrap_identity
         if bootstrap_identity(helper_python.parent.parent) != validated.get('installation'):
             raise ValueError('The qualified application installation changed')
-    from .application_generations import supports, can_read_candidate
+    from .application_generations import active, supports, can_read_candidate
     bootstrap = Path(previous['installation']) if previous.get('installation') else Path(sys.prefix)
     can_promote = bool(generation and supports(bootstrap))
     if can_promote and artifact is not None:
         can_promote = await manager.diagnostics.run('bootstrap-artifact-compatibility',
-            can_read_candidate, process, bootstrap, helper_python, validated)
+            can_read_candidate, process, bootstrap, helper_python, validated, home=manager.home)
+    if sys.platform == 'win32' and (not can_promote or artifact is None):
+        raise ValueError('Windows updates require an official qualified immutable app generation; '
+                         'the current installation was not replaced.')
+    from . import app_worker_qualification
+    worker_selection = app_worker_qualification.prepared(manager.home)
+    if worker_selection and worker_selection['readiness'] == 'prepared' and worker_selection != validated.get('retainedWorker'):
+        # This generation was prepared or switched after staging, or an older
+        # host staged this app. Recheck under the existing lifecycle owner.
+        await manager.diagnostics.run('candidate-worker-start', app_worker_qualification.qualify,
+            manager.home, helper_python, folder, worker_selection)
     if 'managed-browser' in extras:
         current_browser = await qualify_browser(manager, helper_python)
         if current_browser != validated.get('managedBrowser'):
@@ -676,11 +790,49 @@ async def _activate(manager, *, force=None, holds=None):
         # durable replacement fence or any interruption of the serving host.
         await manager.diagnostics.run('replacement-artifact', asyncio.to_thread,
             artifacts.verify, artifact, validated['version'], revision)
+    recovery = None
+    if can_promote and force is None and (not selected or sys.platform == 'win32'):
+        # Capture the serving graph and launch pointer BEFORE changing either.
+        # In-place reinstalls have no untouched old environment to restore.
+        from .app_features import running_application
+        from .application_generations import bootstrap_identity
+        try:
+            old_pointer = active(manager.home)
+            old_prefix = Path(installed_python).parent.parent
+            if old_prefix.resolve() != (old_pointer['prefix'] if old_pointer else bootstrap).resolve():
+                raise ValueError('The serving interpreter does not match the previous launch target')
+            if old_pointer and old_pointer['bootstrap'] != bootstrap_identity(bootstrap):
+                raise ValueError('The previous launch target belongs to another bootstrap')
+            manual = None
+            if sys.platform == 'win32' and previous_artifact is None and not selected:
+                from .manual_app_handoff import recovery_context
+                manual = await recovery_context(manager)
+            if manual is not None:
+                previous_artifact = manual['artifact']
+                previous['artifact'] = previous_artifact
+            running_app = manual['app'] if manual is not None else running_application(manager)
+            recovery = {'pointer': old_pointer, 'python': installed_python, 'extras': extras,
+                'artifact': previous_artifact, 'installation': bootstrap_identity(old_prefix),
+                'bootstrap': bootstrap_identity(bootstrap),
+                'identity': dict(manager.running_identity),
+                'graph': sorted([*host_graph, running_app], key=lambda row: row['name'])}
+            if manual is not None:
+                recovery['manualHandoff'] = copy.deepcopy(manual)
+        except (OSError, ValueError, metadata.PackageNotFoundError):
+            # Lack of old-host proof does not invalidate a qualified candidate,
+            # but cannot authorize reopening the old host after a failed probe.
+            pass
+    if sys.platform == 'win32' and recovery is None:
+        raise ValueError('Windows activation requires a verified untouched previous installation for recovery; '
+                         'the running host and launch target were not changed.')
     async with manager.service.lock:
         if force is not None:
             from .update_restart import require
             require(manager, force)
-        if force is None and manager.app_busy():return
+        if force is None and manager.app_busy():
+            if manager._derive_state():
+                manager.service._publish_changes(globals={'updates'})
+            return
         state = manager.service.state['updates']
         if state.get('pendingApp') != release or state.get('applicationIntent') != intent:
             return  # External validation did not qualify a replacement target/intent.
@@ -689,6 +841,10 @@ async def _activate(manager, *, force=None, holds=None):
             try:
                 retain_operation_holds(manager.service, held_configuration, holds)
             except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
+                state['error'] = ('Automatic restart is paused because Amplifier cannot confirm earlier work has finished. '
+                                  'The current app is kept.')
+                manager._derive_state()
+                manager.service._publish_changes(globals={'updates'})
                 return  # No recovery, interruption, candidate discard or effect.
         if selected:
             # Candidate and target probes await external processes. Recheck the
@@ -715,8 +871,17 @@ async def _activate(manager, *, force=None, holds=None):
         if force is None:
             from .update_drain import begin_replacement
             begin_replacement(manager, release)
-        manager.service.state['updates'].update(phase='activating',pendingReplacement=replacement,detail='Installing the app update and restarting…')
+        from .update_health import claim_replacement
+        manager._replacing = replacement['attemptId']
+        claim_replacement(manager._replacing)
+        # Final admission passed. An earlier pause text (a hold that could not
+        # be confirmed, then could) no longer describes this attempt.
+        manager.service.state['updates'].update(phase='activating',pendingReplacement=replacement,error=None,detail='Installing the app update and restarting…')
+        manager._derive_state()
         manager.service._publish_changes(globals={'updates'})
+        if recovery is not None:
+            recovery['replacement'] = copy.deepcopy(replacement)
+    promoted = None
     try:
         if force is not None:
             # The durable replacement gate precedes interruption. Runtime.close
@@ -738,6 +903,7 @@ async def _activate(manager, *, force=None, holds=None):
         # environment is itself the live target: no second install or relocation.
         if can_promote:
             target = manager.diagnostics.sync('replacement-promote', promote, manager.home, validated, bootstrap)
+            promoted = target
             installed_python = target['prefix'] / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
         else:
             await manager.diagnostics.run('replacement-install',process,uv,'tool','install','--force',*resolution_args,install_requirement(release['revision'],extras,artifact),env=git_environment(),timeout=900)
@@ -758,13 +924,27 @@ async def _activate(manager, *, force=None, holds=None):
                               detail='The replacement outcome is unknown. No installation or conversation work will be replayed.')
         raise
     except Exception as error:
-        if selected:
-            await record(manager, selected['requestId'], 'error', detail='Feature replacement could not be verified. Its files may have changed; work remains paused until a new host proves the qualified installation.')
+        from .update_diagnostics import exception_type
         last=manager.diagnostics.state.get('latest',{})
         phase=last.get('phase','activation')
         if last.get('status')!='failed':
-            from .update_diagnostics import exception_type
             manager.diagnostics.record(phase,'failed',errorType=exception_type(error))
+        if promoted is not None and recovery is not None:
+            try:
+                if await restore_promoted_application(manager, promoted, recovery, bootstrap):
+                    return
+            except asyncio.CancelledError:
+                await manager.publish(phase='interrupted', pendingApp=None,
+                    error='Application recovery was interrupted. Work remains paused until the installation and launch target are verified.',
+                    detail='No installation or conversation work was replayed.')
+                raise
+            except Exception as recovery_error:
+                # Keep both the original probe failure and recovery failure.
+                # An unknown restore never grants runtime admission.
+                manager.diagnostics.record('replacement-recovery', 'failed',
+                                           errorType=exception_type(recovery_error))
+        if selected:
+            await record(manager, selected['requestId'], 'error', detail='Feature replacement could not be verified. Its files may have changed; work remains paused until a new host proves the qualified installation.')
         await manager.publish(phase='error',pendingApp=None,error='Application update failed during '+phase.replace('-',' ')+'. Its files may have changed; work remains paused. Review the diagnostic receipt and repair the qualified installation before restarting.',
                               detail='The replacement outcome is unknown. Package presence is not verified installation success.')
         return
@@ -773,6 +953,7 @@ async def _activate(manager, *, force=None, holds=None):
     manager.diagnostics.clear_failure()
     await manager.publish(phase='activating',pendingApp=None,pendingReplacement=None,appAvailable=False,error=None,
         pendingRestart={'version':validated['version'],'revision':revision,'attemptId':manager.diagnostics.state['attemptId'],
+                        **({'generation': generation} if sys.platform == 'win32' else {}),
                         'sourceInstanceId':manager.running_identity['instanceId'],'requestedAt':time.time(),
                         **({'updateIntent': intent} if intent is not None else {}),
                         **({'forceRestart':replacement['forceRestart']} if 'forceRestart' in replacement else {}),
@@ -785,7 +966,7 @@ async def _activate(manager, *, force=None, holds=None):
     # detached process spawned by this in-process updater.
     from .deployment_service import current_process_is_unit_managed
     if current_process_is_unit_managed(manager.home):
-        await request_managed_restart(manager)
+        await request_managed_restart(manager, **({'recovery': recovery} if sys.platform == 'win32' else {}))
         return
     # A tiny stdlib helper waits until this host releases its port, then starts
     # the already-verified launcher. It does not execute a shell command.
@@ -814,7 +995,61 @@ with open(logpath,'a') as log:
     os.kill(os.getpid(),signal.SIGTERM)
 
 
-async def request_managed_restart(manager):
+async def restore_promoted_application(manager, promoted, recovery, bootstrap):
+    """Verify the untouched serving installation before undoing its promotion."""
+    from .application_generations import bootstrap_identity, restore
+    from .app_features import running_application
+    from .update_diagnostics import probe_record
+
+    python = recovery['python']
+    extras = recovery['extras']
+    output = await manager.diagnostics.run('replacement-previous-probe', process,
+        python, '-I', '-c', PROBE, *extras, **browser_process_options(manager, extras), timeout=30)
+    report = probe_record(output)
+    if (not report or report.get('ok') is not True or report.get('stage') != 'complete'
+            or report.get('isolated') is not True or report.get('packageInEnvironment') is not True):
+        manager.diagnostics.record('replacement-previous-probe', 'failed', errorType='ValueError')
+        raise ValueError('The previous installation did not pass isolated verification')
+    verified_version(manager, output, recovery['identity']['version'], 'replacement-previous-version')
+    graph = await manager.diagnostics.run('replacement-previous-components', components.read_graph,
+        process, python, **({'artifact': recovery['artifact']} if recovery['artifact'] is not None else {}))
+    manual = recovery.get('manualHandoff')
+    if manual is not None:
+        from .manual_app_handoff import recovery_context
+        if await recovery_context(manager, expected=manual) != manual:
+            raise ValueError('The manual application recovery proof changed')
+    async with manager.service.lock:
+        state = manager.service.state['updates']
+        if (state.get('pendingReplacement') != recovery['replacement'] or state.get('pendingRestart')
+                or manager.running_identity != recovery['identity']
+                or installed_extras() != extras
+                or bootstrap_identity(Path(python).parent.parent) != recovery['installation']
+                or graph != recovery['graph']
+                or sorted([*components.installed_graph(),
+                           manual['app'] if manual is not None else running_application(manager)],
+                          key=lambda row: row['name']) != recovery['graph']):
+            manager.diagnostics.record('replacement-previous-components', 'failed', errorType='ValueError')
+            raise ValueError('The serving installation or replacement changed during recovery')
+        manager.diagnostics.sync('replacement-restore', restore, manager.home, promoted,
+                                 recovery['pointer'], bootstrap, expected_bootstrap=recovery['bootstrap'])
+        # Pointer and old installation are now verified; retain the failed
+        # update, and let ordinary drain settlement release only unsent inputs.
+        before = copy.deepcopy(state)
+        state.update(phase='error', pendingApp=None, pendingReplacement=None, appAvailable=True,
+            error='The application update could not be verified. The previous application was verified and restored.',
+            detail='The verified previous application was restored and is usable. Review update diagnostics before trying the update again.')
+        try:
+            manager._derive_state()
+            manager.service._publish_changes(globals={'updates'})
+        except BaseException:
+            state.clear()
+            state.update(before)
+            raise  # An unconfirmed state commit must not open this host's gate.
+    manager.wakeup.set()
+    return True
+
+
+async def request_managed_restart(manager, *, recovery=None):
     """Queue an OS-owned restart; only a ready successor confirms completion.
 
     A service manager can stop this process before its client receives a reply.
@@ -834,9 +1069,16 @@ async def request_managed_restart(manager):
     dispatched=False
     try:
         await asyncio.to_thread(prepare_managed_shutdown,manager.home)
-        command=managed_restart_command()
-        dispatched=True
-        result=await process(*command,timeout=30)
+        if sys.platform == 'win32':
+            from .windows_service import request_update_restart
+            target = {key: marker[key] for key in ('revision', 'generation', 'attemptId')}
+            dispatched = True
+            await asyncio.to_thread(request_update_restart, manager.home, target, recovery)
+            result = None
+        else:
+            command=managed_restart_command()
+            dispatched=True
+            result=await process(*command,timeout=30)
     except BaseException as error:
         if not isinstance(error,(Exception,asyncio.CancelledError)):raise
         facts={'durationMs':round((time.monotonic()-started)*1000),'errorType':exception_type(error)}

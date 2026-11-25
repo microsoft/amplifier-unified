@@ -59,7 +59,7 @@ def require(service, owner_id, target_id, scope='workspace'):
 SESSION_READS = {
     'session.inspect': 'id', 'session.history': 'id',
     'session.titlePreview': 'sessionId', 'message.copy': 'sessionId',
-    'conversation.delivery': 'sessionId', 'history.export': 'sessionId',
+    'conversation.delivery': 'sessionId', 'conversation.configuration': 'sessionId', 'history.export': 'sessionId',
 }
 
 

@@ -23,7 +23,7 @@ STORAGE_REASONS = {getattr(errno, name): reason for name, reason in {
     'ENOSPC': 'disk-full', 'EDQUOT': 'disk-quota-exceeded',
     'EACCES': 'storage-permission-denied', 'EPERM': 'storage-permission-denied',
     'EROFS': 'read-only-storage'}.items() if hasattr(errno, name)}
-RECOVERY_REASONS = {'smart-tool-startup-failed', 'smart-tool-update-failed', 'missing-configured-environment', 'incompatible-conversation-loop', 'protected-runtime-source', 'runtime-source-constraint', 'runtime-source-unbound', 'runtime-source-conflict', 'runtime-source-changed', 'runtime-resolution-mismatch', 'runtime-installed-source-mismatch', *PREPARATION_REASONS.values(), *STORAGE_REASONS.values()}
+RECOVERY_REASONS = {'smart-tool-startup-failed', 'smart-tool-update-failed', 'missing-configured-environment', 'incompatible-conversation-loop', 'ai-connection-needed', 'incomplete-conversation-profile', 'protected-runtime-source', 'runtime-source-constraint', 'runtime-source-unbound', 'runtime-source-conflict', 'runtime-source-changed', 'runtime-resolution-mismatch', 'runtime-installed-source-mismatch', *PREPARATION_REASONS.values(), *STORAGE_REASONS.values()}
 RUNTIME_SOURCE_REASONS = {'protected-runtime-source', 'runtime-source-constraint', 'runtime-source-unbound',
                         'runtime-source-conflict', 'runtime-source-changed', 'runtime-resolution-mismatch',
                         'runtime-installed-source-mismatch'}
@@ -64,12 +64,33 @@ def failure_location(value):
         r'(?:amplifier_web|amplifier_foundation|amplifier_core)(?:\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*:[0-9]{1,7}', value)
 
 
+def decision_catalog_facts(value):
+    """Closed, credential-free child status. Never keep subprocess output/args."""
+    if not isinstance(value, dict) or not isinstance(value.get('category'), str) or value['category'] not in {
+            'spawn', 'timeout', 'nonzero-exit', 'subprocess-error',
+            'oversized-output', 'invalid-json', 'non-object'}:
+        return None
+    safe = {'category': value['category']}
+    for key in ('elapsedMs', 'stdoutBytes'):
+        if type(value.get(key)) is int and 0 <= value[key] <= 2**63 - 1:
+            safe[key] = value[key]
+    if type(value.get('exitCode')) is int and -(2**31) <= value['exitCode'] <= 2**32 - 1:
+        safe['exitCode'] = value['exitCode']
+    if value.get('osError') in errno.errorcode.values():
+        safe['osError'] = value['osError']
+    return safe
+
+
 def exception_facts(error):
     """Fixed OS codes and code location; no error messages or file paths."""
     facts = {'errorType': exception_type(error)}
     current, seen = error, set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
+        detail = getattr(current, 'diagnostic_facts', {})
+        catalog = decision_catalog_facts(detail.get('decisionCatalog')) if isinstance(detail, dict) else None
+        if catalog:
+            facts['decisionCatalog'] = catalog
         if isinstance(current, OSError) and current.errno in errno.errorcode:
             facts['osError'] = errno.errorcode[current.errno]
             if current.errno in STORAGE_REASONS:
@@ -96,6 +117,7 @@ def failure_guidance(event):
         'disk-quota-exceeded': 'The update stopped because its storage quota was reached. Increase the quota or free space, then try again.',
         'storage-permission-denied': 'The update could not access a required file. Review the installation’s file permissions before trying again.',
         'read-only-storage': 'The update destination is read-only. Make the installation writable before trying again.',
+        'ai-connection-needed': 'This update needs an AI connection, and the selected conversation profile has none. Nothing was changed. Set up an AI connection in Settings, then update again.',
     }.get(event.get('reason') or event.get('probe', {}).get('reason'))
 
 
@@ -149,6 +171,8 @@ def probe_record(output):
         if isinstance(value.get('package'),str) and len(value['package']) <= 128 and re.fullmatch(r'amplifier-[a-z0-9]+(?:-[a-z0-9]+)*',value['package']):safe['package']=value['package']
         if failure_location(value.get('failureLocation')):safe['failureLocation']=value['failureLocation']
         if value.get('osError') in errno.errorcode.values():safe['osError']=value['osError']
+        catalog = decision_catalog_facts(value.get('decisionCatalog'))
+        if catalog:safe['decisionCatalog']=catalog
         for key in ('version','pythonVersion'):
             if isinstance(value.get(key),str) and re.fullmatch(r'\d+\.\d+\.\d+',value[key]):safe[key]=value[key]
         for key in ('elapsedMs', 'sources', 'packages', 'resolverTransactions', 'profileIndex'):
@@ -167,6 +191,34 @@ def command_facts(stdout,stderr,returncode,duration):
         name=classes[-1].decode('ascii')
         if name in ERROR_TYPES:facts['errorType']=name
     return facts
+
+
+def command_attempts(value):
+    """Closed exported facts for each physical attempt; never arbitrary text."""
+    if not isinstance(value, list):
+        return []
+    attempts = []
+    for row in value[:2]:
+        if not isinstance(row, dict):
+            continue
+        safe = {key: row[key] for key in ('exitCode', 'durationMs', 'stdoutBytes', 'stderrBytes')
+                if type(row.get(key)) is int and
+                (-(2**31) if key == 'exitCode' else 0) <= row[key] < 10**15}
+        for key in ('timedOut', 'stdoutTruncated', 'stderrTruncated', 'outputLimitExceeded'):
+            if type(row.get(key)) is bool:
+                safe[key] = row[key]
+        if isinstance(row.get('errorType'), str) and row['errorType'] in ERROR_TYPES:
+            safe['errorType'] = row['errorType']
+        if safe:
+            attempts.append(safe)
+    return attempts
+
+
+class CommandBytes(bytes):
+    def __new__(cls, value, facts):
+        result = super().__new__(cls, value)
+        result.diagnostic_facts = facts
+        return result
 
 
 class CommandOutput(str):
@@ -229,6 +281,10 @@ class UpdateDiagnostics:
         if 'probe' in cause:
             cause['probe'] = {key: value for key, value in cause['probe'].items()
                               if key not in {'elapsedMs', 'profileIndex'}}
+            if 'decisionCatalog' in cause['probe']:
+                cause['probe']['decisionCatalog'] = {
+                    key: value for key, value in cause['probe']['decisionCatalog'].items()
+                    if key not in {'elapsedMs', 'stdoutBytes'}}
         cause['tier'] = self.state.get('batch', {}).get('tier')
         if kind == 'application':
             cause['revision'] = event.get('revision')
@@ -442,6 +498,15 @@ class UpdateDiagnostics:
         if failure_location(facts.get('failureLocation')):event['failureLocation']=facts['failureLocation']
         if type(facts.get('timedOut')) is bool:event['timedOut']=facts['timedOut']
         if type(facts.get('anonymousRetry')) is bool:event['anonymousRetry']=facts['anonymousRetry']
+        if facts.get('gitCacheRetry') is True:event['gitCacheRetry']=True
+        attempts = command_attempts(facts.get('commandAttempts'))
+        if attempts:event['commandAttempts'] = attempts
+        for key in ('stdoutTruncated', 'stderrTruncated', 'outputLimitExceeded'):
+            if type(facts.get(key)) is bool:event[key] = facts[key]
+        if facts.get('localDetailStatus') in ('saved', 'unavailable'):
+            event['localDetailStatus'] = facts['localDetailStatus']
+            if type(facts.get('localDetailSlot')) is int and 0 <= facts['localDetailSlot'] < 16:
+                event['localDetailSlot'] = facts['localDetailSlot']
         if isinstance(facts.get('commandId'),str) and re.fullmatch(r'[a-f0-9]{32}',facts['commandId']):event['commandId']=facts['commandId']
         for key in ('expectedVersion','observedVersion'):
             if isinstance(facts.get(key),str) and re.fullmatch(r'\d+\.\d+\.\d+',facts[key]):event[key]=facts[key]
@@ -515,6 +580,7 @@ class UpdateDiagnostics:
         return result
 
     async def run(self,phase,operation,*args,_context=None,**kwargs):
+        from .update_command_details import retain
         command_id=uuid.uuid4().hex
         context = _context or {}
         self.record(phase,'started',commandId=command_id,**context)
@@ -523,10 +589,12 @@ class UpdateDiagnostics:
         except BaseException as error:
             facts={'durationMs':round((time.monotonic()-started)*1000),
                    **getattr(error,'diagnostic_facts',{}), **exception_facts(error)}
+            facts.update(retain(self, error, command_id, phase))
             self.record(phase,'interrupted' if type(error).__name__=='CancelledError' else 'failed',commandId=command_id,**{**context,**facts})
             raise
         facts={'durationMs':round((time.monotonic()-started)*1000)}
         facts.update(getattr(result,'diagnostic_facts',{}))
+        facts.update(retain(self, result, command_id, phase))
         if isinstance(result,(str,bytes)):
             probe=probe_record(result)
             if probe:facts['probe']=probe

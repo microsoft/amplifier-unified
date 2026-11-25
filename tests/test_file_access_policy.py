@@ -64,9 +64,94 @@ def test_shared_allow_and_deny_cover_root_and_child_patch_tools(tmp_path):
     assert result.agents['child']['tools'][0]['config'] == {'engine': 'function', **effective}
 
 
+def test_appending_allowed_checkout_keeps_requested_writer_path_order(tmp_path):
+    workspace, external = tmp_path / 'checkout', tmp_path / 'external'
+    requested = [str(external), str(workspace)]
+    private = str(external / 'private')
+    bundle = SimpleNamespace(tools=[
+        {'module': module, 'config': {'allowed_write_paths': list(requested),
+            'denied_write_paths': [private], 'unrelated_order': [2, 1]}}
+        for module in ('tool-filesystem', 'tool-apply-patch')], agents={})
+    config = SimpleNamespace(workspace=workspace, settings={'overrides': {
+        'tool-filesystem': {'config': {'allowed_write_paths': [str(external)]}}}})
+    _apply_host_policy(bundle, config)
+    for row in bundle.tools:
+        assert row['config']['allowed_write_paths'] == requested
+        assert row['config']['denied_write_paths'] == [private]
+        assert row['config']['unrelated_order'] == [2, 1]
+    # A second host projection is stable, without sorting arbitrary arrays.
+    import copy
+    original = copy.deepcopy(bundle.tools)
+    _apply_host_policy(bundle, config)
+    assert bundle.tools == original
+
+
+def test_preserved_write_order_does_not_widen_intersection(tmp_path):
+    workspace, external, denied = tmp_path / 'checkout', tmp_path / 'external', tmp_path / 'outside'
+    bundle = SimpleNamespace(tools=[{'module': 'tool-filesystem', 'config': {
+        'allowed_write_paths': [str(external / 'narrow'), str(denied), str(workspace)],
+        'denied_write_paths': [str(external / 'narrow/private')]}}], agents={})
+    config = SimpleNamespace(workspace=workspace, settings={'overrides': {
+        'tool-filesystem': {'config': {'allowed_write_paths': [str(external)],
+                                     'denied_write_paths': [str(workspace / 'private')]}}}})
+    _apply_host_policy(bundle, config)
+    values = bundle.tools[0]['config']
+    assert values['allowed_write_paths'] == [str(external / 'narrow'), str(workspace)]
+    assert values['denied_write_paths'] == [str(external / 'narrow/private'), str(workspace / 'private')]
+
+
+@pytest.mark.parametrize('kind', ['read', 'write'])
+@pytest.mark.parametrize('module', ['tool-filesystem', 'tool-apply-patch', 'tool-image'])
+def test_allow_projection_is_stable_with_overlapping_shared_roots(tmp_path, kind, module):
+    workspace, external = tmp_path / 'checkout', tmp_path / 'external'
+    key = f'allowed_{kind}_paths'
+    shared = [str(workspace), str(external), str(workspace / 'nested'), str(external)]
+    local = [str(tmp_path)]
+    bundle = SimpleNamespace(tools=[{'module': module, 'config': {key: local}}], agents={})
+    config = SimpleNamespace(workspace=workspace, settings={
+        'overrides': {'tool-filesystem': {'config': {key: shared}}}})
+    _apply_host_policy(bundle, config)
+    import copy
+    original = copy.deepcopy(bundle.tools)
+    assert bundle.tools[0]['config'][key] == [
+        str(workspace), str(external), str(workspace / 'nested')]
+    _apply_host_policy(bundle, config)
+    assert bundle.tools == original
+    actual = [Path(path) for path in bundle.tools[0]['config'][key]]
+    boundaries = [Path(path) for path in shared]
+    if kind == 'write':
+        boundaries.insert(0, workspace)
+    for candidate in (tmp_path, workspace, workspace / 'nested', workspace / 'other',
+                      external, external / 'child', tmp_path / 'outside'):
+        assert any(candidate.is_relative_to(path) for path in actual) == (
+            any(candidate.is_relative_to(path) for path in boundaries))
+
+
+def test_allow_projection_retains_intersection_membership_and_deduplicates(tmp_path):
+    from itertools import product
+    workspace = tmp_path / 'checkout'
+    roots = [workspace, workspace / 'nested', tmp_path / 'external']
+    choices = [[], [tmp_path], roots, list(reversed(roots)), [roots[0], roots[0]], [roots[1]]]
+    probes = [tmp_path, *roots, *(path / 'child' for path in roots), tmp_path / 'outside']
+    for shared, local in product(choices, repeat=2):
+        bundle = SimpleNamespace(tools=[{'module': 'tool-filesystem', 'config': {
+            'allowed_read_paths': [str(path) for path in local]}}], agents={})
+        config = SimpleNamespace(workspace=workspace, settings={'overrides': {
+            'tool-filesystem': {'config': {'allowed_read_paths': [str(path) for path in shared]}}}})
+        _apply_host_policy(bundle, config)
+        actual = bundle.tools[0]['config']['allowed_read_paths']
+        assert len(actual) == len(set(actual))
+        for probe in probes:
+            assert any(probe.is_relative_to(path) for path in actual) == (
+                any(probe.is_relative_to(path) for path in local)
+                and any(probe.is_relative_to(path) for path in shared))
+        _apply_host_policy(bundle, config)
+        assert bundle.tools[0]['config']['allowed_read_paths'] == actual
+
+
 @pytest.mark.parametrize('shared,patch,expected', [
     (['.'], ['src'], ['src']),
-    (['src'], ['.'], ['.', 'src']),
+    (['src'], ['.'], ['.']),
     (['src'], ['other'], ['other']),
     ([], ['.'], ['.']),
     (['.'], [], []),
@@ -118,11 +203,11 @@ def test_settings_precedence_and_multiple_filesystem_instances(tmp_path):
         'overrides': {'narrow': {'config': {'allowed_write_paths': [str(tmp_path / 'src')]}}},
     }
     _apply_host_policy(bundle, SimpleNamespace(workspace=tmp_path, settings=settings))
-    assert bundle.tools[0]['config']['allowed_write_paths'] == [str(tmp_path), str(tmp_path / 'src')]
+    assert bundle.tools[0]['config']['allowed_write_paths'] == [str(tmp_path)]
     settings['overrides']['tool-filesystem'] = {'config': {'allowed_write_paths': []}}
     bundle.tools = [{'module': 'tool-apply-patch'}]
     _apply_host_policy(bundle, SimpleNamespace(workspace=tmp_path, settings=settings))
-    assert bundle.tools[0]['config']['allowed_write_paths'] == [str(tmp_path), str(tmp_path / 'src')]
+    assert bundle.tools[0]['config']['allowed_write_paths'] == [str(tmp_path)]
 
 
 def test_snapshot_and_child_patch_environment_paths_expand_before_intersection(tmp_path, monkeypatch):

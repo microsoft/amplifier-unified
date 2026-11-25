@@ -244,6 +244,18 @@ async def test_history_refresh_copies_only_reader_inputs_and_keeps_paging(tmp_pa
     row = app._session('bounded-reader', hydrate=False)
     original = automatic_history.read_transcript
     seen = []
+    phases = ('history.merge', 'history.native.refresh', 'history.activity.apply', 'history.publish')
+    phase_calls = []
+    original_measure = automatic_history.measure
+    previous_counts = app.performance_diagnostics.snapshot()['operations']
+
+    def observe_phase(service, name, **kwargs):
+        if name in phases:
+            phase_calls.append((name, kwargs))
+        return original_measure(service, name, **kwargs)
+
+    monkeypatch.setattr(automatic_history, 'measure', observe_phase)
+
     def read(source, **kwargs):
         assert not {'execution', 'workers', 'configuration', 'historyActivity'} & source.keys()
         if kwargs['before'] is None:
@@ -264,6 +276,9 @@ async def test_history_refresh_copies_only_reader_inputs_and_keeps_paging(tmp_pa
     assert not row.get('historyError')
     assert not app.runtime.started and not app.runtime.sent
     assert seen == [{'before': None, 'limit': 100}, {'before': 100, 'limit': 100}]
+    assert phase_calls == [(name, {'synchronous': True, 'session_id': row['id']}) for name in phases * 2]
+    operations = app.performance_diagnostics.snapshot()['operations']
+    assert all(operations[name]['count'] == previous_counts.get(name, {}).get('count', 0) + 2 for name in phases)
 
 
 async def test_workspace_availability_tracks_real_folders_without_removing_history(tmp_path, app_factory):
@@ -698,7 +713,7 @@ async def test_resolved_metadata_migrates_workspace_customization_and_canvas_sco
 async def test_incremental_workspace_resolution_persists_pin_remap_before_full_save(
         tmp_path, app_factory, monkeypatch, pin_case):
     import time
-    from amplifier_web.workspace_canvas import _registration
+    from amplifier_web.workspace_selection import _registration
 
     workspace = tmp_path / 'incrementally-resolved'
     directory = native_session(workspace, 'incremental-resolved-chat',
@@ -1019,6 +1034,50 @@ def test_cached_reminder_cleanup_requires_exact_native_provenance():
     hidden = {0: display_identity(session, 0, 'user', '<system-reminder>Quoted</system-reminder>')}
     remove_internal_copies(session, hidden)
     assert session['messages'] == before
+
+
+@pytest.mark.parametrize('boundary', ['exact', 'mismatch', 'public', 'noninteger'])
+def test_cached_reminder_cleanup_hashes_only_possible_internal_copies(monkeypatch, boundary):
+    from amplifier_web import automatic_history
+    session = {'id': 'root', 'messages': [
+        {'id': f'public-{index}', 'role': 'user', 'nativeIndex': index, 'text': 'Public text' * 128}
+        for index in range(32)
+    ] + [
+        {'id': 'internal-copy', 'role': 'user', 'nativeIndex': 100, 'text': 'Internal text'},
+        {'id': 'different-text', 'role': 'user', 'nativeIndex': 100, 'text': 'Real user input'},
+        {'id': 'different-role', 'role': 'assistant', 'nativeIndex': 100, 'text': 'Internal text'},
+        {'id': 'unindexed', 'role': 'user', 'text': 'Internal text'},
+        {'id': 'boolean-index', 'role': 'user', 'nativeIndex': True, 'text': 'Public text'},
+        {'id': 'float-index', 'role': 'user', 'nativeIndex': 100.0, 'text': 'Internal text'},
+    ]}
+    identity = automatic_history.display_identity
+    hidden = {100: identity(session, 100, 'user', 'Internal text')}
+    boundary_index, boundary_id = {
+        'exact': (100, hidden[100]), 'mismatch': (100, 'different-id'),
+        'public': (1, 'public-id'), 'noninteger': (True, 'public-id'),
+    }[boundary]
+    session.update(nativeBoundary=boundary_index, nativeBoundaryId=boundary_id)
+    original = list(session['messages'])
+    expected = [row for row in original if row['id'] != 'internal-copy']
+    calls = []
+
+    def observed_identity(owner, index, role, text):
+        calls.append((index, role, text))
+        return identity(owner, index, role, text)
+
+    monkeypatch.setattr(automatic_history, 'display_identity', observed_identity)
+    automatic_history.remove_internal_copies(session, hidden)
+    assert calls == [(100, row['role'], row['text']) for row in original if row['id'] in {
+        'internal-copy', 'different-text', 'different-role'}]
+    assert session['messages'] == expected
+    assert all(actual is retained for actual, retained in zip(session['messages'], expected))
+    if boundary == 'exact':
+        assert 'nativeBoundary' not in session and 'nativeBoundaryId' not in session
+    else:
+        assert (session['nativeBoundary'], session['nativeBoundaryId']) == (boundary_index, boundary_id)
+    calls.clear()
+    automatic_history.remove_internal_copies(session, {})
+    assert calls == [] and session['messages'] == expected
 
 
 async def test_ensure_loaded_refreshes_already_loaded_chat_before_continuing(tmp_path, app_factory):

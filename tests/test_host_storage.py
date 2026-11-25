@@ -8,13 +8,20 @@ from amplifier_web.host.approvals import Approvals
 
 
 @pytest.mark.parametrize('persistent', [False, True])
-def test_metadata_write_during_read_is_retried_once(tmp_path, monkeypatch, persistent):
+@pytest.mark.parametrize('prepare_index', [False, True])
+def test_metadata_write_during_read_is_retried_once(tmp_path, monkeypatch, persistent, prepare_index):
     from amplifier_foundation.session import history
     store = SessionStore(tmp_path / 'sessions')
     store.save('root', [{'role': 'user', 'content': 'Keep my question'}], {'status': 'idle'})
     transcript = store.directory('root') / 'transcript.jsonl'
     before = transcript.read_bytes()
     original = history._read_metadata
+    original_load = history.SessionHistoryStore.load
+    load_options = []
+    def load(self, *, include_events=True, prepare_index=False):
+        load_options.append((include_events, prepare_index))
+        return original_load(self, include_events=include_events)
+    monkeypatch.setattr(history.SessionHistoryStore, 'load', load)
     calls = 0
 
     def racing_read(path, **kwargs):
@@ -28,14 +35,67 @@ def test_metadata_write_during_read_is_retried_once(tmp_path, monkeypatch, persi
     monkeypatch.setattr(history, '_read_metadata', racing_read)
     if persistent:
         with pytest.raises(ValueError, match='changed while'):
-            store.load('root')
+            store.load('root', prepare_index=prepare_index)
     else:
-        rows, metadata = store.load('root')
+        rows, metadata = store.load('root', prepare_index=prepare_index)
         assert rows == [{'role': 'user', 'content': 'Keep my question'}]
         assert metadata['status'] == 'updated-1'
     # Successful loads separately refresh naming metadata after the snapshot.
     assert calls == (2 if persistent else 3)
+    assert load_options == [(False, prepare_index)] * 2
     assert transcript.read_bytes() == before
+
+
+@pytest.mark.parametrize('api', ['legacy', 'variadic', 'index'])
+def test_resume_load_only_requests_declared_index_preparation(tmp_path, monkeypatch, api):
+    from amplifier_foundation.session.history import SessionHistoryStore
+    store = SessionStore(tmp_path / 'sessions')
+    rows = [{'role': 'user', 'content': 'Keep complete native history'}]
+    store.save('root', rows, {'bundle': 'saved-bundle'})
+    original = SessionHistoryStore.load
+    options = []
+    def legacy(self, *, include_events=True):
+        options.append({'include_events': include_events})
+        return original(self, include_events=include_events)
+    def variadic(self, *, include_events=True, **kwargs):
+        options.append({'include_events': include_events, **kwargs})
+        return original(self, include_events=include_events)
+    def indexed(self, *, include_events=True, prepare_index=False):
+        options.append({'include_events': include_events, 'prepare_index': prepare_index})
+        return original(self, include_events=include_events)
+    monkeypatch.setattr(SessionHistoryStore, 'load',
+                        {'legacy': legacy, 'variadic': variadic, 'index': indexed}[api])
+    loaded, metadata = store.load('root', prepare_index=True)
+    assert loaded == rows and metadata['bundle'] == 'saved-bundle'
+    assert options == [{'include_events': False, **({'prepare_index': True} if api == 'index' else {})}]
+
+
+def test_ordinary_load_does_not_inspect_resume_index_support(tmp_path, monkeypatch):
+    from amplifier_web.host import storage
+    store = SessionStore(tmp_path / 'sessions')
+    rows = [{'role': 'user', 'content': 'Browse without preparing a checkpoint'}]
+    store.save('root', rows, {})
+    def unexpected_signature(_):
+        raise AssertionError('An ordinary read must not inspect resume capabilities')
+    monkeypatch.setattr(storage.inspect, 'signature', unexpected_signature)
+    assert store.load('root')[0] == rows
+
+
+@pytest.mark.parametrize('error', [TypeError('Native read failed'), ValueError('Invalid native history')])
+def test_resume_load_does_not_retry_real_read_errors(tmp_path, monkeypatch, error):
+    from amplifier_foundation.session.history import SessionHistoryStore
+    store = SessionStore(tmp_path / 'sessions')
+    store.save('root', [{'role': 'user', 'content': 'Preserve on failure'}], {})
+    before = (store.directory('root') / 'transcript.jsonl').read_bytes()
+    calls = []
+    def load(self, *, include_events=True, prepare_index=False):
+        calls.append((include_events, prepare_index))
+        raise error
+    monkeypatch.setattr(SessionHistoryStore, 'load', load)
+    with pytest.raises(type(error)) as caught:
+        store.load('root', prepare_index=True)
+    assert caught.value is error and calls == [(False, True)]
+    assert (store.directory('root') / 'transcript.jsonl').read_bytes() == before
 
 
 def test_changing_transcript_is_not_retried(tmp_path, monkeypatch):

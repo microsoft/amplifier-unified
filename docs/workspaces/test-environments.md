@@ -3,7 +3,7 @@
 Test environments are an explicitly enabled capability for a managed
 Linux host. The workspace controls provide setup against an installed local
 Docker or Incus service. They are not a required consumer installation path. The
-adapter uses a pinned Digital Twin Universe core in a managed Smart Tool
+adapter uses the maintained Digital Twin Universe Compose library in a managed Smart Tool
 installation. It does not install Docker, change firmware, configure providers,
 or author profiles with a model. Other platforms and a hosted runner are not
 qualified by this implementation.
@@ -14,16 +14,16 @@ The user interface and agents call the same host actions:
 
 | Action | Input and result |
 | --- | --- |
-| `workspace.environments.setup` | Existing backend choice and stable request identity; approved runner installation, offline probe and private configuration. |
+| `workspace.environments.setup` | Existing backend choice and stable request identity; ordinary installed Smart Tool, daemon/Compose/image observation and private configuration. Incus keeps its separate offline probe. |
 | `workspace.environments.setup.reconcile` | Passive inspection of the original setup and its retained effects. |
 | `workspace.environments.setup.cleanup` | Remove only verified disposable resources from interrupted setup. |
 | `workspace.environments.read` | Workspace and root conversation identity; bounded resources, availability, source location, current observation and retained results. |
-| `workspace.environments.start` | Approved profile plus stable `requestId`; immutable source snapshot and one owned environment. |
+| `workspace.environments.start` | Resource preset and optional trusted relative `composeFile`, `offline` and `preserveSource` choices plus stable `requestId`; immutable source snapshot and one owned environment. |
 | `workspace.environments.execute` | Resource identity, exact revision, stable request identity and command; bounded stdout, stderr, exit code and truncation flags. |
 | `workspace.environments.stop` | Resource identity, exact revision and stable request identity; observed stopping outcome with data retained. |
 | `workspace.environments.exportArtifacts` | The same ownership and revision checks; a bounded verified `/artifacts` archive from a stopped environment, without executing commands, restarting or deleting it. |
 | `workspace.environments.finishCleanup` | Exact stopped owner and prior failed cleanup identity; bounded complete archive preservation and confirmed cleanup without replaying the test or original request. |
-| `workspace.environments.remove` | The same ownership and revision checks; source and artifact archives retained before observed teardown. |
+| `workspace.environments.remove` | The same ownership and revision checks; selected artifacts and the source snapshot retained before observed teardown. Full guest source export is optional for new disposable Docker copies, unchanged for older owners. |
 
 The resource ledger owns allocation identity and lifetime. The existing operation
 request journal owns command admission and results. A duplicate request returns
@@ -119,16 +119,23 @@ provider credentials are not forwarded. This is not a guarantee that source
 files contain no secrets. No original source directory or Docker socket is
 mounted into the container.
 
-Docker tests use an internal network, no published ports, a read-only image,
+New Docker tests use ordinary networking unless `offline: true` is explicit.
+The default Compose preset has no published ports and a read-only image,
 four narrowly selected supervisor capabilities and limits for memory, CPU and
 process count. Commands run as an unprivileged user; supervisor records are
 private to root. Incus uses its separate unprivileged offline guest boundary.
-Container volumes do **not** have a host disk quota. The small Python profile
+Custom trusted Compose and app-preview may publish loopback ports and select
+images/build contexts from copied source. They never implicitly inherit host
+credentials, a Docker socket, writable original source, privileged services or
+host namespaces. Container volumes do **not** have a host disk quota. The small Python profile
 runs for up to five minutes without preparation. Python project and browser
-profiles prepare locked dependencies in a separate owned networked builder,
-then run offline for twenty minutes by default (thirty maximum). Preparation
-does not receive host credentials or source mounts. Remote browser preview
-routing and general multi-service deployment remain unqualified.
+presets provide larger workload budgets and automatically prepare their maintained
+locked Python/Node/browser dependencies unless a custom `composeFile` explicitly
+takes over setup. Normal networked commands remain available; the prepared venv,
+Node/Chromium/X11 paths and execution contract are still provided for default
+presets. Explicit Incus retains its locked,
+networked preparation and offline execution. Remote Docker registration is
+unsupported; a local preview URL is not remote routing qualification.
 
 Test commands default to a private disposable `HOME` and `XDG_CACHE_HOME` under
 `/tmp/unified-test`, created as the unprivileged workload user. They are outside
@@ -137,12 +144,13 @@ Docker's existing profile temporary-space limit applies; Incus uses its guest
 temporary filesystem. Explicit command environment overrides remain available.
 Keep useful reports, final patches and chosen build outputs in `/artifacts`
 (`AMPLIFIER_TEST_ARTIFACTS`); keep package/browser caches, installed harnesses and
-pytest temporary fixture trees outside it. Removing an environment still exports
-the complete `/workspace` and `/artifacts`; no file filtering or report deletion
-is introduced by these defaults.
+pytest temporary fixture trees outside it. New disposable Docker copies export
+`/artifacts`; `preserveSource: true` additionally exports `/workspace`. Original
+source archives, results and receipts remain. Existing owners retain both-root
+preservation; no historical archive or failed receipt is deleted or reclassified.
 
 Stop retains containers and volumes. Remove requires observed stopped work and
-successful bounded exports of both `/workspace` and `/artifacts`; failed export
+successful bounded exports of the owner's selected roots; failed selected export
 blocks destruction. Archives are retained without extraction on the host. Local
 snapshots and receipts remain after removal. Owned dependency images and builders
 must also be confirmed removed before their resource owner is retired.
@@ -151,7 +159,9 @@ If working-folder preservation fails, **Save artifact evidence** can retain
 `/artifacts` independently for diagnosis. Recovery uses the original approved
 backend, exact owner, stopped-state checks and immutable request receipts.
 It does not mark the working folder preserved, retire ownership, retry the
-failed check, or satisfy removal's two-root/full-retention requirement.
+failed check, or satisfy removal's selected-root preservation requirement.
+For owners requiring both roots or full retention, those requirements remain;
+new disposable Docker owners export the guest working folder only when selected.
 Archive bytes, members, logical selected size, safe links and complete tar
 termination remain bounded and verified. Incus still streams a bounded full
 backup while selecting artifacts only; its input-size, free-space and deadline
@@ -161,8 +171,10 @@ Incus artifact recovery. Uncertain exports are retained, never auto-replayed.
 ## Operator setup and upgrade retention
 
 The supported setup action writes a private `test-environments.json` file in the app data home.
-It identifies the exact managed core installation, qualified commit and local
-Docker Unix endpoint. The reviewed image digest is fixed by the app. The app
+It identifies the installed Smart Tool source revision and local
+Docker Unix endpoint. The default image is digest-pinned; trusted custom profiles
+may select other images. Docker uses ordinary package updates for future work,
+not per-operation runtime hashing or target-local certification. The app
 reports disabled or unavailable when this setup is missing or does not match.
 Setup downloads approved dependencies after an explicit user action, a scoped
 `test_host_setup` agent grant, or standing Full access; ordinary inspection does
@@ -204,7 +216,8 @@ and either the preservation or verification phase with a safe failure code
 (including `preserving` / `retention_storage` when retention space was unavailable), or
 the `preparing` phase and `cleanup_helper_not_started` code proving that no
 cleanup helper started. Once `Popen` returns, a lost response or helper process
-failure remains uncertain; it is not covered by this preflight exception.
+failure remains uncertain unless the new local Docker loaded-input gate
+positively records a reaped, pre-permit refusal (`cleanup_loaded_inputs_refused`).
 A local refusal before the new cleanup helper is invoked stays a failed request;
 retained dependency preparation from an earlier start does not make it an unknown
 removal. Known local refusal boundaries have bounded reason codes; arbitrary
@@ -215,6 +228,35 @@ Stopped inventory alone does not qualify. An unresolved removal or cleanup
 executor, including an unbound journal entry, blocks a new destructive identity.
 It uses the retained original backend configuration. The failed operation receipt,
 test outcome and partial exports remain unchanged.
+
+Prospective local Docker cleanup uses the retained Smart Tool interpreter, not
+necessarily the serving application's Python. Its fixed launcher compiles the
+exact captured worker and retention source buffers after comparing them with
+members of the serving generation's original qualified release wheel. The wheel
+digest comes from the existing authenticated download and private qualification
+receipt, never from action input, installed RECORD, a source stamp or prefix alone.
+The host caches only immutable verified member bytes; it revalidates serving
+eligibility for each invocation. The first capture streams the wheel once and
+retains bounded selected ZIP reads, not a second wheel or dependency-closure scan.
+
+The same live helper reports bounded payload-free readiness, then waits for a
+nonce/lifecycle-bound permit. Before delivery the host durably records that permit
+and rechecks authority, Stop, owner/revision, original receipt, source, backend and
+executor after its waits. No preservation, backend import or operation payload
+precedes the permit. A partial/lost permit delivery or subsequent helper failure
+remains UNKNOWN, never automatically replayed. Readiness from an exited probe
+cannot qualify another process.
+
+`removal.read` can return the exact saved `loadedInputs` evidence for an original
+remove or finishCleanup request without starting/importing a helper or consulting
+the backend. It describes a historical retained permit, **not** current process
+liveness, a dispatch acknowledgement or retroactive proof for older releases.
+No source contents, operation payload, settings, environment variables or chat
+content enter that evidence. The proof covers the two named app inputs only,
+not Python, stdlib, DTU or other helper/dependency bytes. Local Docker cleanup
+without the qualified serving-wheel context is refused; ordinary non-cleanup
+actions are unchanged. Incus/common-loader and registered-runner cleanup retain
+their existing routes and make no same-process loaded-input attestation claim.
 
 One older returned failure has a separate, narrow qualification: Docker's
 `export-too-large` receipt, containing the exact retained universe and source

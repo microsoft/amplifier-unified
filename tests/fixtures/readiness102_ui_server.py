@@ -47,6 +47,9 @@ async def main(home):
                 ('tool:post', {'result': {'success': True, 'output': {'status': 'updated', 'count': 1}}}),
             ])]
     path.write_text(''.join(json.dumps(row)+'\n' for row in records))
+    # Initialize the visible Plan from the canonical receipts, not invented state.
+    # This fixture covers initialized display, not cold saved-plan rehydration.
+    await service.event_log_view.refresh(sid)
     service.state['view'].update(panel=None, workSurface='chat')
     service._publish()
 

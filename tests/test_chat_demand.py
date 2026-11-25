@@ -123,6 +123,18 @@ def test_legacy_timeline_retains_complete_compact_workers():
     assert result['workers'][0]['reportDetail']['part'] == 'workers'
 
 
+@pytest.mark.parametrize('status', ['ready', 'retrying', 'unavailable'])
+def test_empty_nonloading_work_projection_keeps_legacy_worker_evidence(status):
+    state = worker_chat()
+    state['execution'] = {'nodes': [], 'turns': []}
+    overlay = {'execution': {'nodes': [], 'turns': [], 'segments': [], 'detailsDeferred': True},
+               'workProjection': {'status': status, 'current': status == 'ready'}}
+    result = conversation(state, work_overlay=overlay)
+    assert 'workerSummary' not in result
+    assert len(result['workers']) == len(state['workers'])
+    assert result['workers'][0]['reportDetail']['part'] == 'workers'
+
+
 def test_filter_precedes_report_hashing_and_keeps_unknown_groups(monkeypatch):
     from amplifier_web import browser_detail
     state = worker_chat()

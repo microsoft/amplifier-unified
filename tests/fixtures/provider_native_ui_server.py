@@ -84,6 +84,9 @@ class NativeFixtureProvider:
     def get_config_schema(self):
         return {'fields':[{'id':'reasoning_effort','field_type':'choice',
                           'choices':['low','high','xhigh'],'required':False}]}
+    def get_model_list_info(self):
+        # The local list is synthetic, not evidence of a remote catalog request.
+        return {'version': 1, 'source': 'simulated'}
     async def list_models(self):
         return [{'id':'native-model','display_name':'Native model'}]
     def parse_tool_calls(self, response):
@@ -138,6 +141,29 @@ def append(path, value):
 def file_identity(path):
     path = Path(path).resolve(strict=True)
     return {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
+def presentation_proof(application, branding, *, size=192, accent=None):
+    """Expected bytes from the fixture's owner, never from an HTTP response."""
+    if type(size) is not int or size not in (32, 180, 192, 512):
+        raise ValueError('Unsupported fixture icon size')
+    if accent is not None and (not isinstance(accent, str) or len(accent) != 6
+                               or any(char not in '0123456789abcdef' for char in accent)):
+        raise ValueError('Use one lowercase six-digit fixture accent')
+    static = application / 'static'
+    document = (static / 'index.html').read_bytes()
+    manifest = (static / 'manifest.webmanifest').read_bytes()
+    return {
+        'branding': branding.snapshot(),
+        'producer': file_identity(application / 'instance_branding.py'),
+        'document': {'inputSha256': hashlib.sha256(document).hexdigest(),
+                     'sha256': hashlib.sha256(branding.document(document.decode('utf-8')).encode()).hexdigest()},
+        'manifest': {'inputSha256': hashlib.sha256(manifest).hexdigest(),
+                     'sha256': hashlib.sha256(json.dumps(branding.manifest(json.loads(manifest), accent)).encode()).hexdigest()},
+        'icon': {'size': size, 'accent': accent,
+                 'markSha256': file_identity(static / 'branding/pwa/pwa-512.png')['sha256'],
+                 'sha256': hashlib.sha256(branding.icon(size, accent)).hexdigest()},
+    }
 
 
 def package_origin(root):
@@ -275,7 +301,11 @@ def observe_account_catalog(root, policy):
             if catalog:
                 # Preserve the production environment, pipes and isolation. A
                 # changed launch contract needs review, not a permissive fallback.
-                if (positional or set(kwargs) != {'stdout', 'stderr', 'env'}
+                # The cross-platform caller explicitly supplies zero on Linux.
+                # Admit that no-op only, never arbitrary process creation flags.
+                if (positional or set(kwargs) - {'creationflags'} != {'stdout', 'stderr', 'env'}
+                        or type(kwargs.get('creationflags', 0)) is not int
+                        or kwargs.get('creationflags', 0) != 0
                         or kwargs['stdout'] != subprocess.PIPE or kwargs['stderr'] != subprocess.DEVNULL
                         or not isinstance(kwargs['env'], dict)
                         or not set(kwargs['env']).issubset(CATALOG_ENVIRONMENT)):
@@ -548,11 +578,12 @@ async def main(root):
         save(bundle, root_definition)
         alternate_definition = copy.deepcopy(root_definition)
         alternate_definition['bundle']['name'] = 'provider-native-alternate'
-        # A distinct root-local connection leaves shared A/B priorities intact.
-        # Shared settings override matching IDs, so do not pretend a root B=0
-        # would override the shared B=20 declaration.
+        # Discovery lists saved connections, not a root's private declarations.
+        # Save native-alt below too, without a shared priority: its ordinary
+        # default is 100, while this root supplies 0. A/B stay at 1/20.
         alternate_definition['providers'] = [{
             'module': 'provider-native-fixture', 'id': 'native-alt',
+            'label': 'Native alternate',
             'source': paths['provider-native-fixture'],
             'config': {'display_name': 'Native alternate', 'priority': 0,
                        'default_model': 'native-model', 'reasoning_effort': 'high',
@@ -562,11 +593,13 @@ async def main(root):
         save(settings, {'bundle': {'active': str(bundle), 'app': []},
             'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)}, 'sources': {'modules': paths},
             'config': {'providers': [
-                {'module': 'provider-native-fixture', 'id': identity, 'config': {
-                    'display_name': label, 'priority': priority, 'default_model': 'native-model',
+                {'module': 'provider-native-fixture', 'id': identity, 'label': label, 'config': {
+                    'display_name': label, **({'priority': priority} if priority is not None else {}),
+                    'default_model': 'native-model',
                     'reasoning_effort': effort, 'proof_sink': str(root / 'calls.jsonl')}}
                 for identity, label, priority, effort in (
-                    ('native-a', 'Native A', 1, 'low'), ('native-b', 'Native B', 20, 'high'))]}})
+                    ('native-a', 'Native A', 1, 'low'), ('native-b', 'Native B', 20, 'high'),
+                    ('native-alt', 'Native alternate', None, 'high'))]}})
         settings_identity = file_identity(settings)
         control_token_path(root / 'app').write_text('fixture-browser-control-token\n')
         # Same local prepared-interpreter seam as bundle_switch_probe; real probes.
@@ -733,6 +766,16 @@ async def main(root):
                 'sharedSettings': {'initial': settings_identity, 'current': file_identity(settings)}}
         async def inspect(request):
             return web.json_response(proof(), headers={'Cache-Control': 'no-store'})
+        async def presentation(request):
+            if (set(request.query) - {'size', 'accent'}
+                    or any(len(request.query.getall(key)) != 1 for key in request.query)):
+                raise web.HTTPBadRequest(text='Choose one fixture size and accent')
+            try:
+                value = presentation_proof(application, service.instance_branding,
+                    size=int(request.query.get('size', '192')), accent=request.query.get('accent'))
+            except ValueError as error:
+                raise web.HTTPBadRequest(text=str(error)) from None
+            return web.json_response(value, headers={'Cache-Control': 'no-store'})
         async def arm(request):
             if delayed['phase'] != 'unarmed' or len(calls_at(root / 'calls.jsonl')) != 4:
                 raise web.HTTPConflict(text='Arm only once, after the original four sends')
@@ -747,6 +790,7 @@ async def main(root):
             gate.set()
             return web.json_response(copy.deepcopy(delayed))
         app.router.add_get('/fixture/native-proof', inspect)
+        app.router.add_get('/fixture/presentation', presentation)
         app.router.add_post('/fixture/native-delay/arm', arm)
         app.router.add_post('/fixture/native-delay/release', release)
         runner = web.AppRunner(app)

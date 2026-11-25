@@ -74,6 +74,16 @@ try{
  assert.equal(facts.installedStatic,installedStatic);
  const article=id=>page.locator(`article[data-message-id="${id}"]`);
  const caption='Sent by Amplifier from another chat';
+ // Prove the complete saved-set precondition through actual serialized state,
+ // not a fabricated caption or a larger production message window.
+ const initial=await page.evaluate(id=>{
+  const state=window.amplifier.getState(),row=state.sessions.find(row=>row.id===state.selectedSessionId);
+  return {count:row.messages.length,mode:row.messageWindow.mode,before:row.messageWindow.before,hasEarlier:row.messageWindow.hasEarlier,
+   gaps:row.messageWindow.unavailableRanges,caption:row.messages.find(row=>row.id===id)?.attribution?.caption};
+ },facts.agent);
+ assert.equal(facts.messageCount,19);
+ assert.deepEqual(initial,{count:19,mode:'cursor',before:null,hasEarlier:false,gaps:[],caption});
+ console.log('PEER_INITIAL_WINDOW '+JSON.stringify(initial));
  assert.equal(facts.peerCopies,1,'Canonical steering metadata repairs only the exact old native display copy');
  await expect(article(facts.nativePeer)).toHaveCount(0);
  await expect(article(facts.lookalike)).toHaveClass(/a-user/);
@@ -172,7 +182,9 @@ try{
   return {selectedSessionId:state.selectedSessionId,draft:state.view.draft};
  });
  assert.deepEqual(preserved,{selectedSessionId:'receiving',draft:'Untouched draft'});
- const presentation=scheme=>page.evaluate(async scheme=>{
+ const presentationRevisions=[];
+ const presentation=async scheme=>{
+  const receipt=await page.evaluate(async scheme=>{
   const shell=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
   const prepared=await window.amplifier.dispatch('shell.changes.prepare',{
    clientId,expectedRevision:shell.revision,
@@ -183,7 +195,24 @@ try{
    clientId,expectedRevision:shell.revision,changeId:prepared.result.id
   });
   if(!applied.accepted)throw Error('Theme commit failed');
- },scheme);
+  if(applied.result?.status!=='awaiting-storage'||!applied.result.commandId)throw Error('Expected the browser storage activation receipt');
+  return {scheme,baseRevision:prepared.result.baseRevision,commandId:applied.result.commandId};
+  },scheme);
+  // The scheme may already match (the zoom loop repeats it). Wait for this
+  // exact storage command and shell revision, not a prior iteration's theme.
+  await expect.poll(()=>page.evaluate(({commandId,baseRevision,scheme})=>{
+   const shell=window.amplifier.getShellState(),command=shell?.preferenceCommand;
+   return command?.id===commandId&&command.status==='stored'&&
+    shell.revision===baseRevision+1&&shell.effectiveComposition.presentation.scheme===scheme;
+  },receipt),{message:'Exact peer presentation activation revision'}).toBe(true);
+  const observed=await page.evaluate(()=>{const shell=window.amplifier.getShellState();return {
+   revision:shell.revision,commandId:shell.preferenceCommand.id,status:shell.preferenceCommand.status,
+   scheme:shell.effectiveComposition.presentation.scheme};
+  });
+  presentationRevisions.push({...receipt,observed});
+  if(process.env.AMPLIFIER_PROOF_DIR)writeFileSync(join(process.env.AMPLIFIER_PROOF_DIR,'peer-presentation-revisions.json'),
+   JSON.stringify(presentationRevisions,null,2));
+ };
  for(const width of [320,390])for(const scheme of ['light','dark'])for(const zoom of [1,2]){
   await page.setViewportSize({width,height:844});
   await presentation(scheme);
@@ -215,16 +244,74 @@ try{
  await page.reload();await expect(article(facts.agent).locator('.a-message-attribution')).toHaveText(caption);
  await expect(article(facts.notification).locator('.a-message-attribution')).toHaveText('Amplifier update');
  assert.ok((await page.request.post(new URL('/api/fixture/extendHistory',page.url()).href,{headers:{Origin:target}})).ok());
+ // Deliberately read the oldest peer through the maintained paging control.
+ // Save its anchor after the extension has reached the UI, so a live latest-
+ // window update cannot race the reading position that reload must restore.
+ await page.getByRole('button',{name:'Load earlier conversation',exact:true}).click();
+ const olderPeer=article(facts.older);
+ const readingPosition=()=>page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier.chat-reading.v1')||'{}').receiving);
+ const previousSeenAt=(await readingPosition())?.seenAt;
+ await olderPeer.evaluate(node=>{
+  const pane=node.closest('.a-messages');
+  pane.dispatchEvent(new WheelEvent('wheel',{deltaY:-1}));
+  node.scrollIntoView({block:'start'});pane.dispatchEvent(new Event('scroll'));
+ });
+ await expect(olderPeer).toBeInViewport();
+ await expect.poll(async()=>{
+  const position=await readingPosition();
+  return position?.messageId===facts.older&&position.seenAt!==previousSeenAt;
+ },{message:'Fresh older peer reading anchor persisted'}).toBe(true);
+ const savedReading=await readingPosition();
+ const restoration=page.waitForResponse(response=>{
+  const url=new URL(response.url());
+  return url.pathname==='/api/conversation/navigation'&&url.searchParams.get('sessionId')==='receiving'&&
+   url.searchParams.get('messageId')===facts.older&&url.searchParams.get('window')==='true';
+ });
  await page.reload();
+ const restoredResponse=await restoration;assert.ok(restoredResponse.ok());
+ const restored=await restoredResponse.json(),restoredIds=restored.messages.map(row=>row.id);
+ assert.ok(restoredIds.includes(facts.older));
+ assert.equal(restoredIds.includes(facts.agent),false,'The restored older window excludes the newer peer');
+ await expect(olderPeer).toBeInViewport();
+ const anchorOffset=()=>olderPeer.evaluate(node=>node.getBoundingClientRect().top-node.closest('.a-messages').getBoundingClientRect().top);
+ await expect.poll(async()=>Math.abs(await anchorOffset()-savedReading.offset),{message:'Older peer reading offset restored'}).toBeLessThan(3);
+ await expect(summary).toHaveCount(0);
+ const returnToLatest=page.getByRole('button',{name:'Return to latest',exact:true});
+ await expect(returnToLatest).toBeEnabled();
+ const historyTransition={savedReading,restored:{messageIds:restoredIds,anchorOffset:await anchorOffset()}};
+ console.log('PEER_OLDER_RESTORED '+JSON.stringify(historyTransition));
+ await returnToLatest.click();
+ await expect(returnToLatest).toHaveCount(0);await expect(olderPeer).toHaveCount(0);
  await expect(summary).toHaveAttribute('aria-expanded','false');
  const state=await page.evaluate(()=>window.amplifier.getState());
  const receiving=state.sessions.find(row=>row.id===state.selectedSessionId);
+ assert.equal((await readFacts()).messageCount,109);
+ assert.equal(receiving.messages.length,20);
+ assert.equal(receiving.messageWindow.mode,'cursor');
  assert.equal(receiving.messageWindow.hasEarlier,true);
+ assert.equal(typeof receiving.messageWindow.before,'string');
+ assert.ok(receiving.messageWindow.before.length>0);
+ assert.deepEqual(receiving.messageWindow.unavailableRanges,[]);
+ for(const id of [facts.agent,facts.notification]){
+  const row=receiving.messages.find(row=>row.id===id);assert.ok(row);
+  assert.equal(row.attribution,undefined,'A partial recent window cannot prove global input uniqueness');
+ }
  const headers={'X-Amplifier-Client':state.client.id};
- const older=await (await page.request.get(new URL(`/api/conversation/detail?sessionId=receiving&part=messages&before=${encodeURIComponent(receiving.messageWindow.before)}`,page.url()).href,{headers})).json();
+ const olderResponse=await page.request.get(new URL(`/api/conversation/detail?sessionId=receiving&part=messages&before=${encodeURIComponent(receiving.messageWindow.before)}`,page.url()).href,{headers});
+ assert.ok(olderResponse.ok());
+ const older=await olderResponse.json();
  assert.ok(Array.isArray(older.items),JSON.stringify({window:receiving.messageWindow,response:older}));
+ assert.equal(older.items.length,89,'One bounded older lookup must reach the oldest peer');
+ assert.equal(older.before,null);assert.equal(older.hasEarlier,false);
+ assert.deepEqual(older.unavailableRanges,[]);
+ assert.equal(new Set([...older.items,...receiving.messages].map(row=>row.id)).size,109);
  assert.ok(older.items.some(row=>row.id===facts.older));
  assert.equal(older.items.find(row=>row.id===facts.older).attribution,undefined,'A partial page cannot prove global input uniqueness');
+ console.log('PEER_EXTENDED_WINDOW '+JSON.stringify({savedCount:109,recentCount:receiving.messages.length,
+  olderCount:older.items.length,olderHasEarlier:older.hasEarlier,gaps:older.unavailableRanges}));
+ historyTransition.latest={messageIds:receiving.messages.map(row=>row.id),newerPeerCollapsed:await summary.getAttribute('aria-expanded')};
+ console.log('PEER_RETURNED_LATEST '+JSON.stringify(historyTransition.latest));
+ if(process.env.AMPLIFIER_PROOF_DIR)writeFileSync(join(process.env.AMPLIFIER_PROOF_DIR,'peer-history-transition.json'),JSON.stringify(historyTransition,null,2));
  // The focused rail is another receiving boundary, not a compact-text lookup.
  const focused=await (await page.request.get(new URL(`/api/conversation/navigation?sessionId=receiving&messageId=${encodeURIComponent(facts.agent)}&window=true`,page.url()).href,{headers})).json();
  assert.equal(focused.messages.find(row=>row.id===facts.agent).attribution?.caption,caption);

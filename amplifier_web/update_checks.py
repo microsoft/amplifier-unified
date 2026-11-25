@@ -19,8 +19,92 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 GIT_CHECK_CONCURRENCY = 5
+REGISTRY_JSON = "https://pypi.org/pypi/{}/json"
 
 _scope = ContextVar("update_check_scope", default=None)
+
+# Closed facts only: exception text can contain endpoint, proxy and path data.
+_LOOKUP_WHY = {
+    "certificate": "this PC did not accept that site's security certificate",
+    "timeout": "the site did not answer in time",
+    "unavailable": "the site is not available from this PC right now",
+    "invalid_response": "the answer could not be used",
+    "roots_unavailable": "Amplifier could not read its own list of trusted certificate issuers",
+}
+_LOOKUP_NEXT = {
+    "certificate": "Check for updates again later. If this message stays, a network filter may inspect "
+                   "secure connections: ask the person who manages this PC or network.",
+    "timeout": "Check the internet connection, then check for updates again.",
+    "unavailable": "Check the internet connection, then check for updates again. "
+                   "If your organization filters downloads, pypi.org must be reachable.",
+    "invalid_response": "Check for updates again later.",
+    "roots_unavailable": "Stop Amplifier and start it again. If this message stays, run the Amplifier "
+                         "installer again.",
+}
+LOOKUP_REASONS = frozenset(_LOOKUP_WHY)
+
+
+class RegistryLookupFailure(ValueError):
+    """A registry lookup that gave no usable version, with a closed reason."""
+
+    def __init__(self, reason):
+        super().__init__("Component release could not be checked")
+        self.reason = reason if reason in LOOKUP_REASONS else "invalid_response"
+
+
+def lookup_failure_reason(error):
+    import ssl
+
+    import aiohttp
+
+    if isinstance(error, RegistryLookupFailure):
+        return error.reason
+    if isinstance(error, ssl.SSLCertVerificationError):
+        return "certificate"  # Includes a certificate for another host name.
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    if isinstance(error, aiohttp.ClientResponseError):
+        return "invalid_response"  # The site answered: an HTTP error status or another content type.
+    if isinstance(error, (aiohttp.ClientError, OSError)):
+        return "unavailable"
+    return "invalid_response"
+
+
+def lookup_guidance(reason, *, application=False):
+    """Plain words for a person: what was not checked, why, and a next step."""
+    reason = reason if reason in LOOKUP_REASONS else "invalid_response"
+    if application:
+        return ("The newest app release is installed. Amplifier could not look for a newer version of "
+                "one of its components at pypi.org, because " + _LOOKUP_WHY[reason] + ". " + _LOOKUP_NEXT[reason])
+    return ("Amplifier could not look for a newer version of this component at pypi.org, because "
+            + _LOOKUP_WHY[reason] + ". The installed version is kept. " + _LOOKUP_NEXT[reason])
+
+
+def registry_trust():
+    """Roots for the registry lookup: this system's store plus the bundled roots.
+
+    Certificate and host-name verification stay on. On Windows, Python accepts
+    only roots that the Windows store holds at that moment, and the store of a
+    new PC can lack the registry's root (measured in Windows Sandbox). The
+    bundled roots are the ones this app's GitHub metadata request already uses.
+    Build this for each lookup: a context made at process start never sees a
+    root that enters the store later.
+    """
+    import ssl
+
+    import certifi
+
+    context = ssl.create_default_context()
+    context.load_verify_locations(cafile=certifi.where())
+    return context
+
+
+async def loaded_registry_trust():
+    try:
+        return await asyncio.to_thread(registry_trust)
+    except (OSError, ImportError):
+        # Never send a request with weaker verification instead.
+        raise RegistryLookupFailure("roots_unavailable") from None
 
 
 def access_scope():
@@ -244,9 +328,10 @@ class CheckCache:
 
         if self.client is None or self.client.closed:
             self.client = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
+        trust = await loaded_registry_trust()
         async with (
             self.semaphore,
-            self.client.get("https://pypi.org/pypi/" + name + "/json") as response,
+            self.client.get(REGISTRY_JSON.format(name), ssl=trust) as response,
         ):
             response.raise_for_status()
             value = (await response.json())["info"]["version"]
@@ -316,8 +401,10 @@ async def index_latest(name, loader):
 
         try:
             return await cache.index(name)
-        except (TimeoutError, aiohttp.ClientError, KeyError, TypeError) as error:
-            raise ValueError("Component release could not be checked") from error
+        except RegistryLookupFailure:
+            raise
+        except (TimeoutError, aiohttp.ClientError, KeyError, TypeError, ValueError) as error:
+            raise RegistryLookupFailure(lookup_failure_reason(error)) from error
 
     return await cached(["registry", name], load)
 

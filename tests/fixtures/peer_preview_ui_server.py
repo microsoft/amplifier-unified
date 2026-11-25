@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT / 'tests'))
 from aiohttp import web
 from amplifier_web import server
 from amplifier_web.server import create_app
-from amplifier_web.workspace_canvas import workspace_command
+from amplifier_web.workspace_selection import workspace_command
 from test_collaborative_workspaces import generation, agent_action
 from fixtures.peer_message_content import TEXT, LONG, CRLF
 

@@ -13,8 +13,17 @@ from amplifier_web.host.prompt_events import install
 from amplifier_web.host.storage import SessionStore
 
 
+class Coordinator:
+    """Session-local identity, like Core's coordinator (not value equality)."""
+    def __init__(self, hooks, rows):
+        self.hooks, self.config, self.session_state = hooks, {'hooks': rows}, {}
+
+    async def mount(self, mount_point, module, name=None):
+        raise AssertionError('This naming fixture does not load additional modules')
+
+
 def coordinator(hooks, rows):
-    return SimpleNamespace(hooks=hooks, config={'hooks': rows})
+    return Coordinator(hooks, rows)
 
 
 def row(instance=None):
@@ -164,7 +173,7 @@ async def test_worker_rejects_uncontrolled_naming_before_execute(tmp_path, monke
         assert tool_invocation == worker.tool_invocation
         return controls
     monkeypatch.setattr('amplifier_web.runtime_controls.RuntimeControls', make_controls)
-    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args: None)
+    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args, **kwargs: None)
     monkeypatch.setattr('amplifier_web.history_revision.recover_pending', lambda *args: None)
     monkeypatch.setattr('amplifier_web.app_guidance.install_app_access', AsyncMock())
     monkeypatch.setitem(sys.modules, 'amplifier_module_loop_live.runtime',
@@ -180,7 +189,11 @@ async def test_worker_rejects_uncontrolled_naming_before_execute(tmp_path, monke
     session.execute.assert_not_awaited()
     assert worker.execution is None and worker.shutdown.is_set()
     assert not any(event['type'] == 'runtime.ready' for event in events)
-    assert any(event['type'] == 'runtime.error' and 'recognized lifecycle' in event['error'] for event in events)
+    errors = [event['error'] for event in events if event['type'] == 'runtime.error']
+    assert errors == [
+        'ValueError: This pinned naming module does not expose a recognized lifecycle. '
+        'Update it before using app naming.'
+    ]
 
 
 async def test_actual_mounted_parent_late_result_preserves_manual_rename(native_home, community):

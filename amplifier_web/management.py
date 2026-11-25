@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import copy
+from contextlib import ExitStack
 import json
 from pathlib import Path
 import time
@@ -35,20 +36,27 @@ class Management:
         restored = set()
         for session in service.state.get('sessions',[]):
             pending = session.get('pendingConfiguration', {})
-            if pending.get('phase') not in {'queued', 'applying', 'error'}:
+            if (pending.get('phase') not in {'queued', 'applying', 'error'}
+                    and not (pending.get('phase') == 'cancelled'
+                             and isinstance(pending.get('recoveryNoInput'), dict))):
                 continue
             try:
                 record = self.configuration_record(session['id'], pending.get('operationId'))
+                if self.finish_saved_cancellation(session, record):
+                    restored.add(session['id'])
+                    continue
                 if pending.get('phase') == 'queued' and record['state']['stage'] == 'queued' and record['state']['effect'] == 'none':
                     self.schedule_configuration(session['id'])
                 elif pending.get('phase') in {'queued', 'applying'}:
                     # A persisted dispatch can have saved settings before losing
                     # its result. Reopening is observation, never permission to retry.
-                    self.configuration_transition(session, record['id'], phase='error',
+                    record = self.configuration_transition(session, record['id'], phase='error',
                         stage='interrupted', error='Configuration application was interrupted; its original operation is retained and was not repeated.')
+                record = self.settle_interrupted_configuration(session, record)
                 if record['state']['effect'] != 'none' or pending.get('recoveryRequired'):
                     session['configurationBusy'] = True
-                    session['configurationOperationFence'] = record['id']
+                    if session.get('configurationOperationFence') is None:
+                        session['configurationOperationFence'] = record['id']
             except (OSError, ValueError, KeyError, TypeError):
                 # Older records have neither an immutable payload binding nor a
                 # way to distinguish a user action from missing agent authority.
@@ -57,7 +65,8 @@ class Management:
                     'error': 'The original configuration operation cannot be verified. No pending change was repeated.',
                     'recoveryRequired': True}
                 session['configurationBusy'] = True
-                session['configurationOperationFence'] = pending.get('operationId')
+                if session.get('configurationOperationFence') is None:
+                    session['configurationOperationFence'] = pending.get('operationId')
             restored.add(session['id'])
 
         service._save_changes(sessions=restored, globals={'notificationSettings'})
@@ -72,7 +81,12 @@ class Management:
                 for sid, operation in outcomes:
                     async with service.lock:
                         try:
-                            publish_outcome(self, service._session(sid), operation)
+                            current = service._session(sid)
+                            publish_outcome(self, current, operation)
+                            if (current.get('status') in {'stopped', 'interrupted'}
+                                    or self.unresolved_configuration(current)
+                                    or self.configuration_record(sid, operation).get('recoveryNoInput')):
+                                continue
                         except (OSError, ValueError, KeyError, TypeError):
                             continue  # Retain unavailable evidence; do not invent a continuation.
                     await service.collaboration.drain(sid)
@@ -90,7 +104,9 @@ class Management:
         # Publish the cached catalog as one snapshot. Even fresh cache hits used
         # to rebuild and persist the entire app twice for every provider.
         with manager.read_snapshot(workspace):
-            enabled=[row for row in manager.provider_rows(workspace) if row.get('enabled',True)]
+            from .decision_settings import row_id
+            chat_ids = {row_id(row) for row in manager.config(workspace).configured_connections}
+            enabled=[row for row in manager.provider_rows(workspace) if row.get('enabled',True) and row['id'] in chat_ids]
             for row in enabled:
                 key=manager.catalog_key({'id':row['id']},workspace)
                 cache_key=('providers.models',key)
@@ -417,7 +433,7 @@ class Management:
             self.service._publish_changes(globals={'managementResults'})
 
     def session(self,args):
-        return copy.deepcopy(self.service._session(args.get('sessionId')))
+        return copy.deepcopy(self.service._session(args.get('sessionId'), hydrate=False))
 
     def configuration_session(self, args):
         from .configuration_target import resolve
@@ -446,9 +462,12 @@ class Management:
             or pending.get('phase') in {'error', 'applying'} and pending.get('effect', 'unknown') != 'none')
 
     @staticmethod
-    def configuration_readback_matches(expected, actual):
+    def configuration_readback_matches(expected, actual, *, home=None):
         from .configuration_readback import matches
-        return matches(expected, actual)
+        from .host.components import portable_module_sources
+        pair = portable_module_sources(
+            {'agents': {'expected': expected, 'actual': actual}}, home)['agents']
+        return matches(pair['expected'], pair['actual'])
 
     def queued_path(self,identity):
         return self.service.data_dir/'sessions'/identity/'pending-configuration.json'
@@ -490,14 +509,12 @@ class Management:
 
     def configuration_error(self, session, operation, error):
         try:
-            from .configuration_recovery import evidence, latest_attempt
+            from .configuration_recovery import terminal_no_effect
             record = self.configuration_record(session['id'], operation)
             changes = {}
             if record['state']['effect'] == 'unknown':
                 try:
-                    attempt = latest_attempt(record)
-                    observed = evidence(attempt, home=self.service.data_dir) if attempt else None
-                    if observed and observed['effect'] == 'none' and observed.get('terminal') is True:
+                    if terminal_no_effect(self, session, record):
                         # The exact native attempt finished before any write.
                         # Retain the error, but don't require manual recovery
                         # merely to release this operation's input fence.
@@ -514,6 +531,49 @@ class Management:
                     error='The original configuration operation cannot be verified. No automatic recovery was attempted.')
                 session['configurationBusy'] = True
             return None
+
+    def settle_interrupted_configuration(self, session, record):
+        """Startup bookkeeping under absent native ownership, never a continuation."""
+        from .configuration_recovery import terminal_no_effect
+        operation = record['id']
+        task = self.pending_config_tasks.get(session['id'])
+        if (record['state']['phase'] != 'error'
+                or record['state']['effect'] == 'none' and not record['state'].get('recoveryRequired')
+                    and not record.get('recoveryNoInputBinding')
+                or session.get('configurationOperationFence') not in {None, operation}
+                or self.lock.locked() or task is not None and not task.done()
+                or not self.configuration_idle({**session, 'pendingConfiguration': {}, 'configurationBusy': False})
+                or any(row.get('phase') in {'pending', 'unknown'} for row in session.get('worktreeHandoffs', []))
+                or any(row.get('phase') == 'running' for row in session.get('execution', {}).get('turns', []))):
+            return record
+        try:
+            with self.service.runtime.stopped_boundary(session):
+                if not terminal_no_effect(self, session, record):
+                    return record
+                # Persist the input cutoff BEFORE releasing admission, including
+                # restart after an interrupted publication. No old input drains.
+                from .host.config import write_private
+                marker = max((row for row in (
+                    record.get('recoveryNoInputBinding'), session.get('cancelledConfigurationInput'),
+                    session['pendingConfiguration'].get('recoveryNoInput')) if isinstance(row, dict)),
+                    key=lambda row: row['acceptedAt'], default=None) or {
+                    'generationId': (session.get('collaborationGeneration') or {}).get('id'),
+                    'acceptedAt': time.time()}
+                record.update(recoveryNoInput=True, recoveryNoInputBinding=marker)
+                write_private(self.configuration_record_path(session['id'], operation), json.dumps(record))
+                session['pendingConfiguration']['recoveryNoInput'] = copy.deepcopy(marker)
+                session['cancelledConfigurationInput'] = copy.deepcopy(marker)
+                session['pendingConfiguration'].update(copy.deepcopy(record['state']), revision=record['revision'])
+                session['configurationOperationFence'] = operation
+                if (record['state'].get('stage') != 'reconciled'
+                        or record['state']['effect'] != 'none' or record['state'].get('recoveryRequired')):
+                    record = self.configuration_transition(session, operation, phase='error', stage='reconciled',
+                        effect='none', recoveryRequired=False,
+                        recovery_source={'origin': 'internal', 'action': 'startup-terminal-observation'})
+                self.settle_configuration_fence(session, operation)
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+            pass  # Missing, partial or unavailable proof remains a local hold.
+        return record
 
     @staticmethod
     def configuration_target_binding(session):
@@ -541,11 +601,37 @@ class Management:
         if session.get('configurationOperationFence') != operation:
             return
         pending = session.get('pendingConfiguration', {})
+        saved_cancelled = pending.get('phase') == 'cancelled' and pending.get('stage') == 'saved_cancelled'
         held = bool(pending.get('recoveryRequired') or
-            pending.get('effect') != 'none' and pending.get('phase') != 'ready')
+            pending.get('effect') != 'none' and pending.get('phase') != 'ready' and not saved_cancelled)
         session['configurationBusy'] = held
         if not held:
             session.pop('configurationOperationFence', None)
+            if saved_cancelled and (session.get('configurationPending')
+                    or session.get('configurationRefresh', {}).get('phase') in {'queued', 'applying'}):
+                session['configurationBusy'] = True
+
+    def finish_saved_cancellation(self, session, record):
+        """Finish an already committed cancellation after interrupted publication."""
+        state = record['state']
+        if state.get('phase') != 'cancelled' or not (
+                state.get('stage') == 'saved_cancelled'
+                or state.get('stage') == 'cancelled' and record.get('recoveryNoInputBinding')):
+            return False
+        pending = session.get('pendingConfiguration', {})
+        if pending.get('operationId') != record['id']:
+            raise ValueError('The configuration cancellation no longer owns the pending operation.')
+        self.queued_path(session['id']).unlink(missing_ok=True)
+        pending.update(copy.deepcopy(state))
+        self.settle_configuration_fence(session, record['id'])
+        if record.get('recoveryNoInputBinding'):
+            # Keep the existing per-generation input fence through restart, even
+            # though this cancelled operation no longer holds configuration.
+            pending['recoveryNoInput'] = copy.deepcopy(record['recoveryNoInputBinding'])
+            session['cancelledConfigurationInput'] = copy.deepcopy(record['recoveryNoInputBinding'])
+        else:
+            session.pop('pendingConfiguration', None)
+        return True
 
     def create_configuration_operation(self, session, config, command_id, authority, source):
         from .configuration_authority import CURRENT, fingerprint
@@ -561,6 +647,9 @@ class Management:
             raise ValueError('The configuration target was stopped or moved after admission. No change was applied.')
         if authority is None and source.get('origin') not in {'ui', 'user', 'internal'}:
             raise ValueError('The original agent configuration authority is missing.')
+        if source.get('action', 'configuration.apply') == 'configuration.apply':
+            from .host.components import portable_module_sources
+            config = portable_module_sources(config, self.service.data_dir)
         operation = str(uuid.uuid4())
         if self.configuration_record_path(session['id'], operation).exists():
             raise ValueError('Configuration operation identity already exists.')
@@ -583,30 +672,37 @@ class Management:
 
     def check_configuration_operation(self, session, record):
         from .configuration_authority import fingerprint
+        from .configuration_diagnostics import PredicateFailure, checkpoint
         request = record['request']
+        checkpoint("continuation_intent")
         if request['source'].get('continuation'):
             from .configuration_continuation import intent_reason
             if reason := intent_reason(self.service, record):
-                raise ValueError(reason)
+                raise PredicateFailure("continuation_intent", reason)
+        checkpoint("placement_binding")
         if request['source'].get('action') == 'configuration.patchPlacement.bind':
             from .patch_placement import check_request
             check_request(self, session, record)
+        checkpoint("original_target")
         if (request['sessionId'] != session['id'] or request['workspace'] != session['workspace']
                 or request['workingDirectory'] != session.get('workingDirectory')
                 or request['executionRevision'] != session.get('executionRevision', 0)
                 or request['interruptionRevision'] != session.get('interruptionRevision', 0)):
-            raise ValueError('The original configuration target was stopped or moved. No delayed change was repeated.')
+            raise PredicateFailure("original_target", 'The original configuration target was stopped or moved. No delayed change was repeated.')
+        checkpoint("original_authority")
         if request['authorization'] == 'grant':
             if not request.get('authority'):
-                raise ValueError('The original configuration authority is missing.')
+                raise PredicateFailure("original_authority", 'The original configuration authority is missing.')
             self.service.configuration_authority.check(request['authority'])
         elif request['authorization'] not in {'ui', 'user', 'internal'} or request.get('authority') is not None:
-            raise ValueError('The original configuration authority cannot be verified.')
+            raise PredicateFailure("original_authority", 'The original configuration authority cannot be verified.')
+        checkpoint("retained_authority")
         for retained in record.get('resumptions', []):
             self.service.configuration_authority.check(retained)
+        checkpoint("original_payload")
         if (fingerprint(request['config']) != request['payloadHash']
                 or fingerprint(json.loads(self.queued_path(session['id']).read_text())) != request['payloadHash']):
-            raise ValueError('The original configuration payload changed. It was not applied.')
+            raise PredicateFailure("original_payload", 'The original configuration payload changed. It was not applied.')
 
     def schedule_configuration(self, identity):
         task = self.pending_config_tasks.get(identity)
@@ -720,10 +816,10 @@ class Management:
                         self.background(self.service.collaboration.drain(identity))
 
     async def ensure_runtime(self,session,*,selection_override=None,bundle_replacement=None,restart_guard=None,preserve_configuration=False,saved_configuration_operation=None):
-        if self.unresolved_configuration(self.service._session(session['id'])):
+        if self.unresolved_configuration(self.service._session(session['id'], hydrate=False)):
             if saved_configuration_operation is None or restart_guard is None:
                 raise ValueError('The original configuration application is unresolved. Runtime preparation cannot reconcile or repeat it.')
-            current = self.service._session(session['id'])
+            current = self.service._session(session['id'], hydrate=False)
             record = self.configuration_record(session['id'], saved_configuration_operation)
             from .configuration_recovery import check_saved
             check_saved(self, current, record)
@@ -741,12 +837,17 @@ class Management:
         if work_paused(self.service.state):raise ValueError('An update is activating; retry shortly')
         # Explicitly using runtime controls makes this a web-owned presentation.
         if session.get('historyManaged') and not session.get('historyLoaded'):
-            await self.service.history.ensure_loaded(session['id'])
+            await self.service.history.ensure_loaded(session['id'], hydrate=False)
         async with self.service.lock:
             if restart_guard is not None: restart_guard()
-            current = self.service._session(session['id'])
+            current = self.service._session(session['id'], hydrate=False)
             current['historyManaged'] = False
-            session.update(copy.deepcopy(current))
+            detached = copy.deepcopy(current)
+            if session is current:
+                # The worker request is complete; its host owner stays cold.
+                session = detached
+            else:
+                session.update(detached)
         if selection_override is not None:
             # Only an explicit model-control action may replace a saved pin.
             # This transient startup request is not an input or an automatic retry.
@@ -782,7 +883,7 @@ class Management:
             model = row['info']['defaults']['model']
             result = {'provider': identity, 'models': [model] if model else [], 'supported': False}
         async with self.service.lock:
-            current = self.service._session(session['id'])
+            current = self.service._session(session['id'], hydrate=False)
             if current.get('status') != 'error' or catalog(self.service.data_dir, current) != recovery:
                 return True
             controls = self.service.state.setdefault('runtimeControl', {}).setdefault(session['id'], {})
@@ -801,6 +902,7 @@ class Management:
             # Drafts have no session to refresh. Re-resolve their defaults and
             # prevent an in-flight probe from restoring the old configuration.
             self.service.state['configurationRevision'] = self.service.state.get('configurationRevision', 0) + 1
+            self.service.prompt_suggestions.invalidate()
             self.service.state['draftDefaults'] = {}
             self.service.state.setdefault('setup', {}).pop('providersRequestedWorkspace', None)
             for session in self.service.state['sessions']:
@@ -1056,28 +1158,45 @@ class Management:
         elif action=='configuration.cancel':
             identity=self.session({'sessionId':args['id']})['id']
             operation = None
+            saved_cancellation = False
             async with self.service.lock:
-                current = self.service._session(identity)
-                pending = current.get('pendingConfiguration', {})
-                if pending.get('phase') == 'applying':
-                    raise ValueError('These changes are already applying.')
-                if pending:
-                    record = self.configuration_record(identity, pending.get('operationId'))
-                    operation = record['id']
-                    if record['state']['effect'] != 'none' and record['state']['phase'] != 'ready':
-                        raise ValueError('The original application outcome is unresolved. Cancellation cannot prove it had no effect.')
-                    if record['state']['phase'] != 'ready':
-                        self.configuration_transition(current, record['id'], phase='cancelled', stage='cancelled')
-                    self.settle_configuration_fence(current, record['id'])
-                task=self.pending_config_tasks.get(identity)
-                if task:task.cancel()
-                self.queued_path(identity).unlink(missing_ok=True)
-                current.pop('pendingConfiguration',None)
-                self.service._publish_changes(sessions={identity})
-            if operation:
+                # Keep native ownership through the operation commit and host
+                # publication, with no await or opportunity to start a writer.
+                with ExitStack() as boundary:
+                    current = self.service._session(identity)
+                    pending = current.get('pendingConfiguration', {})
+                    if pending.get('phase') == 'applying':
+                        raise ValueError('These changes are already applying.')
+                    if pending:
+                        record = self.configuration_record(identity, pending.get('operationId'))
+                        operation = record['id']
+                        saved_cancellation = self.finish_saved_cancellation(current, record)
+                        if (not saved_cancellation and record['state']['phase'] != 'ready'
+                                and record['state']['effect'] == 'saved_not_mounted'):
+                            from .configuration_recovery import check_saved_cancellation
+                            observed = boundary.enter_context(self.service.runtime.stopped_boundary(current))
+                            check_saved_cancellation(self, current, record)
+                            record = self.configuration_transition(current, operation,
+                                phase='cancelled', stage='saved_cancelled', recoveryRequired=False,
+                                error=None, detail='Saved settings retained; unfinished runtime load cancelled.',
+                                recovery_source={'action': action, 'boundary': observed})
+                            saved_cancellation = self.finish_saved_cancellation(current, record)
+                        elif not saved_cancellation:
+                            if record['state']['effect'] != 'none' and record['state']['phase'] != 'ready':
+                                raise ValueError('The original application outcome is unresolved. Cancellation cannot prove it had no effect.')
+                            if record['state']['phase'] != 'ready':
+                                self.configuration_transition(current, record['id'], phase='cancelled', stage='cancelled')
+                            self.settle_configuration_fence(current, record['id'])
+                    task=self.pending_config_tasks.get(identity)
+                    if task:task.cancel()
+                    self.queued_path(identity).unlink(missing_ok=True)
+                    current.pop('pendingConfiguration',None)
+                    self.service._publish_changes(sessions={identity})
+            if operation and not saved_cancellation:
                 from .configuration_continuation import release_boundary
                 await release_boundary(self, identity, operation)
-            self.background(self.service.collaboration.drain(identity))
+            if not saved_cancellation:
+                self.background(self.service.collaboration.drain(identity))
         elif action in {'configuration.inspect','configuration.apply','configuration.patchPlacement.bind'}:
             session=self.session({'sessionId':args['id']})
             applying = action != 'configuration.inspect'
@@ -1092,6 +1211,7 @@ class Management:
                     if not idle and not args.get('whenIdle'):
                         raise ValueError('Finish active work before changing this conversation configuration')
                     record = self.create_configuration_operation(current, args['config'], command_id, authority, source)
+                    args = {**args, 'config': record['request']['config']}
                     configuration_operation = record['id']
                     if idle:
                         current['configurationBusy'] = True
@@ -1170,7 +1290,9 @@ class Management:
                 return await self.perform('configuration.apply',
                     {'id': args['sessionId'], 'config': args.get('args', {}).get('config')},
                     command_id=command_id, authority=authority, source=source)
-            session=self.session(args)
+            session = (self.service._session(args.get('sessionId'), hydrate=False)
+                       if args['operation'] in {'configuration.catalog', 'provider.queueSelection'}
+                       else self.session(args))
             recovery_request = args['operation'] == 'context.recovery.request'
             recovery_binding = (source or {}).get('recovery') if recovery_request else None
             if recovery_request:
@@ -1314,11 +1436,14 @@ class Management:
                         # The worker acknowledgement is evidence to check, not
                         # authority to replace the immutable requested plan.
                         expected = self.configuration_record(session['id'], configuration_operation)['request']['config']
+                        from .host.components import portable_module_sources
+                        expected = portable_module_sources(expected, self.service.data_dir)
                         from .configuration_readback import inspect_loaded
                         inspected, readback_guard = await inspect_loaded(self, session, expected, operation_guard)
                         if 'configuration' in result and (
                                 not isinstance(result['configuration'], dict)
-                                or not self.configuration_readback_matches(expected, result['configuration'])):
+                                or not self.configuration_readback_matches(
+                                    expected, result['configuration'], home=self.service.data_dir)):
                             raise ValueError('Saved configuration acknowledgement does not match the original request. Its operation remains unresolved.')
                     if not placement:
                         result['configuration']=inspected
@@ -1330,6 +1455,8 @@ class Management:
                             self.configuration_transition(self.service._session(session['id']), configuration_operation,
                                 stage='readback', effect='mounted')
                             self.service._publish_changes(sessions={session['id']})
+                if args['operation'] == 'context.recovery.status' and command_id:
+                    result = {**result, 'readCommandId': command_id}
                 refreshed={}
                 if result.get('requiresRestart') and not placement:refreshed['configuration.providers']=await self.service.runtime.control(session['id'],'configuration.providers',{})
                 refresh={'native.compact':'native.status','mode.set':'mode.list','mode.clear':'mode.list','goals.set':'goals.get','goals.clear':'goals.get','budget.set':'budget.get','provider.select':'configuration.providers','provider.reset':'configuration.providers','configuration.toggle':'configuration.inspect'}.get(args['operation'])
@@ -1337,6 +1464,10 @@ class Management:
                 async with self.service.lock:
                     self.service.state.setdefault('runtimeControl',{}).setdefault(session['id'],{}).update(refreshed)
                     self.service.state.setdefault('runtimeControl',{}).setdefault(session['id'],{})[args['operation']]=result
+                    if args['operation'] == 'context.clear' and result.get('cleared'):
+                        current = self.service._session(session['id'])
+                        current['_lastPromptUsage'] = {'startedAt': time.time()}
+                        current.pop('nextMessageImpact', None)
                     if args['operation'] in {'provider.select', 'provider.reset'}:
                         current=self.service._session(session['id'])
                         current['selection'] = copy.deepcopy(result['selection'])
@@ -1445,7 +1576,7 @@ class Management:
                         session['messages'].append({'id': uuid.uuid5(uuid.NAMESPACE_URL, f"shared:{result['workspace']}:{result['id']}:{index}").hex,
                             'role': row['role'], 'text': row['text'], 'via': 'chat', 'source': 'shared', 'createdAt': session['createdAt']})
                 self.service.state['selectedSessionId'] = session['id']
-                from .workspace_canvas import select_session_workspace
+                from .workspace_selection import select_session_workspace
                 select_session_workspace(self.service.state, session)
                 # Only UI presentation is saved here. The next worker admission
                 # locks and reads the complete common checkpoint, never bubbles.

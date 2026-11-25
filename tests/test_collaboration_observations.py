@@ -94,12 +94,12 @@ async def test_bridge_and_direct_reads_do_not_hydrate_history_or_expose_private_
 
 
 async def test_recap_fences_workspace_move_during_resource_owner_read(app, monkeypatch):
-    import amplifier_web.workspace_resources as resources
+    import amplifier_web.task_resources as resources
     source = app.state['sessions'][0]
-    async def moving(*args, **kwargs):
+    def moving(*args, **kwargs):
         source['workspace'] += '/other'
-        return {'result': {'items': []}}
-    monkeypatch.setattr(resources, 'dispatch_reservation', moving)
+        return {'items': [], 'nextOffset': None}
+    monkeypatch.setattr(resources, 'read', moving)
     with pytest.raises(AppError, match='moved'):
         await read(app)
 

@@ -24,6 +24,53 @@ sessionId = the native session directory name
 presentation[SessionRef] = { pinned, unread, canvasReferences }
 ```
 
+**Windows exception for the app's own chat folders.** On Windows, a folder that
+Unified allocated for a chat (`<app data>\chats\<chat id>\files`) uses the project
+name `chat-<first 16 hex digits of the chat id>` instead of the path slug. The
+path slug of such a folder repeats the installation path, and its session paths
+exceed the Windows path limit while long paths are off, which is the Windows
+default. Every folder that a person chooses, and every folder on other
+platforms, uses the path slug. `nativeProject` carries the name in use, so
+SessionRef is unchanged.
+
+- The short name needs proof that the folder is the app's: its allocation record,
+  or, after the chat folder is deleted, saved history under the short name that
+  records this exact folder. The folder shape and the chat id alone are not
+  proof; a copy of a chat folder in another place uses the path slug.
+- Nothing is moved. A chat whose saved history is only under the path slug keeps
+  that folder. That includes history longer than the Windows limit, written
+  while long paths were on.
+- When both names hold saved history for one chat (possible only after an update
+  rollback), the chat uses the short name. The other folder is kept and stays
+  listed, read-only, as a project without a folder.
+- Saved history means a transcript, session metadata or the chat's own settings
+  file. Capture and view files alone, such as those of a first message that
+  failed, do not keep a chat on the path slug.
+- A CLI or TUI started inside such a folder on Windows computes the path slug. It
+  lists a chat kept under the path slug and does not list one under the short name.
+- The folder in which an update checks its candidate
+  (`<app data>\updates\releases\<stage id>\qualification-workspace`) is also the
+  app's own. Its check sessions are not saved conversations: their history is
+  in the stage's own store (`<stage>\shared-config`), not in the person's shared
+  home. Their capture records go to the installation's capture folder under
+  the same project name.
+  On Windows, in a process that runs with that stage as its app home, the
+  folder uses the project name `update-<first 12 hex digits of the stage id>`,
+  for the same path-limit reason. It never equals a path slug or a chat name.
+- A chat with its own setup (dependency overrides, a saved plan, a bundle that
+  is not offered) is checked in such a stage too, with the chat's folder. That
+  check session is not a saved conversation either, and it is in the stage's
+  own store. So on Windows every folder has the stage's project name in a
+  process that runs with a stage as its app home and that stage's
+  `shared-config` as its shared home, also a folder that a person chose. The
+  saved conversations of that folder are not in the stage, and their project
+  name is unchanged. With any other shared home every folder keeps its name.
+- A folder that a person chose keeps the path slug, which is as long as the
+  folder's path. While Windows long paths are off, the app refuses to create
+  or start a chat in a folder whose path is too long for the chat's files. It
+  names the folder and says what to do. It does not give the folder another
+  project name.
+
 ## The promises
 
 1. **Native sessions define saved conversations.** Existing native records decide

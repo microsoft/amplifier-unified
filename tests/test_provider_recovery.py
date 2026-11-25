@@ -124,6 +124,87 @@ async def test_model_control_repairs_startup_without_sending_saved_message(tmp_p
         await app.close()
 
 
+@pytest.mark.parametrize('operation,arguments', [
+    ('configuration.providers', {}),
+    ('configuration.providerModels', {'instance': 'openai'}),
+    ('configuration.providerModels', {'instance': 'not-mounted'}),
+])
+async def test_recovery_catalog_keeps_retained_execution_and_current_aliases_cold(
+        tmp_path, monkeypatch, operation, arguments):
+    from amplifier_web import execution, execution_records as records
+    from amplifier_web.cold_display import ColdRecord, MARKER
+    from amplifier_web.execution_working_set import exact, snapshot, working
+    from test_service import Runtime
+
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'native'))
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app'))
+    runtime = Runtime()
+    app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    app.management = Management(app)
+    try:
+        await app.dispatch('session.create', {})
+        session = app._session(hydrate=False)
+        assert isinstance(session, ColdRecord)
+        sid = session['id']
+        session.update(status='error', selection=copy.deepcopy(WANTED),
+                       failure={'category': 'worker_startup'})
+        app._message(session, 'user', 'Retained uncertain request',
+                     inputId='prior-attempt', delivery={'status': 'unknown'})
+        history = copy.deepcopy(session['messages'])
+        control, mounted = saved_files(app.data_dir, session)
+        saved_reports = [path.read_bytes() for path in (control, mounted)]
+        tree = {'nodes': [{'id': f'old-{i}', 'kind': 'tool', 'turnId': 'old',
+                           'phase': 'completed', 'detail': {'values': [i]}} for i in range(160)],
+                'turns': [{'id': 'old', 'phase': 'completed', 'anchorMessageId': None}],
+                'retiredUsageNodes': [], 'currentTurnId': None}
+        execution.refresh_usage(tree)
+        reference = records.import_tree(app.db, (sid,), tree)
+        app.db.commit()
+        dict.pop(session, 'execution', None)
+        dict.setdefault(session, MARKER, {})['execution'] = reference
+        owner = working(session)
+        borrowed_row = exact(session, 'nodes', {'id': 'old-7'})
+        borrowed = borrowed_row['detail']['values']
+        expected_catalog = catalog(app.data_dir, session)
+        assert expected_catalog is not None
+
+        request = {'sessionId': sid, 'operation': operation, 'args': arguments}
+        if arguments.get('instance') == 'not-mounted':
+            with pytest.raises(ValueError, match='Choose an available replacement connection'):
+                await app.management.perform('runtime.control', request)
+            assert operation not in app.state.get('runtimeControl', {}).get(sid, {})
+        else:
+            await app.management.perform('runtime.control', request)
+            controls = app.state['runtimeControl'][sid]
+            assert controls['configuration.providers'] == expected_catalog
+            if operation == 'configuration.providerModels':
+                assert controls[operation] == {
+                    'provider': 'openai', 'models': ['gpt-6-sol'], 'supported': False}
+
+        assert not dict.__contains__(session, 'execution')
+        assert session._working_execution is owner
+        assert exact(session, 'nodes', {'id': 'old-7'}) is borrowed_row
+        assert snapshot(session) == tree
+        await app._flush_pending_progress()
+        borrowed.append('late correction')
+        app._publish_changes(sessions={sid})
+        expected = copy.deepcopy(tree)
+        expected['nodes'][7]['detail']['values'].append('late correction')
+        assert snapshot(session) == expected
+        assert records.materialize(app.db, session[MARKER]['execution']) == expected
+        assert records.materialize(app.db, reference) == tree
+        assert not dict.__contains__(session, 'execution')
+        assert session._working_execution is owner
+        assert borrowed_row['detail']['values'] is borrowed
+        assert session['messages'] == history
+        assert session['selection'] == WANTED and session['status'] == 'error'
+        assert session['failure'] == {'category': 'worker_startup'}
+        assert [path.read_bytes() for path in (control, mounted)] == saved_reports
+        assert runtime.started == runtime.sent == runtime.stopped == []
+    finally:
+        await app.close()
+
+
 @pytest.mark.parametrize('saved,override,expected', [
     ({'selection': REPLACEMENT}, False, REPLACEMENT),
     ({'selection': None}, False, None),
@@ -138,7 +219,7 @@ async def test_worker_mount_uses_saved_exact_id_or_explicit_replacement(tmp_path
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(home))
     monkeypatch.setattr('amplifier_web.runtime_bootstrap.bootstrap_app_package', lambda: None)
     monkeypatch.setattr('amplifier_web.host.config.app_home', lambda: home)
-    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args: None)
+    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides', lambda *args, **kwargs: None)
     monkeypatch.setattr('amplifier_web.history_revision.recover_pending', lambda *args: None)
     runtime = SimpleNamespace(session_id='chat')
     monkeypatch.setitem(sys.modules, 'amplifier_module_loop_live.runtime', SimpleNamespace(Runtime=lambda **kwargs: runtime))

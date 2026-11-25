@@ -4,7 +4,7 @@ import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, call
+from unittest.mock import ANY, AsyncMock, Mock, call
 
 import pytest
 from amplifier_web import runtime_worker
@@ -33,7 +33,7 @@ def policy_worker(tmp_path, monkeypatch):
         compatibility=Path(runtime_worker.__file__).with_name("runtime_deps") / "compatibility.txt",
     )
 
-    def active_policy(*args):
+    def active_policy(*args, **kwargs):
         assert dict(os.environ) == state.parent_env
         state.order.append("policy")
         return state.selected
@@ -106,9 +106,9 @@ async def test_worker_policy_matrix_preserves_caller_environment(policy_worker, 
     else:
         assert state.options["install_overrides"] == (state.qualified if qualified else state.compatibility)
         assert isinstance(state.options["install_overrides"], Path)
-        calls = [call(state.home)]
+        calls = [call(state.home, on_verified=ANY)]
         if qualified:
-            calls.append(call(state.home, str(state.qualified)))
+            calls.append(call(state.home, str(state.qualified), on_verified=ANY))
         assert state.policy.call_args_list == calls
         assert state.order == (["policy", "prepare", "policy"] if qualified else ["policy", "prepare"])
     assert dict(os.environ) == state.parent_env
@@ -138,7 +138,7 @@ async def test_prepare_failure_or_cancellation_keeps_environment_and_skips_postc
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
     assert state.options["install_overrides"] == (None if value else state.qualified if qualified else state.compatibility)
-    assert state.policy.call_args_list == ([] if value else [call(state.home)])
+    assert state.policy.call_args_list == ([] if value else [call(state.home, on_verified=ANY)])
     assert state.order == (["prepare"] if value else ["policy", "prepare"])
     assert dict(os.environ) == state.parent_env
     state.capture.close.assert_called_once()
@@ -154,10 +154,60 @@ async def test_qualified_precheck_failure_never_prepares_or_changes_environment(
     state.policy.side_effect = ValueError("qualified policy changed")
     with pytest.raises(ValueError, match="qualified policy changed"):
         await state.worker.start(state.config, raise_errors=True, recover_bundle=False)
-    state.policy.assert_called_once_with(state.home)
+    state.policy.assert_called_once_with(state.home, on_verified=ANY)
     state.prepare.assert_not_awaited()
     assert dict(os.environ) == state.parent_env
     state.capture.close.assert_called_once()
+
+
+@pytest.mark.parametrize('change', ['same', 'payload', 'before-missing', 'after-missing'])
+async def test_tool_source_witness_requires_both_matching_verification_boundaries(
+        policy_worker, monkeypatch, change):
+    from amplifier_web.tool_source_proof import QualifiedToolSources
+    state = policy_worker
+    incoming_policy(state, monkeypatch, 'absent')
+    expected = [{'name': 'fixture-selection'}]
+    project, receipt = state.home / 'runtime/q-fixture', state.qualified.parent
+    def witness(payload):
+        result = QualifiedToolSources()
+        result.project, result.receipt = project, receipt
+        result.stamps, result.rows, result.payloads = {}, {}, {'fixture': payload}
+        result.packages, result.entries, result.selections = {}, {}, {}
+        return result
+    before, after = witness('original'), witness('original')
+    if change == 'payload': after.payloads['fixture'] = 'changed'
+    if change == 'before-missing': before = None
+    if change == 'after-missing': after = None
+    capture = Mock(side_effect=[before, after])
+    monkeypatch.setattr(QualifiedToolSources, 'capture', capture)
+    def verified(*args, on_verified):
+        state.order.append('policy')
+        on_verified(project, receipt, expected)
+        return state.qualified
+    state.policy.side_effect = verified
+    with pytest.raises(PolicyBoundaryReached):
+        await state.worker.start(state.config, raise_errors=True, recover_bundle=False)
+    assert capture.call_args_list == [call(project, receipt, expected)] * 2
+    assert state.order == ['policy', 'prepare', 'policy']
+    assert state.worker.tool_sources is (after if change == 'same' else None)
+
+
+def test_root_and_child_receive_same_private_worker_source_witness():
+    def coordinator(name):
+        capabilities = {}
+        return SimpleNamespace(session_id=name, session_state={},
+            get_capability=capabilities.get, register_capability=capabilities.__setitem__,
+            cancellation=SimpleNamespace(is_cancelled=False))
+    worker = runtime_worker.Worker()
+    root, child = coordinator('root'), coordinator('child')
+    worker.session = SimpleNamespace(coordinator=root)
+    worker.runtime = SimpleNamespace(generation={'id': 'run', 'input_ids': []},
+                                     closed=False, stop_requested=False)
+    marker = object()  # Wiring only; not an eligible package proof.
+    worker.tool_sources = marker
+    for value in (root, child):
+        worker.app_access_bridge(value)
+        assert value.get_capability('web.tool_sources') is marker
 
 
 @pytest.mark.parametrize('cancel', [False, True])

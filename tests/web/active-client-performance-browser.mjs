@@ -8,7 +8,8 @@ import {chromium,expect} from '@playwright/test';
 
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/active_client_performance_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
 let browser,terminal,stopCompanion=true,companionTask,api,result,primaryError,diagnosticsBefore,diagnosticsAfter;
-const clientRequests=[],samples=[],companionSamples=[],diagnosticErrors=[],cleanupErrors=[];
+const clientRequests=[],samples=[],companionSamples=[],diagnosticErrors=[],cleanupErrors=[],browsers=[];
+const singleProcess=process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1';
 const retain=(rows,row)=>{rows.push(row);if(rows.length>128)rows.shift()};
 const evidence=async()=>{
  const value={...(result||{}),samples,clientRequests,companionSamples,diagnosticsBefore,diagnosticsAfter,
@@ -29,10 +30,14 @@ try{
   finally{Object.assign(row,{elapsedMs:performance.now()-started,endedAtMs:Date.now()});retain(clientRequests,row)}
  };
  const {sessions}=await api('/fixture/metrics');
- browser=await chromium.launch({headless:true});
+ const launch=async()=>{const value=await chromium.launch({headless:true,args:singleProcess?['--no-zygote','--single-process','--disable-gpu']:[]});browsers.push(value);return value};
+ browser=await launch();
  const pages=[],errors=[],viewCounts=[],stateReads=[];
  for(let i=0;i<4;i++){
-  const context=await browser.newContext({extraHTTPHeaders:{Authorization:headers.Authorization},viewport:{width:1280,height:900}}),page=await context.newPage();pages.push(page);
+  // Single-process Chromium supports one context; retain four isolated clients
+  // using separate owned browser processes in that explicit DTU mode.
+  const owner=singleProcess&&i>0?await launch():browser;
+  const context=await owner.newContext({extraHTTPHeaders:{Authorization:headers.Authorization},viewport:{width:1280,height:900}}),page=await context.newPage();pages.push(page);
   page.on('pageerror',error=>errors.push(error.message));
   stateReads.push(0);
   const counts={pending:0,max:0};viewCounts.push(counts);const views=new Set();
@@ -52,22 +57,28 @@ try{
  const companionBefore=(await api('/fixture/metrics')).companion;
  assert.equal(companionBefore.pins.length,14);assert.equal(companionBefore.readReceipts,153);assert.equal(companionBefore.noticeOwners,100);
  const companionDurations=[],companionStatuses=[],companionErrors=[];
- let companionPending=0,companionMax=0,companionEtag,lastCompanion;
+ let companionPending=0,companionMax=0; const representations=new Map();
  const pollCompanion=async working=>{
   const start=performance.now(),sample={startedAtMs:Date.now(),working};companionPending++;companionMax=Math.max(companionMax,companionPending);
   try{
-   const response=await fetch(url+'/api/companion',{headers:{...headers,'X-Amplifier-Client':'performance-companion',...(companionEtag?{'If-None-Match':companionEtag}:{})},signal:AbortSignal.timeout(15000)});
-   Object.assign(sample,{status:response.status,serverTiming:response.headers.get('server-timing'),requestId:response.headers.get('x-amplifier-request-id')});
-   assert.ok([200,304].includes(response.status),'Companion HTTP '+response.status);
-   if(response.status===200)lastCompanion=await response.json();
-   else assert.ok(companionEtag&&lastCompanion,'Conditional response needs a prior representation');
-   companionEtag=response.headers.get('etag');assert.ok(companionEtag);
-   assert.equal(lastCompanion.workingCount,working);assert.equal(lastCompanion.attentionCount,50);
-   assert.equal(lastCompanion.sessionsTruncated,false);assert.equal(lastCompanion.itemsTruncated,false);
-   assert.deepEqual(lastCompanion.sessions.map(row=>row.id).sort(),[...companionBefore.pins].sort());
-   assert.ok(lastCompanion.sessions.every(row=>row.pinned));
-   assert.deepEqual(lastCompanion.items.map(row=>row.id).sort(),[...companionBefore.noticeIds].sort());
-   companionStatuses.push(response.status);
+   // The native client reads independently coherent public collections. This
+   // three-request workload supersedes the old single-adapter benchmark.
+   const values={};
+   for(const [name,path] of Object.entries({sessions:'/api/sessions?view=observation&scope=roots&activity=active-or-pinned&limit=200',attention:'/api/attention?scope=roots&limit=200',activity:'/api/activity?scope=roots'})){
+    const prior=representations.get(name);
+    const response=await fetch(url+path,{headers:{...headers,'X-Amplifier-Client':'performance-companion',...(prior?{'If-None-Match':prior.etag}:{})},signal:AbortSignal.timeout(15000)});
+    assert.ok([200,304].includes(response.status),'Native '+name+' HTTP '+response.status);
+    const value=response.status===200?await response.json():prior?.value;
+    assert.ok(value,'Conditional response needs a prior representation');
+    const etag=response.headers.get('etag');assert.ok(etag);representations.set(name,{etag,value});values[name]=value;
+    companionStatuses.push(response.status);
+    sample[name]={status:response.status,serverTiming:response.headers.get('server-timing'),requestId:response.headers.get('x-amplifier-request-id')};
+   }
+   assert.equal(values.activity.executionCount,working);assert.equal(values.activity.attentionCount,50);
+   assert.equal(values.sessions.nextCursor,null);assert.equal(values.attention.nextCursor,null);
+   assert.deepEqual(values.sessions.items.map(row=>row.id).sort(),[...companionBefore.pins].sort());
+   assert.ok(values.sessions.items.every(row=>row.pinned));
+   assert.deepEqual(values.attention.items.map(row=>row.id).sort(),[...companionBefore.noticeIds].sort());
    return performance.now()-start;
   }finally{companionPending--;Object.assign(sample,{elapsedMs:performance.now()-start,endedAtMs:Date.now()});retain(companionSamples,sample)}
  };
@@ -115,7 +126,7 @@ try{
 }catch(error){primaryError=error;throw error}
 finally{
  stopCompanion=true;
- for(const cleanup of [()=>companionTask,async()=>{if(api)diagnosticsAfter=await api('/fixture/diagnostics')},()=>terminal?.abort(),()=>browser?.close(),()=>fixture.kill()]){
+ for(const cleanup of [()=>companionTask,async()=>{if(api)diagnosticsAfter=await api('/fixture/diagnostics')},()=>terminal?.abort(),()=>Promise.all(browsers.map(value=>value.close())),()=>fixture.kill()]){
   try{await cleanup()}catch(error){cleanupErrors.push({name:error.name,message:error.message.slice(0,1000)})}
  }
  await evidence().catch(error=>diagnosticErrors.push(error.message.slice(0,1000)));

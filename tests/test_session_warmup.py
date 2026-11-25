@@ -98,6 +98,11 @@ async def test_passive_preparation_preserves_failed_turn_evidence_and_history(se
         'kind': 'llm', 'phase': 'error', 'endedAt': 1790182800,
         'failure': failure_details('Invalid image base64 data', 'ValueError'),
     })
+    await service.on_runtime_event('runtime.generation', {
+        'sessionId': session['id'], 'rootSessionId': session['id'],
+        'event': 'generation.failed', 'generation_id': 'failed-generation',
+        'input_ids': ['failed-input'], 'error_type': 'ValueError', 'error_category': 'unknown',
+    })
     if raw_error:
         await service.on_runtime_event('runtime.error', {
             'sessionId': session['id'], 'error': 'Manager turn failed; no automatic replay',
@@ -266,3 +271,54 @@ async def test_passive_warmup_progress_does_not_revive_a_stopped_send(service):
         'detail': 'Checking this chat’s tools…'})
     assert session['status'] == 'stopped'
     assert session.get('activity') == before
+
+
+@pytest.mark.parametrize(('status', 'legacy'), [('error', False), ('stopped', False),
+                                                ('stopped', True), ('interrupted', False)])
+@pytest.mark.parametrize('late', [False, True], ids=['during-warm', 'after-warm'])
+async def test_passive_worker_events_preserve_settled_turn(service, status, legacy, late):
+    from amplifier_web.runtime import normalize_event
+
+    session = service._session()
+    sid = session['id']
+    session['status'] = status
+    if legacy:
+        session.pop('lastInterruption', None)
+        session.pop('interruptionRevision', None)
+    else:
+        session['lastInterruption'] = {'revision': 3, 'source': 'saved'}
+        session['interruptionRevision'] = 3
+    session['diagnosticReceipt'] = 'saved-worker.log'
+    service._activity(session, status, 'Saved outcome')
+    service._message(session, 'user', 'Saved input', inputId='old-input')
+    ensure_turn(session, 'old-input')
+    protected = {key: copy.deepcopy(session.get(key)) for key in
+                 ('status', 'activity', 'messages', 'execution', 'interruptionRevision',
+                  'lastInterruption', 'diagnosticReceipt')}
+    await service.dispatch('session.warm', {'id': sid})
+    await asyncio.wait_for(service.runtime.ready.wait(), 1)
+    if late:
+        service.runtime.release.set()
+        await asyncio.gather(*list(service.warmup.pending.values()))
+        await service.runtime.emit('runtime.status', {'sessionId': sid, 'status': 'ready',
+                                                       'report': {'bundle': 'late-report'}})
+        assert session['runtimeReport'] == {'bundle': 'late-report'}
+    with patch.object(service.schedules, 'idle') as schedule_idle:
+        for event in ('session.ready', 'session.idle', 'session.closed'):
+            await service.runtime.emit(*normalize_event({'type': event}, sid))
+            assert {key: session.get(key) for key in protected} == protected, event
+        schedule_idle.assert_not_called()
+    if legacy:
+        assert 'lastInterruption' not in session and 'interruptionRevision' not in session
+    assert session['preparation'] == {'status': 'cold'}
+
+    # A real delivery can still advance the same conversation and settle normally.
+    service.runtime.release.set()
+    await asyncio.gather(*list(service.warmup.pending.values()))
+    await service.dispatch('conversation.send', {'sessionId': sid, 'text': 'One new input'},
+                           command_id='new-input')
+    assert session['messages'][-1]['delivery']['status'] == 'accepted'
+    assert session['status'] == 'working'
+    await service.runtime.emit(*normalize_event({'type': 'session.idle'}, sid))
+    assert session['status'] == 'idle'
+    assert len(session['messages']) == 2

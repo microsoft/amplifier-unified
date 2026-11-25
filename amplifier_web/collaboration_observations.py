@@ -109,9 +109,6 @@ def recap_items(app, source, rows, resources):
              receipt.get('outcomeRevision'), response.get('status'), response.get('qualified'),
              response.get('artifactVerification'), wait.get('status'), wait.get('lastClaimedRevision'),
              (receipt.get('watch') or {}).get('status')])
-    for row in resources.get('items', [])[:16]:
-        add(['resource', row['id']], 'resource', 'Resource reservation',
-            'Reservation ' + state(row.get('status')), [row.get('revision'), row.get('status')])
     for row in resources.get('storage', [])[:16]:
         add(['storage', row['id']], 'resource', 'Task storage',
             'Storage ' + state(row.get('status')),
@@ -199,10 +196,6 @@ async def read(collaboration, action, args, origin, caller):
     if action == 'coordination.recap':
         workspace = next((row for row in app.state['workspaces'] if row['path'] == source['workspace']), None)
         if workspace:
-            from .workspace_resources import dispatch_reservation
-            reply = await dispatch_reservation(app, 'workspace.resources.reservations',
-                {'workspaceId': workspace['id'], 'limit': 16}, origin, None, caller)
-            resources = reply['result']
             from .task_resources import read as read_storage
             storage = await asyncio.to_thread(read_storage, app.data_dir, source['id'], {'limit': 16})
             resources.update(storage=storage['items'], storageNextOffset=storage['nextOffset'])
@@ -215,4 +208,4 @@ async def read(collaboration, action, args, origin, caller):
     if action == 'coordination.diagnostics':
         return diagnostics(app, source, rows, truncated)
     return recap(source, recap_items(app, source, rows, resources), args.get('cursor'),
-        truncated or resources.get('nextOffset') is not None or resources.get('storageNextOffset') is not None)
+        truncated or resources.get('storageNextOffset') is not None)

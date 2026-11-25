@@ -36,8 +36,13 @@ The following action names describe the proposed surface, not today's API.
    folder. Creation never silently adopts or overwrites either user's files.
 
 4. **Identity survives a rename.** Display-name changes retain workspace and
-   history identity and leave paths unchanged. A path-derived legacy identity
-   remains an alias; a renamed workspace must not duplicate its saved chats.
+   history identity and leave paths unchanged. A resolved registration keeps
+   its existing workspace ID, including one originally derived from a path;
+   no replacement ID or identity alias is needed. Display aliases retain their
+   meaning. Unresolved native-project placeholders remain subject to the
+   existing discovery reconciliation and ordered reference remaps. Renaming a
+   workspace must not duplicate its saved chats. Location metadata alone does
+   not relocate native history, saved file references or running work.
 
 5. **Creation retries preserve their result.** The same command and payload
    returns the same receipt. Changed plans, collisions, or uncertain allocation
@@ -50,6 +55,22 @@ The following action names describe the proposed surface, not today's API.
 7. **Allocation preserves filesystem boundaries.** Name normalization yields a
    child path inside the approved root. Traversal, reserved names, symlink swaps,
    and filesystem-equivalent collisions cannot escape the reviewed destination.
+
+8. **Automatic bundle defaults follow the release; explicit choices do not.**
+   A built-in starter's fallback is release-owned intent for future conversations,
+   not an implicit user override. Prepared snapshots retain that distinction.
+   Explicit workspace/project, app, shared and conversation/draft choices survive
+   updates, including choices equal to an old shipped default. Custom starters
+   remain literal. Existing conversations never change roots on upgrade.
+   Blank, Development and custom starters with an empty bundle inherit the
+   general conversation fallback; Amplifier development owns a specialized
+   fallback identity. Following changes within those policies does not imply
+   retroactive inheritance-to-specialization without an explicit policy and
+   provenance/migration change.
+   Legacy automatic settings require matching host-generated provenance and
+   unchanged owned file shape; unknown/manual settings are preserved. The
+   [configuration guide](../../SHARED-CONFIGURATION.md#root-bundle-defaults-in-unified)
+   specifies the irrecoverable byte-identical direct-file rewrite boundary.
 
 ## Not in v1
 
@@ -77,6 +98,7 @@ The following action names describe the proposed surface, not today's API.
 
 | Date | Change | Evidence |
 |---|---|---|
+| 2026-11-15 | Retain existing resolved workspace IDs directly; distinguish unresolved placeholder reconciliation from identity preservation. | Accepted identity/location direction; [metadata ownership](../notes/registration-ownership.md). |
 | 2026-09-22 | Initial candidate placement rules. | User requested a name-first flow, configurable root, and preservation of existing-folder workflows. |
 
 Design direction accepted by the user on 2026-09-22. Acceptance is not a claim of implementation conformance; see [implementation status](../IMPLEMENTATION.md).

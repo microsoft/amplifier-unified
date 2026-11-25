@@ -11,6 +11,35 @@ from amplifier_web import runtime_source_policy as policy
 from test_runtime_ref_identity import normalized_runtime, ROW, REVISION
 
 
+@pytest.mark.parametrize('protection', ['version', 'second-version', 'marker', 'source-array', 'override',
+                                        'version-override', 'version-constraint', 'optional-only', 'local'])
+def test_mapped_root_with_additional_policy_is_not_recovered(protection):
+    name = 'fixture-component'
+    source = {'git': ROW['url'], 'rev': 'main'}
+    uv = {'sources': {name: source}}
+    project = {'dependencies': [name]}
+    if protection == 'version':
+        project['dependencies'] = [name + '>=2']
+    elif protection == 'second-version':
+        project['dependencies'].append(name + '==1')
+    elif protection == 'marker':
+        source['marker'] = "sys_platform == 'darwin'"
+    elif protection == 'source-array':
+        uv['sources'][name] = [source]
+    elif protection == 'override':
+        uv['override-dependencies'] = [name + ' @ git+' + ROW['url'] + '@other']
+    elif protection in {'version-override', 'version-constraint'}:
+        key = 'override-dependencies' if protection == 'version-override' else 'constraint-dependencies'
+        uv[key] = [name + '==1']
+    elif protection == 'optional-only':
+        project = {'optional-dependencies': {'contributor': [name]}}
+    else:
+        uv['sources'][name] = {'path': './local'}
+    content = ('project = ' + environments.toml_value(project) +
+               '\ntool = ' + environments.toml_value({'uv': uv})).encode()
+    assert name not in policy.app_declarations(content)
+
+
 @pytest.fixture
 def prepared(tmp_path):
     home = tmp_path / 'app'
@@ -133,6 +162,126 @@ async def test_freeze_recovers_new_authored_dependency_with_no_checked_row(norma
     saved = json.loads((receipt / 'runtime-sources.json').read_text())[ROW['package']]
     assert saved['ref'] == 'main'
     assert saved['policyOrigin']['kind'] == 'prepared-manifest'
+
+
+@pytest.fixture
+def app_generated(prepared, monkeypatch, request):
+    """The old app-direct @main -> unresolved/fullSHA frozen receipt shape."""
+    home, generation, project, graph = prepared
+    requirement = 'fixture-component @ git+' + ROW['url'] + '@main#subdirectory=module'
+    content = ('[project]\nname="worker"\nversion="1"\ndependencies=[' + json.dumps(requirement) +
+               ']\n[tool.uv]\noverride-dependencies=[' + json.dumps(requirement) + ']\n').encode()
+    if getattr(request, 'param', None) == 'source-table':
+        content = ('[project]\nname="worker"\nversion="1"\ndependencies=["fixture-component"]\n'
+                   '[tool.uv.sources]\nfixture-component={git="' + ROW['url'] +
+                   '",rev="main",subdirectory="module"}\n').encode()
+    manifest = home.parent / 'app.toml'
+    manifest.write_bytes(content)
+    monkeypatch.setattr(environments, 'manifest_path', lambda: manifest)
+    monkeypatch.setattr('amplifier_web.app_updates.installed_extras', lambda: [])
+    (project / 'pyproject.toml').write_bytes(content)
+    saved = policy.freeze_policies(*prepared)
+    assert saved['fixture-component']['policyOrigin']['kind'] == 'unresolved-reference'
+    receipt = environments.receipt_directory(home, generation)
+    receipt.mkdir(parents=True, exist_ok=True)
+    # Faithful old writer inputs; prospective recovery may not edit any of them.
+    (receipt / 'runtime-base.toml').write_bytes(content)
+    (receipt / 'runtime.toml').write_bytes(content)
+    (receipt / 'runtime.lock').write_bytes((project / 'uv.lock').read_bytes())
+    (receipt / 'runtime-installed.json').write_text(json.dumps(graph))
+    (receipt / 'runtime-sources.json').write_text(json.dumps(saved))
+    monkeypatch.setattr(environments, 'project_path', lambda *args, **kwargs: project)
+    rows = [{'kind': 'runtime dependency', 'package': 'fixture-component',
+             'current': REVISION, 'eligible': False, 'status': 'pinned', **saved['fixture-component']}]
+    monkeypatch.setattr('amplifier_web.runtime_qualification.installed_graph', lambda _: graph)
+    return home, generation, project, graph, receipt, manifest, rows
+
+
+@pytest.mark.parametrize('case', ['branch', 'tag', 'same-name-tag', 'unknown', 'moved',
+                                 'separate-config', 'external-override', 'authored-pin', 'local-source',
+                                 'during-proof'])
+async def test_new_app_direct_policy_requires_exact_branch_kind(app_generated, monkeypatch, case):
+    home, generation, project, graph, receipt, manifest, _ = app_generated
+    baseline = manifest.read_bytes()
+    if case == 'authored-pin':
+        baseline = baseline.replace(b'@main', ('@' + REVISION).encode())
+        (project / 'pyproject.toml').write_bytes(baseline)
+    if case == 'local-source':
+        baseline += b'\n[tool.uv.sources]\nfixture-component={path="../custom"}\n'
+        (project / 'pyproject.toml').write_bytes(baseline)
+    if case == 'separate-config': (project / 'uv.toml').write_text('')
+    if case == 'external-override': monkeypatch.setenv('UV_OVERRIDE', '/not-read/custom.txt')
+    calls = []
+    async def runner(*args, **kwargs):
+        calls.append(args)
+        if case == 'during-proof':
+            (project / 'pyproject.toml').write_bytes(baseline + b'\n# concurrent source edit\n')
+        return (('b' * 40 if case == 'moved' else REVISION) + '\trefs/heads/main\n'
+                if case in {'branch', 'same-name-tag', 'moved', 'during-proof'} else '') + (
+                REVISION + '\trefs/tags/main\n' if case in {'tag', 'same-name-tag'} else '')
+    policies = policy.freeze_policies(home, generation, project, graph)
+    if case == 'during-proof':
+        with pytest.raises(environments.ProtectedRuntimeSource):
+            await policy.qualify_app_policies(policies, {}, project, baseline, runner)
+        assert policies['fixture-component']['ref'] == REVISION
+        return
+    result = await policy.qualify_app_policies(policies, {}, project, baseline, runner)
+    saved = result['fixture-component']
+    assert (saved['ref'] == 'main') is (case == 'branch')
+    assert len(calls) <= 1
+    if case == 'branch':
+        assert saved['policyOrigin']['kind'] == 'verified-app-declaration'
+
+
+@pytest.mark.parametrize('case', [
+    'branch', 'tag', 'same-name-tag', 'unknown', 'missing-proof', 'changed-graph',
+    'changed-lock', 'changed-manifest', 'changed-declaration', 'authored-pin',
+    'unknown-origin', 'wrong-original-ref', 'wrong-policy', 'fork', 'local', 'dirty',
+    'separate-config', 'external-override', 'during-proof',
+])
+@pytest.mark.parametrize('app_generated', ['requirement-url', 'source-table'], indirect=True)
+async def test_old_app_direct_recovery_preserves_unexplained_pins_and_receipts(app_generated, monkeypatch, case):
+    home, generation, project, graph, receipt, manifest, rows = app_generated
+    if case == 'missing-proof': (receipt / 'runtime-installed.json').unlink()
+    if case == 'changed-graph': graph[0]['version'] = 'changed'
+    if case == 'changed-lock': (project / 'uv.lock').write_bytes(b'version=1\n')
+    if case == 'changed-manifest': (project / 'pyproject.toml').write_bytes(b'[project]\n')
+    if case in {'changed-declaration', 'authored-pin'}:
+        ref = ('other' if case == 'changed-declaration' else REVISION).encode()
+        manifest.write_bytes(manifest.read_bytes().replace(b'@main', b'@' + ref)
+                             .replace(b'rev="main"', b'rev="' + ref + b'"'))
+    if case == 'unknown-origin': rows[0]['policyOrigin']['kind'] = 'unrecorded'
+    if case == 'wrong-original-ref': rows[0]['policyOrigin']['originalRef'] = 'other'
+    if case == 'wrong-policy': (receipt / 'runtime-sources.json').write_text('{}')
+    if case == 'fork': rows[0]['url'] += '-fork'
+    if case == 'local': rows[0]['override'] = True
+    if case == 'dirty': rows[0]['cacheManaged'] = True
+    if case == 'separate-config': (project / 'uv.toml').write_text('')
+    if case == 'external-override': monkeypatch.setenv('UV_OVERRIDE', '/not-read/custom.txt')
+    before = {path: path.read_bytes() for path in receipt.iterdir()}
+    calls = []
+    async def runner(*args, **kwargs):
+        calls.append(args)
+        if case == 'during-proof':
+            manifest.write_bytes(manifest.read_bytes() + b'\n# concurrent policy edit\n')
+        # A branch can have moved since installation: old bytes are independently
+        # verified; ordinary Check must still bind the next candidate's commit.
+        return (('b' * 40) + '\trefs/heads/main\n' if case in {'branch', 'same-name-tag', 'during-proof'} else '') + (
+                REVISION + '\trefs/tags/main\n' if case in {'tag', 'same-name-tag'} else '')
+    if case == 'during-proof':
+        with pytest.raises(environments.ProtectedRuntimeSource):
+            await policy.recover_app_policies(home, generation, rows, graph, runner)
+    else:
+        result = await policy.recover_app_policies(home, generation, rows, graph, runner)
+        assert (result[0]['ref'] == 'main') is (case == 'branch')
+        assert result[0]['current'] == REVISION
+        if case == 'branch':
+            assert result[0]['eligible']
+            assert result[0]['policyOrigin']['kind'] == 'verified-app-declaration'
+        else:
+            assert not result[0]['eligible']
+    assert len(calls) <= 1
+    assert {path: path.read_bytes() for path in receipt.iterdir()} == before
 
 
 @pytest.mark.parametrize('case', ['owned', 'dirty', 'outside', 'changed-subdirectory'])

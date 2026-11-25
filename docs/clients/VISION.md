@@ -46,10 +46,27 @@ remain ways into the same work, with the same essential actions. Neither density
 nor a change of interface changes what a status means or grants more authority.
 Clients express these promises in the form that fits their device.
 
+Consumer-level usability is the baseline, including for people who are not
+developers. Routine work and personalization use familiar controls, plain language
+and useful defaults without teaching storage, synchronization or agent internals.
+Expert capability stays available through discoverable secondary controls, not a
+parallel configuration task beside every everyday choice. Accessibility means
+readable, keyboard- and touch-usable journeys with low cognitive effort, not
+oversized controls or smaller text used to compensate for a poor layout.
+
+People know the product as **Amplifier**, not by the name of its host
+implementation. Clients keep that name consistent as people move between
+interfaces or connect instances. [CX8](../../contracts/client-experience.v1.md#the-promises)
+defines the user-facing naming rule.
+
 ### 3. Independent attention, shared work
 A person's selection, unfinished input and reading position persist locally in
 that client with no routine backend synchronization. Shared drafting or agent
-inspection is explicit. Accepted work is shared; AHP owns its replication and
+inspection is explicit. Explicit dismissal of an update is shared with the owning account on that service;
+a new update or activity incarnation remains eligible to appear. Avatar, density,
+placement, grouping and visibility are device preferences. Dismissal does not read,
+answer, approve or stop work. Independent services do not imply account federation.
+Accepted work is shared; AHP owns its replication and
 recovery while the host continues unattended work and preserves its results.
 
 ### 4. Feedback makes the next action clear
@@ -112,6 +129,13 @@ the assessment says how much of it has actually been demonstrated.
   choices**, then can find that conversation again.
 - A person visits **2 conversations**, returns to their work overview, and
   reconstructs **0 previously chosen filters or reading positions** in that client.
+- A person changes an everyday preference without learning its storage model or
+  making a second persistence choice. The bundled web client's
+  [appearance direction](../shell/appearances.md) uses Reference-based deltas and
+  complete independent Global / This browser profiles. Ordinary choices apply
+  directly, with explicit accent reset and Preview Cancel. The
+  [appearance contract](../shell/appearance-contract.md) owns scope, preservation
+  and feedback boundaries.
 
 ## Current desktop consumers
 
@@ -131,12 +155,3 @@ The optional [device connection PoC contract](../../contracts/device-connections
 applies these boundaries to enrollment and local capability providers in the
 current host. It does not require the future AHP/ACP replacement, Tempo or
 new CLI onboarding. The bundled web client supplies one setup experience.
-
-## Changelog
-
-| Date | Change | Basis |
-| --- | --- | --- |
-| 2026-10-20 | Identify current Mac and planned Windows consumers; link shared desktop journeys. | Product-owner request for coordinated platform documentation. |
-| 2026-10-20 | Apply the accepted Home/sidebar UX amendment. | [Product-owner decision](../ux/decisions/20261020.md). |
-| 2026-10-02 | Adopt protocol boundaries, client-local state and independent repos. | [Family architecture direction](../architecture/README.md); implementation pending. |
-| 2026-09-20 | Initial draft. | Shared-client design discussion and the sources in the direction index. |

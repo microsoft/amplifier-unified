@@ -59,6 +59,9 @@ source-checked file tools recheck after waiting for file admission. In-flight ca
 retain their invocation snapshot. Existing or preparing children can only narrow
 their captured ceilings; new children inherit the refreshed parent plan. Read
 policy, bundle restrictions, hooks and approval checks are not replaced.
+Unrelated provider, decision-model and application settings are not dependencies
+of file admission. Only changes to the selected writer declarations, sources and
+non-write configuration require the ordinary writer lifecycle.
 No extra user message, replay or synthetic input is needed.
 Before the canonical file write, the existing host record durably fences new
 input with a pending file-access change. New root/worker/voice execution is rejected,
@@ -68,7 +71,7 @@ available as steering. They cannot fall forward into a new turn if that run ends
 before delivery; an undelivered message remains saved with its delivery state.
 Answers, approvals and Stop remain available for existing work.
 The confirmed live boundary clears only its own write-change fence. Unavailable,
-lost or superseded refresh replies and unrelated configuration changes remain
+lost or superseded refresh replies and genuine writer configuration changes remain
 pending for the existing retirement path; inspect `fileAccessPending` rather than
 equating saved settings with mounted access. Finish or stop existing child work
 when that fallback is required.
@@ -160,6 +163,42 @@ not covered by this grant slice. Neither a root grant nor assignment membership
 grants stop/steer/settings authority over an independent peer. The explicit
 same-workspace Full operator recovery exception below inspects or continues only
 the original configuration operation; it does not administer that peer's grants.
+
+## Saved choices for other chats
+
+A current transport-bound **Full root operator** can use
+`conversation.configure` with an explicit other root `sessionId` on this
+authenticated installation, including archived, managed and other-workspace
+chats. This saves **Next message** bundle/model intent, not a live mount,
+conversation input, ownership takeover, Stop/resume or grant change. Existing
+work keeps its captured configuration. `expectedRevision` is the target's
+`nextMessageRevision`; `conversation.configuration` reads its saved-choice
+projection and hold category. Other-workspace reads require explicit `scope: all`.
+
+The caller retains its own Full revision, native identity and assigned input
+lineage; the target never becomes the caller. Lower-authority peer input cannot
+borrow this power, and ordinary own-session grants, children and unbound systems
+do not authorize the other-chat route. Authority and exact source/target
+placement and interruption revisions are checked after commit waits and again
+when genuine target input applies the choice. A later Stop or Full off/on does
+not renew old intent. Saving choices does not resume an already stopped chat.
+Read-only native workers, missing owners, conflicting ownership and unresolved
+configuration operations remain refused; permission parity does not repair them.
+Native-discovered roots retain app-owned choices across restart without rewriting
+their native transcript. Exact retries remain caller-bound and idempotent.
+
+The same Full root can set `bundle.default` for an explicitly registered other
+workspace. Its local effect is bound to that exact registered path, not broadened
+to global scope; authorization is rechecked inside the canonical settings
+mutator. Verify with `workspace.bundleDefault.inspect`. No additional permission
+store or browser impersonation is involved. Owner-local and user controls remain.
+
+The read visits only the requested resident metadata or exact committed owner
+manifest and immutable view payload, capped at 1 MiB. It never follows referenced
+message, execution or mount-plan bodies, admits a dormant owner, refreshes native
+history, starts a worker, flushes progress or builds an unrelated agent snapshot.
+An oversized or unavailable owner is explicitly unreadable, not an inherited or
+empty choice. The output omits internal authority, credentials and private drafts.
 
 ## Active tasks changing their own settings
 
@@ -404,6 +443,20 @@ A terminal sealed native save receipt and an unchanged saved plan allow explicit
 resume to finish that same operation's loaded readback. It observes the exact
 existing worker first; only an absent worker may mount the proven saved plan.
 This continuation never repeats the settings write or submits conversation input.
+An explicit `configuration.cancel` may instead abandon an unfinished load after
+the host proves that its worker and native writer have stopped. The same sealed
+terminal save and unchanged target and saved plan are required. This fresh
+cancellation can follow Stop without renewing the original request's authority:
+it keeps saved settings, immutable receipts and failure history, releases only
+the cancelled operation's hold, and sends no input or automatic continuation.
+Unknown or partial effects, active configuration work and another native writer
+still refuse cancellation. Interrupted host publication finishes from the durable
+cancellation record on startup; it never replays the settings write or load.
+A saved conversation plan retains its selected module sources through dependency
+preparation and worker mounting, including distinct sources for child or named
+module instances. Earlier bundle composition and installation defaults cannot
+replace those choices. Required host components retain their host-owned sources;
+credential binding and loaded-plan verification still apply to the resulting plan.
 A different loaded plan remains held. Readback may equate relocated module source
 declarations through qualified generations and matching recorded repository,
 revision, subdirectory and source-content digest. If an ecosystem update has
@@ -419,6 +472,14 @@ While recovery is held, `configuration.inspect` may observe the exact existing
 worker and publish its actual loaded plan, even when it differs from the saved
 request. This read never starts a worker, changes settings or settles the operation;
 Stop or replacement of the observed worker prevents stale publication.
+An idle operation-bound error can also retain passive settings-freshness markers
+after its worker is gone. Once the host proves no worker, preparation, unsettled
+configuration task, refresh or runtime activity remains, it retires only that
+obsolete mount freshness. The operation's busy/input fence, original request,
+native evidence and unknown or saved-but-unverified outcome remain unchanged.
+This permits the existing recovery checks to assess their own evidence; it does
+not authorize recovery. Unrelated updates observe actual activity independently
+of these retained markers, as specified by the [update contract](../UPDATES.md#explicit-app-only-requests-and-idle-configuration-holds).
 For UI, user or internal originals, a current Full agent, qualified child or
 trusted system can reconcile and resume through the same recovery owner. Ask
 cannot substitute a new grant for that operator-origin authority. Resume retains
@@ -451,6 +512,35 @@ the native settings write again. Cross-owner recovery neither delivers inputs no
 wakes the target's model, including through a saved settings continuation or a
 queued peer input. Ordinary own-task settings continuation is unchanged.
 
+The bounded passive `conversation.configuration` read exposes `pendingOperation`
+with the retained operation ID, revision, phase and effect, or an explicit
+unavailable marker for incomplete legacy metadata. This is discovery, not native
+effect evidence or permission. An operator can discover the ID without private
+fixture state, then inspect the exact operation and its first-failure checks.
+
+`configuration.operation.cancel` adds fresh Full-root abandonment of an exact
+settled operation in the same workspace. Unlike Resume, it does not renew or
+exercise the old request's authority. A target already stopped, or an original
+whose grant was revoked, can be abandoned only when terminal native evidence
+proves no effect or a complete save with the saved plan unchanged. An operation
+proven never dispatched can also be abandoned. Missing, partial, contradictory
+or unauthenticated evidence remains held. Real placement/native identity changes,
+active work and another writer still refuse. The mutation acquires the existing
+native ownership lease through its durable cancellation and publication; the
+read's `canCancel` is only passive eligibility, not proof of exclusive ownership.
+
+Cancellation retains the original request, authority, attempts, receipts and
+failure history. Saved settings are neither removed nor rolled back. It performs
+no write of the old plan, load, input delivery or automatic continuation.
+Pre-existing queued inputs remain suppressed by the original durable cutoff,
+including after restart and a later fresh turn. The original generation's
+dependency continuation remains fenced; genuinely fresh work retains its normal
+admission. The cancelled pending record remains readable until a later operation
+replaces it. Use the exact command read after an uncertain cancellation, never
+another cancellation to discover its outcome. Once cancellation is confirmed,
+read the current `nextMessageRevision`, save the independent future bundle choice
+through `conversation.configure`, and read it back. Saved is not mounted.
+
 `configuration.operation.read` accepts an optional exact recovery `commandId`
 with the explicit target and operation. It returns only target-bound recovery
 admission, expected/observed revision, phase and a bounded error category from
@@ -459,6 +549,23 @@ native credential, receipt body or raw error is exposed. Missing or older
 unbound command evidence is **unconfirmed**, not proof of rejection or no effect.
 The current operation and sealed native evidence remain canonical. Read this
 status after an uncertain Resume; do not invoke the mutation to obtain its result.
+
+For passive first-failure observation, the same read accepts
+`diagnostic: "first_failure"` with an explicit `operationId`, `expectedRevision`
+and `includeRecovery: true`. Missing or stale revision context refuses rather than
+observing a replacement operation. Existing caller/Full/root/workspace checks
+are unchanged. The optional diagnostic reports each recovery action's first
+unproved canonical check and, separately, the app-only update-quiescence check.
+Codes are a closed vocabulary; unexpected read/validation failures report
+unavailable at the last reached check, never raw exceptions or private values.
+Later checks are not evaluated after a failure in that validation path.
+Only an already performed saved-plan comparison reports `match` or `mismatch`;
+the app-only quiescence observation uses the updater's current activity predicate,
+not a second recovery validation or saved-plan comparison. It may be clear while
+the historical effect remains unknown and input stays fenced.
+`loadedComparison` is always `not_observed`. The read does not inspect a runtime,
+refresh retained presentation, start or mount a worker, rewrite any operation,
+or authorize reconciliation, resumption, input delivery or component activation.
 
 For an already executing Full native child, the exact operation read, reconcile
 and resume calls can reach the recovery owner even when that same settled pending

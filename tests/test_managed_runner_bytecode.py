@@ -69,7 +69,7 @@ def test_existing_executable_bytecode_is_hashed_without_importing_package(runtim
 
 
 @pytest.mark.parametrize('sourceless', [False, True])
-def test_normal_dispatch_preserves_identity_and_rejects_changed_bytecode(runtime, tmp_path, monkeypatch, sourceless):
+def test_docker_dispatch_trusts_installed_package_without_runtime_inventory(runtime, tmp_path, monkeypatch, sourceless):
     installation, base = runtime
     source = base / 'digital_twin_universe/__init__.py'
     target = bytecode(source, sourceless=sourceless)
@@ -78,9 +78,8 @@ def test_normal_dispatch_preserves_identity_and_rejects_changed_bytecode(runtime
     (home / 'managed-runner-updates').mkdir(mode=0o700)
     config = {**installation, 'installationId': 'a' * 24,
               'commit': environments.DTU_COMMIT, 'runnerQualificationRequired': True}
-    identity = updates.runtime_identity(config)
-    private.write_json(updates.qualification_path(home, config), {
-        'version': 1, 'normalized': config, 'runtime': identity})
+    monkeypatch.setattr(updates, 'runtime_identity', lambda *a: pytest.fail('Docker runtime inventory'))
+    monkeypatch.setattr(updates, 'qualification_path', lambda *a: pytest.fail('Docker certification lookup'))
     row = {'sessionId': 'owned', 'id': 'owned-resource'}
     folder = environments.storage.directory(home, row)
     folder.mkdir(parents=True)
@@ -97,14 +96,12 @@ def test_normal_dispatch_preserves_identity_and_rejects_changed_bytecode(runtime
     monkeypatch.setattr(subprocess, 'Popen', launch)
     assert environments.invoke(config, home, row, 'prepare', {}) == {'ok': True}
     assert len(launches) == 1
-    assert updates.runtime_identity(config) == identity
     injected = tmp_path / 'injected.py'
     injected.write_text("VALUE = 'changed'\n")
     py_compile.compile(str(injected), cfile=str(target), doraise=True,
                        invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
-    with pytest.raises(updates.RunnerUpdateError):
-        environments.invoke(config, home, row, 'prepare', {})
-    assert len(launches) == 1, 'changed bytes must be refused before normal backend dispatch'
+    assert environments.invoke(config, home, row, 'prepare', {}) == {'ok': True}
+    assert len(launches) == 2
 
 
 

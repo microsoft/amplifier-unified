@@ -8,9 +8,35 @@ on:
       - tests/test_manual_app_handoff_native.py
       - amplifier_web/manual_app_handoff.py
       - amplifier_web/app_installation_proof.py
+      - amplifier_web/app_updates.py
+      - tests/test_app_promotion_recovery.py
+      - tests/test_manual_app_handoff.py
 permissions:
   contents: read
 jobs:
+  recovery-composition:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+      - run: uv sync --locked --group dev
+      - name: Check manual recovery in the normal Windows activation pipeline
+        run: uv run --no-sync pytest -q tests/test_app_promotion_recovery.py tests/test_manual_app_handoff.py --junitxml="$RUNNER_TEMP/manual-recovery-composition.xml"
+      - name: Retain activation composition results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: manual-recovery-composition
+          path: ${{ runner.temp }}/manual-recovery-composition.xml
+          if-no-files-found: error
+          retention-days: 14
   installed-verifier:
     runs-on: windows-latest
     timeout-minutes: 15

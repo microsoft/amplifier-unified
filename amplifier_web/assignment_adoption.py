@@ -14,7 +14,7 @@ from .task_continuity import _load_control
 
 def reusable_retirement(app, source, target):
     """Only a proven same-owner retirement can replace a new human instruction."""
-    from .assignment_retirement import require_finished, reuse_binding
+    from .assignment_retirement import require_settled, reuse_binding
     from .errors import AppError
     from .peer_resume import safety_halt
     from .task_binding import dependency_blocked
@@ -40,7 +40,8 @@ def reusable_retirement(app, source, target):
         # Unavailable native state cannot prove standing reuse. Preserve the
         # ordinary human-instruction path, without substituting a cached task.
         return False
-    if receipt.get('reuseBinding') != reuse_binding(app, source, target, task):
+    if (task and task.get('status') != 'completed'
+            or receipt.get('reuseBinding') != reuse_binding(app, source, target, task)):
         return False
     source_task = source.get('task') or app.coordination.task(source['id'])
     if (source.get('status') in {'stopped', 'stopping', 'error', 'interrupted'}
@@ -48,7 +49,7 @@ def reusable_retirement(app, source, target):
             or source_task.get('status') == 'blocked' and not dependency_blocked(source_task)
             or target.get('status') != 'idle' or target.get('failure') or safety_halt(target)):
         return False
-    require_finished(app, target, value, task)
+    require_settled(app, target, value)
     return True
 
 

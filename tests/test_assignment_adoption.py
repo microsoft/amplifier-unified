@@ -268,7 +268,7 @@ async def warm_idle(app, target, monkeypatch, during_retirement=None):
     from unittest.mock import AsyncMock
     manager = RuntimeManager()
     sid = target['id']
-    row = {'parked': True, 'process': SimpleNamespace(returncode=None, pid=os.getpid()),
+    row = {'idle': True, 'process': SimpleNamespace(returncode=None, pid=os.getpid()),
            'start_session': target, 'emit': app.on_runtime_event}
     manager.workers[sid] = row
     app.runtime.workers = manager.workers

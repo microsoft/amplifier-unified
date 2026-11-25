@@ -96,7 +96,7 @@ async def test_history_scope_does_not_bypass_companion_ownership_or_revocation(a
         assert 'X-Amplifier-History-Scope' not in response.headers
         assert app['service'].clients.records == before
     devices.revoke(device['deviceID'])
-    response = await client.get('/api/companion', headers={**mixed, 'X-Amplifier-Client': 'history-native'})
+    response = await client.get('/api/attention', headers={**mixed, 'X-Amplifier-Client': 'history-native'})
     assert response.status == 401
     assert 'X-Amplifier-History-Scope' not in response.headers
     response = await client.get('/api/state', headers={**cookie, 'X-Amplifier-Client': 'history-web'})

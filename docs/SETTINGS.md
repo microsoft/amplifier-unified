@@ -13,11 +13,11 @@ copying an exhaustive route/component table into this guide:
 
 | Responsibility | Owner |
 | --- | --- |
-| Section titles, destination IDs, parent routes and public aliases | [settings-navigation.js](../components/web-client/src/settings-navigation.js) and [navigation checks](../components/web-client/tests/settings-navigation.test.mjs) |
+| Section titles, destination IDs, parent routes and public aliases | [settings-navigation.js](https://github.com/microsoft/amplifier-client-web/blob/main/src/settings-navigation.js) and [navigation checks](https://github.com/microsoft/amplifier-client-web/blob/main/tests/settings-navigation.test.mjs) |
 | Host routing of legacy destinations and Settings state for agents | [settings_navigation.py](../amplifier_web/settings_navigation.py) |
-| Destination-to-editor mapping, generic contributed sections and retained editor mounts | [settings-experience.jsx](../components/web-client/src/settings-experience.jsx) |
-| Compact hierarchy, browser history, scroll restoration and footer actions | [settings-mobile.js](../components/web-client/src/settings-mobile.js) and [settings-layout.jsx](../components/web-client/src/settings-layout.jsx) |
-| Dirty-editor registration and review/discard decisions | [settings-drafts.jsx](../components/web-client/src/settings-drafts.jsx) |
+| Destination-to-editor mapping, generic contributed sections and retained editor mounts | [settings-experience.jsx](https://github.com/microsoft/amplifier-client-web/blob/main/src/settings-experience.jsx) |
+| Compact hierarchy, browser history, scroll restoration and footer actions | [settings-mobile.js](https://github.com/microsoft/amplifier-client-web/blob/main/src/settings-mobile.js) and [settings-layout.jsx](https://github.com/microsoft/amplifier-client-web/blob/main/src/settings-layout.jsx) |
+| Dirty-editor registration and review/discard decisions | [settings-drafts.jsx](https://github.com/microsoft/amplifier-client-web/blob/main/src/settings-drafts.jsx) |
 
 `settingsSection`, `settingsExpanded` and `panel: appearance` remain supported
 navigation inputs. Older Setup/Capabilities/Maintenance destinations resolve

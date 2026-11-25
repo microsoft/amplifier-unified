@@ -1,0 +1,41 @@
+/* Atelier: warm paper, terracotta accents and editorial Georgia headings. */
+#amp-one {
+  --a-bg: light-dark(#f4efe5, #171714);
+  --a-surface: light-dark(#fffaf0, #22211d);
+  --a-soft: light-dark(#eee6d7, #2d2a24);
+  --a-ink: light-dark(#342d25, #f2eadb);
+  --a-muted: light-dark(#70604d, #c4b7a1);
+  --a-line: light-dark(#d7c7af, #50473a);
+  --a-accent: light-dark(#a24833, #f0a184);
+  --a-on-accent: light-dark(#ffffff, #32190f);
+  --a-tint: light-dark(#f2e2d7, #453028);
+  --a-green: light-dark(#35664d, #9bc9a5);
+  --a-danger: light-dark(#a53c36, #ffaaa1);
+
+  --a-font-ui: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --a-font-heading: Georgia, "Times New Roman", serif;
+  --a-font-chat: var(--a-font-ui);
+  --a-font-code: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --a-font: var(--a-font-ui);
+
+  --a-navigation-art:
+    repeating-linear-gradient(0deg, transparent 0 31px, color-mix(in srgb, var(--a-line) 15%, transparent) 31px 32px);
+  --a-conversation-art:
+    linear-gradient(180deg, color-mix(in srgb, var(--a-soft) 55%, transparent), transparent 140px);
+  --a-canvas-art: linear-gradient(180deg, var(--a-soft), transparent);
+  --a-panel-gap: 7px;
+  --a-panel-radius: 10px;
+  --a-panel-border-width: 1px;
+  --a-panel-line: var(--a-line);
+  --a-panel-shadow: inset 0 1px 0 color-mix(in srgb, var(--a-surface) 80%, transparent);
+  --a-navigation-pad: 22px;
+  --a-card-radius: 9px;
+  --a-control-radius: 7px;
+  --a-composer-radius: 12px;
+  --a-message-radius: 12px;
+  --a-message-gap: 25px;
+  --a-composer-pad: 13px;
+  --a-card-pad: 15px;
+  --a-card-line: var(--a-line);
+  --a-surface-shadow: 0 2px 8px color-mix(in srgb, var(--a-ink) 5%, transparent);
+}

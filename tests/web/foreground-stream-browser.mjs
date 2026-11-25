@@ -3,11 +3,13 @@ import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
-let browser;
+const stopFixture=ownFixture(fixture,{label:'Foreground stream fixture'});
+let browser,primaryFailure;
 try {
  const url=await new Promise((resolve,reject)=>{
   let output='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),15000);
@@ -55,8 +57,11 @@ try {
  await expect.poll(async()=>(await page.evaluate(()=>window.amplifier.getState())).view.draft).toBe('UNSAVED COMPOSER EDIT');
  await expect(editor).toHaveValue('LOCAL CANVAS EDIT');
  // Confirm live delivery on the replacement stream (no navigation action).
+ const instanceName=await page.evaluate(()=>window.amplifier.getState().instanceBranding?.name);
+ assert.equal(typeof instanceName,'string');assert.ok(instanceName.length>0);
  await action('session.rename',{id:await page.evaluate(()=>window.amplifier.getState().selectedSessionId),title:'Reconnected chat'});
- await expect(page).toHaveTitle('Reconnected chat - Amplifier');
+ await expect(page).toHaveTitle(`Reconnected chat - ${instanceName}`);
  assert.deepEqual(mutations,[]);assert.deepEqual(errors,[]);
  console.log('Foreground recovery passed: CLOSED native stream retry, stale OPEN wake, coalesced wake signals, pending composer draft, dirty Canvas mount, stable client, live replacement stream and no replay.');
-}finally{await browser?.close();fixture.kill('SIGTERM')}
+}catch(error){primaryFailure=error;throw error}
+finally{await finishFixture({label:'Foreground stream fixture',close:[['browser',()=>browser?.close()]],stop:stopFixture,originalError:primaryFailure})}

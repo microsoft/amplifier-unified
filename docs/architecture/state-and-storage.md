@@ -272,15 +272,85 @@ save cost or the model request. A compaction summary is not a replacement for th
 original messages, receipts or pending command authority.
 
 The current implementation has bounded `TranscriptWindows` and `WorkWindows` for
-the bundled web client, plus an explicitly complete compatibility reader. It does
-not yet meet the target throughout the host. Admitted mutable session records can
-retain completed messages, worker reports and execution/accounting rows.
-`session_projection.persist`, `MessagePreparation` and `ExecutionPreparation`
-still inspect historical content during current-owner saves. Caching prepared
+the bundled web client, plus an explicitly complete compatibility reader. Cold host
+execution records use one immutable root over ordered body pages and an ID-to-ordinal
+lookup; the body is stored once. Canonical writers admit current or exactly requested
+historical records into `WorkingExecution`. A save replaces affected pages and selects
+both indexes in the existing transaction. Completed records remain correctable;
+neither completion nor an object identity is evidence that borrowed values stopped
+changing. Public full mutable reads transfer to the conservative complete owner,
+and deliberate borrowed aliases can keep admitted records resident.
+
+Placement checks, task controls and model catalog reads use metadata without
+exposing that mutable history. A worker preparation request still receives its
+complete detached snapshot. Canonical native refresh still verifies the source
+revision and reads native files. Empty activity, or activity fully shadowed by
+existing web anchors, retains the cold execution owner after one complete
+detached read and the existing usage rollup. Real unshadowed native activity keeps
+the complete mutable compatibility path, preserving its ordering and borrowed
+aliases. That fallback still has history-sized later saves; it is not a claim that
+all native-history presentation has been made bounded.
+
+Each ordered page owns complete record bodies once. A full accounting rebuild
+reads the required nodes and turns, without the separate admission ledger; ordinary
+current updates continue the bounded ordered fold described below. A changed
+historical aggregate or turn binding admits the exact full record and changes only
+the derived fields. Current records and their issued aliases retain their identity.
+Bounded Work reads pay for selected complete pages within their existing byte
+budget. Pages and their index remain descendants of the same immutable root and
+transaction/GC owner. Initial conversion and full rebuild cost remain visible
+separately from later update measurements.
+
+Ordered web reads select bounded pages without exposing the full mutable execution
+tree. Ordinals preserve insertion order, survive corrections and are never reused
+after deletion. Open details bind exact identity/ordinal pairs, so unrelated appends
+and rank changes preserve access while deletion/reinsertion does not inherit it.
+Detached metadata reads freeze the root and current overlay without loading history.
+The last committed root and retained client/operation roots remain GC authorities
+until their owning transactions release them; failed saves never adopt a staged root.
+
+A canonical native refresh may share one verified legacy execution read through
+its synchronous merge and publication while holding the session writer lock.
+This operation-local binding is cleared on every exit; detached owners do not
+inherit it. The current overlay and public snapshots remain independently
+mutable, while the canonical projector only reads the verified original. The
+private native-selection input also borrows those rows for read-only selection
+and rollup; it returns only a new aggregate and activity diagnostics to the owner,
+never historical row aliases. Public snapshots still detach the complete graph. The
+normal logical-content check, stored projection, index import and successful
+commit still own validation and durable selection. No decoded history is cached
+between refreshes, and the first index-publication cost remains visible.
+
+Usage totals continue the canonical per-call fold in original order from a closed
+prefix and a current suffix. The prefix is disposable private state, not a receipt
+or a second accounting authority. Current nested aliases remain live; earlier
+mutable admission, changed topology, unresolved ordered turn repairs or an oversized
+suffix use the complete reducer. Prefix advancement requires successful publication,
+the existing exclusive-ownership proof and unchanged canonical contributions after
+projection. Terminal unpriced calls keep their unknown counters; being unpriced does
+not make them active. The suffix, required ancestor/turn summaries and unresolved
+dependencies each fit the existing 128-row selection count and collectively its
+4 MiB byte envelope. Exceeding those bounds rebuilds normally and never denies work.
+Capacity admission and receipt replay keep their separate existing authority.
+
+This does not yet meet the target throughout the host. Retained messages and worker
+reports can still grow the admitted record. Complete accounting rebuilds and
+capacity replay checks still inspect the required history without promoting
+it into the current owner. Legacy/full mutable execution saves retain their content
+witness, and `MessagePreparation` still inspects historical messages. Caching prepared
 bytes reduces encoding but does not make those comparisons independent of history.
 The complete `EventIndex` reader also verifies its previous file prefix after an
 append; this is not the bounded web-reader path. Do not describe all readers as
 incremental merely because they retain an offset.
+
+File-backed execution roots use an `execution-root/1:` tag in their SQLite `$blob`
+pointer; the resource ID and canonical file bytes are unchanged. Older applications
+reject that pointer during reads and collection rather than treating the index as
+an execution tree or an empty resource leaf. An application-only rollback therefore
+does not make newly selected roots readable by an older binary. Preserve the state
+and reopen with a compatible application, or deliberately restore a complete earlier
+backup with its known recovery point; do not rewrite the pointer to bypass the check.
+In-memory test resources remain inline and have no cross-process recovery lifetime.
 
 Implement the remaining separation at the owning write/read boundary:
 

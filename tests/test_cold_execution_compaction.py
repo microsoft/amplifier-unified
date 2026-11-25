@@ -350,6 +350,16 @@ async def test_saved_work_placement_rechecks_owner_after_resource_read(app, tmp_
     original = resource_files.read_detached if boundary == 'resource' else windows._matches
     def held(*args, **kwargs):
         result = original(*args, **kwargs)
+        if boundary == 'resource':
+            import sys
+            caller = sys._getframe(1)
+            selected_read = (caller.f_globals.get('__name__') == WorkWindows.__module__
+                             and caller.f_code.co_name == 'saved_work')
+            del caller
+            if not selected_read:
+                # Maintenance can inspect the same resource concurrently. Its
+                # read is not the window's captured placement boundary.
+                return result
         entered.set()
         if not release.wait(5):
             raise TimeoutError('Synthetic saved placement barrier did not release')

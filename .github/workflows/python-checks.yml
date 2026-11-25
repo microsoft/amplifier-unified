@@ -16,6 +16,7 @@ on:
           - patch-placement-native
           - managed-removal-recovery
           - fresh-cleanup-native
+          - prepared-runtime-native
           - shared-work-continuity
           - manager-exception-boundary
           - remote-test-origins
@@ -29,6 +30,12 @@ on:
           - native-child-fixtures
           - question-answer-resume
           - question-answer-installed
+          - live-first-send
+          - live-first-accepted-graph
+      candidate_ref:
+        description: Optional full same-repository candidate SHA for prepared-runtime-native (tests remain at the selected workflow revision)
+        type: string
+        default: ''
       core_wheels:
         description: Qualify published Core wheels and real runtime on both Linux architectures
         type: boolean
@@ -45,7 +52,7 @@ permissions:
   contents: read
 jobs:
   python:
-    if: ${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' && inputs.suite != 'updater-omitted-ref' && inputs.suite != 'updater-public-selected-source' && inputs.suite != 'updater-synthetic-acquisition' && inputs.suite != 'updater-expanded-lock' && inputs.suite != 'fresh-cleanup-native' }}
+    if: ${{ !inputs.core_wheels && inputs.suite != 'remote-test-origins' && inputs.suite != 'cold-control-restore' && inputs.suite != 'goal-peer-publisher-0410' && inputs.suite != 'updater-omitted-ref' && inputs.suite != 'updater-public-selected-source' && inputs.suite != 'updater-synthetic-acquisition' && inputs.suite != 'updater-expanded-lock' && inputs.suite != 'fresh-cleanup-native' && inputs.suite != 'prepared-runtime-native' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -80,6 +87,8 @@ jobs:
               'native-child-fixtures': ['tests/test_child_app_assignment_capture.py', 'tests/test_history_scope_native.py', 'tests/test_file_source_native_children.py'],
               'question-answer-resume': ['tests/test_question_peer_resume.py', 'tests/test_peer_resume.py', 'tests/test_peer_resume_native.py', 'tests/test_failed_peer_recovery.py', 'tests/test_retained_failure_recovery.py', 'tests/test_questions.py', 'tests/test_question_handoffs.py'],
               'question-answer-installed': ['tests/test_question_peer_resume.py', 'tests/test_peer_resume_native.py'],
+              'live-first-send': ['tests/test_conversation_steering.py', 'tests/test_steering_runtime.py', 'tests/test_native_provider.py', 'tests/test_message_delivery.py', 'tests/test_queued_configuration_boundary.py', 'tests/test_service.py::test_failed_direct_send_settles_activity_without_replay_or_lost_input'],
+              'live-first-accepted-graph': ['tests/test_message_delivery.py::test_captured_source_refuses_before_input_draft_attachment_mutation', 'tests/test_message_delivery.py::test_source_receipt_replay_precedes_changed_identity_and_fresh_admission', 'tests/test_message_delivery.py::test_source_is_rechecked_after_waiting_for_existing_action_lock', 'tests/test_conversation_steering.py::test_manager_stop_epoch_rechecks_after_preparation_without_routing', 'tests/test_steering_runtime.py::test_outer_worker_stop_fences_waiting_ordinary_input', 'tests/test_steering_runtime.py::test_pending_configuration_is_decided_by_actual_worker_before_admission', 'tests/test_steering_runtime.py::test_manager_pending_configuration_uses_finite_owner_admission_only', 'tests/test_assignment_retirement_recovery.py::test_unfinished_task_warm_retirement_preserves_task_stop_and_input'],
           }
           selection = os.environ['CHECK_SUITE']
           if selection not in suites:
@@ -88,7 +97,7 @@ jobs:
           output = Path('output/python-checks')
           output.mkdir(parents=True, exist_ok=True)
           git = lambda *args: subprocess.check_output(['git', *args], text=True).strip()
-          missing = [path for path in targets if not Path(path).is_file()]
+          missing = [path for path in targets if not Path(path.split('::', 1)[0]).is_file()]
           record = {'suite': selection, 'fullSuite': selection == 'full', 'targets': targets,
                     'revision': git('rev-parse', 'HEAD'), 'tree': git('rev-parse', 'HEAD^{tree}'),
                     'runId': os.environ.get('GITHUB_RUN_ID'), 'runAttempt': os.environ.get('GITHUB_RUN_ATTEMPT'),
@@ -130,7 +139,10 @@ jobs:
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import os, tomllib
           p = tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb"))
-          revision = ("76073827ba6742ae026a12b524f596120cd2b314" if os.environ["CHECK_SUITE"] == "manager-exception-boundary"
+          locked = tomllib.load(open("uv.lock", "rb"))
+          loop, = [row for row in locked["package"] if row["name"] == "amplifier-module-loop-live"]
+          revision = (loop["source"]["git"].rsplit("#", 1)[1] if os.environ["CHECK_SUITE"] in {"live-first-send", "live-first-accepted-graph"}
+                      else "76073827ba6742ae026a12b524f596120cd2b314" if os.environ["CHECK_SUITE"] == "manager-exception-boundary"
                       else p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])
           print("revision=" + revision)
           PY
@@ -142,6 +154,7 @@ jobs:
           ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
           persist-credentials: false
       - name: Install runtime prerequisites for host and child tests
+        if: ${{ env.CHECK_SUITE != 'live-first-send' && env.CHECK_SUITE != 'live-first-accepted-graph' }}
         run: >-
           uv pip install --python .venv/bin/python
           .ci/loop-live
@@ -165,30 +178,13 @@ jobs:
       - name: Select the prepared native-controls interpreter
         if: ${{ env.CHECK_SUITE == 'patch-placement-native' }}
         run: echo "UNIFIED_RUNTIME_PYTHON=$GITHUB_WORKSPACE/.venv/bin/python" >> "$GITHUB_ENV"
-      - name: Prepare pinned native receipt dependencies
+      - name: Verify locked native receipt dependencies
         if: ${{ env.CHECK_SUITE == 'full' || env.CHECK_SUITE == 'shared-work-native' }}
         run: |
-          uv pip install --python .venv/bin/python \
-            'amplifier-module-provider-openai[native] @ git+https://github.com/microsoft/amplifier-module-provider-openai@2b35fa334fb2fb2c5c948842e8c7bd691ce5e834' \
-            'amplifier-module-tool-exec @ git+https://github.com/microsoft/amplifier-module-tool-exec@f267548ccd1b38a236a46afb96252bb6dd474dcd' \
-            'openai==3.29.0' 'websockets==15.0.1' 'hatchling==1.27.0' 'amplifier-core==2.0.2'
-          uv run --no-sync python - <<'PY'
-          import hashlib, importlib.metadata as m, json, subprocess
-          from pathlib import Path
-          from amplifier_module_provider_openai.native import NativeSendAdmission, NativeOutboundEnvelope
-          from amplifier_module_loop_live.scope import LIVE_OWNER, NATIVE_REQUEST
-          import amplifier_module_provider_openai.native as native
-          expected = '304a78c2036c6dfe0bf60017844ffec3a0e8b556ad67e3fac20db4b613d276b1'
-          assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest() == expected
-          names = ['amplifier-core', 'amplifier-module-provider-openai', 'amplifier-module-loop-live',
-                   'amplifier-module-loop-streaming', 'amplifier-module-tool-exec', 'openai', 'websockets']
-          record = {name: {'version': m.version(name),
-                          'source': json.loads(m.distribution(name).read_text('direct_url.json') or 'null')}
-                    for name in names}
-          record['loopCheckout'] = subprocess.check_output(['git', '-C', '.ci/loop-live', 'rev-parse', 'HEAD'], text=True).strip()
-          record['providerNativeSha256'] = expected
-          Path('output/python-checks/native-readiness.json').write_text(json.dumps(record, indent=2))
-          PY
+          # The dev group already selects provider[native], tool-exec and their
+          # SDK closure in uv.lock. Do not replace it with an older receipt pin.
+          uv run --no-sync python scripts/native_dependency_preflight.py \
+            --output output/python-checks/native-readiness.json
       - name: Run the complete Python suite
         if: ${{ env.CHECK_SUITE == 'full' }}
         run: python -u scripts/browser_check_runner.py --python-suite --output output/python-checks
@@ -209,7 +205,7 @@ jobs:
           print(json.dumps(result, indent=2))
           PY
       - name: Run the selected repair suite
-        if: ${{ env.CHECK_SUITE != 'full' && env.CHECK_SUITE != 'native-child-fixtures' && env.CHECK_SUITE != 'question-answer-installed' }}
+        if: ${{ env.CHECK_SUITE != 'full' && env.CHECK_SUITE != 'native-child-fixtures' && env.CHECK_SUITE != 'question-answer-installed' && env.CHECK_SUITE != 'live-first-send' && env.CHECK_SUITE != 'live-first-accepted-graph' }}
         shell: bash
         run: |
           mapfile -t targets < output/python-checks/targets.txt
@@ -374,6 +370,126 @@ jobs:
           rows = list(ET.parse('output/python-checks/installed-junit.xml').getroot().iter('testcase'))
           assert rows and not any(row.find(kind) is not None for row in rows for kind in ('failure', 'error', 'skipped'))
           assert len([row for row in rows if 'test_peer_resume_native' in row.get('classname', '')]) == 9
+          PY
+      - name: Qualify live-first Send from the installed wheel with scripted external transports
+        if: ${{ env.CHECK_SUITE == 'live-first-send' || env.CHECK_SUITE == 'live-first-accepted-graph' }}
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Reuse committed, verified production assets: no second frontend build.
+          python scripts/web_client_build.py verify > output/python-checks/client-build.json
+          npm ci --prefix tests/web
+          (cd tests/web && npx playwright install --with-deps chromium)
+          uv build --wheel --out-dir output/python-checks/dist
+          python - <<'PY'
+          import hashlib, json, tomllib, zipfile
+          from pathlib import Path
+          wheel, = Path('output/python-checks/dist').glob('*.whl')
+          mappings = tomllib.loads(Path('pyproject.toml').read_text())['tool']['hatch']['build']['targets']['wheel']['force-include']
+          with zipfile.ZipFile(wheel) as archive:
+              files = {name: hashlib.sha256(archive.read(name)).hexdigest()
+                       for name in archive.namelist() if name.startswith('amplifier_web/') and not name.endswith('/')}
+              for name, digest in files.items():
+                  source = Path(name)
+                  if not source.is_file():
+                      candidates = [Path(original) / name[len(destination) + 1:] if name.startswith(destination + '/')
+                                    else Path(original) for original, destination in mappings.items()
+                                    if name == destination or name.startswith(destination + '/')]
+                      source, = candidates
+                  assert hashlib.sha256(source.read_bytes()).hexdigest() == digest, name
+          Path('output/python-checks/wheel.json').write_text(json.dumps({
+              'wheel': wheel.name, 'sha256': hashlib.sha256(wheel.read_bytes()).hexdigest(),
+              'files': files}, indent=2) + '\n')
+          PY
+          uv pip install --python .venv/bin/python --no-deps --reinstall-package amplifier-unified output/python-checks/dist/*.whl
+          uv pip check --python .venv/bin/python
+          export AMPLIFIER_TEST_PYTHON="$GITHUB_WORKSPACE/.venv/bin/python"
+          export AMPLIFIER_DIRECTION_EVIDENCE="$GITHUB_WORKSPACE/output/python-checks/immediate-direction"
+          export DIRECTION_INSTALLED_HOST="$("$AMPLIFIER_TEST_PYTHON" -I -c 'import amplifier_web; from pathlib import Path; print(Path(amplifier_web.__file__).parent)')"
+          export HARNESS="$RUNNER_TEMP/live-first-installed"
+          mkdir -p "$HARNESS/.build/web-client/tests"
+          cp -a tests "$HARNESS/"
+          cp .build/web-client/tests/composer-test-support.mjs "$HARNESS/.build/web-client/tests/"
+          (
+            cd "$HARNESS"
+            unset PYTHONPATH
+            "$AMPLIFIER_TEST_PYTHON" -I - <<'PY'
+          import hashlib, importlib, importlib.metadata as md, json, os, subprocess, tomllib
+          from pathlib import Path
+          root = Path(os.environ['GITHUB_WORKSPACE'])
+          host = Path(os.environ['DIRECTION_INSTALLED_HOST']).resolve()
+          assert not host.is_relative_to(root / 'amplifier_web'), host
+          wheel = json.loads((root / 'output/python-checks/wheel.json').read_text())
+          for name, digest in wheel['files'].items():
+              path = host.parent / name
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, name
+          locked = tomllib.loads((root / 'uv.lock').read_text())
+          packages = {row['name']: row for row in locked['package']}
+          modules = {}
+          for package, module in (
+              ('amplifier-core', 'amplifier_core'), ('amplifier-foundation', 'amplifier_foundation'),
+              ('amplifier-module-loop-live', 'amplifier_module_loop_live.orchestrator'),
+              ('amplifier-module-loop-streaming', 'amplifier_module_loop_streaming'),
+              ('amplifier-module-provider-openai', 'amplifier_module_provider_openai.native')):
+              distribution = md.distribution(package)
+              direct = json.loads(distribution.read_text('direct_url.json') or 'null')
+              expected = packages[package]
+              if 'git' in expected['source']:
+                  assert direct['vcs_info']['commit_id'] == expected['source']['git'].rsplit('#', 1)[1], package
+              else:
+                  assert distribution.version == expected['version'], package
+              path = Path(importlib.import_module(module).__file__).resolve()
+              assert path.is_relative_to(Path(os.environ['AMPLIFIER_TEST_PYTHON']).parent.parent), path
+              modules[package] = {'version': distribution.version, 'source': direct,
+                                   'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+          assert subprocess.check_output(['git', '-C', str(root / '.ci/loop-live'), 'rev-parse', 'HEAD'], text=True).strip() == packages['amplifier-module-loop-live']['source']['git'].rsplit('#', 1)[1]
+          record = {'host': str(host), 'wheel': wheel['sha256'], 'modules': modules,
+                    'revision': subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip(),
+                    'runId': os.environ['GITHUB_RUN_ID'], 'attempt': os.environ['GITHUB_RUN_ATTEMPT']}
+          (root / 'output/python-checks/installed-imports.json').write_text(json.dumps(record, indent=2) + '\n')
+          PY
+            # Preserve independent browser evidence even when a Python oracle
+            # fails; neither phase may turn the combined result green alone.
+            browser_status=0
+            modes="native ordinary tool completion stale-config stop native-unknown native-stop"
+            if [ "$CHECK_SUITE" = live-first-accepted-graph ]; then modes="native ordinary completion stop"; fi
+            for mode in $modes; do
+              node tests/web/immediate-direction-browser.mjs "$mode" \
+                > "$GITHUB_WORKSPACE/output/python-checks/immediate-direction-$mode.log" 2>&1 || browser_status=1
+            done
+            if [ "$CHECK_SUITE" = live-first-accepted-graph ]; then
+              AMPLIFIER_TEST_INSTALLED_PACKAGE="$DIRECTION_INSTALLED_HOST" \
+                AMPLIFIER_TEST_ARTIFACTS="$GITHUB_WORKSPACE/output/python-checks/captured-source" \
+                node tests/web/message-delivery-browser.mjs \
+                > "$GITHUB_WORKSPACE/output/python-checks/captured-source.log" 2>&1 || browser_status=1
+            fi
+            printf '%s\n' "$browser_status" > "$GITHUB_WORKSPACE/output/python-checks/browser-exit.txt"
+            mapfile -t targets < "$GITHUB_WORKSPACE/output/python-checks/targets.txt"
+            set +e
+            "$AMPLIFIER_TEST_PYTHON" -I -m pytest -c /dev/null -o asyncio_mode=auto --rootdir=. \
+              -v --tb=short "${targets[@]}" --junitxml="$GITHUB_WORKSPACE/output/python-checks/installed-junit.xml" \
+              2>&1 | tee "$GITHUB_WORKSPACE/output/python-checks/installed-tests.log"
+            test_status=${PIPESTATUS[0]}
+            set -e
+            printf '%s\n' "$test_status" > "$GITHUB_WORKSPACE/output/python-checks/tests-exit.txt"
+          )
+          python - <<'PY'
+          import json, os, xml.etree.ElementTree as ET
+          from pathlib import Path
+          output = Path('output/python-checks')
+          cases = list(ET.parse(output / 'installed-junit.xml').getroot().iter('testcase'))
+          assert cases and not any(row.find(tag) is not None for row in cases for tag in ('failure', 'error', 'skipped'))
+          modes = ['native', 'ordinary', 'tool', 'completion', 'stale-config', 'stop', 'native-unknown', 'native-stop']
+          if os.environ['CHECK_SUITE'] == 'live-first-accepted-graph':
+              modes = ['native', 'ordinary', 'completion', 'stop']
+              assert (output / 'browser-exit.txt').read_text().strip() == '0'
+          for mode in modes:
+              row = json.loads((output / 'immediate-direction' / (mode + '.json')).read_text())
+              assert row['passed'] and row['scenario'] == mode and row['host'] and row['cleanupConfirmed'], mode
+          (output / 'live-first-qualified.json').write_text(json.dumps({
+              'installedCases': len(cases), 'skips': 0, 'browserModes': modes,
+              'scope': os.environ['CHECK_SUITE'] + ': scripted external transports; not paid-provider parity or release'}, indent=2) + '\n')
           PY
       - name: Run and retain exact native child fixture evidence
         if: ${{ env.CHECK_SUITE == 'native-child-fixtures' }}
@@ -912,5 +1028,80 @@ jobs:
         with:
           name: fresh-cleanup-native-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: output/fresh-cleanup-native/
+          if-no-files-found: error
+          retention-days: 14
+
+  prepared-runtime-native:
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.core_wheels && inputs.suite == 'prepared-runtime-native' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    permissions:
+      contents: read
+    env:
+      CHECK_SUITE: prepared-runtime-native
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate optional immutable candidate input
+        env:
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+        run: |
+          python - <<'PY'
+          import os, re
+          value = os.environ['CANDIDATE_REF']
+          assert not value or re.fullmatch('[a-f0-9]{40}', value), 'Use a full candidate commit SHA'
+          PY
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: inputs.candidate_ref != ''
+        with:
+          ref: ${{ inputs.candidate_ref }}
+          path: .ci/candidate
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13.17'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.16.0'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: '0.13.6'
+          enable-cache: false
+      - name: Read the selected product's ordinary backend pin
+        id: backend
+        env:
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import ast, os
+          from pathlib import Path
+          source = Path('.ci/candidate') if os.environ['CANDIDATE_REF'] else Path('.')
+          for node in ast.parse((source / 'amplifier_web/task_environments.py').read_text()).body:
+              if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id == 'DTU_COMMIT':
+                  print('revision=' + ast.literal_eval(node.value))
+          PY
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: microsoft/amplifier-smart-tool-digital-twin-universe
+          ref: ${{ steps.backend.outputs.revision }}
+          path: .ci/dtu-core
+          persist-credentials: false
+      - name: Run the two owned prepared runtime cases
+        env:
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+          CLEANUP_NATIVE_ROOT: ${{ runner.temp }}/unified-prepared-native
+        run: |
+          set -euo pipefail
+          if test -n "$CANDIDATE_REF"; then export NATIVE_CANDIDATE_ROOT="$GITHUB_WORKSPACE/.ci/candidate"; fi
+          mkdir -p output/prepared-runtime-native
+          python -u scripts/fresh_cleanup_native_checks.py 2>&1 | tee output/prepared-runtime-native/driver.log
+      - name: Retain results and failed prerequisites
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: prepared-runtime-native-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/prepared-runtime-native/
           if-no-files-found: error
           retention-days: 14

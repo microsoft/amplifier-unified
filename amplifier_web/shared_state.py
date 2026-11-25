@@ -39,12 +39,30 @@ def configuration_paths(workspace: Path, session_id: str, home: Path) -> tuple[P
     )
 
 
-def configuration_stamp(workspace: Path, session_id: str, home: Path, stamp, *, extra_paths=()) -> tuple[tuple[str, object], ...]:
+def configuration_stamp(workspace: Path, session_id: str, home: Path, stamp, *, extra_paths=(), include_controls=True) -> tuple[tuple[str, object], ...]:
     """Return metadata-only invalidation data; no config file is parsed."""
 
     paths = [*configuration_paths(workspace, session_id, home)]
+    if not include_controls:
+        # Live controls are owned/persisted by this worker and the host's guarded
+        # configuration operation, not external mount inputs.
+        local = home / "sessions" / session_id
+        paths = [path for path in paths if path not in
+                 {local / "configuration.json", local / "control-state.json"}]
     for path in extra_paths:
         path = Path(path)
         if path not in paths:
             paths.append(path)
     return tuple((str(path), stamp(path)) for path in paths)
+
+
+def mounted_configuration_stamp(workspace, session_id, home, *, extra_paths=()):
+    """Runtime-free private mount comparison; JSON-stable metadata, not content."""
+    def stamp(path):
+        try:
+            value = path.stat()
+        except FileNotFoundError:
+            return None
+        return [value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns]
+    return [[path, value] for path, value in configuration_stamp(
+        Path(workspace), session_id, Path(home), stamp, extra_paths=extra_paths, include_controls=False)]

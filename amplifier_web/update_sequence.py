@@ -6,8 +6,14 @@ install packages, or activate any cached source.
 from pathlib import Path
 import hashlib
 import json
+import os
+import re
 import tomllib
 from urllib.parse import urlsplit
+
+
+class StaleAppSelection(ValueError):
+    """Known checked-selection mismatch, not an uncertain promotion."""
 
 
 def git_source(uri):
@@ -58,7 +64,7 @@ def app_selection(home, *, config=None, original_home=None):
     from .host.config import read_config
     from .host.bundle_paths import configured_bundle_reference, local_bundle_path
     from .builtin_behaviors import resolve_builtin_behavior, resource_root
-    from .runtime_profiles import configuration_key
+    from .runtime_profiles import app_folders, configuration_key
     from .updates import source_key
     from urllib.parse import parse_qs, unquote
     import yaml
@@ -100,7 +106,16 @@ def app_selection(home, *, config=None, original_home=None):
         parsed = urlsplit(reference)
         if parsed.scheme == 'file':
             sub = parse_qs(parsed.fragment).get('subdirectory', [''])[0]
-            path = Path(unquote(parsed.path)) / sub
+            text = unquote(parsed.path)
+            # The address of a Windows file on a drive is file:///C:/...: it
+            # has no server name, and its path part has a slash before the
+            # drive. Take only that slash away. A general conversion
+            # (urllib.request.url2pathname) also takes "//localhost" away, on
+            # every system, and does not look at a server name: an address
+            # that was not the shipped file's would become it.
+            if os.name == 'nt' and not parsed.netloc and re.match('/[A-Za-z]:(/|$)', text):
+                text = text[1:]
+            path = Path(text) / sub
             if path.parent == resource_root() / 'behaviors' and path.suffix == '.yaml':
                 shipped(yaml.safe_load(path.read_text()))
     # Only the source roots that installation actually relocates are equivalent.
@@ -109,10 +124,7 @@ def app_selection(home, *, config=None, original_home=None):
     if original_home is not None:
         from .updates import foundation_home
         roots.update((str(Path(original_home) / 'foundation'), str(foundation_home(original_home))))
-    text = json.dumps([configuration_key(config.settings, *roots),
-                       references], sort_keys=True)
-    for root in sorted(roots, key=len, reverse=True):
-        text = text.replace(root, '$APP')
+    text = app_folders([configuration_key(config.settings, *roots), references], roots, sort_keys=True)
     return {'sources': list(sources.values()), 'witness': hashlib.sha256(text.encode()).hexdigest()}
 
 
@@ -122,12 +134,12 @@ def verify_app_selection(manager, rows, *, stage=None):
     if not expected:
         return
     if None in expected or expected != {app_selection(manager.home)['witness']}:
-        raise ValueError('App behavior selection changed or was not checked; check for updates again.')
+        raise StaleAppSelection('App behavior selection changed or was not checked; check for updates again.')
     if stage is not None:
         from .host.config import read_config
         config = read_config(stage, home=stage, shared_home=stage/'shared-config', global_only=True)
         if expected != {app_selection(stage, config=config, original_home=manager.home)['witness']}:
-            raise ValueError('Staged app behavior selection differs from the checked configuration.')
+            raise StaleAppSelection('Staged app behavior selection differs from the checked configuration.')
 
 
 def classify(home, rows, *, selection=None):
@@ -138,6 +150,16 @@ def classify(home, rows, *, selection=None):
     if selection is not None:
         sources = selection['sources']
     required = {source_key(row['url'], row['ref']) for row in sources}
+    generation = active_release(home).get('current')
+    project = project_path(home, generation)
+    lock = receipt_directory(home, generation) / 'runtime.lock'
+    environment = (project / 'uv.lock').exists() or lock.exists()
+    # With a worker environment and no component generation, a conversation
+    # fetches a declared source itself at its first use. Until then the source
+    # is absent, and no component update is needed to get it. A generation is
+    # immutable, so there an update must add the source; with no environment
+    # the first update prepares everything.
+    fetched_at_first_use = generation is None and environment
     seen = set()
     for row in rows:
         if row.get('kind') == 'smart tool':
@@ -157,6 +179,7 @@ def classify(home, rows, *, selection=None):
         key = source_key(source['url'], source['ref'])
         if key in seen:continue
         seen.add(key)
+        if fetched_at_first_use:continue
         from .updates import pinned
         rows.append({**source, 'id': 'included:' + hashlib.sha256(str(key).encode()).hexdigest()[:20],
                      'label': safe_label(source['url']), 'kind': 'included source', 'updateTier': 'included',
@@ -164,10 +187,7 @@ def classify(home, rows, *, selection=None):
                      'eligible': not pinned(source['ref']), 'missing': True,
                      **({'appSelection': selection['witness']} if selection is not None else {}),
                      'usage': 'configured', 'usageEvidence': ['Included with Amplifier Unified']})
-    generation = active_release(home).get('current')
-    project = project_path(home, generation)
-    lock = receipt_directory(home, generation) / 'runtime.lock'
-    if packages and not (project / 'uv.lock').exists() and not lock.exists() and not any(row.get('id') == 'runtime:environment' for row in rows):
+    if packages and not environment and not any(row.get('id') == 'runtime:environment' for row in rows):
         rows.insert(0, {'id': 'runtime:environment', 'label': 'Conversation worker environment',
                        'kind': 'runtime environment', 'updateTier': 'included', 'status': 'update',
                        'eligible': True, 'missing': True, 'current': None, 'latest': 'required',

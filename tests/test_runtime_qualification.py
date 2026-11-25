@@ -117,8 +117,242 @@ def test_installed_graph_file_uri_keeps_git_identity_and_dirty_refusal(tmp_path,
     assert dirty[0]['cacheSource']['dirty'] is True
     assert runtime_environment.installed_sources(project, graph=dirty)['amplifier-fixture']['override'] is True
     assert dirty[0]['directUrl']['url'] == reference
-    assert len(reads) == 6
+    assert len(reads) == 4
     assert all(env is child_env for env in reads)
+
+
+def test_installed_root_matches_git_for_divergent_detached_and_changed_checkouts(tmp_path):
+    import hashlib
+    import subprocess
+
+    def git(*args):
+        return subprocess.check_output(['git', '-c', 'user.name=Fixture',
+            '-c', 'user.email=test@example.invalid', *args], cwd=tmp_path)
+
+    def verify():
+        index = tmp_path / '.git/index'
+        before = (index.stat().st_mtime_ns, index.read_bytes())
+        old_revision = git('rev-parse', 'HEAD').decode().strip()
+        old_dirty = bool(git('--no-optional-locks', 'status', '--porcelain', '--untracked-files=no'))
+        witness = runtime_qualification._installed_root(tmp_path, None)
+        assert witness['revision'] == old_revision
+        assert witness['dirty'] == old_dirty
+        assert (index.stat().st_mtime_ns, index.read_bytes()) == before
+        return witness
+
+    git('init')
+    (tmp_path / '.amplifier_cache_meta.json').write_text(json.dumps({'git_url': 'test'}))
+    header_name = '# branch.oid ' + 'a' * 40
+    (tmp_path / header_name).write_bytes(b'one\n')
+    git('add', '--', header_name)
+    git('commit', '-m', 'fixture')
+    git('checkout', '-b', 'upstream-peer')
+    git('commit', '--allow-empty', '-m', 'upstream ahead')
+    git('checkout', '-b', 'local-peer', 'HEAD~')
+    git('commit', '--allow-empty', '-m', 'local ahead')
+    git('branch', '--set-upstream-to=upstream-peer')
+    assert git('rev-list', '--left-right', '--count', 'HEAD...@{upstream}').split() == [b'1', b'1']
+    assert verify()['dirty'] is False
+    git('checkout', '--detach', 'HEAD')
+    (tmp_path / 'untracked').write_bytes(b'untracked')
+    clean = verify()
+    assert clean['dirty'] is False
+    assert clean['trackedContentSha256'] == hashlib.sha256(header_name.encode() + b'\0one\n').hexdigest()
+
+    git('mv', '--', header_name, 'renamed')
+    renamed = verify()
+    assert renamed['revision'] == clean['revision'] and renamed['dirty'] is True
+    assert renamed['trackedContentSha256'] == hashlib.sha256(b'renamed\0one\n').hexdigest()
+    (tmp_path / 'renamed').write_bytes(b'two\n')
+    git('add', '--', 'renamed')
+    updated = verify()
+    assert updated['dirty'] is True
+    assert updated['trackedContentSha256'] == hashlib.sha256(b'renamed\0two\n').hexdigest()
+
+
+def test_installed_root_refuses_unborn_head(tmp_path):
+    import subprocess
+    subprocess.run(['git', 'init'], cwd=tmp_path, check=True)
+    (tmp_path / '.amplifier_cache_meta.json').write_text(json.dumps({'git_url': 'test'}))
+    with pytest.raises(ValueError, match='HEAD commit'):
+        runtime_qualification._installed_root(tmp_path, None)
+
+
+@pytest.mark.parametrize('oid', [b'a' * 39, b'a' * 41, b'g' * 40, b'0' * 40, b'a' * 65])
+def test_installed_status_refuses_malformed_object_id(monkeypatch, oid):
+    monkeypatch.setattr(runtime_qualification.subprocess, 'check_output',
+                        lambda *a, **kw: b'# branch.oid ' + oid + b'\0')
+    with pytest.raises(ValueError, match='HEAD commit'):
+        runtime_qualification._installed_checkout_status(Path('.'), None)
+
+
+def test_installed_status_accepts_sha256_without_optional_upstream_count_on_old_git(monkeypatch):
+    import subprocess
+    commands = []
+    def output(command, **kwargs):
+        commands.append(command)
+        if '--no-ahead-behind' in command:
+            raise subprocess.CalledProcessError(129, command)
+        return b'# branch.oid ' + b'b' * 64 + b'\0# branch.head main\0'
+    monkeypatch.setattr(runtime_qualification.subprocess, 'check_output', output)
+    assert runtime_qualification._installed_checkout_status(Path('.'), None) == ('b' * 64, False)
+    assert commands[0] == [*commands[1], '--no-ahead-behind']
+
+
+def _root_distribution(project, name, source=None):
+    metadata = project / '.venv/Lib/site-packages' / (name + '-1.0.dist-info')
+    metadata.mkdir(parents=True)
+    (metadata / 'METADATA').write_text(f'Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\n')
+    if source is not None:
+        (metadata / 'direct_url.json').write_text(json.dumps({'url': source.as_uri(), 'dir_info': {}}))
+    return runtime_qualification.importlib.metadata.PathDistribution(metadata)
+
+
+def test_installed_roots_keep_aliases_graph_order_and_fresh_content(tmp_path, monkeypatch):
+    import hashlib
+    import subprocess
+    project = tmp_path / 'project'
+    roots, expected = [], {}
+    for name in ('one', 'two'):
+        root = tmp_path / name
+        root.mkdir()
+        (root / 'module').mkdir()
+        content = ('source ' + name + '\n').encode()
+        (root / 'tracked.txt').write_bytes(content)
+        def git(*args):
+            return subprocess.check_output(['git', '-c', 'user.name=Fixture',
+                '-c', 'user.email=fixture@example.invalid', *args], cwd=root, text=True).strip()
+        git('init')
+        git('add', 'tracked.txt')
+        git('commit', '-m', 'fixture')
+        revision = git('rev-parse', 'HEAD')
+        url = 'https://example.invalid/' + name
+        (root / '.amplifier_cache_meta.json').write_text(json.dumps({'git_url': url, 'ref': 'main'}))
+        expected[root] = {'url': url, 'ref': 'main', 'revision': revision, 'dirty': False,
+            'trackedContentSha256': hashlib.sha256(b'tracked.txt\0' + content).hexdigest()}
+        roots.append(root)
+    entries = [('zeta', roots[0]), ('beta', roots[1]), ('alias', roots[0] / 'module'), ('plain', None)]
+    distributions = [_root_distribution(project, name, source) for name, source in entries]
+    monkeypatch.setattr(runtime_qualification.importlib.metadata, 'distributions', lambda **kw: distributions)
+    original = runtime_qualification._installed_root
+    reads, observed = [], {}
+    def read(root, env):
+        reads.append(root)
+        value = original(root, env)
+        observed[root] = value
+        return value
+    monkeypatch.setattr(runtime_qualification, '_installed_root', read)
+    graph = runtime_qualification.installed_graph(project)
+    oracle = []
+    for name, source in entries:
+        row = {'name': name, 'version': '1.0'}
+        if source is not None:
+            root = roots[0] if name in {'zeta', 'alias'} else roots[1]
+            row.update(path=str(source), directUrl={'url': source.as_uri(), 'dir_info': {}},
+                cacheSource={**expected[root], 'subdirectory': 'module' if name == 'alias' else '.'})
+        oracle.append(row)
+    assert graph == sorted(oracle, key=lambda row: row['name'])
+    assert sorted(reads) == sorted(roots)  # Two package paths share one physical root.
+    (roots[0] / 'tracked.txt').write_bytes(b'source NEW\n')
+    with pytest.raises(ValueError, match='changed after qualification'):
+        runtime_qualification.verify_recorded(project, tmp_path, expected=graph)
+    assert all(reads.count(root) == 2 for root in roots)
+    assert observed[roots[0]]['dirty'] is True
+    assert observed[roots[0]]['trackedContentSha256'] != expected[roots[0]]['trackedContentSha256']
+
+
+@pytest.mark.parametrize('root_fails', [False, True])
+def test_installed_roots_preserve_error_before_later_distribution(tmp_path, monkeypatch, root_fails):
+    root = tmp_path / 'root'
+    (root / '.git').mkdir(parents=True)
+    (root / '.amplifier_cache_meta.json').write_text('{}')
+    project = tmp_path / 'project'
+    first = _root_distribution(project, 'first', root)
+    broken = _root_distribution(project, 'broken')
+    (broken._path / 'direct_url.json').write_text('{invalid')
+    monkeypatch.setattr(runtime_qualification.importlib.metadata, 'distributions', lambda **kw: [first, broken])
+    def read(root, env):
+        if root_fails:
+            raise ValueError('earlier checkout failed')
+        return {}
+    monkeypatch.setattr(runtime_qualification, '_installed_root', read)
+    error = ValueError if root_fails else json.JSONDecodeError
+    message = 'earlier checkout failed' if root_fails else 'property name'
+    with pytest.raises(error, match=message):
+        runtime_qualification.installed_graph(project)
+
+
+@pytest.mark.parametrize('fail', [False, True])
+def test_installed_roots_bound_concurrency_and_settle_before_exit(tmp_path, monkeypatch, fail):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event, Lock, Thread
+    project = tmp_path / 'project'
+    roots, distributions = [], []
+    for index in range(9):
+        root = tmp_path / str(index)
+        (root / '.git').mkdir(parents=True)
+        (root / '.amplifier_cache_meta.json').write_text('{}')
+        roots.append(root)
+        distributions.append(_root_distribution(project, 'fixture-' + str(index), root))
+    monkeypatch.setattr(runtime_qualification.importlib.metadata, 'distributions', lambda **kw: distributions)
+    release, fail_now, two_started, shutting_down, done = (Event() for _ in range(5))
+    lock = Lock()
+    active = peak = 0
+    started, finished, shutdowns, outcome = [], [], [], []
+    class Readers(ThreadPoolExecutor):
+        def shutdown(self, wait=True, *, cancel_futures=False):
+            shutdowns.append((wait, cancel_futures))
+            shutting_down.set()
+            return super().shutdown(wait=wait, cancel_futures=cancel_futures)
+    def read(root, env):
+        nonlocal active, peak
+        with lock:
+            started.append(root)
+            active += 1
+            peak = max(peak, active)
+            if active == 2:
+                two_started.set()
+        try:
+            if fail and root == roots[0]:
+                assert fail_now.wait(5), 'fixture did not release the failed read'
+                raise ValueError('first checkout failed')
+            assert release.wait(5), 'fixture did not release the root read'
+            return {'revision': root.name}
+        finally:
+            with lock:
+                active -= 1
+                finished.append(root)
+    def verify():
+        try:
+            outcome.append(runtime_qualification.installed_graph(project))
+        except BaseException as error:
+            outcome.append(error)
+        finally:
+            done.set()
+    monkeypatch.setattr(runtime_qualification, 'ThreadPoolExecutor', Readers)
+    monkeypatch.setattr(runtime_qualification, '_installed_root', read)
+    caller = Thread(target=verify)
+    caller.start()
+    try:
+        assert two_started.wait(5)
+        assert active == peak == 2 and not done.is_set()
+        if fail:
+            fail_now.set()
+            assert shutting_down.wait(5)
+            assert not done.is_set()  # Other started reads still hold the call.
+        release.set()
+    finally:
+        fail_now.set()
+        release.set()
+        caller.join(5)
+    assert not caller.is_alive() and done.is_set() and active == 0
+    assert sorted(started) == sorted(finished) and peak == 2
+    assert shutdowns == [(True, True)]
+    if fail:
+        assert type(outcome[0]) is ValueError and str(outcome[0]) == 'first checkout failed'
+    else:
+        assert [row['name'] for row in outcome[0]] == ['fixture-' + str(i) for i in range(9)]
+        assert len(started) == 9
 
 
 @pytest.mark.parametrize('platform', ['win32', 'linux', 'darwin'])
@@ -515,8 +749,11 @@ def test_active_generation_uses_qualified_policy_without_overriding_user_choice(
     (receipt / 'runtime.lock').write_text('version=1\n[[package]]\nname="amplifier-core"\nversion="1.6.1"\nsource={registry="https://pypi.org/simple"}\n')
     runtime_environment.prepare_project(tmp_path, release)
     calls = []
-    monkeypatch.setattr(runtime_qualification, 'verify_recorded', lambda project, directory, **policy: calls.append((project, directory)))
-    assert runtime_qualification.active_install_overrides(tmp_path) == target
+    monkeypatch.setattr(runtime_qualification, 'verify_recorded', lambda project, directory, **policy: calls.append((project, directory, policy)))
+    observed = []
+    assert runtime_qualification.active_install_overrides(tmp_path, on_verified=lambda *args: observed.append(args)) == target
+    assert observed == [(calls[0][0], receipt, [])]
+    assert calls[0][2] == {'allow_additions': True, 'expected': []}
     assert runtime_qualification.active_install_overrides(tmp_path, str(target)) == target
     assert len(calls) == 2
     assert runtime_qualification.active_install_overrides(tmp_path, '/user/explicit-overrides.txt') is None

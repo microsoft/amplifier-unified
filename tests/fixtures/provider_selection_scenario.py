@@ -39,7 +39,23 @@ class Provider:
                             'choices': ['low', 'high', 'xhigh'], 'required': False}]}
 
     async def list_models(self):
-        return [{'id': 'cli-model'}, {'id': 'unified-model'}]
+        # Deliberately synthetic rates: this journey qualifies the real DTO,
+        # shared catalog and bundled price display, not an Anthropic price table.
+        rates = {'input': '0.10', 'output': '0.50', 'cache_read': '0.01',
+                 'cache_write_5m': '0.125', 'cache_write_1h': '0.20'}
+        base = {'version': 1, 'currency': 'USD', 'unit': 'per_million_tokens',
+                'basis': 'standard_global', 'modifiers': {'us_inference': '1.1'}}
+        return [
+            {'id': 'cli-model', 'pricing': None, 'pricing_details': {
+                **base, 'kind': 'tiered', 'threshold_tokens': 100000,
+                'threshold_basis': 'input_tokens+cache_read_input_tokens+cache_creation_input_tokens',
+                'tiers': [{'up_to': 100000, 'rates': rates},
+                          {'above': 100000, 'rates': {'input': '0.50', 'output': '2.50',
+                              'cache_read': '0.05', 'cache_write_5m': '0.625',
+                              'cache_write_1h': '1.00'}}]}},
+            {'id': 'unified-model', 'pricing_details': {**base, 'kind': 'fixed',
+                'rates': {**rates, 'input': '8.00', 'output': '40.00'}}},
+        ]
 
     def get_model_list_info(self):
         return {'version':1,'source':self.config.get('catalog_origin','provider-api')}

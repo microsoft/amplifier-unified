@@ -1,11 +1,49 @@
 # Contributor operating guidance
 
+This codebase is yours: what it's for and how it's built are your call, and you'll keep building on it.
+
 Before broad source reads or searches, use the [source and ownership map](docs/source-context.md).
 `python scripts/source_context.py` summarizes tracked inputs without reading
 their bodies; use `--format paths` with `--under` to select relevant owners,
 contracts and tests. Ordinary `rg` does not apply these context classifications;
 use the map's selective-search examples, and expand to retained evidence or
 generated output when the task needs it.
+
+## Design for everyday users
+
+Use the [shared-client vision](docs/clients/VISION.md#2-common-meaning-native-interaction)
+and [CX8](contracts/client-experience.v1.md#the-promises) for all user-facing work,
+not only appearance changes. The baseline is ordinary information-worker,
+end-user and consumer usability: plain familiar language, useful defaults and low
+cognitive load. UX is golf: every click or stroke counts; fewer steps wins without
+sacrificing accessibility, authority, meaningful feedback or recovery. Measure the
+whole journey, including entry, repeated setup and keyboard/focus behavior, rather
+than optimizing one control in isolation.
+
+## Web client: public source selection
+
+Author browser source, client tests and client build tools in
+[`amplifier-client-web`](https://github.com/microsoft/amplifier-client-web), the
+sole client authoring owner. Unified selects an exact accepted public revision
+and source digest in `components/web-client.source.json`; normal preparation
+fetches that selection into ignored `.build/web-client`.
+Follow [component ownership and assembly](components/README.md#select-public-client-source).
+Do not restore a committed source copy or hand-edit built assets.
+
+A client-only PR merge is not a delivered Unified change. Carry the selected
+source through paired qualification and Unified release, or name the integration
+owner and hand off exact client and Unified revisions with remaining work pending.
+Coordinate with that owner; do not duplicate ports or build campaigns. Report
+source acceptance, selection, build/paired qualification and release separately.
+
+Neither disposable `.build/web-client` nor generated `amplifier_web/static/` is
+another authoring owner. Unified owns the assembler in `scripts/` and
+host/browser/producer checks in [`tests/web`](tests/web/README.md), with a separate
+test dependency lock; do not recreate a frontend wrapper package, generated source
+view or duplicate client tests.
+The normal build replaces static output from the selected client. Verify
+source/artifact provenance and served routes after rebuilding; a source-only
+login check does not prove packaged browser entry.
 
 ## Assess scope and design before taking on issues or PRs
 
@@ -19,6 +57,8 @@ Amplifier Agent is separate from Unified's Core/Foundation runtime.
   vision, and the relevant contracts. Identify the canonical owner and evidence.
 - For direction or contract changes, use [vision and contract guidance](docs/vision-and-contracts.md):
   keep observable promises separate from design notes and implementation evidence.
+- When a Unified feature suggests a shared Constellation need, check
+  [candidate ideas from Unified](docs/design/constellation-candidates.md) for earlier examples.
 - Confirmed defects in promised behavior normally warrant straightforward fixes.
 - New features and behavior or architecture changes require judgment about whether
   they are desirable, their general client needs, and the right design; do not
@@ -51,6 +91,14 @@ the demonstrated cost and the affected history, authority and recovery semantics
 Use measured workload budgets; this does not add a full-suite release gate.
 
 ## Keep the development release loop fast
+
+For native runner checks, use the ordinary manual `python-checks.yml` suite
+`prepared-runtime-native` on an explicit source revision; `candidate_ref` can
+select a separate immutable candidate. A standing scoped task includes dispatch,
+inspection, ordinary repairs and corrected runs after known terminal failures,
+without nomination variables or another approval round. Inspect uncertain
+original operations before new effects; preserve Stop, ownership and cleanup
+receipts. Test workflows are convenience shortcuts, not exclusive execution paths.
 
 Follow the [Fast Release Guide](docs/validation/release-qualification.md):
 **one PR → review while required CI runs → merge → automatic publication and
@@ -94,6 +142,15 @@ released clients, custom components, and explicit public APIs have their own
 contracts and version policies. Preserve or deliberately revise those contracts
 with their owners instead of silently changing their promised behavior.
 
+Appearance work follows the [appearance contract](docs/shell/appearance-contract.md)
+and the shared-client consumer UX baseline. The approved production redesign uses
+Reference deltas, strict format-2 packages and complete Global / This browser
+profiles. Keep ordinary choices direct, without Saved/Undo rituals; preserve
+Preview Cancel, explicit accent reset and Archive Undo. Old complete themes,
+`.078` profiles/libraries and trial records remain inert and undeleted, never
+automatic migration/recovery inputs. Preserve independent component placements
+and views. See the contract's persistence/default-impact boundary before changes.
+
 ## Interactive archive boundary
 
 Keep archive feedback/navigation in the bundled interactive controls, not the
@@ -124,18 +181,6 @@ Windows stdin read stops delivery; its daemon thread/descriptor may remain until
 EOF or worker-process exit. Do not join it or close its buffered stream from the
 event loop.
 
-Author browser source, client tests and client build tools in
-[`amplifier-client-web`](https://github.com/microsoft/amplifier-client-web).
-Follow [component ownership and assembly](components/README.md) to refresh its
-selected delivery copy and prepare disposable `.build/web-client`. Neither that
-prepared directory nor `components/web-client` is another authoring owner.
-Unified owns the assembler in `scripts/` and host/browser/producer checks in
-[`tests/web`](tests/web/README.md), with a separate test dependency lock. Do not
-recreate a frontend wrapper package, generated source view or duplicate client tests.
-The normal build replaces generated `amplifier_web/static/` from the selected
-client. Verify source/artifact provenance and served routes after rebuilding;
-a source-only login check does not prove packaged browser entry.
-
 The foreground owner-browser reader uses the existing-only native private
 credential boundary after qualified cold startup. Qualify the exact installed
 public entry and real foreground CLI before presenting a usable trial; source
@@ -145,9 +190,305 @@ Launcher HTTP health JSON is not listener authentication: require the private
 local leaf pin and HTTPS before reading or sending a control credential. The standalone process
 guard supports ordinary CPython 3.13 only and requires explicit
 `sys._base_executable`; do not weaken PID checks to accept a venv redirector.
+The windowless app host attaches one console without a window at start
+(`windows_hidden_console.py`) so that default-flag console children open no
+terminal. Keep explicit `CREATE_NO_WINDOW` at known call sites. After a late
+`AttachConsole`, Python signal settings do not protect the host from a child's
+Ctrl+C; keep the explicit console control handler and the standard-handle
+restore. The stable launcher keeps the code that setup installed; an in-app
+update cannot change it. `amplifier_web.windows_launcher_refresh` is the only
+supported replacement: it runs with the active generation's Python from outside
+the host's Job, and it rolls back fully on failure.
+The app host asks for that refresh by itself (`windows_launcher_follow`): it
+registers a second task, `AmplifierUnifiedLauncher-<SID>`, whose helper runs
+the command with `--automatic` outside the Job. Keep its rules: an open request
+fences every update operation (`awaiting_restart`); a host names its run in the
+request only after it closed admission; the helper stops only the exact run
+whose hold it read under the refresh lock; a host reopens only with that lock
+and with no stop record for its run; a journal of another task registration is
+renamed and never used. No clock decides safety there, and the helper never
+shows a message box (a waiting box blocks the timed trigger that repairs an
+ended helper). Every app generation's `Scripts` folder holds a `uv.exe` of a
+package, and that folder is the helper's working folder: keep
+`NoDefaultCurrentDirectoryInExePath` in the refresh command's environment, or
+Windows runs that program before setup's. The refresh starts only when a file of
+`windows_launcher_files.FILES` or a distribution of `PACKAGES` differs, so a
+launcher-side fix reaches an installed PC only through that list. A change
+that makes the launcher load another file fails
+`tests/test_windows_launcher_files.py`: run
+`scripts/windows_launcher_files.py --write` and decide each new `DYNAMIC`
+entry. The Apps-list version is the confirmed app version; the host writes it
+(`windows_consumer_shell.set_version`), not the refresh. A host that an update
+started confirms its own start after it listens: the hand-over record still
+says `prepared` when the update loop first runs. Never keep that reading as a
+decision for the host run; read the record again until it says something else.
+A fixture that writes `acknowledged` before the start hides this. In
+`windows-launcher-follow.yml` the app is built as a version above every
+release: a host that is behind a public release updates itself in the middle
+of a case.
+A live conversation worker holds Foundation's session ownership below
+`<installation folder>\ownership`. A worker whose Foundation is older than
+`e37a946b` makes Windows refuse a rename, a move or a replacement of an entry
+directly in the installation folder (error 32); the private writer publishes
+by a rename, so it fails there too. From `e37a946b` those changes work. Windows
+still refuses a rename of a pinned folder itself (the installation folder,
+each folder above it, and Foundation's own), and a rename or a move into
+`ownership` or a pinned folder below it
+(`tests/test_windows_live_worker_folders.py`). A running worker keeps the
+Foundation that it started with. Maintenance code must still expect the
+refusal from a worker that started before an update; `app\config\services`
+still accepts writes. Launcher maintenance stops the app before such a write
+and removes the person's Start-menu and Apps-list entries last.
+Uninstall deletes the installation folder only on the person's choice, made
+twice, and only exact top-level names (`windows_uninstall`). It writes
+`unified-uninstall.json` before the first deletion. While that file exists the
+launcher does not start the app, and setup must never install into a folder
+that holds it. Add a new top-level name to `windows_uninstall` together with
+the code that creates it. A running program cannot delete the files that it
+runs from: uninstall moves them through their handles into the folder
+`unified-uninstall-last`, and the step after exit deletes only there. That
+step works with paths. Its paths are safe only because it inherits two open
+files that the uninstall program created through handles; do not give it a
+tree walk, a file that it creates or opens by a path, or a rule that rests on
+its current folder.
+`setup-tls force` on a key-less identity makes a new root, and Windows can
+still hold the earlier one for the person. The command records each root that
+it replaces in `config\tls\replaced-roots.pem`; only that command writes the
+file. The launcher (after the person's Yes to the new root) and uninstall ask
+Windows to delete a recorded root only when it has the fixed shape of the
+product's root and the store holds exactly that certificate
+(`windows_trust.replaced`). Never find a root to delete by its name, in code
+or in a guide: another installation's root has the same name. The record
+never loses a root that Windows may still hold; a full or unreadable record
+stops `force` with nothing changed. Windows asks the person once for each
+deletion, and no code answers it; say the number of questions before them.
+Windows has no exec: `os.execv` starts a new process there and ends the
+caller at once with exit status 0, before the command's output is complete.
+The launcher hands a command to the active app generation with
+`application_generations.hand_over`, which waits on Windows and ends with the
+app's status. Do not use `os.execv` on Windows where a caller reads the
+output or the status. A launcher from a setup file before that change still
+returns 0 at once, so the confirmation line of `open` stays the launcher's
+proof that the browser opened. The Start-menu start shows `windows_start.sign`
+and holds `windows_start.only`; both must end before the launcher's own last
+message, which sends the person back to the Start menu. While the start holds
+that lock, a second click does nothing and shows nothing.
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
 different program. Task registration/state is not authenticated host health.
+Task Scheduler stores the sign-in trigger's user as a name (`COMPUTER\user`),
+even when registration gave the SID, and never rewrites it; the principal stays
+a SID. After a computer rename Windows still starts the task, and that name
+maps to nothing. `_same_account` in `windows_service.py` is the one identity
+equivalence in the ownership check: keep "Windows says no such name" apart from a lookup
+that failed, and keep every other field an exact comparison. The launcher runs
+that check before any app version does, so a fix to it reaches an installed PC
+only with a new launcher. `windows-task-after-rename.yml` registers the real
+task on a hosted runner and renames that runner's account domain. Its fixture
+changes the machine's security policy: it runs only with the workflow's opt-in
+in a hosted runner's environment. That guard stops accidental use and does not
+prove the machine; never run the fixture on a machine that is kept.
+`windows-standard-account.yml` runs the consumer journey as a standard user
+(not a member of Administrators) on a hosted runner. Its fixture creates one
+local user and signs it in through Remote Desktop to the same computer
+(`127.0.0.2`): Task Scheduler starts a task that runs with a person's own
+sign-in only in a desktop session of that person. The fixture creates a
+Windows user, changes a Remote Desktop setting of the runner's account and
+deletes that user's installation folder. The same guard and the same rule
+apply: only a hosted runner with the workflow's opt-in, never a machine that
+is kept. No hosted runner runs the setup file, because setup refuses Windows
+Server. The case compares the product's texts of the Stop question, the
+uninstall questions and the certificate message; change them together with
+the fixture.
+Python on Windows accepts only root certificates that the Windows store holds
+at that moment, and aiohttp builds its default list once at import. A new PC's
+store lacks many public roots (seen in Windows Sandbox: the package registry's
+root entered only after a Windows program asked for that site). An outbound request
+that must work there verifies against the system store plus the bundled roots,
+built per request (`update_checks.registry_trust`). Never turn verification off.
+A new installation has no component generation until its first component
+update; update health then verifies setup's record (`update_health.setup_evidence`),
+which is weaker than a qualified generation and never authorizes preparation.
+On every platform a component update waits for the first AI connection
+(`profile_catalog.connection`): the update owner starts no candidate and records
+no attempt, because a profile with no provider cannot qualify. The rule and
+bundle composition share `host.config.provider_dropped`; keep them on one rule.
+It makes a claim only for the app's own profiles. A connection changes the
+checked selection, so the owner checks again before it installs. Update health
+never reclassifies an earlier refusal record as waiting: its form does not
+prove that only a connection was missing. A later completed update settles it.
+The installed-package reader runs Git for a package from a local checkout, so
+a caller without the installation's Git folder on PATH reads "not prepared".
+Until that first component update the Foundation home is the data folder
+itself (`updates.foundation_home`), not setup's receipt folder
+`updates/baseline-runtime`. A conversation there fetches a declared source and
+installs its modules at first use; the module's build view carries its commit
+as its ref, and the branch is in the binding below
+`<data>/foundation/cache/.source-bindings`. A reader that looks below the
+receipt folder finds no binding, takes the commit for an unexplained fixed
+version, and offers "Refresh included components": a full component update
+that changes no component (`runtime_environment.shared_build_policies`,
+`tests/test_update_new_installation.py`). For the same reason an absent
+declared source is no update there (`update_sequence.classify`). An update
+must add it in two other states: with a selected generation, which is
+immutable, and with no worker environment, where the first update prepares
+everything. The first real component update then makes the first generation.
+A chat-installed module of the other tier that is behind its branch at that
+moment gets the existing moved-reference record
+(`runtime_source_policy.qualify_cache_policies`). The sequence's next check, of
+the other tier, lists its source as an update, and that second stage moves the
+module and records its branch again: two stages where one was enough before.
+A full check between them lists the record as "Refresh included components".
+`UpdateManager.check_due` is the one rule for a check that time causes: the
+timed check, and one check at a host start when the last check or attempt was
+at least 1 hour old. A one-time reason must end by a fact that the owner keeps
+(`_start_check_open`, ended when a check passes its admission), never by
+comparing a saved time with the start time: a clock that was ahead at the start
+and is corrected later would name the reason again on every pass.
+The update check's selection witness (`update_sequence.app_selection`) and the
+configuration key (`runtime_profiles.configuration_key`) are hashes of JSON
+text in which the installation's folders are replaced. Both get that text
+from `runtime_profiles.app_folders`. JSON writes each backslash of a Windows
+path twice and a letter outside ASCII in another form, so such a folder is
+never found in the text as plain text. Do not look for it there in another
+form either: JSON text does not show where the name of a folder ends (a
+folder beside it, a name with `#` or a backslash, and the name of an entry
+were each taken for it). The function changes the values before it writes
+them: only a text value that is the folder or a path below it, with a path
+separator of the system after the folder, also after `file://`; never the
+name of an entry, and never a value with `..` after the folder (or with `%`
+there in an address), which can name a place outside it. A doubt leaves the
+value as it is: that is what the code before did for such a folder. For a
+folder that JSON writes as it is, it replaces the
+text wherever it stands in the JSON text, also in the name of a folder beside
+it and in the name of an entry, because installations have saved those
+values. The address of a Windows file
+on a drive (`Path.as_uri()`) is `file:///C:/...`: it has no server name, and
+its path part has a slash before the drive. On Windows take that one slash
+away, only for an address with no server name, and change nothing else. Do not
+use `urllib.request.url2pathname` there: on every system (read in Python
+3.13.11) it also takes `//localhost` away, and it does not look at a server name, so an address that
+was not the shipped file's becomes it and the witness of a Linux installation
+can move. The address of an app in a network folder (`file://server/share/...`)
+is not read as the shipped file's on Windows. An installation saves both
+values and compares them later. A change of either function must keep the
+values in `tests/test_effective_behavior_updates.py` for settings that name no
+folder; else every saved row and qualification record counts as changed. The
+witness also holds the address of the shipped behavior file, and so the app's
+folder: it changes with each app update, and the first check of the new app
+makes new rows. `other-test-files.yml` runs that test file on native Windows.
+A reader of a private file can hold an object that another process replaced
+(`publish_private(replace=True)`). Windows then reports 0 links and a path below
+`$Extend\$Deleted` for it. That is `PrivateFileUnlinked` in `windows_files.py`,
+never a hardlink or an alias of the named file, and never accepted:
+`_existing` opens the name again and validates everything again, bounded in
+count and time. A handle that `_existing` returned can lose its name later; do
+not read a later `info()` of it as a refusal of the named file.
+A folder below the installation folder that the app itself uses as a session
+workspace gets a CLI project name that repeats the installation path, so its
+session paths pass the Windows limit with long paths off (the first chat of
+0.94.1, the update stage's compatibility probe of 0.98.5). Give such a folder a
+short project name in `session_files.project_slug`, add its rows to
+`tests/test_windows_path_budget.py`, and run its real writer in
+`tests/test_windows_long_paths_off.py`. A folder that a person chose keeps its
+name, with one exception: in a process that runs with an update stage as its
+app home and that stage's `shared-config` as its shared home, every folder has
+the stage's name (`session_files.stage_project_name`).
+The session of such a check is not a saved conversation. A chat's own setup is
+checked there with the chat's folder, and `tests/test_windows_chat_setup.py`
+runs that whole preparation on a hosted runner and lists every path that it
+writes. A path may pass the limit only in the places of `NOT_NEEDED` in the
+budget test. When the path of a person's folder is
+too long for the chat's files, `session_files.chat_folder_too_long` gives the
+answer; do not give that folder another project name without a change of the
+[history contract](docs/workspaces/contracts/history.v1.md).
+A hosted runner's account is elevated, so a folder from an ordinary `mkdir`
+belongs to the Administrators group and the private-folder check refuses it. A
+native test that runs product code with such folders sets its process's default
+owner to the account (`token_user_default_owner` in
+`tests/fixtures/manual_app_handoff_native.py`), as a person's PC has it.
+A module can build a file path from the person's home folder and ignore
+`AMPLIFIER_HOME`. On an installation from the setup file that file is outside
+the installation folder, and uninstall leaves it (the Anthropic provider's
+`rate-limit-state.json`, seen in `%USERPROFILE%\.amplifier`).
+`provider_state_files` gives such a module paths in the shared Amplifier home
+when Core loads it, and in the probes that construct a provider for a model
+call. Never write such a path into a mount plan: a plan is saved, hashed,
+compared and exported, so a schedule or a queued change of an earlier version
+would then be refused. Add a module to `STATE_FILES` only after reading its
+source; `tests/test_provider_state_files.py` runs the real module and fails
+when a later version adds a file or changes a name.
+On Windows the host's environment names the shared source store
+(`AMPLIFIER_SOURCE_STORE`, kept in the start-at-sign-in task). A helper of the
+host that prepares a module from a source then imports it from a store object.
+A read-only attribute on a Windows folder does not stop a new entry: a helper
+that writes bytecode puts `__pycache__` into the object, and Foundation refuses
+the object from then on ("Shared source contents changed"). In 0.106.3 the
+connection check of an "OpenAI Compatible API" connection did that; no chat
+with the connection started and the next component update failed. A helper
+prepares a source only through `source_imports.prepare`. After it an import
+writes no bytecode, for the rest of that process and in a Python process that
+it starts with its environment (a child started with `-E` or `-I` ignores the
+setting; code that calls `py_compile` or `compileall` still writes). Call it only in a helper process that ends after its one task, never
+in the host. Do not give the setting to every child of the host instead.
+Workers write no bytecode (`update_sources.store_environment`), and no
+installation step was found that compiles the worker environment. A helper
+leaves the bytecode of what it imported from that environment before that call
+for the next process; with a host-wide setting it would leave none.
+`tests/test_source_store_bytecode.py` runs the real connection check against
+Foundation's store on a hosted runner.
+A PC that connected such a service on 0.106.5 or earlier already has the
+bytecode in a store object. `source_store_repair.at_host_start` removes it at
+the first start of an app version: only untracked `*.pyc` directly in a
+`__pycache__` of an object that has nothing else changed, then the emptied
+folder. Never widen that rule, and keep "any doubt leaves the object": a link
+that the listing finds anywhere in the object or below its `.git` means that
+Git does not run. Every native step of a run goes through `_Bounded`, which
+lets none begin after the limit of the whole step; give a new step to that
+wrapper, never a call beside it. Any other operation that you add to a run
+gets the same check before it begins, and a place in the case that makes each
+operation of a run the slow one
+(`test_after_an_operation_that_took_the_rest_of_the_time_nothing_else_begins`).
+It runs only in the host that the Windows task started, before that host takes
+its own lock, with that lock held alone; do not call it later in the start or
+from another process. Its limits are stated in the setup design ("Repair of a
+source store object that holds bytecode"). It imports `_Native` from
+`windows_removal` and does not copy it: a change of those steps must keep
+`tests/test_source_store_repair_native.py`. Git runs there with its
+configuration files, as in Foundation's check: `git status` can start a
+content filter that they name. Any attribute file that Git reads can give a
+file that filter, for example a `.gitattributes` of the object, its
+`.git\info\attributes`, the person's global attribute file or the Git
+installation's system attribute file. The repair removes every `GIT_*` name
+from Git's environment. Foundation's check keeps the names of its process.
+So the two can read different configurations, different attribute files or
+another index. Do not write that Git only reads there. The repair tells Git
+to start no file system monitor (`core.fsmonitor=false`). It gives both
+commands `--no-optional-locks`, so `git status` leaves out its optional
+write of the object's index. Git can still write a trace file, start a
+filter program or start a second Git in a submodule. Do not write that the
+repair starts only what Foundation's check starts. The design names both
+limits. The record's change mark is an
+input of `update_inventory_index.signature`. A run works with the record that
+it read after it got the lock, never with an earlier read: another host can
+have written a new mark meanwhile. A run writes the record first; a
+record that cannot be written means that the store is not looked at. A run
+writes a new mark before its first deletion; a mark that cannot be written
+means no deletion. Keep the mark random: a count repeats after a lost record,
+and the update check then keeps its saved rows.
+A hosted runner cannot make the state through the product, so the cases plant
+it with a real import.
+A text that tells a person how to open Amplifier says only what that code
+knows. On Windows the sign-in page and the ticket refusals take the step from
+`browser_entry.next_step`: the Start menu only for a request from this
+computer to a host that can give a ticket, that this installation's own task
+started and whose Start-menu entry exists, and else one sentence that names
+no way. Do not name
+`amplifier-unified open` in a Windows text for a browser: it works as written
+only on an installation by hand with the default data folder. Do not put a
+path of the installation on a page that needs no sign-in. `open` is that step,
+so its own failure messages never name it or the Start menu; it prints the
+host's reason.
 
 ## Keep agent context and coordination useful
 
@@ -169,3 +510,16 @@ discovery, and retire superseded workarounds with their code. Reuse repository
 guidance until its relevant source or scope changes. Validate actual composed
 requests and installed companion discovery; fewer bytes alone do not establish
 better model behavior or authorize removing user-selected capabilities.
+
+## Ecosystem maps
+
+Keep this repository's README and product-page maps aligned with the
+[Constellation map guide](https://github.com/microsoft/amplifier-constellation/blob/main/docs/ecosystem-maps.md)
+and its canonical registry; start with this repository's
+`docs/ecosystem-map.json`. When creating, renaming, splitting, retiring, or
+changing a role, interface, parent, or dependency, inspect incoming and outgoing
+relationships and update every affected parent/consumer map and link, including
+the centralized product pages. Regenerate from source data and synchronize local
+records/images rather than hand-editing generated images. Describe actual
+boundaries and optional choices; a role highlight is not a compatibility claim.
+Documentation work does not authorize deployment or resume paused product work.

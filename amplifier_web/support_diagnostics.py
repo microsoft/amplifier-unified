@@ -4,6 +4,22 @@ from pathlib import Path
 import re
 
 
+_TRANSITION_FAILURE_CODES = (
+    'transition_unsupported', 'transition_intent_required', 'recovery_checkpoint_rejected',
+    'recovery_unreconciled', 'summary_work_paused',
+)
+
+
+def _context_recovery_fields(code, reason):
+    from .context_continuity import TRANSITION_HOLD_REASONS
+    if type(code) is not str or code not in _TRANSITION_FAILURE_CODES:
+        return {}
+    fields = {'contextRecoveryCode': code}
+    if code == 'recovery_unreconciled' and type(reason) is str and reason in TRANSITION_HOLD_REASONS:
+        fields['contextRecoveryReason'] = reason
+    return fields
+
+
 def environment():
     from . import __version__
     return {'applicationVersion': __version__, 'pythonVersion': platform.python_version(),
@@ -42,6 +58,20 @@ def exception_chain(error):
         if isinstance(error, RequestFitChanged) and error.local_refusal:
             item['requestFit'] = {'reason': error.reason, 'components': list(error.components),
                                   **({'cause': error.cause} if error.cause else {})}
+        if type(error).__name__ == 'FunctionCallTruncationError':
+            # Certify the actual provider class, not its name or message. Older
+            # providers without this type retain their unknown diagnosis.
+            try:
+                from amplifier_module_provider_openai._response_handling import FunctionCallTruncationError
+            except ImportError:
+                pass
+            else:
+                if type(error) is FunctionCallTruncationError:
+                    item['providerFailure'] = {'code': 'function_call_truncated'}
+        if type(error).__name__ == 'ContextRecoveryError':
+            from .context_continuity import ContextRecoveryError
+            if type(error) is ContextRecoveryError:
+                item.update(_context_recovery_fields(error.code, error.reason))
         chain.append(item)
         error = error.__cause__ or error.__context__
     return chain
@@ -78,12 +108,17 @@ def public_exception_chain(value):
             refusal = public_refusal(item.get('requestFit'))
             if refusal:
                 row['requestFit'] = refusal
+        if (kind == 'FunctionCallTruncationError'
+                and item.get('providerFailure') == {'code': 'function_call_truncated'}):
+            row['providerFailure'] = {'code': 'function_call_truncated'}
+        if kind == 'ContextRecoveryError':
+            row.update(_context_recovery_fields(item.get('contextRecoveryCode'), item.get('contextRecoveryReason')))
         result.append(row)
     return result
 
 
 def terminal_exception_capture(value):
-    """Only correlated generic manager failures may carry supplemental frames."""
+    """Only correlated manager failures may carry supplemental original frames."""
     if not isinstance(value, dict):
         return None
     def identity(raw):
@@ -96,10 +131,15 @@ def terminal_exception_capture(value):
     # that original terminal type; only the adapter-certified local subtype
     # can explain it without parsing a flattened exception message.
     local_refit = kind == 'ValueError' and terminal_request_refusal(chain)
+    # Provider-local subtypes are likewise reduced to the native LLMError base.
+    # A type name alone cannot explain that terminal.
+    provider_truncation = kind == 'LLMError' and terminal_function_call_truncation(chain)
+    context_recovery = kind == 'RuntimeError' and terminal_context_recovery(chain)
     if (not identity(generation) or not isinstance(inputs, list) or not 1 <= len(inputs) <= 128
             or not all(identity(item) for item in inputs)
             or not isinstance(kind, str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_.]{0,99}', kind)
-            or not chain or not (local_refit or any(item['errorType'] == kind for item in chain))):
+            or not chain or not (local_refit or provider_truncation or context_recovery
+                                 or any(item['errorType'] == kind for item in chain))):
         return None
     result = {'generationId': generation, 'inputIds': list(inputs),
               'errorType': kind, 'exceptionChain': chain}
@@ -109,6 +149,34 @@ def terminal_exception_capture(value):
         if secondary_chain:
             result['secondaryFailure'] = {'stage': 'loop_exit', 'exceptionChain': secondary_chain}
     return result
+
+
+def public_execution_failure(value):
+    """Original loop exception metadata; no messages, SDK bodies or locals."""
+    if not isinstance(value, dict) or value.get('stage') != 'execution':
+        return None
+    def identity(raw):
+        return isinstance(raw, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}', raw)
+    if not identity(value.get('runtimeSessionId')):
+        return None
+    chain = public_exception_chain(value.get('exceptionChain'))
+    if not chain:
+        return None
+    result = {'runtimeSessionId': value['runtimeSessionId'], 'stage': 'execution', 'exceptionChain': chain}
+    if identity(value.get('generationId')):
+        result['generationId'] = value['generationId']
+    inputs = value.get('inputIds')
+    if isinstance(inputs, list) and len(inputs) <= 128 and all(identity(item) for item in inputs):
+        result['inputIds'] = list(inputs)
+    return result
+
+
+def terminal_context_recovery(chain):
+    """The native loop may wrap the actual refusal once in ManagerTurnError."""
+    index = 1 if chain and chain[0]['errorType'] == 'ManagerTurnError' else 0
+    if len(chain) > index and chain[index]['errorType'] == 'ContextRecoveryError':
+        return chain[index].get('contextRecoveryCode')
+    return None
 
 
 def terminal_request_refusal(chain):
@@ -121,12 +189,44 @@ def terminal_request_refusal(chain):
     return None
 
 
+def terminal_function_call_truncation(chain):
+    """Only the certified immediate cause, never an earlier handled exception."""
+    index = 1 if chain and chain[0]['errorType'] == 'ManagerTurnError' else 0
+    return bool(len(chain) > index
+        and chain[index]['errorType'] == 'FunctionCallTruncationError'
+        and chain[index].get('providerFailure') == {'code': 'function_call_truncated'})
+
+
+def callback_rejection_detail(row):
+    """Closed callback facts, not proof that earlier work had no effects."""
+    callback = row.get('callback_kind')
+    if ((row.get('type') != 'command.rejected' and row.get('event') != 'command.rejected')
+            or not isinstance(callback, str)
+            or callback not in {'input', 'child_report', 'child_event', 'bundle_turn', 'bundle_job'}
+            or row.get('reason') != 'invalid_activation'
+            or row.get('delivery') != 'not_admitted' or row.get('outcome') != 'unknown'):
+        return {}
+    result = {'callback_kind': callback, 'reason': 'invalid_activation',
+              'delivery': 'not_admitted', 'outcome': 'unknown'}
+    keys = {'input': ('input_id',), 'bundle_job': ('job_id', 'call_id'),
+            'child_report': ('child_session_id', 'call_id'),
+            'child_event': ('child_session_id', 'call_id')}.get(callback, ())
+    for key in keys:
+        value = row.get(key)
+        if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}', value):
+            result[key] = value
+    index = row.get('report_index')
+    if callback in {'child_report', 'child_event'} and type(index) is int and 0 <= index <= 2**31 - 1:
+        result['report_index'] = index
+    return result
+
+
 def event_detail(row):
     result = {}
     for key in ('event', 'timestamp', 'ts', 'at', 'generation_id', 'session_id', 'sessionId',
-                'rootSessionId', 'runtimeSessionId', 'request_id', 'response_id', 'tool_call_id', 'provider', 'model',
+                'rootSessionId', 'runtimeSessionId', 'generationId', 'inputId', 'request_id', 'response_id', 'tool_call_id', 'provider', 'model',
                 'error_type', 'error_stage', 'error_category', 'disposition', 'operation',
-                'bridgeId', 'action', 'errorType', 'phase', 'type', 'id', 'turnId', 'parentId', 'kind', 'startedAt', 'endedAt'):
+                'bridgeId', 'action', 'errorType', 'phase', 'type', 'id', 'turnId', 'parentId', 'kind', 'startedAt', 'endedAt', 'scope'):
         value = row.get(key)
         if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_.:/+ -]{1,200}', value):
             result[key] = value
@@ -135,6 +235,7 @@ def event_detail(row):
     for key in ('duration_ms', 'timeoutSeconds', 'elapsedSeconds', 'attempts', 'retryable'):
         if type(row.get(key)) in (int, float, bool):
             result[key] = row[key]
+    result.update(callback_rejection_detail(row))
     error = row.get('error')
     if isinstance(error, dict):
         kind = error.get('type')

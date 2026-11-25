@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "source": {
+    "schema": 1,
+    "component": "publishing",
+    "repository": "microsoft/amplifier-publishing",
+    "revision": "4b7e678f960d6c14519c5d3a47275f9723a66fd6",
+    "subdirectory": ".",
+    "tree": "29bb19f362dbe80683032e4c54e5a1aa69011c00",
+    "version": "0.1.2",
+    "tag": "publishing-v0.1.2",
+    "sourceFiles": {
+      ".gitignore": "ef03fbb02ae215722f6932f64df352d9de71b2c426a598f7653f82796484fa1c",
+      "AGENTS.md": "e2adb5fd00a0b5d5f5de32b2c9ac776c102050267a6f181db8d12104b7829bf8",
+      "CODE_OF_CONDUCT.md": "9d45a586fce701502d173a7c10c71c8bd4f23e23d5a4a06e9d00eb57a9c11205",
+      "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "PROVENANCE.json": "074fa134ff98f7311f87675daac206f47a9a419beef0d570ebb05f2dc1f2bbde",
+      "QUALIFICATION.json": "706010c5cb3a91f592a16ea35c52b0d13d976a9af5fe550b1b5e0381d1d81e08",
+      "README.md": "b3a7cfc5da6b61af11d5b39f7ea4071b8790aba038103b5c42069a9fff75de88",
+      "SECURITY.md": "b02bf4e236e9335b27298a77688c751d18ca7e6052873d0d3d29eda37d0a72fa",
+      "SUPPORT.md": "bc29be057576bc9576acb59335d95fe6dfef948c1c056e7ad5758cf97e9caa68",
+      "contracts/publishing.v1.md": "14a666980763acab6452b36467eff88203c6ba65dd4cb5126627d1e4b7d41d81",
+      "docs/PUBLISHING-TARGET.md": "0c3539cd9d0d9f9e243c919e53078cb8278b28d7848b2cdd0ecec522ab4f3d8b",
+      "docs/VISION.md": "7b3d262eb9e66258cf8a0e708b4aa01321e18460d64600ee9d45a4dc6d460e90",
+      "docs/ecosystem-map.json": "6f7ccc8412055ec8558fae24e358d3e6fce59a3dd6455d80c0768c631f046fe1",
+      "docs/ecosystem-map.svg": "8279d95f1b73e407714f0fcd5fab8201996ff8005219ce966d23d44e0212cea4",
+      "docs/product/index.html": "dc2ab1076904663bc576bdde02178473a66b0db6d450a4c66d8757d63701124c",
+      "docs/product/map.svg": "8279d95f1b73e407714f0fcd5fab8201996ff8005219ce966d23d44e0212cea4",
+      "docs/product/style.css": "f6467c444176dc301f57f3cc3832f910d4df829e94fabdfe24eb6a4f53be3866",
+      "pyproject.toml": "5993d52738b7f692292626d0ecfed76e1cf6c8cb16eae44017c952422c178b61",
+      "scripts/qualify-installed.sh": "c36db40f20d5e931981fffe0e93f606af853f4626b56cd9adc04359fe30d5d98",
+      "src/amplifier_publishing/README.md": "25cadd80e034f852765aa59378f1e33d39fc4fa1ddbff9077808182db01e977a",
+      "src/amplifier_publishing/__init__.py": "e2a113bd99e5d025a6ac5ca81769104c24057843d45429e249f1595dc8b15fe7",
+      "src/amplifier_publishing/publisher.py": "1ff7beb75664cbd9c5b10bf33558903e04d247654be17d5cc5b4ac04f0a101af",
+      "src/amplifier_publishing/remote.py": "3484b71f0fcd81edd370bed49a0dfd855a3eb0c22d0c9e60e580b8f894c1d926",
+      "src/amplifier_publishing/retention.py": "e0dd39fa84724cf9b6d5066da17ef1b4998bb700fb604312ba72d37aaede207d",
+      "src/amplifier_publishing/retirement.py": "7e48283e71274211cd8873e2c31257f76c22de01bf0e0d51dbfa034ec1aa3a4b",
+      "src/amplifier_publishing/service.py": "571f343cb0387b374d0fb725d11396736c55a502a345ef57cb4c95f8d7bb8994",
+      "tests/test_publishing_compatibility.py": "56852c3576c4408e71fc1fcd897ff6e735ca41ac550ff2db68d0a60656ef36f3",
+      "tests/test_publishing_library.py": "3857460b708be4411e7370f5d2757f24678ff12ac938b7b0269a0f823df9ad0b",
+      "tests/test_publishing_pages.py": "2805748a5b63735b4f1db9729ee570c599b004edd5087cb7009aa8dfad785287",
+      "tests/test_publishing_remote.py": "20c23e2ba02ee60d54e9a725da54967ad2073324d683e4934796c2ca4358f6e5",
+      "tests/test_publishing_retention.py": "4ee62d720da373eb7082063425973f24894f4b34a2e473fd68450f591c3c5ca6",
+      "tests/test_publishing_retirement.py": "5e54d29695b5a2e537043dbf273e98ba50a63b65c166fb62ac66a23eefbeb338",
+      "uv.lock": "e467932e9454ba1929597787536f596b5e1373da8f72a41f27abf9a8f28182c6"
+    },
+    "artifacts": {
+      "amplifier_publishing-0.1.2-py3-none-any.whl": {
+        "sha256": "8d3186221778eabf98343bb2fc37075a39cbcdd04148cf36a1c21e326d65a137",
+        "bytes": 50656
+      },
+      "amplifier_publishing-0.1.2.tar.gz": {
+        "sha256": "448bd8a33c1b32bece5edcaba80594951f319dc0787e3091d5c38a248fab5cb7",
+        "bytes": 95260
+      }
+    }
+  },
+  "artifact": {
+    "url": "https://github.com/microsoft/amplifier-publishing/releases/download/publishing-v0.1.2/amplifier_publishing-0.1.2-py3-none-any.whl",
+    "sha256": "8d3186221778eabf98343bb2fc37075a39cbcdd04148cf36a1c21e326d65a137",
+    "bytes": 50656
+  },
+  "sourceReceiptSha256": "bcb780743ff159a3e3aacfe41cd07cb0861296fbad650b56a0903c0b3aed6226",
+  "runtimeRequirements": [],
+  "files": {
+    "amplifier_publishing/README.md": "25cadd80e034f852765aa59378f1e33d39fc4fa1ddbff9077808182db01e977a",
+    "amplifier_publishing/__init__.py": "e2a113bd99e5d025a6ac5ca81769104c24057843d45429e249f1595dc8b15fe7",
+    "amplifier_publishing/publisher.py": "1ff7beb75664cbd9c5b10bf33558903e04d247654be17d5cc5b4ac04f0a101af",
+    "amplifier_publishing/remote.py": "3484b71f0fcd81edd370bed49a0dfd855a3eb0c22d0c9e60e580b8f894c1d926",
+    "amplifier_publishing/retention.py": "e0dd39fa84724cf9b6d5066da17ef1b4998bb700fb604312ba72d37aaede207d",
+    "amplifier_publishing/retirement.py": "7e48283e71274211cd8873e2c31257f76c22de01bf0e0d51dbfa034ec1aa3a4b",
+    "amplifier_publishing/service.py": "571f343cb0387b374d0fb725d11396736c55a502a345ef57cb4c95f8d7bb8994",
+    "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  }
+}

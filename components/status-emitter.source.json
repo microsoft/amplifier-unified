@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "source": {
+    "schema": 1,
+    "component": "status-emitter",
+    "repository": "bkrabach/amplifier-platform-status",
+    "revision": "6765dd1a52018038ed9cada7399d87cbc72167ae",
+    "subdirectory": ".",
+    "tree": "b07f91306a6c77d9131374a70e38d873db77da4d",
+    "version": "0.1.0",
+    "tag": "status-emitter-v0.1.0",
+    "sourceFiles": {
+      "CODE_OF_CONDUCT.md": "9d45a586fce701502d173a7c10c71c8bd4f23e23d5a4a06e9d00eb57a9c11205",
+      "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "MANIFEST.in": "744c8e8fdef6d2ace82e871311d717dedf7390bc6d05e2df6c633f5da84c2fd7",
+      "PROVENANCE.json": "592213e8456cfebf4f2c768bed0995f74c4a03644cd227e582dff23117679b9a",
+      "README.md": "0f383d9870b3db1231613ea4a39a96470e4e11c4a12512d4fcac52ab368da252",
+      "SECURITY.md": "b02bf4e236e9335b27298a77688c751d18ca7e6052873d0d3d29eda37d0a72fa",
+      "SUPPORT.md": "bc29be057576bc9576acb59335d95fe6dfef948c1c056e7ad5758cf97e9caa68",
+      "__init__.py": "b299fe83643242caeeffa3b3f206c53eacc25e32468ccb13a5def87480b0f9f0",
+      "cli.py": "9dc2c87c489c2a153ac01c4b9ad4446fabe12701dd36328c93116b908ab7deac",
+      "hook.py": "fb15daf075810c99329b8b24af311156956a6a614dc630f6bda7e0c377efb28c",
+      "publisher.py": "a420977c8da9e287d9067df219e6cd509c64da65921752c8cfede964335a9008",
+      "pyproject.toml": "e52f5acdadd26338870bb13e91e8e46a01cc74a8f40683821e24b1b02737293b",
+      "reader.py": "4946c67d0c4d84660b0a288914ce441e5248f95071b5cd106b71fc2fd2a880d1",
+      "schema.py": "ff87d28b27b7b859a2c3410d8ebe7fdbe32dfe220fbc87d937f6267e1ebe6963",
+      "tests/test_standalone.py": "845d57a5ce7ce405ccd94b982d6f497c674cec3a4003f0e601b79c25ecb423f4"
+    },
+    "artifacts": {
+      "amplifier_status_emitter-0.1.0-py3-none-any.whl": {
+        "sha256": "226b9c9f7d5d108130eea8d50c930de6cd0db90aea81a01214cb1f312b40d9d6",
+        "bytes": 15732
+      },
+      "amplifier_status_emitter-0.1.0.tar.gz": {
+        "sha256": "dd528f177346631ca134d2f527f993dd9a482f3bdcd42c301145a639185ae927",
+        "bytes": 17474
+      }
+    }
+  },
+  "artifact": {
+    "url": "https://github.com/bkrabach/amplifier-platform-status/releases/download/status-emitter-v0.1.0/amplifier_status_emitter-0.1.0-py3-none-any.whl",
+    "sha256": "226b9c9f7d5d108130eea8d50c930de6cd0db90aea81a01214cb1f312b40d9d6",
+    "bytes": 15732
+  },
+  "sourceReceiptSha256": "5056edab957598a4aa0da71ace0082f0f54b1e47c6cf771b450e70c0d8335df6",
+  "runtimeRequirements": [],
+  "files": {
+    "__init__.py": "b299fe83643242caeeffa3b3f206c53eacc25e32468ccb13a5def87480b0f9f0",
+    "cli.py": "9dc2c87c489c2a153ac01c4b9ad4446fabe12701dd36328c93116b908ab7deac",
+    "hook.py": "fb15daf075810c99329b8b24af311156956a6a614dc630f6bda7e0c377efb28c",
+    "publisher.py": "a420977c8da9e287d9067df219e6cd509c64da65921752c8cfede964335a9008",
+    "reader.py": "4946c67d0c4d84660b0a288914ce441e5248f95071b5cd106b71fc2fd2a880d1",
+    "schema.py": "ff87d28b27b7b859a2c3410d8ebe7fdbe32dfe220fbc87d937f6267e1ebe6963",
+    "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  }
+}

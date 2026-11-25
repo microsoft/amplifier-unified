@@ -5,6 +5,145 @@ import pytest
 from amplifier_web.draft_defaults_probe import query
 
 
+async def test_replacement_probe_uses_worker_source_and_key_environment(tmp_path, monkeypatch):
+    """The guard hashes a rendered plan; probe and worker must resolve it alike."""
+    import json
+    from amplifier_web import draft_defaults
+    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.host import config
+    captured = {}
+    monkeypatch.setattr(RuntimeManager, '_command', lambda *a, **k: ['python', 'worker.py'])
+    monkeypatch.setattr(config, 'worker_environment', lambda: {
+        'AMPLIFIER_SOURCE_STORE': str(tmp_path / 'source-store'), 'EXPLICIT_KEY': 'same',
+        'PYTHONDONTWRITEBYTECODE': '1'})
+    monkeypatch.setenv('STALE_FILE_MANAGED_KEY', 'must-not-inherit')
+    class Process:
+        returncode = 0
+        async def communicate(self, data):
+            captured['request'] = json.loads(data)
+            return b'{"selection":null,"fingerprint":"same"}', b''
+    async def spawn(*args, **kwargs):
+        captured['environment'] = kwargs['env']
+        return Process()
+    async def stop(process):
+        pass
+    monkeypatch.setattr(draft_defaults, 'spawn', spawn)
+    monkeypatch.setattr(draft_defaults, 'stop', stop)
+    await draft_defaults.resolve_defaults(tmp_path / 'app', str(tmp_path), 'work',
+                                         session_id='old-chat', replacement={'replaceSavedSelection': True})
+    assert captured['environment']['AMPLIFIER_SOURCE_STORE'] == str(tmp_path / 'source-store')
+    assert captured['environment']['EXPLICIT_KEY'] == 'same'
+    assert 'STALE_FILE_MANAGED_KEY' not in captured['environment']
+
+
+async def test_genuine_replacement_probe_uses_qualified_worker_generation(tmp_path, monkeypatch):
+    """Qualification selects the rendering runtime before the guard is captured."""
+    import json
+    from unittest.mock import AsyncMock
+    from amplifier_web import draft_defaults, runtime_profiles, updates
+    from amplifier_web.runtime import RuntimeManager
+    captured = {}
+    monkeypatch.setattr(updates, 'active_release', lambda home: {'current': 'base'})
+    monkeypatch.setattr('amplifier_web.generation_leases.acquire', lambda *args: None)
+    ensure = AsyncMock(return_value='selected-profile')
+    monkeypatch.setattr(runtime_profiles, 'ensure', ensure)
+    def command(self, release=None, **kwargs):
+        captured['generation'] = release
+        return ['python', 'worker.py']
+    monkeypatch.setattr(RuntimeManager, '_command', command)
+    class Process:
+        returncode = 0
+        async def communicate(self, data):
+            captured['request'] = json.loads(data)
+            return b'{"selection":null,"fingerprint":"same"}', b''
+    async def spawn(*args, **kwargs):
+        captured['environment'] = kwargs['env']
+        return Process()
+    async def stop(process):
+        pass
+    monkeypatch.setattr(draft_defaults, 'spawn', spawn)
+    monkeypatch.setattr(draft_defaults, 'stop', stop)
+    session = {'id': 'old-chat', 'workspace': str(tmp_path), 'bundle': 'anchors'}
+    await draft_defaults.resolve_defaults(tmp_path / 'app', str(tmp_path), 'work',
+        session_id='old-chat', replacement={'replaceSavedSelection': True}, runtime_session=session)
+    assert captured['generation'] == 'selected-profile'
+    assert captured['environment']['AMPLIFIER_UNIFIED_RELEASE'] == 'selected-profile'
+    candidate = ensure.call_args.args[2]
+    assert candidate['bundle'] == 'work' and candidate['bundleReplacement']
+    assert session['bundle'] == 'anchors' and 'bundleReplacement' not in session
+
+
+@pytest.mark.parametrize('selection', [{}, {'instance': 'fixture', 'model': 'manual', 'effort': 'high'}])
+async def test_replacement_probe_and_worker_process_share_exact_rendered_plan(tmp_path, monkeypatch, selection):
+    """Offline local snapshot; real composition and strict guard, no module mount."""
+    import json
+    import os
+    import sys
+    from unittest.mock import AsyncMock
+    import yaml
+    from amplifier_web import draft_defaults, runtime_profiles, updates
+    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.host.config import worker_environment
+    from amplifier_web.bundles import SNAPSHOT_VERSION
+    home, shared = tmp_path / 'app', tmp_path / 'shared'
+    shared.mkdir()
+    monkeypatch.setenv('AMPLIFIER_HOME', str(shared))
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(home))
+    monkeypatch.setenv('AMPLIFIER_UNIFIED_RELEASE', 'a' * 32)
+    monkeypatch.delenv('AMPLIFIER_SOURCE_STORE', raising=False)
+    root = tmp_path / 'candidate.yaml'
+    root.write_text(yaml.safe_dump({
+        'bundle': {'name': 'offline', 'version': SNAPSHOT_VERSION},
+        'session': {'orchestrator': {'module': 'loop-live'}, 'context': {'module': 'context-simple'}},
+        'providers': [{'module': 'provider-fixture', 'instance_id': 'fixture'}],
+        'tools': [{'module': 'tool-fixture', 'source': '${AMPLIFIER_SOURCE_STORE}/fixture',
+                   'config': {'generation': '${AMPLIFIER_UNIFIED_RELEASE}'}}]}))
+    monkeypatch.setattr(updates, 'active_release', lambda home: {'current': 'a' * 32})
+    monkeypatch.setattr(runtime_profiles, 'ensure', AsyncMock(return_value='b' * 32))
+    monkeypatch.setattr('amplifier_web.generation_leases.acquire', lambda *args: None)
+    monkeypatch.setattr(RuntimeManager, '_command', lambda *a, **k: [sys.executable, 'worker.py'])
+    captured = {'id': 'old-chat', 'workspace': str(tmp_path), 'bundle': 'anchors', 'selection': selection}
+    base_checked = await draft_defaults.resolve_defaults(home, str(tmp_path), str(root), session_id='old-chat',
+        replacement={'selection': selection, 'replaceSavedSelection': True})
+    checked = await draft_defaults.resolve_defaults(home, str(tmp_path), str(root), session_id='old-chat',
+        replacement={'selection': selection, 'replaceSavedSelection': True}, runtime_session=captured)
+    script = """
+import asyncio,json,sys
+from amplifier_web.bundle_selection import begin_replacement
+request=json.load(sys.stdin)
+async def run():
+    journal,_=await begin_replacement(request['home'],request['workspace'],request['config'])
+    journal.restore()
+    return {'ok':True}
+try:
+    print(json.dumps(asyncio.run(run())))
+except ValueError:
+    print(json.dumps({'ok':False}))
+"""
+    environment = {**worker_environment(), 'AMPLIFIER_UNIFIED_RELEASE': 'b' * 32,
+                   'PYTHONPATH': str(Path(__file__).resolve().parents[1])}
+    async def recheck(value):
+        process = await asyncio.create_subprocess_exec(sys.executable, '-c', script,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env=environment)
+        output, error = await asyncio.wait_for(process.communicate(json.dumps({
+            'home': str(home), 'workspace': str(tmp_path), 'config': {
+                'id': 'old-chat', 'selection': selection, 'bundleReplacement': {
+                    **value, 'replaceSavedSelection': True}}}).encode()), 15)
+        assert process.returncode == 0, error.decode()
+        return json.loads(output)
+    assert base_checked['bundle'] == checked['bundle'] and base_checked['selection'] == checked['selection']
+    assert base_checked['fingerprint'] != checked['fingerprint']
+    assert await recheck(base_checked) == {'ok': False}
+    assert await recheck(checked) == {'ok': True}
+    # A genuinely changed source/plan is still refused, before transaction files.
+    value = yaml.safe_load(root.read_text())
+    value['tools'][0]['source'] = '/different/source'
+    root.write_text(yaml.safe_dump(value))
+    assert await recheck(checked) == {'ok': False}
+    assert not (home / 'sessions/old-chat/bundle-transition.json').exists()
+
+
 @pytest.mark.parametrize('scope', ['shared', 'project', 'local'])
 @pytest.mark.parametrize('explicit', [False, True])
 async def test_draft_precedence_matches_first_provider_dispatch(tmp_path, monkeypatch, scope, explicit):

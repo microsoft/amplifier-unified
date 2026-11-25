@@ -52,7 +52,7 @@ try{
  await expect(install).toBeEnabled();await expect(results).toBeVisible();
  await page.screenshot({path:out+'/runner-app-desktop.png'});
  await install.click();
- await expect(updates).toContainText('Waiting for your work to finish');
+ await expect(updates).toContainText('Waiting for work to finish');
  await expect(install).toHaveCount(0);
  assert.deepEqual((await evidence()).calls.application,['stage']);
  assert.deepEqual((await evidence()).pending,runnerAttempt);

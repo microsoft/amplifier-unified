@@ -1,4 +1,6 @@
 """Release identity and package checks, with only isolated local Git repositories."""
+from datetime import datetime, timezone
+import hashlib
 import importlib.util
 import io
 import json
@@ -48,7 +50,13 @@ def distributions(root):
 
 
 @pytest.fixture
-def preparation(repository):
+def preparation(repository, monkeypatch):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz):
+            assert tz is timezone.utc
+            return cls(2026, 11, 17, 23, 59, tzinfo=tz)
+    monkeypatch.setattr(release, 'datetime', Clock)
     (repository/'frontend').mkdir()
     (repository/'frontend/package.json').write_text('{}')  # Explicit historical bundled fixture.
     (repository/'uv.lock').write_text('''version = 1
@@ -88,13 +96,13 @@ def test_prepare_preserves_dirty_work_and_dependency_versions_without_git(prepar
     assert tomllib.loads((root/'uv.lock').read_text())['package'][1]['version'] == '1.2.3'
     updated = json.loads((root/'amplifier_web/release-notes.json').read_text())
     assert updated['releases'][1:] == history['releases']
-    assert updated['releases'][0] == json.loads(notes.read_text())
+    assert updated['releases'][0] == {**json.loads(notes.read_text()), 'date': '2026-11-17'}
     saved = {name:((root/name).read_bytes(), (root/name).stat().st_mtime_ns) for name in result['changedFiles']}
     assert release.prepare(root, '1.2.4', notes)['changedFiles'] == []
     assert saved == {name:((root/name).read_bytes(), (root/name).stat().st_mtime_ns) for name in saved}
 
 
-@pytest.mark.parametrize('invalid', ['notes-version','empty-changes','existing-notes','future-history',
+@pytest.mark.parametrize('invalid', ['notes-version','empty-changes','existing-notes','future-history','invalid-date',
                                     'downgrade','stale-lock','duplicate-root','malformed-lock'])
 def test_prepare_rejects_invalid_inputs_before_any_write(preparation, invalid):
     root, notes = preparation
@@ -104,6 +112,8 @@ def test_prepare_rejects_invalid_inputs_before_any_write(preparation, invalid):
         entry['version'] = '1.2.5'
     elif invalid == 'empty-changes':
         entry['changes'] = []
+    elif invalid == 'invalid-date':
+        entry['date'] = '2026-02-29'
     elif invalid in {'existing-notes','future-history'}:
         path = root/'amplifier_web/release-notes.json'
         history = json.loads(path.read_text())
@@ -130,6 +140,169 @@ def test_prepare_rejects_invalid_inputs_before_any_write(preparation, invalid):
     assert before == {name:(root/name).read_bytes() for name in names}
 
 
+def test_prepare_keeps_date_on_retry_across_utc_midnight(preparation, monkeypatch):
+    root, notes = preparation
+    release.prepare(root, '1.2.4', notes)
+    path = root / 'amplifier_web/release-notes.json'
+    before = path.read_bytes(), path.stat().st_mtime_ns
+    class Tomorrow(datetime):
+        @classmethod
+        def now(cls, tz):
+            return cls(2026, 11, 18, tzinfo=tz)
+    monkeypatch.setattr(release, 'datetime', Tomorrow)
+    assert release.prepare(root, '1.2.4', notes)['changedFiles'] == []
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+    assert json.loads(path.read_text())['releases'][0]['date'] == '2026-11-17'
+
+
+def test_prepare_respects_authored_date_and_rejects_conflicting_retry(preparation):
+    root, notes = preparation
+    authored = {**json.loads(notes.read_text()), 'date': '2026-11-16'}
+    notes.write_text(json.dumps(authored))
+    release.prepare(root, '1.2.4', notes)
+    path = root / 'amplifier_web/release-notes.json'
+    assert json.loads(path.read_text())['releases'][0] == authored
+    assert release.prepare(root, '1.2.4', notes)['changedFiles'] == []
+    before = path.read_bytes()
+    notes.write_text(json.dumps({**authored, 'date': '2026-11-18'}))
+    with pytest.raises(ValueError, match='Different notes'):
+        release.prepare(root, '1.2.4', notes)
+    assert path.read_bytes() == before
+
+
+def test_prepare_identical_existing_undated_entry_is_still_a_noop(preparation):
+    root, notes = preparation
+    path = root / 'amplifier_web/release-notes.json'
+    notes.write_text(json.dumps(json.loads(path.read_text())['releases'][0]))
+    before = path.read_bytes(), path.stat().st_mtime_ns
+    assert release.prepare(root, '1.2.3', notes)['changedFiles'] == []
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+
+
+def github_release(tag='v1.2.3', **changes):
+    return {'tag_name': tag, 'draft': False, 'prerelease': False,
+            'published_at': '2026-11-17T00:05:00Z', **changes}
+
+
+def test_import_dates_only_fills_exact_published_stable_versions_and_preserves_everything(repository):
+    root = repository
+    path = root / 'amplifier_web/release-notes.json'
+    history = json.loads(path.read_text())
+    first = history['releases'][0]
+    first['notices'][0]['previousTitles'] = ['Original title']
+    first['extension'] = {'keep': ['exact']}
+    history['releases'] += [{**first, 'version': f'1.2.{i}'} for i in range(2, -1, -1)]
+    history['releases'][1]['date'] = '2026-11-16'  # Authored cut date, not publish time.
+    path.write_text(json.dumps(history))
+    source = root / 'github-releases.json'
+    source.write_text(json.dumps([
+        github_release(created_at='2026-11-16T01:00:00Z'),
+        github_release('1.2.2'), github_release('v1.2.1', draft=True, published_at=None),
+        github_release('v1.2.0', prerelease=True),
+        github_release('v1.2.1-rc.1'), github_release('v01.2.1'),
+        github_release('v11.2.1')]))
+    before = path.read_bytes()
+    digest = hashlib.sha256(before).hexdigest()
+    result = release.import_dates(root, source, digest)
+    expected = json.loads(before)
+    expected['releases'][0]['date'] = '2026-11-17'
+    assert json.loads(path.read_bytes()) == expected
+    assert result['addedDates'] == 1 and result['addedVersions'] == ['1.2.3']
+    assert result['undatedVersions'] == ['1.2.1', '1.2.0']
+    assert result['releaseCount'] == 4
+    assert result['beforeSha256'] == digest
+    assert result['afterSha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert result['inputSha256'] == hashlib.sha256(source.read_bytes()).hexdigest()
+    saved = path.read_bytes(), path.stat().st_mtime_ns
+    assert release.import_dates(root, source, result['afterSha256'])['addedDates'] == 0
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == saved
+    with pytest.raises(ValueError, match='changed'):
+        release.import_dates(root, source, digest)
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == saved
+
+
+@pytest.mark.parametrize('rows', [None, {}, [], [None],
+    [github_release(draft=0)], [github_release(prerelease=None)],
+    [github_release(tag_name=None)], [github_release(published_at=None)],
+    [github_release(published_at='2026-02-29T00:00:00Z')],
+    [github_release(published_at='2026-11-17T00:00:00+01:00')],
+    [github_release(), github_release('1.2.3')],
+    [github_release(), github_release('v9.9.9', published_at='invalid')]])
+def test_import_dates_validates_all_inputs_before_writing(repository, rows):
+    path = repository / 'amplifier_web/release-notes.json'
+    source = repository / 'github-releases.json'
+    source.write_text(json.dumps(rows))
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        release.import_dates(repository, source, hashlib.sha256(before).hexdigest())
+    assert path.read_bytes() == before
+
+
+def test_import_dates_fails_capacity_without_retiring_any_records(repository):
+    path = repository / 'amplifier_web/release-notes.json'
+    validator = release.notes_module(repository)
+    compact = validator.serialize(json.loads(path.read_text())['releases'])
+    path.write_text(compact)
+    module = repository / 'amplifier_web/release_notes.py'
+    module.write_text(module.read_text().replace('MAX_BYTES = 512_000',
+        f'MAX_BYTES = {len(compact.encode("utf-8"))}'))
+    source = repository / 'github-releases.json'
+    source.write_text(json.dumps([github_release()]))
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match='too large'):
+        release.import_dates(repository, source, hashlib.sha256(before).hexdigest())
+    assert path.read_bytes() == before
+
+
+def test_import_dates_never_applies_ordinary_history_retention(repository):
+    path = repository / 'amplifier_web/release-notes.json'
+    history = json.loads(path.read_text())
+    history['releases'] += [{'version': f'0.1.{i}', 'title': 'Older release',
+                            'changes': ['Fix'], 'notices': []} for i in range(300)]
+    path.write_text(json.dumps(history))
+    source = repository / 'github-releases.json'
+    source.write_text(json.dumps([github_release()]))
+    before = path.read_bytes()
+    result = release.import_dates(repository, source, hashlib.sha256(before).hexdigest())
+    assert result['releaseCount'] == 301
+    assert json.loads(path.read_text())['releases'][1:] == history['releases'][1:]
+
+
+def test_import_dates_refuses_concurrent_source_change(repository, monkeypatch):
+    path = repository / 'amplifier_web/release-notes.json'
+    source = repository / 'github-releases.json'
+    source.write_text(json.dumps([github_release()]))
+    before = path.read_bytes()
+    concurrent = before + b'\n'
+    validator = release.notes_module(repository)
+    parse = validator.parse
+    calls = []
+    def validate(raw, expected=None):
+        result = parse(raw, expected)
+        calls.append(raw)
+        if len(calls) == 2:
+            path.write_bytes(concurrent)
+        return result
+    monkeypatch.setattr(validator, 'parse', validate)
+    monkeypatch.setattr(release, 'notes_module', lambda root: validator)
+    with pytest.raises(ValueError, match='changed during import'):
+        release.import_dates(repository, source, hashlib.sha256(before).hexdigest())
+    assert path.read_bytes() == concurrent
+
+
+def test_import_dates_cli_requires_reviewed_source_hash(repository):
+    script = Path(__file__).parents[1] / 'scripts/release.py'
+    source = repository / 'github-releases.json'
+    source.write_text(json.dumps([github_release()]))
+    command = [sys.executable, str(script), 'import-dates', '--releases-file', str(source)]
+    before = (repository / 'amplifier_web/release-notes.json').read_bytes()
+    missing = subprocess.run(command, cwd=repository, capture_output=True, text=True)
+    assert missing.returncode == 2 and 'requires' in missing.stderr
+    result = subprocess.run([*command, '--expected-notes-sha256', hashlib.sha256(before).hexdigest()],
+                            cwd=repository, capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout)['addedDates'] == 1
+
+
 @pytest.mark.parametrize('outcome', ['passed','failed','stale-version'])
 def test_prepare_optional_build_runs_only_the_existing_build_once(preparation, monkeypatch, outcome):
     root, notes = preparation
@@ -152,6 +325,43 @@ def test_prepare_optional_build_runs_only_the_existing_build_once(preparation, m
         assert release.prepare(root, '1.2.4', notes)['changedFiles'] == []
     assert calls == [(['npm','run','build','--prefix','frontend'], root)]
     assert release.version_at(root) == '1.2.4'
+
+
+def test_prepare_prunes_shared_history_before_bounds_and_is_idempotent(preparation):
+    root, notes = preparation
+    path = root / 'amplifier_web/release-notes.json'
+    protected = json.loads(path.read_text())['releases'][0]
+    protected['notices'][0]['previousTitles'] = ['Original title']
+    protected['extension'] = {'untouched': True}
+    ordinary = [{'version': f'0.1.{i}', 'title': 'Ordinary', 'changes': ['Fix'], 'notices': []}
+                for i in range(511)]
+    path.write_text(json.dumps({'schemaVersion': 1, 'releases': [protected, *ordinary]}))
+    release.prepare(root, '1.2.4', notes)
+    result = json.loads(path.read_text())['releases']
+    assert result == [{**json.loads(notes.read_text()), 'date': '2026-11-17'}, protected, *reversed(ordinary[256:])]
+    assert len(result) == 257  # One new + 255 older ordinary entries, plus the notice.
+    before = {p: ((root/p).read_bytes(), (root/p).stat().st_mtime_ns) for p in
+              ('pyproject.toml', 'amplifier_web/__init__.py', 'uv.lock', 'amplifier_web/release-notes.json')}
+    assert release.prepare(root, '1.2.4', notes)['changedFiles'] == []
+    assert before == {p: ((root/p).read_bytes(), (root/p).stat().st_mtime_ns) for p in before}
+
+
+@pytest.mark.parametrize('pressure', ['count', 'bytes'])
+def test_prepare_unfit_new_entry_fails_before_writing_any_metadata(preparation, pressure):
+    root, notes = preparation
+    module = root / 'amplifier_web/release_notes.py'
+    if pressure == 'count':
+        module.write_text(module.read_text().replace('MAX_RELEASES = 512', 'MAX_RELEASES = 1'))
+    else:
+        module.write_text(module.read_text().replace('MAX_BYTES = 512_000', 'MAX_BYTES = 500'))
+        authored = json.loads(notes.read_text())
+        authored['changes'] = ['é' * 200]
+        notes.write_text(json.dumps(authored))
+    names = ('pyproject.toml', 'amplifier_web/__init__.py', 'uv.lock', 'amplifier_web/release-notes.json')
+    before = {name: (root/name).read_bytes() for name in names}
+    with pytest.raises(ValueError, match='current release'):
+        release.prepare(root, '1.2.4', notes)
+    assert before == {name: (root/name).read_bytes() for name in names}
 
 
 @pytest.mark.parametrize('valid_component', [True, False])
@@ -356,6 +566,42 @@ def test_release_distribution_verification_checks_source_assets_and_references(r
     with pytest.raises(ValueError,match='missing asset'):release.verify_dist(repository,dist,'1.2.3')
 
 
+@pytest.mark.parametrize('missing', [None, 'status_protocol/publisher.py', 'other/tests/helper.py'])
+def test_release_requires_selected_status_runtime_but_not_component_author_tests(repository, missing):
+    standalone = 'components/status/tests/test_standalone.py'
+    for name in [standalone, 'amplifier_web/status_protocol/publisher.py', 'amplifier_web/other/tests/helper.py']:
+        path = repository / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('VALUE = "reviewed source"\n')
+    dist = distributions(repository)
+    wheel = next(dist.glob('*.whl'))
+    omitted = set()
+    if missing:
+        omitted.add('amplifier_web/' + missing)
+    with zipfile.ZipFile(wheel) as archive:
+        entries = {name: archive.read(name) for name in archive.namelist() if name not in omitted}
+    with zipfile.ZipFile(wheel, 'w') as archive:
+        for name, data in entries.items():
+            archive.writestr(name, data)
+    # The app source archive retains author inputs; its wheel owns only selected runtime.
+    source = next(dist.glob('*.tar.gz'))
+    with tarfile.open(source) as archive:
+        members = [(item, archive.extractfile(item).read()) for item in archive.getmembers()]
+    with tarfile.open(source, 'w:gz') as archive:
+        for item, raw in members:
+            archive.addfile(item, io.BytesIO(raw))
+        archive.add(repository / standalone, 'amplifier_unified-1.2.3/' + standalone)
+    with tarfile.open(source) as archive:
+        assert archive.extractfile('amplifier_unified-1.2.3/' + standalone).read() == (repository / standalone).read_bytes()
+    if missing:
+        with pytest.raises(ValueError, match='validated source/assets: amplifier_web/' + missing):
+            release.verify_dist(repository, dist, '1.2.3')
+        assert not (dist / 'SHA256SUMS').exists()
+    else:
+        release.verify_dist(repository, dist, '1.2.3')
+        assert len((dist / 'SHA256SUMS').read_text().splitlines()) == 2
+
+
 @pytest.mark.parametrize('kind', ['wheel', 'source'])
 @pytest.mark.parametrize('change', ['missing', 'changed', 'extra'])
 @pytest.mark.parametrize('asset', ['build.json', 'vendor/pdfjs/font.bin', 'licenses/vendor.txt'])
@@ -533,6 +779,19 @@ print(prepare_metadata_for_build_editable(sys.argv[1]))
 '''
     result = subprocess.check_output([sys.executable, '-I', '-c', code, str(metadata)], cwd=source, text=True)
     assert (metadata / result.strip() / 'METADATA').is_file()
+    from email.parser import Parser
+    from packaging.requirements import Requirement
+    values = Parser().parsestr((metadata / result.strip() / 'METADATA').read_text()).get_all('Requires-Dist')
+    actual = {Requirement(value).name: Requirement(value).url for value in values
+              if not Requirement(value).marker}
+    base = 'git+https://github.com/microsoft/amplifier-foundation@main'
+    assert actual['amplifier-foundation'] == base
+    assert actual['amplifier-module-hooks-session-naming'] == base + '#subdirectory=modules/hooks-session-naming'
+    authored = tomllib.loads((root / 'pyproject.toml').read_text())['project']['dependencies']
+    # Platform markers are runtime requirements too; only optional extras are absent.
+    assert {Requirement(value) for value in values
+            if not Requirement(value).marker or 'extra' not in str(Requirement(value).marker)} == {
+        Requirement(value) for value in authored}
     assert not (source / 'amplifier_web/release-source.json').exists()
     assert not (source / 'amplifier_web/static').exists()
 
@@ -636,6 +895,23 @@ def test_real_sdist_build_excludes_untracked_ci_checkouts(repository):
     project = Path(__file__).parents[1]
     for name in ('pyproject.toml', '.gitignore'):
         shutil.copyfile(project / name, repository / name)
+    for name in ('scripts/scheduling_build_hook.py', 'scripts/scheduling_delivery.py',
+                 'scripts/shell_sdk_delivery.py', 'components/shell-sdk.source.json',
+                 'components/scheduling.source.json', 'components/worktrees.source.json',
+                 'components/portability.source.json', 'components/operations.source.json',
+                 'components/workspace-metadata.source.json', 'components/kernels.source.json',
+                 'components/outputs.source.json', 'components/publishing.source.json',
+                 'components/recall.source.json', 'components/status-emitter.source.json'):
+        target = repository / name; target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(project / name, target)
+    for component in ('scheduling', 'worktrees', 'portability', 'workspace-metadata', 'outputs', 'publishing', 'recall'):
+        shutil.copytree(project / f'components/{component}-delivery',
+                        repository / f'components/{component}-delivery')
+    shutil.copytree(project / 'amplifier_operations', repository / 'amplifier_operations')
+    shutil.copytree(project / 'amplifier_kernels', repository / 'amplifier_kernels')
+    shutil.copytree(project / 'amplifier_web/status_protocol', repository / 'amplifier_web/status_protocol')
+    for name in ('packages/shell-sdk', 'examples/shell-controls'):
+        shutil.copytree(project / name, repository / name)
     (repository / 'README.md').write_text('Package build fixture')
     for dependency in ('loop-live', 'recipes'):
         checkout = repository / '.ci' / dependency

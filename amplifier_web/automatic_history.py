@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 from collections import Counter, deque
 import copy
-import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -16,7 +15,10 @@ from .performance_diagnostics import measured, measure, count, TimedLock
 from .session_files import amplifier_home, project_slug
 from .managed_chats import catalog_locations
 from amplifier_foundation.session.history import SessionHistoryStore
-from .shared_state_probe import text_content
+from .native_message_projection import (
+    display_identity, display_message, native_input_id,
+    _public_row, _private_block, _public_blocks, _public_text,
+)
 
 BUSY = {'starting', 'working', 'running', 'stopping', 'ready'}
 INDEX_FIELDS = ('location', 'draft', 'id', 'title', 'titleSource', 'nativeNameSource', 'nativeNameRevision', 'nativeNamePolicyRevision', 'autoName', 'naming', 'description', 'bundle', 'workspace',
@@ -77,120 +79,6 @@ def revision(session):
         except OSError:
             return None
     return None
-
-
-def display_identity(session, index, role, text):
-    key = json.dumps([session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id'], index, role, text], ensure_ascii=False)
-    return hashlib.sha256(key.encode()).hexdigest()[:32]
-
-
-def _public_row(row):
-    return (isinstance(row, dict) and row.get('role') in {'user', 'assistant'}
-            and not any((row.get('metadata') or {}).get(key) for key in
-                        ('ephemeral', 'amplifier_visible_reference', 'amplifier_recovery_reference')))
-
-
-def _private_block(block):
-    return isinstance(block, dict) and block.get('visibility') in ('internal', 'developer')
-
-
-def _public_blocks(row, *, text_only=False):
-    """Select ordered native public blocks, without copying or resolving media.
-
-    Returned blocks are read-only references to the selected raw record. This
-    does not reconcile retained originals, assign message IDs or qualify media
-    encodings. Unknown public kinds are diagnostics, never public payloads.
-    """
-    result = {'blocks': [], 'unsupported': []}
-    if not _public_row(row):
-        return result
-    content = row.get('content')
-    if isinstance(content, str):
-        result['blocks'].append({'type': 'text', 'text': content})
-        return result
-    if not isinstance(content, list):
-        result['unsupported'].append({'index': 0, 'type': None})
-        return result
-    for index, block in enumerate(content):
-        if _private_block(block):
-            continue
-        kind = block.get('type') if isinstance(block, dict) else None
-        if kind in ('text', 'output_text') and isinstance(block.get('text'), str):
-            result['blocks'].append(block)
-        elif text_only or kind in ('thinking', 'redacted_thinking', 'reasoning',
-                                   'tool_call', 'tool_use', 'tool_result'):
-            continue
-        elif kind in ('image', 'image_url'):
-            result['blocks'].append(block)
-        else:
-            result['unsupported'].append({'index': index, 'type': kind if isinstance(kind, str) else None})
-    return result
-
-
-def _public_text(row, raw_text):
-    content = row.get('content')
-    if not isinstance(content, list) or not any(_private_block(block) for block in content):
-        return raw_text
-    return text_content({'content': _public_blocks(row, text_only=True)['blocks']})
-
-
-def native_input_id(row):
-    """Validated input provenance, independent of whether its body is visible."""
-    if not isinstance(row, dict) or row.get('role') != 'user':
-        return None
-    metadata = row.get('metadata')
-    provenance = metadata.get('amplifier_input') if isinstance(metadata, dict) else None
-    # Steering keeps the canonical input ID. Media-only and empty occurrences
-    # also participate in uniqueness; display text never proves provenance.
-    if (isinstance(provenance, dict) and provenance.get('version') == 1
-            and provenance.get('kind') in ('user', 'steer')
-            and isinstance(provenance.get('id'), str) and 0 < len(provenance['id']) <= 200):
-        return provenance['id']
-    return None
-
-
-def display_message(row, index, session, *, include_internal=False):
-    if not isinstance(row, dict) or row.get('role') not in {'user', 'assistant'}:
-        return None
-    if not include_internal and not _public_row(row):
-        return None
-    raw_text = text_content(row)
-    text = raw_text if include_internal else _public_text(row, raw_text)
-    if not text:
-        return None
-    from .session_store import message_time
-    metadata=row.get('metadata') or {}
-    provenance=metadata.get('amplifier_input',{})
-    recovery=metadata.get('live_recovery_job')
-    if 'amplifier_input' not in metadata and isinstance(recovery,str) and 0<len(recovery)<=128:
-        # Earlier loop-live versions recorded recovery ownership separately.
-        # Read that host metadata; matching text alone is never provenance.
-        provenance={'version':1,'kind':'service','id':recovery,'source':'local-job-recovery'}
-    observation={}
-    input_id = native_input_id(row)
-    input_identity = {'nativeInputId': input_id} if input_id is not None else {}
-    if isinstance(provenance,dict) and provenance.get('version')==1 and provenance.get('kind')=='service' and all(isinstance(provenance.get(key),str) and 0<len(provenance[key])<=128 for key in ('id','source')):
-        observation={'observation':{key:provenance[key] for key in ('id','source','call_id') if key in provenance}}
-        from .recovery_observations import recovery_facts
-        facts = recovery_facts(metadata, text, provenance)
-        if facts:
-            observation['observation']['recovery'] = facts
-    # Public block visibility changes the view, never its canonical raw anchor.
-    identity = display_identity(session, index, row['role'], raw_text)
-    voice = None
-    if row['role'] == 'user' and not include_internal:
-        from .voice_input_projection import public_input
-        voice = public_input(text, provenance)
-    voice_fields = ({'voiceDelegation': True, 'voiceCallId': voice['callId'],
-                     'voiceInputId': provenance['id'],
-                     'nativeMessageId': identity, 'inputOrigin': 'voice'} if voice else {})
-    return {'id': identity, 'role': row['role'],
-            'text': voice['text'] if voice else text, 'via': 'call' if voice else 'chat', 'source': 'native', 'nativeIndex': index,
-            'createdAt': message_time(row) or session.get('createdAt', 0), 'timestampKnown': message_time(row) is not None,
-            **({'nativeMessageId': identity} if text != raw_text else {}),
-            **input_identity, **observation, **voice_fields}
-
-
 
 
 @retry_indexed_read
@@ -289,6 +177,7 @@ def remove_internal_copies(session, hidden):
     """
     session['messages'] = [message for message in session['messages']
         if type(message.get('nativeIndex')) is not int
+        or message['nativeIndex'] not in hidden
         or hidden.get(message['nativeIndex']) != display_identity(
             session, message['nativeIndex'], message.get('role'), message.get('text', ''))]
     boundary = session.get('nativeBoundary')
@@ -392,9 +281,14 @@ def alias_input_originals(session, native, *, peer_only=False):
     return [replacements.get(row['id'], row) for row in native]
 
 
-def same_native_message(native, visible):
+def same_native_message(native, visible, *, infer_index=False):
     if native.get('role') != visible.get('role'):
         return False
+    # A refresh can still display an old text-aligned row. Enforce identity
+    # when inferring a new index; mutation separately verifies provenance.
+    if infer_index and visible.get('inputId') and native.get('nativeInputId'):
+        if visible['inputId'] != native['nativeInputId'] or native.get('nativeInputAmbiguous'):
+            return False
     if visible.get('nativeMessageId'):
         return visible['nativeMessageId'] == native['id']
     if native.get('voiceDelegation'):
@@ -450,7 +344,7 @@ def merge_web_history(session, incoming):
         if anchor and not same_native_message(anchor[1], message):
             raise ValueError('The saved conversation was rewritten; existing web messages were kept.')
         match = anchor[0] if anchor else next((number for number in range(begin, len(incoming))
-                      if same_native_message(incoming[number], message)), None)
+                      if same_native_message(incoming[number], message, infer_index=True)), None)
         if match is not None:
             matches[position] = match
             claimed.add(match)
@@ -570,7 +464,7 @@ class AutomaticHistory:
         async with self.lock:
             try:
                 known = workspace_inputs(self.service.state)
-                from .workspace_canvas import refresh_workspace_availability
+                from .workspace_selection import refresh_workspace_availability
                 cursor = self._availability_cursor % max(1, len(known))
                 availability = known if force else known[cursor:cursor + 64]
                 self._availability_cursor = (cursor + len(availability)) % max(1, len(known))
@@ -730,110 +624,57 @@ class AutomaticHistory:
                             for row in incoming['sessions']) if directory_mode else
                             all(row.get('sessionKind') == 'worker' for row in incoming['sessions']))
                         and not locations_changed)
-                    hidden_workspaces = set(state.get('hiddenNativeWorkspaces', []))
-                    workspaces = {row['id']: row for row in state['workspaces']}
-                    # Most refreshes contain no unresolved folders. Index the
-                    # exceptions once instead of rescanning every registration
-                    # for every discovered workspace while holding the app lock.
-                    unresolved_by_project = {}
-                    for item in state['workspaces']:
-                        if not item.get('path'):
-                            unresolved_by_project.setdefault(item.get('nativeProject'), {})[item['id']] = item
-                    for row in known:
-                        previous = workspaces.get(row['id'])
-                        if previous and previous.get('path') == row.get('path') and previous.get('available') != row['available']:
-                            previous['available'] = row['available']
-                            changed = True
-                            globals_changed.add('workspaces')
-                    for row in snapshot['workspaces']:
-                        if row.get('path') in managed_paths:
-                            continue
-                        unresolved_id = (uuid.uuid5(uuid.NAMESPACE_URL, f"amplifier-project:{row['nativeProject']}").hex
-                                         if hidden_workspaces and row.get('path') else None)
-                        if unresolved_id is not None and unresolved_id in hidden_workspaces and row['id'] not in hidden_workspaces:
-                            hidden_workspaces.add(row['id'])
-                            state.setdefault('hiddenNativeWorkspaces', []).append(row['id'])
-                            changed = True
-                            globals_changed.add('hiddenNativeWorkspaces')
-                        if row['id'] in hidden_workspaces:
-                            continue
-                        previous = workspaces.get(row['id'])
-                        previous_project = previous.get('nativeProject') if previous else None
-                        unresolved = [item for identity, item in unresolved_by_project.get(row['nativeProject'], {}).items()
-                                      if identity != row['id']]
-                        if previous is None:
-                            state['workspaces'].append(dict(row)); workspaces[row['id']] = state['workspaces'][-1]
-                            previous = workspaces[row['id']]
-                            changed = True
-                            globals_changed.add('workspaces')
-                        else:
-                            for key in ('nativeProject', 'available', 'sessionCount', 'workerSessionCount'):
-                                if key in row and previous.get(key) != row[key]:
-                                    previous[key] = row[key]; changed = True
-                                    globals_changed.add('workspaces')
-                        if not previous.get('path'):
-                            # Later rows in this same scan must see additions
-                            # and identity changes, just as a fresh list scan did.
-                            project = previous.get('nativeProject')
-                            if previous_project != project:
-                                unresolved_by_project.get(previous_project, {}).pop(previous['id'], None)
-                            unresolved_by_project.setdefault(project, {})[previous['id']] = previous
-                        for old in unresolved:
-                            # Migrate the generated placeholder, preserving any
-                            # user customization and every reference to it.
-                            if old.get('name') != old.get('nativeProject'):
-                                if previous.get('name') == row.get('name'):
-                                    previous['name'] = old['name']
-                                elif old.get('name') != previous.get('name'):
-                                    aliases = previous.setdefault('aliases', [])
-                                    if old['name'] not in aliases:
-                                        aliases.append(old['name'])
-                            for key, value in old.items():
-                                if key not in {'id', 'name', 'nativeProject', 'path', 'available', 'sessionCount', 'workerSessionCount'}:
-                                    previous.setdefault(key, copy.deepcopy(value))
-                            if state.get('selectedWorkspaceId') == old['id']:
-                                state['selectedWorkspaceId'] = row['id']
-                                globals_changed.add('selectedWorkspaceId')
-                                if row.get('path'):
-                                    state['settings']['workspace'] = row['path']
-                                    globals_changed.add('settings')
-                            pins = state.get('pinnedWorkspaceIds', [])
-                            if isinstance(pins, list) and old['id'] in pins:
-                                # Replace identity in place; availability and
-                                # unrelated stored values are not migration policy.
-                                remapped, seen = [], set()
-                                for value in pins:
-                                    value = row['id'] if value == old['id'] else value
-                                    if not isinstance(value, str) or value not in seen:
-                                        remapped.append(value)
-                                    if isinstance(value, str):
-                                        seen.add(value)
-                                if remapped != pins:
-                                    state['pinnedWorkspaceIds'] = remapped
-                                    globals_changed.add('pinnedWorkspaceIds')
-                                    if isinstance(state.get('pinnedItemIds'), list):
-                                        items = list(dict.fromkeys(
-                                            'workspace:' + row['id'] if key == 'workspace:' + old['id'] else key
-                                            for key in state['pinnedItemIds']))
-                                        if items != state['pinnedItemIds']:
-                                            state['pinnedItemIds'] = items
-                                            globals_changed.add('pinnedItemIds')
-                            for scoped in state['sessions']:
-                                if scoped.get('workspaceId') == old['id']:
-                                    scoped['workspaceId'] = row['id']
-                                    touched.add(scoped['id'])
-                            canvas_remaps = [(key, scoped) for key, values in (
-                                ('canvasArtifacts', state.get('canvasArtifacts', [])),
-                                ('canvas', [state.get('canvas', {})])) for scoped in values
-                                if scoped.get('workspaceId') == old['id']]
-                            for key, scoped in canvas_remaps:
-                                scoped['workspaceId'] = row['id']
-                                globals_changed.add(key)
-                            state['workspaces'].remove(old)
-                            workspaces.pop(old['id'], None)
-                            unresolved_by_project.get(old.get('nativeProject'), {}).pop(old['id'], None)
-                            changed = True
-                            globals_changed.add('workspaces')
+                    from amplifier_workspace_metadata import reconcile as reconcile_workspace_registrations
+                    reconciliation = reconcile_workspace_registrations(
+                        state['workspaces'], known, snapshot['workspaces'],
+                        hidden_ids=state.get('hiddenNativeWorkspaces', []), managed_paths=managed_paths)
+                    workspaces = reconciliation.by_id
+                    hidden_workspaces = reconciliation.hidden_ids
+                    if reconciliation.registrations_changed:
+                        changed = True
+                        globals_changed.add('workspaces')
+                    if reconciliation.hidden_changed:
+                        changed = True
+                        globals_changed.add('hiddenNativeWorkspaces')
+                    for old_id, new_id, target_path in reconciliation.remaps:
+                        if state.get('selectedWorkspaceId') == old_id:
+                            state['selectedWorkspaceId'] = new_id
+                            globals_changed.add('selectedWorkspaceId')
+                            if target_path:
+                                state['settings']['workspace'] = target_path
+                                globals_changed.add('settings')
+                        pins = state.get('pinnedWorkspaceIds', [])
+                        if isinstance(pins, list) and old_id in pins:
+                            # Replace identity in place; availability and
+                            # unrelated stored values are not migration policy.
+                            remapped, seen = [], set()
+                            for value in pins:
+                                value = new_id if value == old_id else value
+                                if not isinstance(value, str) or value not in seen:
+                                    remapped.append(value)
+                                if isinstance(value, str):
+                                    seen.add(value)
+                            if remapped != pins:
+                                state['pinnedWorkspaceIds'] = remapped
+                                globals_changed.add('pinnedWorkspaceIds')
+                                if isinstance(state.get('pinnedItemIds'), list):
+                                    items = list(dict.fromkeys(
+                                        'workspace:' + new_id if key == 'workspace:' + old_id else key
+                                        for key in state['pinnedItemIds']))
+                                    if items != state['pinnedItemIds']:
+                                        state['pinnedItemIds'] = items
+                                        globals_changed.add('pinnedItemIds')
+                        for scoped in state['sessions']:
+                            if scoped.get('workspaceId') == old_id:
+                                scoped['workspaceId'] = new_id
+                                touched.add(scoped['id'])
+                        canvas_remaps = [(key, scoped) for key, values in (
+                            ('canvasArtifacts', state.get('canvasArtifacts', [])),
+                            ('canvas', [state.get('canvas', {})])) for scoped in values
+                            if scoped.get('workspaceId') == old_id]
+                        for key, scoped in canvas_remaps:
+                            scoped['workspaceId'] = new_id
+                            globals_changed.add(key)
                     if not delta_mode or self._existing is None:
                         existing = {(s.get('nativeProject') or (project_slug(s['workspace']) if s.get('workspace') else None),
                                      s.get('nativeIdentity') or s.get('runtimeSessionId') or s['id']): s for s in state['sessions']}
@@ -1075,11 +916,36 @@ class AutomaticHistory:
         # Browsers have independent selections. Refresh only connected
         # views, not every historical client record retained on disk.
         from .history_demand import subscribed_sessions
+        from .errors import AppError
         selected_ids = subscribed_sessions(self.service)
         by_id = (self.service.projections.sessions(self.service.state).by_id
                  if hasattr(self.service, 'projections') else
                  {row['id']: row for row in self.service.state['sessions']})
-        for selected in [by_id[key] for key in selected_ids if key in by_id]:
+        for session_id in selected_ids:
+            selected = by_id.get(session_id)
+            if selected is None:
+                if not session_id or getattr(self.service, 'directory', None) is None:
+                    continue
+                async with self.service.lock:
+                    # An explicit stream may name a catalog-only owner without
+                    # changing selection. Admit only that live demand, not every
+                    # dormant history; it may have disconnected while we waited.
+                    if session_id not in subscribed_sessions(self.service):
+                        continue
+                    try:
+                        selected = self.service._session(session_id, hydrate=False)
+                    except AppError as exc:
+                        if exc.status == 404:
+                            continue
+                        raise
+            if (selected.get('nativeProject')
+                    and session_id in self.service.queue_sessions.values()):
+                # A simultaneous web observer needs a display window, but must
+                # not redirect a terminal stream away from canonical messages.
+                # This remains canonical even during a web-bound refresh.
+                await self.load(selected['id'], only_if_changed=True, canonical=True)
+                if not self.windows.observed(selected['id']):
+                    continue
             if self.windows.observed(selected['id']):
                 await self.load(selected['id'], only_if_changed=True, display=True)
                 continue
@@ -1154,36 +1020,45 @@ class AutomaticHistory:
                     if session is None:
                         return
                     if (paging or session.get('status') not in BUSY) and not session.get('configurationBusy'):
-                        if paging:
-                            # Only prepend. Current live messages, streaming
-                            # text, execution ownership and draft stay intact.
-                            known = {m['id'] for m in session['messages']}
-                            known_indexes = {m['nativeIndex'] for m in session['messages'] if 'nativeIndex' in m}
-                            session['messages'] = [m for m in result['messages']
-                                                   if m['id'] not in known and m['nativeIndex'] not in known_indexes] + session['messages']
-                        else:
-                            remove_internal_copies(session, result['hiddenMessages'])
-                            if session.get('historyManaged'):
-                                # Keep the loaded window when another host appends.
-                                session['messages'] = result['messages']
+                        with measure(self.service, 'history.merge', synchronous=True, session_id=session_id):
+                            if paging:
+                                # Only prepend. Current live messages, streaming
+                                # text, execution ownership and draft stay intact.
+                                known = {m['id'] for m in session['messages']}
+                                known_indexes = {m['nativeIndex'] for m in session['messages'] if 'nativeIndex' in m}
+                                session['messages'] = [m for m in result['messages']
+                                                       if m['id'] not in known and m['nativeIndex'] not in known_indexes] + session['messages']
                             else:
-                                # Preserve web-owned message IDs, execution anchors,
-                                # voice-only bubbles, attachments and draft state.
-                                merge_web_history(session, result['messages'])
-                            session['nativeRevision'] = result['revision']
+                                remove_internal_copies(session, result['hiddenMessages'])
+                                if session.get('historyManaged'):
+                                    # Keep the loaded window when another host appends.
+                                    session['messages'] = result['messages']
+                                else:
+                                    # Preserve web-owned message IDs, execution anchors,
+                                    # voice-only bubbles, attachments and draft state.
+                                    merge_web_history(session, result['messages'])
+                                session['nativeRevision'] = result['revision']
                         from .native_activity import apply_activity
-                        apply_activity(session, result['activity'], append=before is not None)
-                        offset = source.get('sharedHistoryOffset', 0)
-                        user_offset = source.get('sharedHistoryUserTurnOffset', 0)
-                        if (not paging and session.get('historyManaged')) or (paging and result['offset'] <= offset):
-                            offset, user_offset = result['offset'], result['userOffset']
-                        # A page does not refresh the tail. Keep its old stamp
-                        # so a later refresh still discovers any new appends.
-                        session.update(historyLoaded=True,
-                            sharedHistoryOffset=offset, sharedHistoryUserTurnOffset=user_offset,
-                            sharedHistoryTotal=result['total'])
-                    session['historyLoading'] = False
-                    self.service._publish_changes(sessions={session_id}, detail_only=True)
+                        from .execution_working_set import native_refresh
+                        with measure(self.service, 'history.native.refresh', synchronous=True, session_id=session_id):
+                            with native_refresh(session):
+                                with measure(self.service, 'history.activity.apply', synchronous=True, session_id=session_id):
+                                    apply_activity(session, result['activity'], append=before is not None)
+                                offset = source.get('sharedHistoryOffset', 0)
+                                user_offset = source.get('sharedHistoryUserTurnOffset', 0)
+                                if (not paging and session.get('historyManaged')) or (paging and result['offset'] <= offset):
+                                    offset, user_offset = result['offset'], result['userOffset']
+                                # A page does not refresh the tail. Keep its old stamp
+                                # so a later refresh still discovers any new appends.
+                                session.update(historyLoaded=True,
+                                    sharedHistoryOffset=offset, sharedHistoryUserTurnOffset=user_offset,
+                                    sharedHistoryTotal=result['total'])
+                                session['historyLoading'] = False
+                                with measure(self.service, 'history.publish', synchronous=True, session_id=session_id):
+                                    self.service._publish_changes(sessions={session_id}, detail_only=True)
+                    else:
+                        session['historyLoading'] = False
+                        self.service._publish_changes(sessions={session_id}, detail_only=True)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

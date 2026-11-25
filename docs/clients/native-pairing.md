@@ -19,12 +19,16 @@ or embedding a runtime in a native app.
    A lost response can be retried until expiry without creating another device.
    Host restart expires unfinished pairing; the client starts again explicitly.
 5. Credentials use the existing device store and revocation mechanism. Only
-   hashes persist on the host; the client stores its credential in Keychain.
+   hashes persist on the host; the client stores its credential in OS-protected storage.
    `/devices` lists registrations and lets the signed-in owner revoke them.
 
-The `companion-v1` scope permits native attachment, compact activity/catalog
-reads, bounded message/work previews, managed-chat creation and sending chat
-messages. It does not permit arbitrary actions, settings, files, terminal setup,
+The existing `companion-v1` credential scope permits native attachment,
+bounded `/api/sessions?view=observation`, `/api/attention` and `/api/activity`
+reads, bounded message/work previews, managed-chat creation, sending chat
+messages and exact-state `presentation.dismiss` receipts. The scope name is a
+retained credential identity, not a requirement for a companion feed. Existing
+credentials remain valid through the [generalized cutover](presentation.md);
+there is no new token family or automatic full-authority replacement. It does not permit arbitrary actions, settings, files, terminal setup,
 provider credentials, approvals, or device administration. It is not a
 per-conversation ACL: reading and messaging chats on this host is the explicitly
 approved authority. Legacy terminal credentials keep their existing authority.
@@ -40,8 +44,8 @@ unsupported result; existing manual-token connections continue to work unchanged
 ## Consumers
 
 [Desktop clients](desktop-clients.md) use this platform-neutral approval seam.
-Amplifier for Mac stores the credential in Keychain; a future Windows client owns
-its OS credential-storage implementation. Neither platform name nor app bundle
+Amplifier for Mac stores the credential in Keychain; Amplifier for Windows uses
+its own OS-protected credential storage. Neither platform name nor app bundle
 identity enlarges `companion-v1`. This guide remains the authority for pairing;
 platform contracts reference it instead of copying the protocol.
 

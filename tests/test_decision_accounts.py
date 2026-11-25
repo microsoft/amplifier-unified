@@ -9,10 +9,12 @@ from amplifier_web.module_failures import ConfiguredModuleError
 from amplifier_web.provider_environment import credential_bindings, rebind_provider_credentials
 from amplifier_web.provider_isolation import ProviderIsolation
 from amplifier_web.runtime_controls import public_config
+from test_runtime_controls import managed_module_source
 
 
 DEFINITIONS = {"provider-fixture": "hooks-fixture-decisions"}
 SOURCE = "git+https://example.test/fixture@exact"
+REAL_CATALOGS = accounts.catalogs
 
 
 def account(name="one", *, enabled=True, key="synthetic-secret-one"):
@@ -24,6 +26,11 @@ def account(name="one", *, enabled=True, key="synthetic-secret-one"):
 @pytest.fixture(autouse=True)
 def definitions(monkeypatch):
     monkeypatch.setattr(accounts, "catalogs", lambda: DEFINITIONS)
+
+
+@pytest.fixture
+def real_catalogs(definitions, monkeypatch):
+    monkeypatch.setattr(accounts, "catalogs", REAL_CATALOGS)
 
 
 def project(plan, *, sources=None):
@@ -268,6 +275,123 @@ def test_child_resume_restores_saved_decisions_and_rebinds_only_current_exact_ac
         accounts.restore_child_accounts(copy.deepcopy(current), saved, current)
 
 
+@pytest.mark.parametrize("scope", ["self", "named-agent"])
+@pytest.mark.parametrize("retained_form", ["logical", "projected"])
+def test_retained_child_portable_source_survives_admission_resume_and_projection(
+        managed_module_source, tmp_path, scope, retained_form):
+    """Use the same guard/composition/restore sequence as Children._execute_admitted."""
+    from amplifier_foundation.bundle import BundleModuleResolver
+    from amplifier_web.host.children import child_plan
+
+    c = managed_module_source
+    legacy = {**account(), "source": str(c.module)}
+    retained = credential_bindings({"providers": [legacy]})
+    if retained_form == "projected":
+        retained = project(retained).plan
+    path = tmp_path / "retained-child.json"
+    path.write_text(json.dumps(retained))
+    retained_bytes = path.read_bytes()
+    current = {**account(key="rotated-exact-account-key"), "source": c.portable}
+    current["config"]["decisions"]["enabled"] = False
+    parent_plan = {"providers": [current]}
+    if scope == "named-agent":
+        # A selected nested agent's declaration becomes this child's root
+        # overlay; the functions do not restore unrelated dormant agents.
+        parent_plan["agents"] = {"helper": {"providers": [copy.deepcopy(current)]}}
+    parent = project(parent_plan).plan
+    overlay = {"providers": [{"module": "provider-fixture", "instance_id": "one",
+                              "source": str(c.module)}]}
+    original = copy.deepcopy((parent, overlay, retained))
+    accounts.check_child_sources(parent, overlay)
+    plan = child_plan(parent, overlay)
+    current_overlay = parent.get("agents", {}).get("helper", {}) if scope == "named-agent" else {}
+    authorized = child_plan(parent, current_overlay)
+    before_authorized = copy.deepcopy(authorized)
+    restored = accounts.restore_child_accounts(plan, retained, authorized)
+    row = restored["providers"][0]
+    assert row["source"] == c.portable
+    assert row["instance_id"] == "one"
+    assert row["config"]["api_key"] == "rotated-exact-account-key"
+    assert row["config"]["decisions"] == legacy["config"]["decisions"]
+    assert authorized == before_authorized
+    assert (parent, overlay, retained) == original
+    assert path.read_bytes() == retained_bytes
+    # The resumed account must still resolve only its exact prepared source.
+    projection = project(restored)
+    resolver = accounts.AccountResolver(BundleModuleResolver(
+        {"provider-fixture": c.module},
+        source_paths={("provider-fixture", c.portable): c.module}),
+        projection.aliases)
+    assert resolver.resolve("hooks-fixture-decisions", c.portable).resolve() == c.module
+    assert accounts.logical_plan(projection.plan)["providers"] == restored["providers"]
+    assert ("hooks-fixture-decisions", str(c.module)) not in projection.aliases
+    with pytest.raises(ValueError, match="authorized account"):
+        resolver.resolve("hooks-fixture-decisions", c.portable.replace(c.commit, "f" * 40))
+
+
+@pytest.mark.parametrize("change", [
+    "revision", "instance", "module", "dirty", "missing-provenance",
+    "external-local", "disabled", "duplicate",
+])
+def test_retained_child_portable_equivalence_cannot_authorize_another_identity(
+        managed_module_source, tmp_path, change):
+    c = managed_module_source
+    retained = credential_bindings({"providers": [{**account(), "source": str(c.module)}]})
+    current = {"providers": [{**account(key="current-private-key"), "source": c.portable}]}
+    if change == "revision":
+        current["providers"][0]["source"] = c.portable.replace(c.commit, "f" * 40)
+    elif change == "instance":
+        current["providers"][0]["instance_id"] = "other"
+    elif change == "module":
+        current["providers"][0]["module"] = "provider-other"
+    elif change == "dirty":
+        c.code.write_text(c.code.read_text().replace("VERSION = 1", "VERSION = 9"))
+    elif change == "missing-provenance":
+        c.metadata.unlink()
+    elif change == "external-local":
+        local = tmp_path / "independent-local"
+        c.root.rename(local)
+        retained["providers"][0]["source"] = str(local / c.module.relative_to(c.root))
+    elif change == "disabled":
+        current["providers"][0]["enabled"] = False
+    else:
+        current["providers"].append(copy.deepcopy(current["providers"][0]))
+    before = copy.deepcopy((retained, current))
+    plan = copy.deepcopy(current)
+    with pytest.raises(ValueError, match="no longer authorized"):
+        accounts.restore_child_accounts(plan, retained, current)
+    assert plan == current
+    # Admission protects same-instance inherited credentials. A different
+    # instance is a separate declaration, not authority to resume the saved one.
+    if change not in {"instance", "disabled", "duplicate"}:
+        with pytest.raises(ValueError, match="inherited account source"):
+            accounts.check_child_sources(current, retained)
+    assert (retained, current) == before
+
+
+@pytest.mark.parametrize("operation", ["admit", "resume"])
+@pytest.mark.parametrize("nested", [False, True])
+def test_child_projection_validation_precedes_portable_equivalence(
+        managed_module_source, monkeypatch, operation, nested):
+    c = managed_module_source
+    old = {"providers": [{**account(), "source": str(c.module)}]}
+    forged = project(old).plan
+    # Even an equivalent portable URI is not permission to fix a mismatched
+    # hook/envelope/record projection before its existing validation runs.
+    forged["hooks"][0]["source"] = c.portable
+    if nested:
+        forged = {"providers": [account()], "agents": {"helper": forged}}
+    before = copy.deepcopy(forged)
+    monkeypatch.setattr("amplifier_web.host.components.portable_module_sources",
+                        lambda *a, **kw: pytest.fail("Projection must validate first"))
+    with pytest.raises(ValueError, match="logical account/source"):
+        if operation == "admit":
+            accounts.check_child_sources(old, forged)
+        else:
+            accounts.restore_child_accounts(copy.deepcopy(old), forged, old)
+    assert forged == before
+
+
 def test_real_core_child_decision_hook_and_resume(tmp_path):
     import os
     import subprocess
@@ -311,19 +435,208 @@ print(json.dumps({'coldProviderImports': len(after), 'declaredHooks': value}))
     assert '"coldProviderImports": 0' in result.stdout
 
 
-def test_catalog_helper_failure_is_cached_without_credentials_or_parent_imports(monkeypatch):
+def test_catalog_helper_failure_is_cached_without_credentials_or_parent_imports(monkeypatch, real_catalogs):
     import subprocess
     accounts._catalog_snapshot.cache_clear()
     calls = []
     def fail(command, **kwargs):
         calls.append((command, kwargs))
-        raise subprocess.TimeoutExpired(command, 10)
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
     monkeypatch.setenv("SYNTHETIC_PRIVATE_API_KEY", "must-not-cross")
     monkeypatch.setattr(accounts.subprocess, "run", fail)
     try:
-        assert accounts._catalog_snapshot() is None
-        assert accounts._catalog_snapshot() is None
+        for _ in range(2):
+            with pytest.raises(ValueError) as caught:
+                accounts.catalogs()
+            assert caught.value.diagnostic_facts['decisionCatalog']['category'] == 'timeout'
         assert len(calls) == 1 and calls[0][0][1] == "-I"
         assert "SYNTHETIC_PRIVATE_API_KEY" not in calls[0][1]["env"]
+    finally:
+        accounts._catalog_snapshot.cache_clear()
+
+
+@pytest.mark.parametrize("case,category", [
+    ("spawn", "spawn"), ("timeout", "timeout"), ("exit", "nonzero-exit"),
+    ("large", "oversized-output"), ("json", "invalid-json"),
+    ("unicode", "invalid-json"), ("list", "non-object"),
+    ("subprocess", "subprocess-error"),
+])
+def test_catalog_failure_facts_survive_probe_without_private_output(monkeypatch, real_catalogs, case, category):
+    import errno
+    import json
+    import subprocess
+    from amplifier_web import update_diagnostics as diagnostics
+    secret = b"/private/provider/token-DO-NOT-RETAIN"
+    calls = []
+    def run(command, **kwargs):
+        calls.append(kwargs)
+        assert kwargs["timeout"] == accounts._CATALOG_START_SECONDS == 120 and kwargs["check"] is True
+        assert kwargs["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        if case == "spawn":
+            raise OSError(errno.EACCES, secret.decode())
+        if case == "timeout":
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"], output=secret, stderr=secret)
+        if case == "exit":
+            raise subprocess.CalledProcessError(37, command, output=secret, stderr=secret)
+        if case == "subprocess":
+            raise subprocess.SubprocessError(secret.decode())
+        output = {"large": secret * 20000, "json": secret,
+                  "unicode": b"\xff", "list": b"[]"}[case]
+        return subprocess.CompletedProcess(command, 0, stdout=output)
+    monkeypatch.setattr(accounts.subprocess, "run", run)
+    accounts._catalog_snapshot.cache_clear()
+    try:
+        for _ in range(2):
+            with pytest.raises(ValueError) as caught:
+                accounts.catalogs()
+            facts = diagnostics.probe_failure(caught.value, "prepare")
+            record = diagnostics.probe_record(diagnostics.PROBE_PREFIX + json.dumps(facts))
+            assert record["decisionCatalog"]["category"] == category
+            assert record["decisionCatalog"]["elapsedMs"] >= 0
+            assert "DO-NOT-RETAIN" not in json.dumps(record)
+            if case == "exit":
+                assert record["decisionCatalog"]["exitCode"] == 37
+            if case == "spawn":
+                assert record["decisionCatalog"]["osError"] == "EACCES"
+            # A caller cannot mutate the cached failure shared by later calls.
+            caught.value.diagnostic_facts["decisionCatalog"]["category"] = "changed"
+        assert len(calls) == 1
+    finally:
+        accounts._catalog_snapshot.cache_clear()
+
+
+def test_catalog_valid_empty_and_copy_semantics(monkeypatch, real_catalogs):
+    import subprocess
+    for output in (b"{}", b'{"provider-test": {"module": "hooks-test"}}'):
+        calls = []
+        def run(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout=output)
+        monkeypatch.setattr(accounts.subprocess, "run", run)
+        accounts._catalog_snapshot.cache_clear()
+        try:
+            value = accounts.catalogs()
+            value.clear()
+            import json
+            assert accounts.catalogs() == json.loads(output)
+            assert len(calls) == 1
+        finally:
+            accounts._catalog_snapshot.cache_clear()
+
+
+def test_a_first_start_of_the_catalog_helper_as_slow_as_the_slowest_measured_one_gives_the_catalog(
+        monkeypatch, real_catalogs):
+    """In a new worker environment the first start of the helper compiles the provider packages. Of 85 such
+    starts that ``tests/test_windows_chat_setup.py`` measured on a hosted Windows runner, the slowest took
+    28.44 s (run 44203691661). A start over the limit fails the start of the conversation.
+
+    The helper here is made up. It answers only a caller that waits at least as long as that start took.
+    """
+    import subprocess
+    slowest, limits = 28.44, []
+
+    def run(command, **kwargs):
+        limits.append(kwargs["timeout"])
+        if kwargs["timeout"] < slowest:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return subprocess.CompletedProcess(command, 0, stdout=b'{"provider-test": "hooks-test"}')
+
+    monkeypatch.setattr(accounts.subprocess, "run", run)
+    accounts._catalog_snapshot.cache_clear()
+    try:
+        assert accounts.catalogs() == {"provider-test": "hooks-test"}
+        assert limits == [accounts._CATALOG_START_SECONDS]   # one start, with the app's limit
+    finally:
+        accounts._catalog_snapshot.cache_clear()
+
+
+def test_a_catalog_helper_that_does_not_end_is_ended_at_the_limit(monkeypatch, real_catalogs, tmp_path):
+    """A real helper, started as the app starts it. It connects to this case, sends one byte, and then waits
+    until the connection ends. Only that one process has its end of the connection. So the byte shows that
+    the helper ran. The end of the connection, which this case does not cause, shows that the process ended.
+
+    The limit is 4 s here. The start must return not before it, and in less than 9 s. So a start with another
+    limit (the 10 s of before, or none) fails this case.
+
+    The CI job ``.github/workflows/windows-path-length.yml`` also runs this case on native Windows, with the
+    python.exe of an environment that uv made, as a worker environment has it.
+    """
+    import socket
+    import threading
+    limit = 4
+    listener = socket.create_server(("127.0.0.1", 0))
+    listener.settimeout(60)
+    script = tmp_path / "catalog.py"
+    script.write_text("import socket\n"
+                      f"link = socket.create_connection(('127.0.0.1', {listener.getsockname()[1]}))\n"
+                      "link.sendall(b'r')\n"
+                      "link.recv(1)\n", encoding="utf-8")
+    monkeypatch.setattr(accounts, "Path", lambda _: SimpleNamespace(with_name=lambda _: script))
+    monkeypatch.setattr(accounts, "_CATALOG_START_SECONDS", limit)
+    accounts._catalog_snapshot.cache_clear()
+    outcome, link = [], None
+
+    def start():
+        try:
+            outcome.append(accounts.catalogs())
+        except ValueError as error:
+            outcome.append(error)
+
+    # In a thread, so that a start that does not return fails this case with a message.
+    call = threading.Thread(target=start, daemon=True)
+    call.start()
+    try:
+        try:
+            link, _ = listener.accept()
+        except TimeoutError:
+            pytest.fail(f"The helper did not connect to this case in 60 s. The start gave: {outcome}")
+        link.settimeout(60)
+        assert link.recv(1) == b"r"   # the helper runs
+        call.join(90)
+        assert not call.is_alive(), "The start of a helper that does not end did not return in 90 s."
+        assert len(outcome) == 1 and isinstance(outcome[0], ValueError), outcome
+        facts = outcome[0].diagnostic_facts["decisionCatalog"]
+        assert facts["category"] == "timeout", facts
+        assert limit * 1000 <= facts["elapsedMs"] < 9000, facts
+        # The helper process ended: its connection ended, and this case did not end it.
+        try:
+            ended = link.recv(1) == b""
+        except ConnectionError:
+            ended = True
+        except TimeoutError:
+            ended = False
+        assert ended, "The helper still had its connection 60 s after the start returned."
+    finally:
+        # A helper that still runs ends when this case ends the connection. Then the start returns.
+        for used in (link, listener):
+            if used is not None:
+                used.close()
+        call.join(60)
+        accounts._catalog_snapshot.cache_clear()
+        assert not call.is_alive(), "The start still runs 60 s after this case ended the helper's connection."
+
+
+@pytest.mark.parametrize("value", [
+    {"category": []}, {"category": "/secret"}, {"category": "timeout", "elapsedMs": True,
+    "stdoutBytes": -1, "exitCode": "/secret", "osError": "/secret", "stderr": "/secret"},
+])
+def test_untrusted_catalog_probe_record_is_closed(value):
+    import json
+    from amplifier_web import update_diagnostics as diagnostics
+    record = diagnostics.probe_record(diagnostics.PROBE_PREFIX + json.dumps({"ok": False, "decisionCatalog": value}))
+    assert record == ({"ok": False, "decisionCatalog": {"category": "timeout"}}
+                      if value.get("category") == "timeout" else {"ok": False})
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="native Windows console observation")
+def test_real_catalog_child_does_not_allocate_console(monkeypatch, real_catalogs, tmp_path):
+    script = tmp_path / "catalog.py"
+    script.write_text("import ctypes as c,json\n"
+                      "k=c.WinDLL('kernel32'); k.GetConsoleWindow.restype=c.c_void_p\n"
+                      "print(json.dumps({'console': int(k.GetConsoleWindow() or 0)}))\n")
+    monkeypatch.setattr(accounts, "Path", lambda _: SimpleNamespace(with_name=lambda _: script))
+    accounts._catalog_snapshot.cache_clear()
+    try:
+        assert accounts.catalogs() == {"console": 0}
     finally:
         accounts._catalog_snapshot.cache_clear()

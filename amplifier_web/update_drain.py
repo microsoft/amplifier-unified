@@ -1,7 +1,7 @@
 """Cooperative app replacement using the existing update and input receipts.
 
-Staging does not pause work. Only positively unsubmitted messages wait during
-actual replacement and restart. Older pre-replacement holds can be withdrawn
+The ordinary staged update stays open to work. An explicit safe update also
+holds new input while current work saves and yields. Older pre-replacement holds can be withdrawn
 through their existing receipts. No input or uncertain effect is replayed.
 """
 import copy
@@ -17,7 +17,9 @@ class UpdateDeferred(Exception):
 
 
 def held(service):
-    return (service.state.get('updates', {}).get('drain') or {}).get('phase') in {'draining', 'replacing', 'releasing'}
+    from .safe_update import waiting
+    state = service.state.get('updates', {})
+    return bool(waiting(state)) or (state.get('drain') or {}).get('phase') in {'draining', 'replacing', 'releasing'}
 
 
 def new_work(action, args):
@@ -145,6 +147,8 @@ async def wait_for_update(service, args, command_id, *, origin, guard=None):
                 # Missing proof can still wait, but cannot later supply authority.
                 lineage = service.collaboration.lineage(session, origin)
         task = session.get('task') or service.coordination.task(session['id'])
+        if args.get('expectedTaskId') is not None and (task or {}).get('id') != args['expectedTaskId']:
+            raise AppError('The saved task was replaced; inspect its identity before waiting for an update.', 409)
         worker = getattr(service.runtime, 'workers', {}).get(session['id'])
         if (not task or task.get('status') != 'active' or task.get('revision') != args['expectedRevision']
                 or session.get('status') != 'working' or not worker or not worker.get('runtimeOwnerId')
@@ -184,6 +188,7 @@ async def wait_for_update(service, args, command_id, *, origin, guard=None):
     try:
         result = await service.runtime.handoff_boundary(row['sessionId'], row['boundaryId'], update=True,
             receipt={'updateWait': {'owner': row['owner'], 'generationId': row['generationId'],
+                                    **({'saveAndYield': True} if current.get('safeUpdate') else {}),
                                     **row['taskBinding']}})
     except BaseException:
         async with service.lock:
@@ -203,7 +208,7 @@ async def wait_for_update(service, args, command_id, *, origin, guard=None):
 
 
 async def observe_waiters(manager):
-    """Inspect only enrolled owners; an idle event alone is not checkpoint proof."""
+    """Inspect enrolled owners; return False while exact cancellation is pending."""
     service = manager.service
     current = service.state['updates'].get('drain') or {}
     phase = current.get('phase')
@@ -231,6 +236,7 @@ async def observe_waiters(manager):
                           'checkpoint_ready' if row.get('ready') else 'waiting')
                 service._publish_changes(globals={'updates'})
 
+    pending_cancellations = []
     for sid, row in list(current['workers'].items()):
         if not retained(row) or phase == 'released' and not row.get('withdrawn'):
             continue
@@ -244,11 +250,14 @@ async def observe_waiters(manager):
         if row.get('initializing'):
             continue
         worker = getattr(service.runtime, 'workers', {}).get(sid) or {}
+        if row.get('naturalFinish'):
+            continue
         if row.get('suppressed') and worker.get('runtimeOwnerId') != row['owner']:
             continue
         reason = row.get('suppressed') or continuation_guard(service, {'updateYield': row}, authority_only=True)
         pending = service.state['updates'].get('pendingApp') or {}
-        changed = any(pending.get(key) != current['target'].get(key) for key in ('attemptId', 'revision', 'generation'))
+        changed = current.get('restartRefused') or any(
+            pending.get(key) != current['target'].get(key) for key in ('attemptId', 'revision', 'generation'))
         withdrawn = (changed or row.get('withdrawn')) and not reason and not row.get('unknown')
         if withdrawn and not row.get('ready'):
             # Keep the hook until the current turn has actually yielded. Merely
@@ -266,6 +275,12 @@ async def observe_waiters(manager):
                 try:
                     result = await service.runtime.handoff_boundary(sid, row['boundaryId'], cancel=True,
                         receipt={'updateWait': {'owner': row['owner']}})
+                    if result == {'ready': False, 'waitingFor': ['boundary-reply'], 'requestPending': True}:
+                        # The runtime still owns this exact shielded reply. Keep
+                        # its receipt and checkpoint, but do not release the wait
+                        # or permit replacement before cancellation is confirmed.
+                        pending_cancellations.append(row)
+                        continue
                     if result.get('cancelled') is not True:
                         raise RuntimeError('The original worker did not confirm cancellation of its update wait.')
                 except Exception:
@@ -307,10 +322,26 @@ async def observe_waiters(manager):
             continue
         await observe_checkpoint(sid, row, worker)
     async with service.lock:
-        if (service.state['updates'].get('drain') is current and current.get('phase') == 'waiting'
-                and all(row.get('suppressed') for row in current['workers'].values())):
+        if any(retained(row) for row in pending_cancellations):
+            return False
+        if (service.state['updates'].get('drain') is not current or current.get('phase') != 'waiting'
+                or not all(row.get('suppressed') for row in current['workers'].values())):
+            return
+        if not current.get('safeUpdate'):
             current.update(phase='released', result='superseded')
             service._publish_changes(globals={'updates'})
+            return
+        # Before replacement starts, loss of the chosen candidate withdraws
+        # this wait on the original host. Preserve admission until saved input
+        # has actually been released. An uncertain replacement never enters here.
+        state = service.state['updates']
+        pending = state.get('pendingApp') or {}
+        if (current['hostInstanceId'] != service.instance_id
+                or (not current.get('restartRefused') and all(pending.get(k) == v for k, v in current['target'].items()))):
+            return
+        current.update(phase='releasing', result='withdrawn')
+        service._publish_changes(globals={'updates'})
+    await finish(manager, 'withdrawn')
 
 
 def same_owner(service, row):
@@ -345,7 +376,7 @@ def hold_message(service, session, message):
 
 
 async def prepare(manager, release):
-    """Observe idle readiness without reserving workers or withholding input."""
+    """Check staged readiness against the retained admission and worker state."""
     service = manager.service
     prior = service.state['updates'].get('drain') or {}
     if prior.get('phase') == 'draining':
@@ -356,17 +387,55 @@ async def prepare(manager, release):
         await finish(manager, 'withdrawn')
         return False
     if prior.get('phase') == 'waiting':
-        await observe_waiters(manager)
+        if await observe_waiters(manager) is False:
+            return False
         if any(not row.get('ready') and not row.get('suppressed') for row in prior['workers'].values()):
             return False
+        # Saved settings freshness waits for the enrolled writer's checkpoint.
+        # Once positively ready, retire that exact idle owner rather than
+        # weakening the application gate's real writer-absence requirement.
+        for sid, row in list(prior['workers'].items()):
+            session = service._session(sid)
+            if (row.get('ready') and not row.get('suppressed') and session.get('configurationPending')
+                    and not session.get('configurationBusy') and not session.get('pendingConfiguration')
+                    and not session.get('configurationOperationFence')):
+                if (service.state['updates'].get('drain') is not prior
+                        or continuation_guard(service, {'updateYield': row}, authority_only=True)):
+                    return False
+                if sid in service.runtime.workers:
+                    if not await service.runtime.retire_idle(sid, row['owner'], guard=lambda:
+                            service.state['updates'].get('drain') is not prior
+                            or continuation_guard(service, {'updateYield': row}, authority_only=True)):
+                        return False
+                if (service.state['updates'].get('drain') is not prior
+                        or continuation_guard(service, {'updateYield': row}, authority_only=True)):
+                    return False
+    if prior.get('safeUpdate') and prior.get('phase') == 'waiting':
+        return all(release.get(k) == v for k, v in prior['target'].items()) and not manager.app_busy()
+    from .safe_update import component_restart
+    if component_restart(prior, release):
+        return not manager.app_busy()
     return not held(service) and not manager.app_busy()
 
 
 def begin_replacement(manager, release):
-    """Close admission under the final activation lock, never during staging."""
+    """Commit this replacement under the final lock, preserving any earlier safe hold."""
     service = manager.service
     identity = manager.diagnostics.state['attemptId']
     prior = service.state['updates'].get('drain') or {}
+    from .safe_update import component_restart
+    if component_restart(prior, release):
+        if release['attemptId'] != identity:
+            raise ValueError('The prepared component restart changed.')
+        prior['componentRestart'] = {key: release[key] for key in ('attemptId', 'generation', 'revision')}
+        prior['componentsReady'] = False
+        return
+    if prior.get('safeUpdate') and prior.get('phase') == 'waiting':
+        expected = {key: release.get(key) for key in ('attemptId', 'generation', 'revision')}
+        if prior['target'] != expected or identity != expected['attemptId']:
+            raise ValueError('The prepared safe update changed before replacement.')
+        prior['phase'] = 'replacing'
+        return
     workers = pending_waiters(prior)
     service.state['updates']['drain'] = {
         'attemptId': identity,
@@ -376,13 +445,24 @@ def begin_replacement(manager, release):
         'workers': workers, 'messages': []}
 
 
+def hold_for_restart(service, identity, target):
+    """Close admission for a launcher restart, preserving its saved inputs."""
+    prior = service.state['updates'].get('drain') or {}
+    service.state['updates']['drain'] = {
+        'attemptId': identity, 'launcher': identity, 'target': target,
+        'phase': 'replacing', 'hostInstanceId': service.instance_id,
+        'workers': pending_waiters(prior),
+        'messages': prior.get('messages', []) if (
+            prior.get('launcher') == identity and prior.get('phase') == 'replacing') else []}
+
+
 def latest_input(session, excluding_request=None, *, service=None):
     # The existing bounded message view is enough: a new saved input appears
     # before native generation events. Ignore only positively unsent inputs
     # and this update's own deterministic retained-outcome message.
     for message in reversed(session.get('messages', [])):
         if (message.get('role') != 'user' or not message.get('inputId')
-                or message.get('delivery', {}).get('status') in {'failed', 'held'}
+                or message.get('delivery', {}).get('status') in {'failed', 'held', 'queued_for_update'}
                 or excluding_request and (message.get('peerEnvelope') or {}).get('replyToRequestId') == excluding_request):
             continue
         if service and message.get('peerEnvelope'):
@@ -439,9 +519,10 @@ def continuation_guard(service, request, *, authority_only=False):
 
 def verified_target(manager, drain):
     state = manager.service.state['updates']
+    from .safe_update import adoption_target
     result = state.get('applicationResult') or {}
     return (result.get('phase') == 'restart-ack'
-        and all(result.get(key) == drain.get('target', {}).get(key) for key in ('attemptId', 'revision'))
+        and all(result.get(key) == adoption_target(drain).get(key) for key in ('attemptId', 'revision'))
         and manager.running_identity.get('revision') == result.get('revision')
         and manager.running_identity.get('version') == result.get('version')
         and manager.service.instance_id != drain.get('hostInstanceId')
@@ -517,9 +598,15 @@ async def finish(manager, reason):
     if (not drain or drain.get('phase') not in {'draining', 'replacing', 'releasing'}
             or getattr(manager, '_releasing_update_inputs', False)):
         return
+    if (drain.get('safeUpdate') and reason != 'installed'
+            and not (drain.get('phase') == 'releasing' and drain.get('result') == 'withdrawn')):
+        return
     if reason == 'installed':
+        from .safe_update import adoption_target, ready_to_release
         result = service.state['updates'].get('applicationResult') or {}
-        if any(result.get(key) != drain['target'].get(key) for key in ('attemptId', 'revision')):
+        if any(result.get(key) != adoption_target(drain).get(key) for key in ('attemptId', 'revision')):
+            return
+        if drain.get('safeUpdate') and (not verified_target(manager, drain) or not ready_to_release(manager, drain)):
             return
         if any(row.get('explicit') for row in drain['workers'].values()) and not verified_target(manager, drain):
             return
@@ -540,6 +627,7 @@ async def finish(manager, reason):
             service._publish_changes(globals={'updates'})
         from .message_delivery import find_message
         from .execution import ensure_turn
+        from .external_conversation import is_shared
         for sid, identity in drain['messages']:
             async with service.lock:
                 session = service._session(sid)
@@ -556,15 +644,14 @@ async def finish(manager, reason):
                 # leaves this input uncertain and the remaining inputs queued.
                 drain['releasingInput'] = [sid, identity]
                 service._delivery(session, identity, 'sending')
-                active = session.get('collaborationGeneration') or {}
-                if active.get('id') and not active.get('terminal'):
-                    message['steering'] = {'generationId': active['id'], 'allowNextTurn': True,
-                                           'disposition': 'sending'}
-                else:
+                if not is_shared(session):
                     session['status'] = 'working'
-                    ensure_turn(session, identity, message['text'])
+                    if session.get('externalAgent'):
+                        ensure_turn(session, identity, message['text'])
                 service._publish_changes(sessions={sid}, globals={'updates'})
-                captured = copy.deepcopy(session)
+                captured = ({'id': sid, 'externalAgent': {'participation': 'shared'},
+                             'interruptionRevision': session.get('interruptionRevision', 0)}
+                            if is_shared(session) else copy.deepcopy(session))
             try:
                 await service._send(captured, message['text'], identity, preserve_draft=True)
             except Exception:
@@ -585,6 +672,7 @@ async def finish(manager, reason):
             drain.pop('releasingInput', None)
             drain['phase'] = 'released'
             service._publish_changes(globals={'updates'})
+        service._task(service.external_conversations.resume_pending())
         targets = service.db.execute("""SELECT DISTINCT json_extract(receipt,'$.target.sessionId') FROM commands
             WHERE json_extract(receipt,'$.commandAction')='coordination.send'
             AND json_extract(receipt,'$.delivery')='queued'""").fetchall()
@@ -608,10 +696,5 @@ async def defer_send(service, sid, identity, preserve_draft=False):
             return {'accepted': True, 'inputId': identity, 'delivery': 'queued_for_update'}
         # The gate released while we awaited the commit lock. Continue that
         # same first admission; never append to an already released drain.
-        active = session.get('collaborationGeneration') or {}
-        message.pop('steering', None)
-        if active.get('id') and not active.get('terminal'):
-            message['steering'] = {'generationId': active['id'], 'allowNextTurn': True,
-                                   'disposition': 'sending'}
         captured = copy.deepcopy(session)
     return await service._send(captured, message['text'], identity, preserve_draft=preserve_draft)

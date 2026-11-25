@@ -190,30 +190,35 @@ sending. Retry uncertain delivery with the same ID and arguments; never create a
 new ID automatically. Mismatched URL/argument targets and changed payloads under the same command ID
 are rejected. Observation/reconnection never submits or replays commands.
 
-## Compatibility and delivery slices
+## Shared display receipts and identity
 
-1. [Browser links](chat-links.md) stand alone and may land independently.
-2. This owner-authorized observation slice adds optional resources and discovery.
-   `/api/companion` is only a temporary preview adapter over the same queries.
-   It advertises generic resource URLs and `sessionsNextCursor`/`itemsNextCursor`;
-   use corresponding `sessionsCursor`/`itemsCursor` parameters for continuation.
-   Unsupported `offset` is rejected. Its legacy `workingCount` means execution.
-   If the shared count pass is incomplete, it returns `503 observation_pending`;
-   retry observation only. Private client distribution/setup belongs elsewhere.
-3. General device enrollment/permissions remain separate, unimplemented here.
-   Reuse `TerminalDevices` one-use enrollment and revocation, rather than a new
-   credential store. Its current credentials are revocable but not scoped.
-   Before claiming limited native-device access, central middleware must enforce
-   observation, session read/reply/control, approval and administration rights.
-   Acceptance must cover redemption-once, revocation of HTTP/live connections,
-   permission denials, Host/Origin/TLS protections, and absence of bypass through
-   client IDs, generic actions, session commands or alternate transports. A public
-   setup flow must not require copying a full-control host token. No native
-   enrollment rollout, deployment or shared-host adoption is part of this PR.
+Every collection response includes the same `hostIdentity` and `hostInstanceId`
+as attachment. A changed host is not an automatic retarget; a changed instance
+requires rediscovery and a fresh complete traversal. Counts, sessions and attention
+keep independent coherent revisions, not a fabricated cross-collection snapshot.
 
-Session and attention rows also expose `agentCreated`, using the same positive
-host-retained creation evidence as Recent chats (`is_agent_created`). It does not
-expose creator IDs or prompts and does not change the generic root/delegate scope.
-Clients wanting Recent-like presentation can hide these roots unless pinned or
-explicitly followed. Missing metadata on an older host is unknown, not proof of
-agent creation. Tempo's compatibility adapter preserves this field in both rows.
+Discovery additionally advertises `identity:true` and
+`dismissals:{version:1,action:"presentation.dismiss"}`. Every attention item and
+active/preparing session carries its opaque exact-state dismissal descriptor.
+Idle sessions have no activity dismissal. Active sessions may include a bounded
+plain-text `display.summary` projected at the execution-event boundary. These
+fields contain no raw tool arguments/results and require no historical transcript
+hydration. See [shared presentation](presentation.md) for durable receipts,
+revocation, stale-state handling and device-local preferences.
+
+## Compatibility and cutover
+
+The generic collections are the supported native-client path. The existing
+restricted device credential now admits precisely these reads and shared display
+receipts; it does not admit the full session collection or broader commands.
+[Native pairing](native-pairing.md) owns approval and revocation.
+
+`/api/companion` is removed. Its route, translation module and authorization
+branch no longer exist. Native consumers use the generalized resources without
+a fallback. Existing `companion-v1` credentials retain their restricted authority;
+that historical scope name does not select an adapter. Unsupported discovery
+leaves a service unavailable with an update message.
+
+The rollout record must distinguish source qualification, service publication,
+actual host adoption, client publication and actual device adoption. Browser
+execution/device-v1 remains a separate enrollment and authority boundary.

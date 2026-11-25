@@ -41,11 +41,13 @@ def test_installed_probe_identity():
         identities[name] = {"version": dist.version, "origin": str(origin),
                             "sha256": hashlib.sha256(origin.read_bytes()).hexdigest()}
     import amplifier_web.host.session as host
-    source = Path(__file__).parents[1] / "amplifier_web/host/session.py"
-    installed = Path(host.__file__).resolve(strict=True)
-    assert installed != source.resolve()
-    assert installed.read_bytes() == source.read_bytes()
-    identities["sessionSha256"] = hashlib.sha256(installed.read_bytes()).hexdigest()
+    import amplifier_web.host.children as children
+    for module in (host, children):
+        source = Path(__file__).parents[1] / Path(*module.__name__.split(".")).with_suffix(".py")
+        installed = Path(module.__file__).resolve(strict=True)
+        assert installed != source.resolve()
+        assert installed.read_bytes() == source.read_bytes()
+        identities[module.__name__] = hashlib.sha256(installed.read_bytes()).hexdigest()
     print("SPECIALIST_INSTALLED " + json.dumps(identities, sort_keys=True))
 
 
@@ -498,6 +500,302 @@ async def test_real_preparation_and_fresh_native_child_expose_specialist_only_to
         }, sort_keys=True))
     finally:
         await parent.cleanup()
+
+
+@pytest.fixture
+async def delegate_specialists(specialist, tmp_path, request, monkeypatch):
+    """Real file loading, preparation, DelegateTool, Core mounts and host children."""
+    import asyncio
+    from dataclasses import fields
+    import hashlib
+    from amplifier_foundation.bundle import PreparedBundle
+    from amplifier_module_loop_live.runtime import Runtime
+    from amplifier_module_tool_delegate import DelegateTool
+    from amplifier_web.host.children import install_children, PersistentDelegate
+    from amplifier_web.host.storage import SessionStore
+
+    suffix = hashlib.sha256(str(tmp_path).encode()).hexdigest()[:12]
+    state = {"fail": set(), "events": [], "executed": [], "cleaned": [],
+             "constructed": [], "block": False, "mounting": asyncio.Event(),
+             "provider_selection": "healthy"}
+    sources = {}
+    names = ("alpha", "beta")
+    for name in names:
+        module = f"tool-{name}-{suffix}"
+        folder = specialist.root / "modules" / module
+        folder.mkdir(parents=True)
+        source = TOOL.replace("specialist_probe", name + "_probe")
+        source = source.replace(
+            '    await coordinator.mount("tools", Specialist(), name="',
+            '''    state = coordinator.get_capability("test.specialist")
+    if state is not None and coordinator.session_id != "parent":
+        if state["block"]:
+            import asyncio
+            state["mounting"].set()
+            await asyncio.Future()
+        if "''' + name + '''" in state["fail"]:
+            raise RuntimeError("fixture-secret /private/fixture-path")
+    await coordinator.mount("tools", Specialist(), name="''')
+        (folder / "__init__.py").write_text(source)
+        sources[name] = {"module": module, "source": str(folder)}
+        (specialist.root / "agents" / (name + ".md")).write_text(
+            "---\n" + yaml.safe_dump({"model_role": [name, "general"],
+                                      "tools": [sources[name]]}) +
+            "---\n" + name + " instructions.\n")
+    specialist.behavior.write_text(yaml.safe_dump({
+        "bundle": {"name": "specialists", "namespace_root": ".."},
+        "agents": {"include": ["specialists:" + name for name in names]},
+    }))
+    loop_id = "loop-delegate-probe-" + suffix
+    loop_path = specialist.root / "modules" / loop_id
+    loop_path.mkdir()
+    (loop_path / "__init__.py").write_text('''__amplifier_module_type__ = "orchestrator"
+class Probe:
+    def __init__(self, coordinator):
+        self.coordinator = coordinator
+    def _select_provider(self, providers):
+        state = self.coordinator.get_capability("test.specialist")
+        return providers[state["provider_selection"]]
+    async def execute(self, prompt, context, providers, tools, hooks, coordinator):
+        state = coordinator.get_capability("test.specialist")
+        state["executed"].append(coordinator.session_id)
+        if prompt != "inspect":
+            return "Unexpected execution after failed initialization"
+        name = coordinator.config["instruction"].split()[0]
+        assert coordinator.config["instruction"] == name + " instructions."
+        assert coordinator.config["model_role"] == [name, "general"]
+        result = await tools[name + "_probe"].execute({})
+        assert result.success and result.output == {"specialist": True}
+        await context.add_message({"role": "user", "content": prompt})
+        await context.add_message({"role": "assistant", "content": name + " verified"})
+        return name + " verified"
+async def mount(coordinator, config):
+    await coordinator.mount("orchestrator", Probe(coordinator))
+''')
+    loaded = await compose(specialist)
+    loaded.hooks = []
+    context = Path(importlib.util.find_spec("amplifier_module_context_simple").origin).parent
+    loaded.session = {
+        "orchestrator": {"module": loop_id, "source": str(loop_path)},
+        "context": {"module": "context-simple", "source": str(context)},
+    }
+    if getattr(request, "param", False):
+        provider_id = "provider-mount-probe-" + suffix
+        provider_path = specialist.root / "modules" / provider_id
+        package = provider_path / ("amplifier_module_" + provider_id.replace("-", "_"))
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text(('''__amplifier_module_type__ = "provider"
+from amplifier_core import ProviderInfo
+class ProbeProvider:
+    def __init__(self, config=None):
+        self.config = config or {}
+        self.name = self.config.get("name", "healthy")
+        self.priority = 1
+    def get_info(self):
+        return ProviderInfo(id=self.name, display_name="Offline fixture")
+    def get_config_schema(self):
+        return {"fields": []}
+    async def list_models(self):
+        return []
+    async def complete(self, request, **kwargs):
+        raise AssertionError("No inference permitted")
+    def parse_tool_calls(self, response):
+        return []
+async def mount(coordinator, config):
+    state = coordinator.get_capability("test.specialist")
+    if state is not None and coordinator.session_id != "parent" and config.get("name") == "broken":
+        raise RuntimeError("fixture-provider-secret")
+    provider = ProbeProvider(config)
+    await coordinator.mount("providers", provider, name="PROVIDER_DEFAULT")
+''').replace("PROVIDER_DEFAULT", provider_id.removeprefix("provider-")))
+        # The provider-schema owner uses the ordinary public import name.
+        # This is a local fixture package, never a replacement app source path.
+        monkeypatch.syspath_prepend(str(provider_path))
+        loaded.providers = [
+            {"module": provider_id, "instance_id": name, "source": str(provider_path),
+             "config": {"name": name, "priority": 1}} for name in ("healthy", "broken")]
+        sources["provider"] = {"module": provider_id, "source": str(provider_path)}
+    prepared = await loaded.prepare(install_deps=False, strict=True, cache_dir=tmp_path / "cache")
+    for row in sources.values():
+        assert prepared.resolver.resolve(row["module"]).resolve() == Path(row["source"])
+
+    class ObservedPrepared(PreparedBundle):
+        async def create_session(self, **kwargs):
+            supplied = kwargs.pop("before_initialize", None)
+            async def observe(session):
+                state["constructed"].append(session)
+                coordinator = session.coordinator
+                coordinator.register_capability("test.specialist", state)
+                async def cleanup():
+                    state["cleaned"].append(session.session_id)
+                coordinator.register_cleanup(cleanup)
+                async def failed(event, data):
+                    from amplifier_core import HookResult
+                    state["events"].append((session.session_id, data["module_id"],
+                                             data["module_type"], data.get("reason_code")))
+                    return HookResult()
+                coordinator.hooks.register("module:load_failed", failed, name="fixture-observe-failure")
+                if supplied:
+                    await supplied(session)
+            return await super().create_session(before_initialize=observe, **kwargs)
+
+    prepared = ObservedPrepared(**{field.name: getattr(prepared, field.name)
+                                  for field in fields(prepared)})
+    parent = await prepared.create_session(session_id="parent")
+    store = SessionStore(tmp_path / "sessions")
+    runtime = Runtime("parent")
+    children = await install_children(parent, prepared, runtime, store, None)
+    await parent.coordinator.mount("tools", DelegateTool(parent.coordinator, {}), name="delegate")
+    await children.install(parent, prepared)
+    delegate = parent.coordinator.get("tools")["delegate"]
+    assert isinstance(delegate, PersistentDelegate)
+    assert isinstance(delegate.original, DelegateTool)
+    try:
+        yield SimpleNamespace(state=state, parent=parent, prepared=prepared, children=children,
+                              delegate=delegate, store=store, runtime=runtime, sources=sources)
+    finally:
+        await parent.cleanup()
+
+
+async def test_real_delegate_file_specialists_preserve_full_declarations(delegate_specialists):
+    fixture = delegate_specialists
+    for name in ("alpha", "beta"):
+        assert name + "_probe" not in fixture.parent.coordinator.get("tools")
+        result = await fixture.delegate.execute({"agent": "specialists:" + name, "instruction": "inspect"})
+        assert result.success, result.error
+        child = fixture.state["constructed"][-1]
+        plan = child.coordinator.config
+        assert plan["instruction"] == name + " instructions."
+        assert plan["model_role"] == [name, "general"]
+        assert fixture.sources[name] in plan["tools"]
+        assert name + "_probe" in child.coordinator.get("tools")
+        assert not hasattr(child.coordinator.get("orchestrator"), "load_failures")
+        assert fixture.state["executed"][-1] == child.session_id
+        assert fixture.state["cleaned"].count(child.session_id) == 1
+        _, metadata = fixture.store.load(child.session_id)
+        assert metadata["agent_overlay"]["tools"] == [fixture.sources[name]]
+        assert metadata["agent_overlay"]["instruction"] == name + " instructions."
+        assert fixture.children.rows[child.session_id]["status"] == "completed"
+    assert len(fixture.state["executed"]) == 2
+    assert not fixture.state["events"]
+    assert set(fixture.children.sessions) == {"parent"}
+
+
+@pytest.mark.parametrize("inherited", [False, True])
+@pytest.mark.parametrize("persistent", [False, True])
+async def test_real_delegate_refuses_failed_child_tool_mount(delegate_specialists, inherited, persistent):
+    fixture = delegate_specialists
+    fixture.state["fail"].add("alpha")
+    if inherited:
+        # A prepared declaration inherited from the parent, not the overlay.
+        # Root-equivalent policy must not inspect just agent-declared tools.
+        fixture.parent.coordinator.config.setdefault("tools", []).append(copy.deepcopy(fixture.sources["alpha"]))
+        fixture.parent.coordinator.config["agents"]["specialists:alpha"]["tools"] = []
+    result = await fixture.delegate.execute({
+        "agent": "specialists:alpha", "instruction": "must not execute", "persistent": persistent})
+    child = fixture.state["constructed"][-1]
+    assert fixture.state["events"] == [
+        (child.session_id, fixture.sources["alpha"]["module"], "tool", "unknown")]
+    assert not result.success, "A child with an actual Core tool-mount failure must not report success"
+    public = str(result.error)
+    assert fixture.sources["alpha"]["module"] in public
+    assert "could not be loaded" in public
+    assert "fixture-secret" not in public and "/private/fixture-path" not in public
+    assert not fixture.state["executed"]
+    assert fixture.state["cleaned"].count(child.session_id) == 1
+    row = fixture.children.rows[child.session_id]
+    assert row["status"] == "error" and row["reports"] == 0
+    assert not any(key in row for key in ("task", "runtime", "_owner"))
+    assert set(fixture.children.sessions) == {"parent"}
+    assert not fixture.children.admissions
+    assert fixture.store.load(child.session_id) is None
+    # Failed persistent startup is not a resumable successful checkpoint.
+    with pytest.raises(FileNotFoundError, match="No saved child"):
+        await fixture.children.resume(child.session_id, "not a replay", fixture.parent)
+
+
+async def test_real_child_mount_failure_preserves_saved_resume_history(delegate_specialists):
+    from amplifier_web.module_failures import ConfiguredModuleError
+    fixture = delegate_specialists
+    result = await fixture.delegate.execute({"agent": "specialists:alpha", "instruction": "inspect"})
+    assert result.success, result.error
+    identity = fixture.state["executed"][-1]
+    directory = fixture.store.directory(identity)
+    before = {name: (directory / name).read_bytes() for name in ("transcript.jsonl", "metadata.json")}
+    executions = list(fixture.state["executed"])
+    fixture.state["fail"].add("alpha")
+    with pytest.raises(ConfiguredModuleError) as failure:
+        await fixture.children.resume(identity, "explicit new input, never replay", fixture.parent)
+    assert failure.value.failures == [{
+        "module": fixture.sources["alpha"]["module"], "type": "tool", "reason_code": "unknown",
+        "guidance": "The module could not be loaded. Check its configuration and dependencies.",
+    }]
+    assert {name: (directory / name).read_bytes() for name in before} == before
+    assert fixture.state["executed"] == executions
+    assert fixture.state["cleaned"].count(identity) == 2  # once per distinct construction
+    assert fixture.children.rows[identity]["status"] == "error"
+    assert set(fixture.children.sessions) == {"parent"}
+
+
+@pytest.mark.parametrize("resumed", [False, True])
+async def test_real_child_cancel_during_mount_retains_cleanup_without_checkpoint(delegate_specialists, resumed):
+    import asyncio
+    fixture = delegate_specialists
+    identity = "cancelled-mount"
+    before = {}
+    if resumed:
+        result = await fixture.delegate.execute({"agent": "specialists:alpha", "instruction": "inspect"})
+        assert result.success, result.error
+        identity = fixture.state["executed"][-1]
+        directory = fixture.store.directory(identity)
+        before = {name: (directory / name).read_bytes() for name in ("transcript.jsonl", "metadata.json")}
+    executions = list(fixture.state["executed"])
+    fixture.state["block"] = True
+    task = asyncio.create_task(
+        fixture.children.resume(identity, "explicit follow-up", fixture.parent) if resumed else
+        fixture.children.spawn("specialists:alpha", "must not execute", fixture.parent, sub_session_id=identity))
+    try:
+        await asyncio.wait_for(fixture.state["mounting"].wait(), 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    assert fixture.state["executed"] == executions and not fixture.state["events"]
+    assert fixture.state["cleaned"].count(identity) == (2 if resumed else 1)
+    if resumed:
+        assert {name: (directory / name).read_bytes() for name in before} == before
+    else:
+        assert fixture.store.load(identity) is None
+    assert fixture.children.rows[identity]["status"] == "cancelled"
+    assert set(fixture.children.sessions) == {"parent"}
+    assert not fixture.children.admissions
+
+
+@pytest.mark.parametrize("delegate_specialists", [True], indirect=True)
+@pytest.mark.parametrize("isolated,selected,allowed", [
+    (False, "healthy", False), (True, "healthy", True), (True, "broken", False),
+])
+async def test_real_child_provider_failure_obeys_existing_isolation(
+        delegate_specialists, isolated, selected, allowed):
+    from amplifier_web.provider_isolation import ProviderIsolation
+    fixture = delegate_specialists
+    fixture.state["provider_selection"] = selected
+    if isolated:
+        fixture.parent.coordinator.register_capability("web.provider_isolation", ProviderIsolation())
+    result = await fixture.delegate.execute({"agent": "specialists:alpha", "instruction": "inspect"})
+    child = fixture.state["constructed"][-1]
+    assert any(row[:3] == (child.session_id, fixture.sources["provider"]["module"], "provider")
+               for row in fixture.state["events"]), "Actual Core provider mount failure must be observed"
+    assert result.success == allowed, result.error
+    assert fixture.state["executed"] == ([child.session_id] if allowed else [])
+    assert fixture.state["cleaned"].count(child.session_id) == 1
+    assert set(fixture.children.sessions) == {"parent"}
+    assert "fixture-provider-secret" not in str(result.error)
+    if not allowed:
+        assert fixture.store.load(child.session_id) is None
 
 
 DRIVER = '''__amplifier_module_type__ = "orchestrator"

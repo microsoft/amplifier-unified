@@ -147,7 +147,8 @@ async def test_update_git_filesystem_policy_preserves_ordinary_environment(monke
     monkeypatch.setattr(updates.sys, 'platform', platform)
     child = AsyncMock()
     child.returncode = 0
-    child.communicate.return_value = (b'ok', b'')
+    child.stdout.read.side_effect = [b'ok', b'']
+    child.stderr.read.return_value = b''
     create = AsyncMock(return_value=child)
     monkeypatch.setattr(updates.asyncio, 'create_subprocess_exec', create)
     given = None if inherited else dict(original)
@@ -173,7 +174,8 @@ async def test_windows_update_git_keeps_anonymous_sanitizer(monkeypatch, executa
                 'GIT_CONFIG_VALUE_0': 'true'}
     child = AsyncMock()
     child.returncode = 0
-    child.communicate.return_value = (b'ok', b'')
+    child.stdout.read.side_effect = [b'ok', b'']
+    child.stderr.read.return_value = b''
     create = AsyncMock(return_value=child)
     monkeypatch.setattr(updates.asyncio, 'create_subprocess_exec', create)
     await updates.process(executable, 'status', env=original)
@@ -236,8 +238,12 @@ async def test_update_download_retries_once_with_private_access_preserved(monkey
     monkeypatch.delenv('AMPLIFIER_GITHUB_ACCESS', raising=False)
     monkeypatch.setenv('GH_TOKEN', 'fixture')
     failed, passed = AsyncMock(), AsyncMock()
-    failed.returncode=128; failed.communicate.return_value=(b'', b'https://github.com/example/public SAML enforcement')
-    passed.returncode=0; passed.communicate.return_value=(b'result', b'')
+    failed.returncode=128
+    failed.stdout.read.return_value=b''
+    failed.stderr.read.side_effect=[b'https://github.com/example/public SAML enforcement', b'']
+    passed.returncode=0
+    passed.stdout.read.side_effect=[b'result', b'']
+    passed.stderr.read.return_value=b''
     create=AsyncMock(side_effect=[failed, passed]);monkeypatch.setattr(updates.asyncio,'create_subprocess_exec',create)
     result=await updates.process(*argv)
     assert result=='result' and result.diagnostic_facts['anonymousRetry'] is True
@@ -248,7 +254,10 @@ async def test_update_download_retries_once_with_private_access_preserved(monkey
 
 async def test_private_or_broken_source_stops_after_one_anonymous_retry(monkeypatch):
     monkeypatch.delenv('AMPLIFIER_GITHUB_ACCESS', raising=False)
-    child=AsyncMock();child.returncode=128;child.communicate.return_value=(b'',b'https://github.com/example/private Authentication failed')
+    child=AsyncMock();child.returncode=128
+    child.stdout.read.return_value=b''
+    child.stderr.read.side_effect=[b'https://github.com/example/private Authentication failed', b'',
+                                   b'https://github.com/example/private Authentication failed', b'']
     create=AsyncMock(return_value=child);monkeypatch.setattr(updates.asyncio,'create_subprocess_exec',create)
     with pytest.raises(RuntimeError): await updates.process('git','fetch','https://github.com/example/private')
     assert create.await_count==2

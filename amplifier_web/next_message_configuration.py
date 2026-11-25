@@ -8,14 +8,57 @@ def definitions(schema, string):
     from .new_chat import SELECTION
     value = schema({'sessionId': string(200), 'expectedRevision': {'type': 'integer', 'minimum': 0},
         'bundle': {**string(2000), 'minLength': 1}, 'selection': SELECTION,
-        'resetModel': {'type': 'boolean'}}, ['sessionId', 'expectedRevision'])
-    value['anyOf'] = [{'required': ['bundle']}, {'required': ['selection']}]
-    return {'conversation.configure': ('Save this conversation’s Next message bundle/model choices without preparing a worker. '
-        'expectedRevision is nextMessageRevision, not the app revision. Saved is not mounted; application is validated on genuine input.', value)}
+        'resetModel': {'type': 'boolean'}, 'onlyIfAvoidable': {'const': True}, 'restorePreviousInputId': {**string(200), 'minLength': 1},
+        'restorePreviousGenerationId': {**string(200), 'minLength': 1}}, ['sessionId', 'expectedRevision'])
+    restore_fields = ['restorePreviousInputId', 'restorePreviousGenerationId']
+    value['oneOf'] = [
+        {'required': restore_fields,
+         'not': {'anyOf': [{'required': [key]} for key in ('bundle', 'selection', 'resetModel')]}},
+        {'not': {'anyOf': [{'required': [key]} for key in (*restore_fields, 'onlyIfAvoidable')]},
+         'anyOf': [{'required': ['bundle']}, {'required': ['selection']}]},
+    ]
+    return {
+        'conversation.configure': ('Save an explicitly targeted conversation’s Next message bundle/model choices without preparing a worker. '
+            'Current authenticated Full root operators may target other registered own chats. '
+            'expectedRevision is nextMessageRevision, not the app revision. Saved is not mounted; application is validated on genuine input.', value),
+        'conversation.configuration': ('Read only saved bundle/model choices, nextMessageRevision, configuration hold category and retained pending operation identity/revision for an explicit chat. '
+            'No runtime demand or history hydration. Private plan, authority, draft and conversation history are not returned.',
+            schema({'sessionId': string(200)}, ['sessionId'])),
+    }
 
 
 def target(session):
-    return {key: session.get(key) for key in ('workspace', 'workingDirectory', 'executionRevision')}
+    # Native discovery can omit placement defaults; keyed admission supplies
+    # them after restart. Compare effective placement, not that representation.
+    # Never resolve against today's filesystem or renew the saved revision.
+    return {'workspace': session.get('workspace'),
+            'workingDirectory': session.get('workingDirectory') or session.get('workspace'),
+            'executionRevision': 0 if session.get('executionRevision') is None else session['executionRevision']}
+
+
+def saved_fork_choice(session, message):
+    """Old local forks inherited model options, never the host's account binding.
+
+    All writers of that binding on an existing fork save the selected options as
+    part of the same choice. A verified digest upgrade requires an existing key.
+    A transferred session intentionally drops it. The worker still checks its
+    native fork metadata, current model options and the actual mounted account.
+    """
+    parent = session.get('parentId')
+    fork = session.get('forkTranscript')
+    if not parent or not isinstance(fork, dict) or fork.get('sourceSessionId') != parent:
+        return None
+    selection = session.get('selection')
+    revision = session.get('nextMessageRevision', 0)
+    if (parent == session['id']
+            or session.get('runtimeSessionId') != session['id'] or session.get('nativeIdentity') != session['id']
+            or not session.get('modelConnectionKey') or not isinstance(selection, dict)
+            or not selection.get('instance') or not selection.get('model') or type(revision) is not int or revision < 0
+            or session.get('pendingModelSelection') or session.get('pendingBundleSelection') or session.get('portabilityOrigin')
+            or message.get('inputOrigin') not in {'ui', 'user'} or message.get('role') != 'user'
+            or message.get('steering') or message.get('handoffOrigin')):
+        return None
+    return {'sessionId': session['id'], 'parentId': parent, 'revision': revision, 'selection': selection}
 
 
 def pending_input(service, session):
@@ -24,15 +67,20 @@ def pending_input(service, session):
     generation = session.get('collaborationGeneration') or {}
     if generation.get('id') and not generation.get('terminal'):
         return True
-    # Ordinary, voice, question and scheduled input create an execution turn
-    # before any preparation await, including sends without a command id.
+    # Ordinary input is not a new execution turn until the native owner says so.
+    # Its existing message still protects preparation without a command receipt.
+    from .message_delivery import sending_input
+    if sending_input(session):
+        return True
+    # Voice, question and scheduled input retain their execution-turn evidence.
     # ColdDisplay retains the same pending-work fact with its exact body ref.
     reference = dict.get(session, '_coldFields', {}).get('execution')
-    if not dict.__contains__(session, 'execution') and reference is not None:
+    owner = getattr(session, '_working_execution', None)
+    if owner is None and not dict.__contains__(session, 'execution') and reference is not None:
         if reference.get('pendingWork') is not False:
             return True  # Legacy/unknown is not proof that input has settled.
     else:
-        tree = dict.get(session, 'execution', {})
+        tree = owner.current if owner is not None else dict.get(session, 'execution', {})
         voice_turns = voice_usage_turns(tree)
         # The call owns its duration/response receipts independently of manager
         # work. A spoken input's manager turn still blocks configuration.
@@ -57,7 +105,7 @@ def save(service, args, authority=None):
         raise AppError('Next message settings changed. Review the current choices before saving again.', 409)
     manager = service.management
     pending = session.get('pendingConfiguration', {})
-    if (session.get('configurationBusy') or manager.unresolved_configuration(session)
+    if (session.get('configurationBusy') or session.get('configurationOperationFence') or manager.unresolved_configuration(session)
             or pending.get('phase') in {'queued', 'applying'}):
         raise AppError('Resolve the existing configuration operation before changing Next message settings.', 409)
     # This is durable future intent, not a worker mutation. Live manager/child
@@ -67,6 +115,14 @@ def save(service, args, authority=None):
         raise AppError('This conversation is owned elsewhere. Continue here before changing its settings.', 409)
     if session.get('historyReadOnlyReason'):
         raise AppError(session['historyReadOnlyReason'], 409)
+    if session.get('sessionKind', 'root') != 'root':
+        raise AppError('Worker and internal sessions retain their original configuration.', 409)
+    if 'restorePreviousInputId' in args:
+        from .turn_model_settings import avoidable, restore
+        if args.get('onlyIfAvoidable') and not avoidable(service, session):
+            raise AppError('These settings no longer avoid preparing history. Review the current choices.', 409)
+        return restore(service, session, args['restorePreviousInputId'], args['restorePreviousGenerationId'], authority,
+                       keep_independent_edits=args.get('onlyIfAvoidable', False))
     selected = selection(args['selection']) if 'selection' in args else None
     if 'selection' in args and not selected:
         raise AppError('Choose a provider and model.', 400)
@@ -75,6 +131,8 @@ def save(service, args, authority=None):
     bundle = args.get('bundle', '').strip()
     if 'bundle' in args and not bundle:
         raise AppError('Choose a bundle.', 400)
+    if 'previousTurnSettings' in session:
+        session['previousTurnSettings'].pop('restorePending', None)
     if 'bundle' in args:
         if (bundle == session.get('bundle') and not args.get('resetModel')
                 and not pending_input(service, session)
@@ -92,6 +150,13 @@ def save(service, args, authority=None):
         from .provider_catalog import configured_binding
         binding = configured_binding(service.data_dir, session['workspace'], selected['instance'],
             global_only=session.get('location',{}).get('kind')=='managed')
+        previous = (session.get('previousTurnSettings') or {}).get('selection', {})
+        private = session.get('_previousTurnBinding')
+        if private and all(previous.get(k) == selected.get(k) for k in ('instance', 'model')):
+            if previous.get('effort') != selected.get('effort'):
+                private['retainedSelection'] = selected.copy()
+            else:
+                private.pop('retainedSelection', None)
         session['modelConnectionKey'] = binding
         session['selection'] = copy.deepcopy(selected)
         session['pendingModelSelection'] = copy.deepcopy(selected)
@@ -100,16 +165,46 @@ def save(service, args, authority=None):
         if session.get('pendingBundleSelection'):
             session['pendingBundleSelection']['resetModel'] = False
     session['nextMessageRevision'] = revision + 1
+    # Native discovery indexes are rebuildable and omit local future intent.
+    # Saving settings adopts only its app view; native history remains canonical.
+    session['historyManaged'] = False
+    if authority and 'operatorConfiguration' in authority and ('selection' in args or args.get('resetModel')):
+        session['pendingChoiceAuthority'] = copy.deepcopy(authority)
+    elif 'selection' in args or args.get('resetModel'):
+        session.pop('pendingChoiceAuthority', None)
     session.pop('nextMessageError', None)
     session.pop('nextMessageFailure', None)
     session['nextMessageStatus'] = 'saved'
+    if session.get('previousTurnSettings'):
+        from .turn_model_settings import avoidable
+        session['previousTurnSettings']['canAvoidHistoryPreparation'] = avoidable(service, session)
     return {'revision': revision + 1, 'status': 'saved', 'applies': 'next-message', 'mounted': False}
 
 
 def bind(service, runtime):
     """Only host code supplies this callback. It never crosses the worker wire."""
     if callable(getattr(runtime, 'bind_input_configuration', None)):
-        runtime.bind_input_configuration(lambda session: prepare(service, session, frozen=True))
+        async def prepare_input(session):
+            # Stay inside RuntimeManager's owned preparation task, including
+            # projection/copy failures. The original Send snapshot stays full.
+            return await prepare(service, _startup_inputs(session), frozen=True)
+        runtime.bind_input_configuration(prepare_input)
+
+
+def _startup_inputs(session):
+    """Private startup inputs; prepare() detaches their shared graph once."""
+    value = {key: session[key] for key in (
+        'id', 'workspace', 'workingDirectory', 'executionRevision',
+        'interruptionRevision', 'nextMessageRevision', 'configurationPendingRevision',
+        'runtimeSessionId', 'nativeIdentity', 'location', 'bundle', 'selection',
+        'pendingModelSelection', 'modelConnectionKey', 'pendingBundleSelection',
+        'pendingChoiceAuthority', 'replaceSavedSelection', 'bundleReplacement', 'forkContext',
+    ) if key in session}
+    # Ordinary startup restores native history. A fork explicitly supplies its
+    # captured messages through the existing startup path.
+    if session.get('forkContext'):
+        value['messages'] = session.get('messages', [])
+    return value
 
 
 def guard_for(service, captured, *, frozen=False):
@@ -135,12 +230,17 @@ def guard_for(service, captured, *, frozen=False):
         if service.assignments.blocked(current):
             raise RuntimeStartupError('The assignment is stopped. No input was sent.')
         if bundle:
-            if bundle.get('target') != placement:
+            if not isinstance(bundle.get('target'), dict) or target(bundle['target']) != placement:
                 raise ValueError('The saved bundle target moved. Choose its settings again.')
             try:
                 service.configuration_authority.check(bundle.get('authority'))
             except Exception as exc:
                 raise RuntimeStartupError('The saved bundle authority changed. No input was sent.') from exc
+        if captured.get('pendingChoiceAuthority'):
+            try:
+                service.configuration_authority.check(captured['pendingChoiceAuthority'])
+            except Exception as exc:
+                raise RuntimeStartupError('The saved model authority changed. No input was sent.') from exc
     return check
 
 
@@ -162,11 +262,30 @@ async def prepare(service, captured, *, frozen=False):
     failure = None
     try:
         check()
+        bound_selection = selection or session.get('selection')
+        if session.get('modelConnectionKey') and bound_selection:
+            from .provider_catalog import configured_binding, retained_conversation_binding
+            # Adopt only an exact previous-algorithm digest of TODAY's selected
+            # connection. No guesses about historical flags/credentials, no saved
+            # data rewrite. The actual mounted connection still gates admission.
+            if selection:
+                current_binding = configured_binding(service.data_dir, session['workspace'], bound_selection['instance'],
+                    global_only=session.get('location', {}).get('kind') == 'managed',
+                    saved=session['modelConnectionKey'])
+            else:
+                current_binding = retained_conversation_binding(service.data_dir, session['workspace'],
+                    session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'],
+                    bound_selection['instance'], session['modelConnectionKey'],
+                    global_only=session.get('location', {}).get('kind') == 'managed')
+            if not current_binding:
+                raise ValueError('The saved provider is unavailable. Choose an available connection.')
+            session['modelConnectionKey'] = current_binding
         if pending:
             checked = await resolve_defaults(service.data_dir, session['workspace'], pending['bundle'],
                 session_id=session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'],
                 replacement={'selection': session.get('selection'), 'replaceSavedSelection': True,
-                    'workingDirectory': session.get('workingDirectory')})
+                    'workingDirectory': session.get('workingDirectory')},
+                runtime_session=session)
             check()
             if not checked.get('modelCompatible') and not pending.get('resetModel'):
                 failure = {'code': 'incompatible-model', 'bundle': pending['bundle']}
@@ -266,12 +385,23 @@ def validate_selection(selected, catalog):
 def applied(session, payload):
     """Exact revision acknowledgment cannot clear a newer A→B→A choice."""
     revision = payload.get('revision')
-    if (type(revision) is not int or revision > session.get('nextMessageRevision', 0)
-            or revision <= session.get('appliedConfigurationRevision', -1)):
+    if type(revision) is not int or revision > session.get('nextMessageRevision', 0):
         return
     pending = session.get('pendingBundleSelection')
     if (revision == session.get('nextMessageRevision', 0)
             and pending and pending['bundle'] != payload.get('bundle')):
+        return
+    transition = payload.get('bindingTransition')
+    if transition and revision == session.get('nextMessageRevision', 0):
+        selected = session.get('pendingModelSelection') or session.get('selection') or {}
+        if (session.get('modelConnectionKey') == transition['previous']
+                and selected.get('instance') == transition['instance']):
+            # Only the host's guarded, mounted-verification receipt promotes
+            # this one proven digest. Newer choices and saved plans are untouched.
+            session['modelConnectionKey'] = transition['current']
+    if payload.get('bindingOnly'):
+        return
+    if revision <= session.get('appliedConfigurationRevision', -1):
         return
     # A slow earlier mount may finish after the user saves a future choice.
     # Record its actual root, without clearing or relabelling that newer intent.
@@ -285,6 +415,7 @@ def applied(session, payload):
         session.pop('pendingBundleSelection', None)
         session.pop('bundlePreview', None)
     session.pop('pendingModelSelection', None)
+    session.pop('pendingChoiceAuthority', None)
     session['nextMessageStatus'] = 'applied'
     session.pop('nextMessageError', None)
     session.pop('nextMessageFailure', None)

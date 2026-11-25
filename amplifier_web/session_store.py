@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .host.config import write_private
 from .host.storage import SessionStore
+from .native_message_projection import message_time
 
 
 class _BoundaryUnavailable(ValueError):
@@ -54,14 +55,6 @@ def capture_edit_context(home, source):
     if saved is None or revision(source) != expected:
         raise ValueError('The saved transcript changed. Refresh this chat before forking or editing it.')
     return context_digest(saved[0])
-
-
-def message_time(row):
-    value = (row.get('metadata') or {}).get('timestamp')
-    try:
-        return datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp()
-    except (AttributeError, TypeError, ValueError):
-        return None
 
 
 def matches_user(row, visible):
@@ -258,7 +251,26 @@ def complete_tool_exchanges(messages, *, positions=None):
     return result
 
 
-def _index_visible(messages, visible, display_offset=0, *, source=None, verify_anchors=False):
+def _legacy_text_alias(messages, row, boundary):
+    # Older web projection assigned an index by ordered text equality even
+    # when the native row belonged to a different submission. Only detach
+    # that weak association inside an independently verified saved prefix.
+    index = row.get('nativeIndex')
+    if (type(index) is not int or not 0 <= index < boundary or row.get('role') != 'user'
+            or row.get('source') == 'native' or row.get('via') != 'chat'
+            or row.get('nativeMessageId') or row.get('nativeInputId')
+            or row.get('attachments') or row.get('peerEnvelope') or row.get('voiceId')):
+        return False
+    identity = row.get('inputId')
+    native = messages[index]
+    return (isinstance(identity, str) and 0 < len(identity) <= 200
+            and _input_identity(native) not in (None, identity)
+            and text_content(native) == row.get('text')
+            and all(_input_identity(message) != identity for message in messages))
+
+
+def _index_visible(messages, visible, display_offset=0, *, source=None, verify_anchors=False,
+                   verified_boundary=None):
     """Retain exact anchors; only unindexed legacy web rows need alignment."""
     display_indexes = [index for index, row in enumerate(messages)
                        if row.get('role') in {'user', 'assistant'} and text_content(row)
@@ -267,6 +279,9 @@ def _index_visible(messages, visible, display_offset=0, *, source=None, verify_a
     for row in visible:
         if type(row.get('nativeIndex')) is not int and (row.get('voiceId') or row.get('via') == 'call'):
             continue
+        if verified_boundary is not None and _legacy_text_alias(messages, row, verified_boundary):
+            del row['nativeIndex']
+            continue
         anchor = _native_anchor(messages, row, source) if verify_anchors else row.get('nativeIndex')
         if type(anchor) is int:
             row['nativeIndex'] = anchor
@@ -274,7 +289,8 @@ def _index_visible(messages, visible, display_offset=0, *, source=None, verify_a
             continue
         if row.get('role') == 'user':
             match = next((index for index in range(cursor, len(messages))
-                          if matches_user(messages[index], row)), None)
+                          if matches_user(messages[index], row)
+                          and (not row.get('inputId') or _input_identity(messages[index]) in (None, row['inputId']))), None)
         else:
             match = next((index for index in range(cursor, len(messages))
                           if messages[index].get('role') == row.get('role')
@@ -450,6 +466,8 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
             raise ValueError("The full runtime transcript is unavailable; restore it before forking")
         messages = [{"role":row["role"],"content":row.get("text","")} for row in visible]
         metadata = {"transcript_origin":"visible_text_import"}
+    from .context_continuity import _source_digest
+    full_context_digest = _source_digest(messages)
     from .automatic_history import display_identity, display_message, remove_internal_copies
     internal = {index: display_identity(source, index, row.get('role'), text_content(row))
                 for index, row in enumerate(messages)
@@ -490,8 +508,16 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
             cut = user_indexes[turn]
     # Later rows are irrelevant to an earlier cut. Validate only its retained
     # prefix and the requested boundary, including immutable attachment binds.
+    # Capture any proven target before text alignment can supply a legacy index.
+    verified_boundary = None
+    if revision_checked and cut < len(visible):
+        target = visible[cut]
+        bound_index = _native_anchor(messages, target, source)
+        if bound_index is not None and (target.get('nativeMessageId')
+                or target.get('inputId') and _input_identity(messages[bound_index]) == target['inputId']):
+            verified_boundary = bound_index
     _index_visible(messages, visible[:cut + 1], source.get('sharedHistoryOffset', 0),
-                   source=source, verify_anchors=cut < len(visible))
+                   source=source, verify_anchors=cut < len(visible), verified_boundary=verified_boundary)
     if cut < len(visible):
         target_anchor = _native_anchor(messages, visible[cut], source)
         anchored_input = (target_anchor is not None and visible[cut].get('inputId')
@@ -542,6 +568,9 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
             row['nativeIndex'] = index_map[original_index]
     from .host.session import repair_interrupted_receipts
     messages = messages if recovery else repair_interrupted_receipts(messages)
+    if not prepare_only and source.get('composerImageReferences') is True:
+        from .composer_handoff import inline_composer_uploads
+        messages = inline_composer_uploads(store.directory(source_id), messages, saved=saved[0] if saved else [])
     references = visible_reference(messages, visible)
     messages.extend(references)
     through_turn = user_offset + sum(row.get('role') == 'user' for row in visible)
@@ -574,10 +603,57 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
                 if bundle:
                     from .bundle_selection import reset_controls
                     data = reset_controls(data, reset_model=reset_model)
+                # Model choice is inherited, its source execution's transition
+                # admission is not. A later explicit target choice gets its own
+                # revision on the independent fork, even after bundle reset.
+                data["selectionRevision"] = None  # Explicit fork, not a legacy absent-key control.
+                data.pop("selectionBinding", None)
+                data.pop("selectionBindingPending", None)
             copied[name] = json.dumps(data,indent=2)
     effective = source_dir / "effective-configuration.json"
     if effective.is_file() and not bundle:
         copied["configuration.json"] = effective.read_text()
+    # A full, unchanged fork may retain derived context, never the source's
+    # execution transaction or uncertain provider/install ownership. Context
+    # still validates identity/configuration on the target's first request.
+    if (not bundle and not recovery and cut == len(visible) and before_turn is None
+            and _source_digest(messages) == full_context_digest):
+        path = source_dir / "context-checkpoint.json"
+        journal = source_dir / "context-recovery.json"
+        try:
+            from .context_continuity import digest
+            checkpoint_text = path.read_text()
+            record = json.loads(checkpoint_text)
+            settled = True
+            if journal.exists():
+                receipt = json.loads(journal.read_text())
+                settled = (receipt.get("version") == 1 and isinstance(receipt.get("attempts"), dict)
+                           and all(row.get("state") == "committed" for row in receipt["attempts"].values()))
+            prefix = record["sourceRevision"]
+            end = prefix["messages"]
+            # Consult the owning pure configuration classifier, never mount a
+            # worker or duplicate the module's prompt/configuration algorithm.
+            plan = json.loads(copied["configuration.json"])
+            declaration = plan.get("session", {}).get("context")
+            if (not isinstance(declaration, dict) or declaration.get("module") != "context-managed"
+                    or declaration.get("config", {}).get("engine", "boundary") != "boundary"):
+                raise ValueError("Fork checkpoint configuration is not verifiable")
+            from amplifier_module_context_managed.boundary import BoundaryContextManager
+            validator = BoundaryContextManager(declaration.get("config", {}))
+            validator.messages = messages
+            if validator.restore_checkpoint(record, record.get("identity"))["status"] != "restored":
+                raise ValueError("Fork checkpoint or configuration changed")
+            if (settled and not record.get("progress") and record.get("summary")
+                    and type(end) is int and 0 < end <= len(messages)
+                    and record.get("sha256") == digest({k: v for k, v in record.items() if k != "sha256"})
+                    and prefix["sha256"] == _source_digest(messages[:end])):
+                copied["context-checkpoint.json"] = checkpoint_text
+        except (FileNotFoundError, OSError, ValueError, TypeError, KeyError, AttributeError, ImportError):
+            pass  # Originals-only is explicit in the fork result below.
+    if "configuration.json" in copied:
+        from .host.components import portable_module_sources
+        copied["configuration.json"] = json.dumps(
+            portable_module_sources(json.loads(copied["configuration.json"]), home), indent=2)
     # UI message IDs remain stable, while canonical content bindings belong to
     # the independent target and its remapped native indices.
     from .automatic_history import display_identity
@@ -618,6 +694,8 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
             'sharedHistoryTotal': sum(display_message(row, index, {'id': target_id}) is not None
                                       for index, row in enumerate(messages)),
             "forkTranscript":{"sourceSessionId":source_id,"messageCount":len(messages),"turn":through_turn,"jobsReplayed":False},
+            "forkContinuity": {"status": "checkpoint-retained" if "context-checkpoint.json" in copied else "originals-only",
+                               "providerWork": False},
             **({"selection":copy.deepcopy(source["selection"])} if source.get("selection") and not reset_model else {})}
 
     from .message_interactions import fork_annotations

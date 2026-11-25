@@ -12,29 +12,29 @@ from amplifier_web.runtime_worker import Worker
 SCRIPT = r'''
 import json,sys,time
 from pathlib import Path
-parked=False
+idle=True
 for line in sys.stdin:
     data=json.loads(line); op=data['op']; result={}
     if op=='start':
         if data['session']['id'].startswith('slow'): time.sleep(.1)
         print(json.dumps({'type':'runtime.ready','report':{'session_id':data['session']['id']}}),flush=True)
+        if sys.argv[2:] == ['defer-boot-events']:
+            while not Path(sys.argv[1]).is_file(): time.sleep(.01)
+            for event in ('session.ready', 'session.idle'):
+                print(json.dumps({'type':event}),flush=True)
         continue
     if op=='stop': break
-    if op=='park':
-        parked=True
-        print(json.dumps({'type':'runtime.parked'}),flush=True)
-        result={'parked':True}
     if op=='send':
-        parked=False;result={'accepted':True}
+        idle=False;result={'accepted':True}
+        print(json.dumps({'type':'input.delivered','input_id':data['input_id']}),flush=True)
     if op=='control':
-        parked=False
         if data['operation']=='held':continue
         result={'ok':True}
     if op=='retire':
         time.sleep(.02)
-        result={'retired':parked}
+        result={'retired':idle}
     print(json.dumps({'op':'reply','id':data['id'],'result':result}),flush=True)
-    if op=='retire' and parked:
+    if op=='retire' and idle:
         print(json.dumps({'type':'session.closed'}),flush=True)
         if len(sys.argv)>1:
             while not Path(sys.argv[1]).exists(): time.sleep(.01)
@@ -78,6 +78,95 @@ async def test_count_evicts_oldest_settled_worker_and_input_restarts_without_rep
     assert manager.workers['a']['process'] is not first
     assert not [event for event in manager.events if event[0] == 'runtime.error']
 
+async def test_retiring_warmed_worker_preserves_legacy_stop_after_late_native_idle(tmp_path, monkeypatch):
+    from amplifier_web.service import AppService
+
+    gate = tmp_path / 'release-boot-events'
+    runtime = RuntimeManager(command=[sys.executable, '-c', SCRIPT, str(gate), 'defer-boot-events'])
+    app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    monkeypatch.setattr(runtime.retention, 'wake', lambda: None)
+    observed_idle = asyncio.Event()
+    original = app.on_runtime_event
+
+    async def observe(kind, payload):
+        await original(kind, payload)
+        if payload.get('event') == 'session.idle':
+            observed_idle.set()
+
+    monkeypatch.setattr(app, 'on_runtime_event', observe)
+    try:
+        created = await app.dispatch('session.create', {'title': 'Saved Stop'})
+        sid = created['result']['sessionId']
+        session = app._session(sid)
+        session['status'] = 'stopped'
+        assert (await app.dispatch('session.warm', {'id': sid}))['accepted']
+        await asyncio.gather(*list(app.tasks))
+        await asyncio.gather(*list(app.warmup.pending.values()))
+        process = runtime.workers[sid]['process']
+        assert session['status'] == 'stopped' and process.returncode is None
+        assert not observed_idle.is_set()
+        gate.touch()
+        await asyncio.wait_for(observed_idle.wait(), 3)
+        assert session['status'] == 'stopped'
+
+        runtime.retention.settings['max_warm_workers'] = 0
+        await runtime.retention.sweep()
+        assert process.returncode == 0 and sid not in runtime.workers
+        assert session['preparation'] == {'status': 'cold'}
+        assert session['status'] == 'stopped' and session['messages'] == []
+    finally:
+        gate.touch()
+        await app.close()
+
+
+@pytest.mark.parametrize('barrier', ['none', 'owner', 'guard', 'mcp', 'late-work'])
+async def test_explicit_idle_retirement_keeps_exact_owner_and_final_worker_refusal(manager, barrier):
+    process = await warm(manager, 'enrolled')
+    row = manager.workers['enrolled']
+    owner = row['runtimeOwnerId']
+    manager.retention.protected = lambda sid: True  # Explicit boundary, not eviction.
+    if barrier == 'mcp':
+        manager._ephemeral_mcp['enrolled'] = ('attached', [])
+    if barrier == 'late-work':
+        await manager.send({'id': 'enrolled'}, 'one original input', 'once', manager.emit)
+        row['idle'] = True  # Native final check must reject a stale host hint.
+    result = await manager.retire_idle('enrolled', 'different' if barrier == 'owner' else owner,
+                                      guard=lambda: barrier == 'guard')
+    assert result is (barrier == 'none')
+    if barrier == 'none':
+        assert process.returncode == 0 and 'enrolled' not in manager.workers
+    else:
+        assert manager.workers['enrolled'] is row and process.returncode is None
+        assert not row.get('closing')
+    assert not any(kind == 'runtime.status' and data.get('status') == 'stopped'
+                   for kind, data in manager.events)
+
+@pytest.mark.parametrize('cancel_owner', ['conversation-stop', 'caller'])
+async def test_explicit_idle_retirement_distinguishes_stop_from_caller_cancellation(manager, cancel_owner):
+    from unittest.mock import AsyncMock
+    process = await warm(manager, 'enrolled')
+    row = manager.workers['enrolled']
+    entered = asyncio.Event()
+    async def held_request(*args, **kwargs):
+        entered.set()
+        await asyncio.Future()
+    manager._request_unlocked = AsyncMock(side_effect=held_request)
+    retirement = asyncio.create_task(manager.retire_idle('enrolled', row['runtimeOwnerId'],
+                                                        guard=lambda: False))
+    await asyncio.wait_for(entered.wait(), 1)
+    if cancel_owner == 'conversation-stop':
+        # RuntimeManager.stop cancels the competing retirement task, not the
+        # updater preparation that is observing it.
+        await manager.stop('enrolled')
+        assert await asyncio.wait_for(retirement, 2) is False
+        assert not retirement.cancelled() and process.returncode is not None
+    else:
+        retirement.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await retirement
+        assert not row['retirement_task'].done()  # Reconciliation stays owned.
+        await manager.stop('enrolled')
+
 
 async def test_idle_deadline_and_navigation_do_not_extend_retention(manager):
     first = await warm(manager, 'a')
@@ -85,10 +174,130 @@ async def test_idle_deadline_and_navigation_do_not_extend_retention(manager):
     await manager.prewarm({'id': 'a'}, manager.emit)
     await manager.retention.sweep()
     assert first.returncode is None
-    assert manager.workers['a']['parked_at'] == 0
+    assert manager.workers['a']['idle_at'] == 0
     manager.now += 1
     await manager.retention.sweep()
     assert first.returncode == 0
+
+
+@pytest.mark.parametrize('reason', ['count', 'ttl', 'update'])
+async def test_attached_retention_requests_existing_policy_and_rechecks_stale_demand(manager, reason):
+    servers = {'fixture': {'type': 'http', 'url': 'http://127.0.0.1:1/unused'}}
+    await manager.bind_ephemeral_mcp('attached', 'attachment', servers)
+    process = await warm(manager, 'attached')
+    row = manager.workers['attached']
+    await manager.retention.sweep()
+    assert not [event for event in manager.events if event[0] == 'runtime.retirement_requested']
+    assert await manager.retire_attachment('attached', 'attachment', guard=lambda: False) == 'busy'
+    assert process.returncode is None  # Default warm budget retains the ordinary settled worker.
+    if reason == 'count':
+        manager.retention.settings['max_warm_workers'] = 1
+        manager.now = 10
+        await warm(manager, 'newer')
+    elif reason == 'ttl':
+        manager.now = 12 * 3600
+    else:
+        row['update_pending'] = True
+    await manager.retention.sweep()
+    assert [event for event in manager.events if event[0] == 'runtime.retirement_requested'] == [
+        ('runtime.retirement_requested', {'sessionId': 'attached'})]
+    assert manager._ephemeral_mcp['attached'] == ('attachment', servers)
+    assert process.returncode is None and not row.get('closing')
+    # A delivered hint is not a lasting policy grant: pressure or idle age can change.
+    if reason == 'count':
+        await manager.stop('newer', reason='retention')
+    elif reason == 'ttl':
+        row['idle_at'] = manager.now
+    else:
+        row['update_pending'] = False
+    assert await manager.retire_attachment('attached', 'attachment', guard=lambda: False) == 'busy'
+    assert process.returncode is None and manager._ephemeral_mcp['attached'][0] == 'attachment'
+    row['update_pending'] = True
+    assert await manager.retire_attachment('attached', 'attachment', guard=lambda: False) == 'retired'
+    assert process.returncode == 0 and 'attached' not in manager._ephemeral_mcp
+
+
+async def test_protected_or_active_attachment_does_not_receive_policy_request(manager):
+    await manager.bind_ephemeral_mcp('attached', 'attachment', {
+        'fixture': {'type': 'http', 'url': 'http://127.0.0.1:1/unused'}})
+    process = await warm(manager, 'attached')
+    manager.retention.settings['max_warm_workers'] = 0
+    manager.retention.protected = lambda _: True
+    await manager.retention.sweep()
+    manager.retention.protected = lambda _: False
+    await manager.send({'id': 'attached'}, 'original work', 'once', manager.emit)
+    await manager.retention.sweep()
+    assert not [event for event in manager.events if event[0] == 'runtime.retirement_requested']
+    assert process.returncode is None and 'attached' in manager._ephemeral_mcp
+
+
+@pytest.mark.parametrize('late', [False, True])
+async def test_empty_tool_retirement_notifies_after_exact_ack_outside_lock(manager, late):
+    process = await warm(manager, 'plain')
+    row = manager.workers['plain']
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = manager._write
+    async def write(current, value):
+        if value['op'] == 'retire':
+            entered.set()
+            await release.wait()
+        await original(current, value)
+    manager._write = write
+    notifications = []
+    async def emit(kind, payload):
+        if kind == 'runtime.retirement_requested':
+            assert not manager._locks['plain'].locked()
+            assert 'plain' not in manager.workers and 'plain' in manager._retired
+            notifications.append(payload)
+    row['emit'] = emit
+    manager.retention.settings['max_warm_workers'] = 0
+    if late:
+        manager.retention.reply_timeout = .01
+    sweep = asyncio.create_task(manager.retention.sweep())
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        if late:
+            await asyncio.wait_for(sweep, 2)
+        assert not notifications and manager.workers['plain'] is row and process.returncode is None
+        release.set()
+        await asyncio.wait_for(asyncio.shield(row['retirement_task']), 3)
+        await sweep
+        assert notifications == [{'sessionId': 'plain'}] and process.returncode == 0
+        # A client's exact absent-worker receipt has no new native operation/event.
+        assert await manager.retire_attachment('plain', 'attachment', guard=lambda: False) == 'retired'
+        assert await manager.retire_attachment('plain', 'attachment', guard=lambda: False) == 'retired'
+        assert notifications == [{'sessionId': 'plain'}] and not manager.workers
+    finally:
+        release.set()
+        await asyncio.gather(sweep, return_exceptions=True)
+
+
+@pytest.mark.parametrize('result', ['refused', 'unknown', 'notify-failed'])
+async def test_retirement_completion_signal_preserves_native_outcome(manager, result):
+    process = await warm(manager, 'plain')
+    row = manager.workers['plain']
+    notifications = []
+    async def emit(kind, payload):
+        if kind == 'runtime.retirement_requested':
+            notifications.append(payload)
+            raise RuntimeError('Synthetic observer failure')
+    row['emit'] = emit
+    manager.retention.settings['max_warm_workers'] = 0
+    if result == 'refused':
+        await manager.send({'id': 'plain'}, 'one accepted input', 'once', emit)
+        row['idle'] = True  # Stale host hint cannot override native work.
+    elif result == 'unknown':
+        async def unavailable(*args, **kwargs):
+            raise ConnectionResetError('Synthetic missing acknowledgement')
+        manager._request_unlocked = unavailable
+    await manager.retention.sweep()
+    if result == 'notify-failed':
+        assert notifications == [{'sessionId': 'plain'}]
+        assert process.returncode == 0 and 'plain' in manager._retired
+        assert await row['retirement_task'] is True
+    else:
+        assert not notifications and process.returncode is None
+        assert manager.workers['plain'] is row and 'plain' not in manager._retired
 
 
 async def test_active_and_unanswered_commands_are_protected(manager):
@@ -104,15 +313,15 @@ async def test_active_and_unanswered_commands_are_protected(manager):
     await asyncio.gather(held, return_exceptions=True)
     row = manager.workers['a']
     assert row['inflight']
-    row['parked'] = True  # A delayed status must not override admitted work.
+    row['idle'] = True  # A delayed status must not override admitted work.
     await manager.retention.sweep()
     assert first.returncode is None
 
 
-async def test_worker_final_check_refuses_stale_parked_status(manager):
+async def test_worker_final_check_refuses_stale_idle_status(manager):
     first = await warm(manager, 'a')
     await manager.send({'id': 'a'}, 'work', 'one', manager.emit)
-    manager.workers['a']['parked'] = True
+    manager.workers['a']['idle'] = True
     manager.retention.settings['max_warm_workers'] = 0
     await manager.retention.sweep()
     assert first.returncode is None
@@ -126,7 +335,7 @@ async def test_uncertain_transport_write_keeps_retirement_fence(manager):
         await manager.control('a', 'tool.invoke')
     row = manager.workers['a']
     assert row['inflight']
-    row['parked'] = True
+    row['idle'] = True
     manager.retention.settings['max_warm_workers'] = 0
     await manager.retention.sweep()
     assert process.returncode is None
@@ -179,7 +388,7 @@ async def test_late_retirement_refusal_reopens_same_worker(manager):
     manager.command = [sys.executable, '-c', SCRIPT.replace('time.sleep(.02)', 'time.sleep(.06)')]
     first = await warm(manager, 'late-refusal')
     await manager.send({'id': 'late-refusal'}, 'work', 'one', manager.emit)
-    manager.workers['late-refusal']['parked'] = True
+    manager.workers['late-refusal']['idle'] = True
     manager.retention.settings['max_warm_workers'] = 0
     manager.retention.reply_timeout = .005
     await manager.retention.sweep()
@@ -307,25 +516,35 @@ for line in sys.stdin:
         await runtime.close()
 
 
-@pytest.mark.parametrize('pending', ['none', 'approval', 'bridge', 'generation', 'queued', 'inbox', 'job', 'remount', 'yielding'])
+@pytest.mark.parametrize('pending', ['none', 'approval', 'bridge', 'generation', 'queued', 'inbox', 'job', 'child', 'kernel', 'yielding'])
 async def test_actual_worker_retirement_requires_settled_state(pending):
+    from amplifier_foundation.session.activation import ActivationGate
+    from unittest.mock import AsyncMock
     worker = Worker()
-    worker.parked = True
+    worker.shared_handle = SimpleNamespace(active=True)
+    worker.activation_gate = ActivationGate()
+    worker.activation = worker.activation_gate.activate()
+    checkpoint = AsyncMock()
     worker.runtime = SimpleNamespace(queued_inputs=0, inbox=asyncio.Queue(), generation=None)
     loop = SimpleNamespace(pending=[], _active_jobs=lambda: [])
-    worker.session = SimpleNamespace(coordinator={'orchestrator': loop})
+    children = SimpleNamespace(rows={})
+    worker.session = SimpleNamespace(coordinator=SimpleNamespace(get=lambda _: loop,
+        get_capability=lambda name: checkpoint if name == 'live.checkpoint' else
+            children if name == 'live.children' else None))
     if pending == 'approval': worker.approvals['a'] = object()
     if pending == 'bridge': worker.bridges['a'] = object()
     if pending == 'generation': worker.runtime.generation = object()
     if pending == 'queued': worker.runtime.queued_inputs = 1
     if pending == 'inbox': worker.runtime.inbox.put_nowait(object())
     if pending == 'job': loop._active_jobs = lambda: ['job']
-    if pending == 'remount': worker.remounting = True
+    if pending == 'child': children.rows['child'] = {'status': 'idle'}
+    if pending == 'kernel': worker.controls = SimpleNamespace(kernels=SimpleNamespace(records={'k': {}}))
     if pending == 'yielding': worker.ownership.yielding = True
     with patch('amplifier_web.runtime_worker.publish') as publish:
         await worker.command({'op': 'retire', 'id': 'retirement'})
         assert publish.call_args.args[0]['result']['retired'] == (pending == 'none')
         assert worker.shutdown.is_set() == (pending == 'none')
+        assert worker.shared_handle.active
 
 
 def test_defaults_and_configuration_roundtrip():
@@ -373,9 +592,9 @@ async def test_selecting_six_chats_starts_no_workers_but_explicit_warm_and_send_
     app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
     starts = []
     original = runtime.start
-    async def start(session, emit):
+    async def start(session, emit, *, guard=None):
         starts.append(session['id'])
-        return await original(session, emit)
+        return await original(session, emit, guard=guard)
     monkeypatch.setattr(runtime, 'start', start)
     try:
         ids = []
@@ -398,7 +617,7 @@ async def test_selecting_six_chats_starts_no_workers_but_explicit_warm_and_send_
             await asyncio.gather(*list(app.tasks), return_exceptions=True)
             await asyncio.gather(*list(app.warmup.pending.values()))
             assert starts == [ids[0]]
-            assert runtime.workers[ids[0]]['parked']
+            assert runtime.workers[ids[0]]['idle']
             assert app._session(ids[0])['messages'] == []
 
             result = await app.dispatch('conversation.send',
@@ -460,3 +679,108 @@ async def test_new_boundary_protection_is_rechecked_after_waiting_for_admission_
     manager.retention.protected = lambda sid: False
     await manager.retention.sweep()
     assert process.returncode == 0 and 'a' not in manager.workers
+
+
+@pytest.mark.parametrize('changed', [False, True])
+async def test_external_configuration_next_send_reuses_or_retires_before_single_input(manager, tmp_path, changed):
+    from amplifier_web.shared_state import mounted_configuration_stamp
+    manager.home = tmp_path / 'app'
+    session = {'id': 'configured', 'workspace': str(tmp_path)}
+    local = tmp_path / 'bundle.yaml'
+    local.write_text('bundle: before\n')
+    await manager.start(session, manager.emit)
+    row = manager.workers['configured']
+    row['configurationInputs'] = [str(local)]
+    baseline = mounted_configuration_stamp(tmp_path, 'configured', manager.home, extra_paths=[local])
+    row['configurationStamp'] = baseline
+    writes = []
+    original = manager._write
+    async def write(owner, data):
+        writes.append(data['op'])
+        await original(owner, data)
+    manager._write = write
+    if changed:
+        local.write_text('bundle: changed-external-input\n')
+    assert (await manager.send(session, 'one new input', 'one', manager.emit))['accepted']
+    assert writes.count('send') == 1
+    assert writes.count('retire') == int(changed)
+    assert (manager.workers['configured'] is row) == (not changed)
+    assert row['configurationStamp'] == baseline
+    assert all('configurationInputs' not in payload and 'configurationStamp' not in payload
+               for _, payload in manager.events)
+
+
+@pytest.mark.parametrize('resource', ['active', 'protected', 'mcp', 'worker-refusal'])
+async def test_changed_configuration_never_cancels_held_work_or_admits_input(manager, tmp_path, resource):
+    from amplifier_web.shared_state import mounted_configuration_stamp
+    manager.home = tmp_path / 'app'
+    session = {'id': 'held', 'workspace': str(tmp_path)}
+    local = tmp_path / 'bundle.yaml'
+    local.write_text('before')
+    await manager.start(session, manager.emit)
+    row = manager.workers['held']
+    row['configurationInputs'] = [str(local)]
+    row['configurationStamp'] = mounted_configuration_stamp(
+        tmp_path, 'held', manager.home, extra_paths=[local])
+    if resource == 'worker-refusal':
+        await manager._request('held', 'send', text='existing', input_id='existing')
+        row['idle'] = True  # Stale host hint; native final check still refuses.
+    if resource == 'active': row['idle'] = False
+    if resource == 'protected': manager.retention.protected = lambda sid: True
+    if resource == 'mcp': manager._ephemeral_mcp['held'] = ('attached', {})
+    local.write_text('external change')
+    writes = []
+    original = manager._write
+    async def write(owner, data):
+        writes.append(data['op'])
+        await original(owner, data)
+    manager._write = write
+    with pytest.raises(RuntimeError, match='previous settings. Retry your message'):
+        await manager.send(session, 'not admitted', 'new', manager.emit)
+    assert manager.workers['held'] is row and row['process'].returncode is None
+    assert 'send' not in writes and 'stop' not in writes
+
+
+@pytest.mark.parametrize('op,args', [
+    ('retry', {'text': 'duplicate', 'input_id': 'same'}),
+    ('resume', {}), ('worker.message', {'worker_id': 'settled', 'text': 'no-op'}),
+    ('worker.steer', {'worker_id': 'settled', 'text': 'no-op'}),
+])
+async def test_noop_receipt_does_not_make_idle_owner_permanently_unevictable(manager, op, args):
+    first = await warm(manager, 'noop')
+    await manager._request('noop', op, **args)
+    row = manager.workers['noop']
+    assert row['idle'] and not row['inflight']
+    manager.retention.settings['max_warm_workers'] = 0
+    await manager.retention.sweep()
+    assert first.returncode == 0 and 'noop' not in manager.workers
+
+
+async def test_connected_mcp_attachment_is_not_idle_evicted(manager):
+    process = await warm(manager, 'attached')
+    manager._ephemeral_mcp['attached'] = ('client', {})
+    manager.retention.settings['max_warm_workers'] = 0
+    manager.now = 100000
+    await manager.retention.sweep()
+    assert process.returncode is None
+    manager._ephemeral_mcp.clear()
+    await manager.retention.sweep()
+    assert process.returncode == 0
+
+
+async def test_promoted_generation_retirement_refusal_still_admits_resource_cleanup(manager):
+    first = await warm(manager, 'held-resource')
+    await manager._request('held-resource', 'send', text='held native resource', input_id='existing')
+    row = manager.workers['held-resource']
+    row['idle'] = True
+    manager.promote_generation('new-generation')
+    writes = []
+    original = manager._write
+    async def write(owner, data):
+        writes.append(data['op'])
+        await original(owner, data)
+    manager._write = write
+    result = await asyncio.wait_for(manager.control('held-resource', 'kernels.close'), 2)
+    assert result['ok'] and writes == ['retire', 'control']
+    assert manager.workers['held-resource'] is row and first.returncode is None
+    assert row['idle'] and row['update_pending']

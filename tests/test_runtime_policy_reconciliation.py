@@ -209,11 +209,12 @@ async def test_inactive_catalog_entries_are_never_observed(selected):
 
 
 async def test_host_observes_effective_module_override(selected):
+    from amplifier_web.host.components import HostComponents
     from amplifier_web.host.session import module_source
     s = selected
     s.config._source_policy_observer = migration.Collector()
     s.config.settings['sources'] = {'modules': {'fixture': 'git+' + URL + '@' + s.old}}
-    components = SimpleNamespace(source=lambda m, source, **kw: source, owns=lambda m, source: False)
+    components = HostComponents()
     assert module_source(s.config, False, 'fixture', 'git+' + URL + '@main', components).endswith(s.old)
     assert s.config._source_policy_observer.references == {(URL, s.old)}
 
@@ -346,7 +347,27 @@ async def test_runtime_sibling_mapping_does_not_waive_source_choices(selected, m
         assert None in report['runtimeRequirements'][NAME]['constraints']['fixture-dependency']
 
 
-async def runtime_sibling_report(s, monkeypatch, *, module_root=False, editable=None, case='valid'):
+@pytest.mark.parametrize('module_root', [False, True])
+@pytest.mark.parametrize('editable', [None, False, True])
+@pytest.mark.parametrize('binding', ['valid', 'missing', 'wrong-ref', 'wrong-commit'])
+async def test_shared_runtime_sibling_uses_requiring_source_binding_not_cache_ref(
+        selected, monkeypatch, module_root, editable, binding):
+    report = await runtime_sibling_report(selected, monkeypatch, module_root=module_root,
+        editable=editable, binding=binding)
+    package = report['packages'].get('fixture-dependency', {})
+    if binding == 'valid':
+        assert report['packages'][NAME]['status'] == package['status'] == 'selected'
+        assert package['ref'] == 'main'
+        assert report['runtimeRequirements'][NAME]['constraints']['fixture-dependency'] == [{
+            'url': URL, 'ref': 'main', 'refKind': 'rev', 'subdirectory': 'modules/dependency'}]
+    else:
+        assert report['packages'][NAME]['status'] != 'selected'
+        assert package.get('status') != 'selected'
+    assert not any(any(verb in cmd for verb in ('fetch', 'checkout', 'reset', 'clean', 'install'))
+                   for cmd in selected.commands)
+
+
+async def runtime_sibling_report(s, monkeypatch, *, module_root=False, editable=None, case='valid', binding=None):
     import importlib.metadata
     from test_selected_runtime_dependencies import dist
     parent, target = s.root / 'modules/loop', s.root / 'modules/dependency'
@@ -377,6 +398,19 @@ async def runtime_sibling_report(s, monkeypatch, *, module_root=False, editable=
     if case == 'explicit-local':
         s.batch.names['fixture-dependency'] = target
         s.collector.local_sources.add(target)
+    if binding is not None:
+        from test_runtime_constraint_identity import immutable_shared_selection
+        path = immutable_shared_selection(s, monkeypatch)
+        if binding == 'missing':
+            path.unlink()
+        elif binding != 'valid':
+            data = json.loads(path.read_text())
+            data['ref' if binding == 'wrong-ref' else 'commit'] = 'other' if binding == 'wrong-ref' else OLD
+            path.write_text(json.dumps(data))
+        # Deliberately misleading metadata cannot replace the explicit binding.
+        data = json.loads(s.marker.read_text())
+        data['ref'] = 'main' if binding != 'valid' else head
+        s.marker.write_text(json.dumps(data))
     monkeypatch.setattr(importlib.metadata, 'distributions', lambda: [dist(
         'fixture-dependency', revision=head, subdirectory='modules/dependency')])
     return await s.collector.report(s.batch, s.config)
@@ -546,6 +580,7 @@ def test_retained_extra_usage_requires_matching_completed_profile_selection(sele
 @pytest.mark.parametrize('form', ['relative', 'parent-relative', 'file-subdirectory'])
 async def test_real_resolver_local_module_override_never_becomes_branch(selected, monkeypatch, form):
     from amplifier_foundation.sources.resolver import SimpleSourceResolver
+    from amplifier_web.host.components import HostComponents
     from amplifier_web.host.session import module_source
     s = selected
     monkeypatch.chdir(s.config.workspace)
@@ -557,8 +592,7 @@ async def test_real_resolver_local_module_override_never_becomes_branch(selected
         reference = s.root.parent.as_uri() + '#subdirectory=' + s.root.name
     s.config._source_policy_observer = s.collector
     s.config.settings['sources'] = {'modules': {'fixture': reference}}
-    components = SimpleNamespace(source=lambda module, source, **kw: source,
-                                 owns=lambda module, source: False)
+    components = HostComponents()
     effective = module_source(s.config, False, 'fixture', 'git+' + URL + '@main', components)
     resolved = await SimpleSourceResolver(cache_dir=s.config.registry_home / 'cache',
                                           base_path=s.config.workspace).resolve(effective)
@@ -597,14 +631,15 @@ async def test_host_component_selection_obeys_source_policy_boundaries(selected,
     assert (URL, 'unused') not in s.collector.references
 
 
-def test_previous_host_component_observation_receipt_is_rechecked(selected, monkeypatch):
+@pytest.mark.parametrize('previous_version', [2, 4])
+def test_previous_host_component_observation_receipt_is_rechecked(selected, monkeypatch, previous_version):
     s = selected
     monkeypatch.setattr('amplifier_web.host.config.read_config', lambda *a, **kw: s.config)
     oldrow = row()
     receipt = s.home / 'updates/baseline-runtime'
     receipt.mkdir()
     receipt.joinpath(migration.RECEIPT).write_text(json.dumps({
-        'version': 1, 'selectionVersion': 2, 'configuration': migration.configuration(s.config),
+        'version': 1, 'selectionVersion': previous_version, 'configuration': migration.configuration(s.config),
         'remaining': migration.legacy_candidates([oldrow]),
         'decisions': {NAME: 'unselected'}, 'offeredPackages': []}))
     assert migration.pending(s.home, None, [oldrow]) is not None

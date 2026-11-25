@@ -4,7 +4,6 @@ No private prompt, provider SDK or network. Observation tracing contains only
 identity booleans, counts and fixed statuses, never the synthetic request body.
 """
 import asyncio
-import ast
 import copy
 import hashlib
 import importlib.util
@@ -53,14 +52,11 @@ async def test_live_boundary_large_budget(tmp_path, monkeypatch, measured, manag
     raw=Provider();await c.mount('providers',raw,name='fixture')
     events=ExecutionEvents(session.session_id,lambda row:None)
     async def bridge(operation,args):return {'surfaces':[],'inputIds':[]} if operation=='context.manifest' else {}
-    await install_app_access(c,bridge)
+    await install_app_access(c,bridge, execution_role='root')
     loop=c.get('orchestrator');loop.root_provider=SelectedProvider(raw,{'model':'selected','effort':'high','max_output_tokens':321})
-    # Execute the exact production ObservedHost class, not a hand-flattened
-    # provider chain. Its closure's external activity/checkpoint/bridge IO is
-    # replaced with local observation; prepare_execution itself is unchanged.
+    # Use the production factory, including its module globals and closure.
+    # External checkpoint/bridge IO is replaced with local observation.
     from amplifier_web import runtime_worker
-    tree=ast.parse(Path(runtime_worker.__file__).read_text())
-    node=next(n for n in ast.walk(tree) if isinstance(n,ast.ClassDef) and n.name=='ObservedHost')
     from amplifier_module_loop_live.host import HostAdapter
     original_host=HostAdapter()
     from amplifier_module_loop_live.runtime import Runtime, Input
@@ -68,14 +64,12 @@ async def test_live_boundary_large_budget(tmp_path, monkeypatch, measured, manag
     def observe_runtime(event):
         if event['type']=='generation.finished':finished.set()
     runtime=Runtime(session.session_id,observer=observe_runtime)
-    host=runtime_worker.Worker();host.telemetry=events;host.runtime=runtime
+    host=runtime_worker.Worker();host.telemetry=events;host.runtime=runtime;host.session=session
     host.install_collaboration_checkpoint=lambda c:None
     host.app_access_bridge=lambda c:bridge
     monkeypatch.setattr(runtime_worker,'publish',lambda value:None)
     if manager:c.register_capability('live.runtime',runtime)
-    scope={'original_host':original_host,'host':host,'install_app_access':install_app_access}
-    exec(compile(ast.fix_missing_locations(ast.Module(body=[node],type_ignores=[])),runtime_worker.__file__,'exec'),scope)
-    c.register_capability('live.host',scope['ObservedHost']())
+    c.register_capability('live.host',host.execution_host(original_host))
     home=tmp_path/'home';config(home,recording=False)
     inspector=ContextInspection(c,tmp_path/'capture',home);events.context_inspectors[session.session_id]=inspector
     async def instructions():return 'X'*1_000_100

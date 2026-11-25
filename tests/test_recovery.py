@@ -6,6 +6,82 @@ from amplifier_web.updates import UpdateManager
 from amplifier_web.runtime import RuntimeManager
 from amplifier_web.runtime_retention import DEFAULT_RETENTION
 from test_service import Runtime
+from test_reset import legacy_saved_plan
+from test_runtime_controls import managed_module_source
+
+@pytest.mark.parametrize("same_folder", [False, True], ids=["new-operation", "existing-operation"])
+def test_backup_staging_race_keeps_last_complete_archive(tmp_path, monkeypatch, same_folder):
+    import os
+    import sqlite3
+    from pathlib import Path
+    from amplifier_web.recovery import _backup_files
+    from amplifier_web.storage_backup_cleanup import candidates
+
+    with sqlite3.connect(tmp_path / "app.sqlite3") as db:
+        db.execute("CREATE TABLE state (id INTEGER PRIMARY KEY)")
+    session = tmp_path / "native" / "session"
+    staging = session / "media" / "staging"
+    staging.mkdir(parents=True)
+    retired = staging / "bytes"
+    retired.write_bytes(b"old staging")
+    paths = [(session, "native/session")]
+    previous = Path(_backup_files(tmp_path, paths)["backup"])
+    os.utime(previous, (1, 1))
+    before = previous.read_bytes()
+    folder = previous.parent if same_folder else previous.parent.parent / ("a" * 32)
+    if not same_folder:
+        folder.mkdir(mode=0o700)
+    current = folder / previous.name
+
+    observed = []
+    gettarinfo = tarfile.TarFile.gettarinfo
+    def retire_after_enumeration(archive, name=None, arcname=None, fileobj=None):
+        if name is not None and Path(name) == retired:
+            observed.append((candidates(tmp_path), previous.read_bytes() == before))
+            retired.unlink()
+        return gettarinfo(archive, name, arcname, fileobj)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(tarfile.TarFile, "gettarinfo", retire_after_enumeration)
+        with pytest.raises(FileNotFoundError):
+            _backup_files(tmp_path, paths, operation_id=folder.name)
+    assert observed == [([previous.parent], True)]
+    assert candidates(tmp_path) == [previous.parent]
+    assert previous.read_bytes() == before
+    assert {p.name for p in folder.iterdir()} == (
+        {"app.sqlite3", previous.name} if same_folder else {"app.sqlite3"}
+    )
+
+    (session / "transcript.jsonl").write_bytes(b"new saved turn")
+    result = _backup_files(tmp_path, paths, operation_id=folder.name)
+    assert Path(result["backup"]) == current and candidates(tmp_path)[0] == folder
+    if os.name == "posix":
+        assert current.stat().st_mode & 0o777 == 0o600
+    with tarfile.open(current, "r:gz") as archive:
+        assert archive.extractfile("native/session/transcript.jsonl").read() == b"new saved turn"
+        assert "native/session/media/staging/bytes" not in archive.getnames()
+
+
+def test_backup_cleanup_failure_propagates_original_interruption(tmp_path, monkeypatch):
+    from asyncio import CancelledError
+    from pathlib import Path
+    from amplifier_web.recovery import _private_backup_archive
+
+    destination = tmp_path / "private-state.tar.gz"
+    destination.write_bytes(b"previous archive")
+    interrupted = CancelledError()
+    def cleanup_refused(path, *, missing_ok):
+        raise PermissionError("unpublished file busy")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "unlink", cleanup_refused)
+        with pytest.raises(CancelledError) as failure:
+            with _private_backup_archive(destination):
+                raise interrupted
+    assert failure.value is interrupted
+    assert "unpublished" in interrupted.__notes__[0]
+    assert destination.read_bytes() == b"previous archive"
+
 
 async def test_full_backup_and_selected_reset_are_private_and_reversible(tmp_path):
     service=AppService(tmp_path/'app',Runtime(),workspace=tmp_path)
@@ -86,6 +162,73 @@ async def test_backup_skips_native_index_files_and_keeps_owned_artifacts(tmp_pat
     await service.close()
 
 
+async def test_backup_restores_sent_and_draft_attachment_downloads(tmp_path, authenticated_client, monkeypatch):
+    import asyncio
+    import base64
+    from amplifier_web import recovery
+    from amplifier_web.server import create_app
+    from test_attachments import PNG
+
+    async def open_app(home):
+        monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / (home.name + '-shared')))
+        app = await create_app(home, workspace=tmp_path, runtime=Runtime(), voice=False,
+                               background_updates=False, background_work=False, preload_providers=False)
+        return app['service'], await authenticated_client(app)
+
+    async def check_download(client, row, data):
+        response = await client.get(row['url'])
+        assert response.status == 200
+        assert response.headers['Content-Type'] == row['mime']
+        assert await response.read() == data
+
+    original, client = await open_app(tmp_path / 'original')
+    await original.dispatch('session.create', {})
+    uploads = []
+    for name, data in [('sent.png', PNG), ('draft.bin', b'\x00\xff\x10')]:
+        await original.dispatch('attachment.add', {'name': name, 'base64': base64.b64encode(data).decode()})
+        row = original.clients.attachments(original._session())[-1]
+        await check_download(client, row, data)
+        metadata = original.data_dir / 'attachments' / row['id'] / 'metadata.json'
+        uploads.append((row, data, metadata.read_bytes()))
+        if name == 'sent.png':
+            await original.dispatch('conversation.send', {'text': 'Review', 'attachmentIds': [row['id']]})
+            await asyncio.gather(*original.tasks)
+
+    backup = await recovery.backup(original)
+    restored_home = tmp_path / 'restored'
+    restored_home.mkdir(mode=0o700)
+    with tarfile.open(backup['backup']) as archive:
+        # Restore the app-owned files into an empty app home.
+        archive.extractall(restored_home, members=[m for m in archive if m.name.split('/')[0] in
+                           {'app.sqlite3', 'sessions', 'artifacts', 'attachments'}], filter='data')
+    await client.close()
+    restored, client = await open_app(restored_home)
+    session = restored.get_state()['sessions'][0]
+    assert session['messages'][0]['attachments'] == [uploads[0][0]]
+    assert session['draftAttachments'] == [uploads[1][0]]
+    for row, data, metadata in uploads:
+        await check_download(client, row, data)
+        assert (restored_home / 'attachments' / row['id'] / 'metadata.json').read_bytes() == metadata
+
+
+async def test_backup_omits_linked_attachment_files_and_directories(tmp_path):
+    from amplifier_web import recovery
+    service = AppService(tmp_path / 'app', Runtime(), workspace=tmp_path)
+    try:
+        uploads = service.data_dir / 'attachments'
+        uploads.mkdir()
+        outside = tmp_path / 'outside'
+        outside.mkdir()
+        (outside / 'private').write_bytes(b'outside the upload store')
+        (uploads / 'directory-link').symlink_to(outside, target_is_directory=True)
+        (uploads / 'file-link').symlink_to(outside / 'private')
+        backup = await recovery.backup(service)
+        with tarfile.open(backup['backup']) as archive:
+            assert [name for name in archive.getnames() if name.startswith('attachments/')] == []
+    finally:
+        await service.close()
+
+
 async def test_backup_path_failure_releases_in_progress_flag(tmp_path, monkeypatch):
     from amplifier_web import recovery, session_files
     service=AppService(tmp_path/'app',Runtime(),workspace=tmp_path)
@@ -124,3 +267,213 @@ async def test_reset_skips_unknown_workspace_settings_and_hides_native_chats(tmp
     assert identity('untouched-project','historical-root') in service.state['hiddenNativeSessions']
     assert not service.state['sessions']
     await service.close()
+
+
+@pytest.mark.parametrize("failure", [None, "conversion", "write", "move"])
+async def test_in_app_cache_reset_converts_plans_or_restores_exact_originals(
+        tmp_path, monkeypatch, legacy_saved_plan, failure):
+    import json
+    from pathlib import Path
+    from amplifier_web import recovery
+    from amplifier_web.host import config
+    service = AppService(tmp_path / "app", Runtime(), workspace=tmp_path)
+    manager = Management(service)
+    service.management = manager
+    service.update_manager = UpdateManager(service)
+    saved = legacy_saved_plan(service.data_dir)
+    sentinel = service.data_dir / "foundation/cache/unreferenced"
+    sentinel.mkdir(parents=True)
+    (sentinel / "damaged").write_text("discard on success")
+    if failure == "conversion":
+        saved.metadata.write_text("{}")
+    elif failure == "write":
+        write = config.write_private
+        failed = False
+        def fail_write(path, text, **kwargs):
+            nonlocal failed
+            write(path, text, **kwargs)
+            if path == saved.paths[1] and not failed:
+                failed = True
+                raise OSError("fixture after atomic write")
+        monkeypatch.setattr(config, "write_private", fail_write)
+    elif failure == "move":
+        rename = Path.rename
+        def fail_move(path, target):
+            if path == service.data_dir / "updates/releases":
+                raise OSError("fixture cache move failure")
+            return rename(path, target)
+        monkeypatch.setattr(Path, "rename", fail_move)
+    try:
+        args = {"parts": ["cache"], "apply": True, "confirmation": "RESET"}
+        if failure:
+            with pytest.raises((ValueError, OSError)):
+                await recovery.reset(manager, args)
+            assert all(path.read_bytes() == saved.before for path in saved.paths)
+            assert saved.module.exists()
+            assert (sentinel / "damaged").exists()
+        else:
+            await recovery.reset(manager, args)
+            for path in saved.paths:
+                plan = json.loads(path.read_text())
+                assert plan["tools"][0]["source"] == saved.portable
+                assert plan["tools"][1]["config"] == saved.plan["tools"][1]["config"]
+            assert not saved.module.exists()
+            assert not sentinel.exists()
+            with tarfile.open(service.state["maintenance"]["backup"]) as archive:
+                for path in saved.paths:
+                    assert archive.extractfile(path.relative_to(service.data_dir).as_posix()).read() == saved.before
+    finally:
+        await service.close()
+
+
+@pytest.mark.parametrize("parts", [["runtime"], ["cache", "conversations"]])
+async def test_reset_does_not_convert_plans_when_not_retaining_them_across_cache_retirement(
+        tmp_path, legacy_saved_plan, parts):
+    from amplifier_web import recovery
+    service = AppService(tmp_path / "app", Runtime(), workspace=tmp_path)
+    manager = Management(service)
+    service.management = manager
+    service.update_manager = UpdateManager(service)
+    saved = legacy_saved_plan(service.data_dir)
+    saved.metadata.write_text("{}")
+    try:
+        await recovery.reset(manager, {"parts": parts, "apply": True, "confirmation": "RESET"})
+        if "conversations" in parts:
+            assert not any(path.exists() for path in saved.paths)
+            with tarfile.open(service.state["maintenance"]["backup"]) as archive:
+                assert archive.extractfile("sessions/legacy/configuration.json").read() == saved.before
+        else:
+            assert all(path.read_bytes() == saved.before for path in saved.paths)
+            assert saved.module.exists()
+    finally:
+        await service.close()
+
+
+@pytest.mark.parametrize("parts", [
+    ["cache"], ["cache", "settings"], ["cache", "conversations", "settings"],
+])
+async def test_reset_publication_failure_after_commit_does_not_undo_only_files(
+        tmp_path, monkeypatch, legacy_saved_plan, parts):
+    import json
+    from pathlib import Path
+    from amplifier_web import recovery
+    from amplifier_web.automatic_history import identity
+    from amplifier_web.session_files import project_slug
+    from amplifier_web.state_records import load
+
+    service = AppService(tmp_path / "app", Runtime(), workspace=tmp_path)
+    manager = Management(service)
+    service.management = manager
+    service.update_manager = UpdateManager(service)
+    await service.dispatch("session.create", {})
+    sid = service._session()["id"]
+    saved = legacy_saved_plan(service.data_dir)
+    settings = service.data_dir / "config/reset-sentinel.txt"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_bytes(b"original private settings")
+    service.state["updates"].update(release="old", pendingRelease="candidate", canRollback=True)
+    service.state["settings"]["updates"] = {"autoCheck": False, "autoInstall": False, "intervalHours": 24}
+    service._save()
+    publish = service._publish_full
+    committed = []
+
+    def publish_then_fail(*, reason):
+        publish(reason=reason)
+        # Read committed storage, not merely the in-memory reset projection.
+        committed.append(load(service.db))
+        raise OSError("fixture failure after reset publication committed")
+
+    monkeypatch.setattr(service, "_publish_full", publish_then_fail)
+    try:
+        with pytest.raises(OSError, match="after reset publication committed"):
+            await recovery.reset(manager, {"parts": parts, "apply": True, "confirmation": "RESET"})
+        assert len(committed) == 1
+        durable = load(service.db)
+        retained = Path(service.state["maintenance"]["retained"])
+        assert not saved.module.exists()
+        assert (retained / saved.module.relative_to(service.data_dir)).exists()
+        for state in (committed[0], durable):
+            assert state["updates"]["release"] is None
+            assert state["updates"]["pendingRelease"] is None
+            if "conversations" in parts:
+                assert sid not in {row["id"] for row in state["sessions"]}
+                assert identity(project_slug(tmp_path), sid) in state["hiddenNativeSessions"]
+            else:
+                assert sid in {row["id"] for row in state["sessions"]}
+            if "settings" in parts:
+                assert state["settings"]["updates"] == {
+                    "autoCheck": True, "autoInstall": False, "intervalHours": 4}
+        for path in saved.paths:
+            if "conversations" in parts:
+                assert not path.exists()
+                assert (retained / path.relative_to(service.data_dir)).read_bytes() == saved.before
+            else:
+                assert json.loads(path.read_text())["tools"][0]["source"] == saved.portable
+        if "settings" in parts:
+            assert not settings.exists()
+            assert (retained / settings.relative_to(service.data_dir)).read_bytes() == b"original private settings"
+        else:
+            assert settings.read_bytes() == b"original private settings"
+        with tarfile.open(service.state["maintenance"]["backup"]) as archive:
+            assert archive.extractfile("sessions/legacy/configuration.json").read() == saved.before
+    finally:
+        await service.close()
+
+
+async def test_legacy_plan_cold_mounts_after_actual_in_app_reset(
+        tmp_path, monkeypatch, managed_module_source):
+    """Real reset/backup followed by fresh Foundation resolution and Core mount."""
+    import json
+    import shutil
+    from pathlib import Path
+    from amplifier_foundation import Bundle
+    from amplifier_web import recovery
+    from amplifier_web.host.components import installed_package_source
+
+    c = managed_module_source
+    origin = tmp_path / "offline-origin"
+    shutil.copytree(c.root, origin)
+    code = origin / c.code.relative_to(c.root)
+    code.write_text(code.read_text().replace("VERSION = 1", "VERSION = 2"))
+    c.git("add", ".", cwd=origin)
+    c.git("commit", "-m", "advance main beyond the saved selection", cwd=origin)
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "url." + origin.as_uri() + ".insteadOf")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", c.url)
+    monkeypatch.setenv("GIT_ALLOW_PROTOCOL", "file")
+    monkeypatch.setenv("AMPLIFIER_SOURCE_STORE", str(tmp_path / "cold-store"))
+    service = AppService(c.home, Runtime(), workspace=tmp_path)
+    manager = Management(service)
+    service.management = manager
+    service.update_manager = UpdateManager(service)
+    path = c.home / "sessions/legacy/configuration.json"
+    path.parent.mkdir(parents=True)
+    original = json.dumps({"hooks": [{
+        "module": "hook-source-lifetime-fixture", "source": str(c.module)}]}).encode()
+    path.write_bytes(original)  # Legacy producer, deliberately not normalized.
+    mounted = None
+    try:
+        await recovery.reset(manager, {"parts": ["cache"], "apply": True,
+                                       "confirmation": "RESET"})
+        assert not c.module.exists()
+        with tarfile.open(service.state["maintenance"]["backup"]) as archive:
+            assert archive.extractfile("sessions/legacy/configuration.json").read() == original
+        saved = json.loads(path.read_bytes())
+        assert saved["hooks"][0]["source"] == c.portable
+        bundle = Bundle(name="cold-legacy", hooks=saved["hooks"], session={
+            "orchestrator": {"module": "loop-live", "source": installed_package_source(
+                "amplifier-module-loop-live", "amplifier_module_loop_live")},
+            "context": {"module": "context-simple", "source": installed_package_source(
+                "amplifier-module-context-simple", "amplifier_module_context_simple")},
+        })
+        prepared = await bundle.prepare(install_deps=False, strict=True,
+                                         cache_dir=tmp_path / "cold-cache")
+        mounted = await prepared.create_session(session_id="reset-legacy-qualified")
+        actual = mounted.coordinator.get_capability("fixture.source_lifetime")
+        assert actual["version"] == 1
+        assert Path(actual["file"]).is_relative_to(tmp_path / "cold-store")
+        assert path.read_bytes() != original
+    finally:
+        if mounted is not None:
+            await mounted.cleanup()
+        await service.close()

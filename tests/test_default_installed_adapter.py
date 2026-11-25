@@ -11,6 +11,8 @@ import json
 from pathlib import Path
 import subprocess
 import tarfile
+import tomllib
+from urllib.parse import parse_qs, urlsplit
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -46,6 +48,411 @@ def test_selected_ci_client_direct_dependency_must_be_pinned(tmp_path):
         'missing-library @ https://example.invalid/library ; extra == "client"'])
     with pytest.raises(ValueError, match='Undeclared active'):
         adapter.check_direct_requirements([wheel], ['amplifier-bundle-context-intelligence'], '3.13.16')
+
+
+@pytest.mark.parametrize('omitted', [
+    None, 'amplifier-bundle-ui-use', 'amplifier-bundle-context-intelligence',
+    'amplifier-foundation', 'amplifier-memory', 'amplifier-module-hooks-session-naming',
+])
+def test_current_host_direct_dependency_packages_are_in_qualification_manifest(tmp_path, omitted):
+    data = adapter.pins(ROOT / 'scripts/default-installed-pins.json')
+    lock = tomllib.loads((ROOT / 'uv.lock').read_text())
+    # The lock maps distribution names to source packages (memory's distribution
+    # differs from its repository). Historical qualification revisions may differ;
+    # every active host direct dependency must still have an explicit build.
+    selected = {('https://github.com/microsoft/' + row['name'], package)
+                for row in data['repositories'] for package in row['packages']}
+    names = ['amplifier-unified', 'amplifier-core']
+    for row in lock['package']:
+        if 'git' not in row['source']:
+            continue
+        source = urlsplit(row['source']['git'])
+        package = parse_qs(source.query).get('subdirectory', ['.'])[0]
+        if (source._replace(query='', fragment='').geturl(), package) in selected:
+            names.append(adapter.canonical(row['name']))
+    requirements = tomllib.loads((ROOT / 'pyproject.toml').read_text())['project']['dependencies']
+    wheel = fake_wheel(tmp_path / 'host.whl', 'amplifier-unified', requirements)
+    if omitted is None:
+        adapter.check_direct_requirements([wheel], names, data['python'])
+    else:
+        assert omitted in names
+        names.remove(omitted)
+        with pytest.raises(ValueError, match='Undeclared active direct dependency: ' + omitted):
+            adapter.check_direct_requirements([wheel], names, data['python'])
+
+
+def test_ui_use_installed_input_matches_required_host_lock():
+    data = adapter.pins(ROOT / 'scripts/default-installed-pins.json')
+    [baseline] = [row for row in data['repositories'] if row['name'] == 'amplifier-bundle-ui-use']
+    lock = tomllib.loads((ROOT / 'uv.lock').read_text())
+    [package] = [row for row in lock['package'] if row['name'] == 'amplifier-bundle-ui-use']
+    assert package['source']['git'] == (
+        'https://github.com/microsoft/amplifier-bundle-ui-use?rev=main#' + baseline['commit'])
+    assert baseline['packages'] == ['.']
+    assert package.get('dependencies', []) == []
+
+
+def test_image_input_matches_host_lock_after_pillow_13_upgrade():
+    data = adapter.pins(ROOT / 'scripts/default-installed-pins.json')
+    [baseline] = [row for row in data['repositories'] if row['name'] == 'amplifier-bundle-imagegen']
+    lock = tomllib.loads((ROOT / 'uv.lock').read_text())
+    [package] = [row for row in lock['package'] if row['name'] == 'amplifier-module-tool-image']
+    assert package['source']['git'].rsplit('#', 1)[1] == baseline['commit']
+    assert baseline['packages'] == ['modules/tool-image']
+    # The replaced ad077 input required Pillow<13 while the host requires >=13.
+    # The selected accepted wheel must still satisfy the real resolver and pip
+    # check during installed preparation; a name-only closure check is not that.
+    assert any(row['name'] == 'pillow' for row in package['dependencies'])
+
+
+@pytest.mark.parametrize('declared', [False, True])
+def test_selected_wheels_require_transitive_direct_dependency_closure(tmp_path, declared):
+    root = fake_wheel(tmp_path / 'host.whl', 'amplifier-unified', [
+        'selected-tool @ https://example.invalid/tool'])
+    tool = fake_wheel(tmp_path / 'tool.whl', 'selected-tool', [
+        'support-library @ https://example.invalid/library'])
+    wheels, names = [root, tool], ['amplifier-unified', 'selected-tool']
+    if declared:
+        wheels.append(fake_wheel(tmp_path / 'library.whl', 'support-library'))
+        names.append('support-library')
+        adapter.check_direct_requirements(wheels, names, '3.13.16')
+    else:
+        with pytest.raises(ValueError, match='Undeclared active direct dependency: support-library'):
+            adapter.check_direct_requirements(wheels, names, '3.13.16')
+
+
+@pytest.mark.parametrize('marker,active', [
+    ('python_version >= "3.13"', True),
+    ('python_version < "3.13"', False),
+    ('python_full_version == "3.13.16"', True),
+    ('python_full_version > "3.13.16"', False),
+    ('extra == "decisions"', False),
+    ('extra == "browser"', False),
+])
+def test_direct_dependency_markers_use_target_python_without_optional_extras(tmp_path, marker, active):
+    wheel = fake_wheel(tmp_path / 'ui.whl', 'amplifier-bundle-ui-use', [
+        'conditional-library @ https://example.invalid/library ; ' + marker])
+    if active:
+        with pytest.raises(ValueError, match='Undeclared active direct dependency: conditional-library'):
+            adapter.check_direct_requirements([wheel], ['amplifier-bundle-ui-use'], '3.13.16')
+    else:
+        adapter.check_direct_requirements([wheel], ['amplifier-bundle-ui-use'], '3.13.16')
+
+
+def catalog_preparation_class(namespace=None):
+    # Test the exact shared probe helper without importing the application or
+    # collecting the installed-only composition tests in this adapter process.
+    import ast
+    import sys
+    tree = ast.parse((ROOT / 'tests/test_default_behaviors_integration.py').read_text())
+    node = next(n for n in tree.body if isinstance(n, ast.ClassDef)
+                and n.name == 'DecisionCatalogPreparation')
+    scope = {'sys': sys, **(namespace or {})}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), '<catalog-preparation>', 'exec'), scope)
+    return scope['DecisionCatalogPreparation']
+
+
+@pytest.mark.parametrize('change', [
+    'none', 'closed', 'repeated', 'executable', 'extra-arg', 'missing-isolated',
+    'script', 'cwd', 'credentials', 'pythonpath', 'inherit-environment', 'spawn', 'network',
+])
+def test_catalog_preparation_admits_only_one_exact_setup_launch(change):
+    import sys
+    gate = catalog_preparation_class()()
+    gate.open = change != 'closed'
+    gate.command = [sys.executable, '-I', '/installed/decision_account_catalog.py']
+    gate.environment = {'PATH': '/owned/bin', 'TMPDIR': '/owned/tmp'}
+    args = [sys.executable, list(gate.command), None, dict(gate.environment)]
+    event = 'subprocess.Popen'
+    if change == 'repeated':
+        assert gate.permits(event, args)
+    elif change == 'executable':
+        args[0] = '/other/python'
+    elif change == 'extra-arg':
+        args[1].append('--anything')
+    elif change == 'missing-isolated':
+        args[1].remove('-I')
+    elif change == 'script':
+        args[1][-1] = '/other/decision_account_catalog.py'
+    elif change == 'cwd':
+        args[2] = '/other'
+    elif change in {'credentials', 'pythonpath'}:
+        args[3]['API_KEY' if change == 'credentials' else 'PYTHONPATH'] = 'not-allowed'
+    elif change == 'inherit-environment':
+        args[3] = None
+    elif change == 'spawn':
+        event = 'os.posix_spawn'
+    elif change == 'network':
+        event = 'socket.connect'
+    assert gate.permits(event, args) is (change == 'none')
+    gate.open = False
+    assert not gate.permits('subprocess.Popen', [
+        sys.executable, gate.command, None, gate.environment])
+
+
+@pytest.mark.parametrize('change', [
+    'none', 'unexpected-entrypoint', 'changed-helper', 'missing-record', 'wrong-origin',
+    'warm-cache', 'timeout', 'nonzero', 'malformed-result', 'no-launch', 'second-launch',
+    'parent-provider-import', 'real-child-timeout',
+])
+def test_catalog_preparation_requires_real_discovery_provenance_and_cache(tmp_path, monkeypatch, change):
+    import base64
+    from functools import lru_cache
+    import hashlib
+    from types import SimpleNamespace
+    helper = tmp_path / 'decision_account_catalog.py'
+    started = tmp_path / 'child-started.json'
+    helper.write_text(
+        'import os,json,time\nfrom pathlib import Path\n'
+        f'Path({str(started)!r}).write_text(json.dumps({{"pid":os.getpid()}}))\n'
+        'time.sleep(30)\n' if change == 'real-child-timeout' else 'print("{}")\n')
+
+    class Record:
+        hash = SimpleNamespace(mode='sha256', value=base64.urlsafe_b64encode(
+            hashlib.sha256(helper.read_bytes()).digest()).decode().rstrip('='))
+        size = helper.stat().st_size
+
+        def __str__(self):
+            return 'amplifier_web/decision_account_catalog.py'
+
+    if change == 'changed-helper':
+        helper.write_bytes(b'changed\n')
+    dist = SimpleNamespace(files=[] if change == 'missing-record' else [Record()],
+                           locate_file=lambda row: helper)
+    modules = {}
+    fake_sys = SimpleNamespace(executable='/owned/python', modules=modules)
+    environment = {'PATH': '/owned/bin', 'TMPDIR': '/owned/tmp', 'API_KEY': 'must-not-cross'}
+    gate = None
+
+    @lru_cache(maxsize=1)
+    def snapshot():
+        if change == 'warm-cache':
+            return {}
+        if change != 'no-launch':
+            assert gate.permits('subprocess.Popen', [
+                fake_sys.executable, gate.command, None, gate.environment])
+        if change == 'second-launch':
+            assert gate.permits('subprocess.Popen', [
+                fake_sys.executable, gate.command, None, gate.environment]), 'Second launch refused'
+        if change == 'timeout':
+            raise subprocess.TimeoutExpired('catalog', 120)
+        if change == 'nonzero':
+            raise subprocess.CalledProcessError(1, 'catalog')
+        if change == 'parent-provider-import':
+            modules['amplifier_module_provider_unexpected'] = object()
+        return {'unexpected': 'hooks-fake'} if change == 'malformed-result' else {}
+
+    accounts = SimpleNamespace(
+        __file__=str(tmp_path / 'decision_accounts.py'), _catalog_snapshot=snapshot, catalogs=snapshot,
+        _CATALOG_START_SECONDS=120)
+    children = []
+    canonical = None
+    if change == 'real-child-timeout':
+        import ast
+        import copy
+        import errno
+        import os
+        import sys
+        import time
+        # Run the unchanged canonical launcher and failure translation. The only
+        # synthetic part is a helper that signals startup and then stalls.
+        tree = ast.parse((ROOT / 'amplifier_web/decision_accounts.py').read_text())
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                     and node.name in {'_catalog_snapshot', 'catalogs'}]
+        canonical = {'__file__': accounts.__file__, '_CATALOG_START_SECONDS': 120,
+                     'lru_cache': lru_cache, 'time': time, 'subprocess': subprocess,
+                     'sys': sys, 'Path': Path, 'os': os, 'errno': errno,
+                     'json': json, 'copy': copy}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), '<actual-catalog>', 'exec'), canonical)
+        real_popen = subprocess.Popen
+
+        def observed_popen(argv, **kwargs):
+            assert gate.permits('subprocess.Popen', [
+                argv[0], argv, kwargs.get('cwd'), kwargs['env']])
+            child = real_popen(argv, **kwargs)
+            children.append(child)
+            return child
+
+        monkeypatch.setattr(subprocess, 'Popen', observed_popen)
+        # Attribute writes from warm() update the actual function's globals.
+        class CanonicalAccounts:
+            __file__ = accounts.__file__
+            _catalog_snapshot = staticmethod(canonical['_catalog_snapshot'])
+            catalogs = staticmethod(canonical['catalogs'])
+
+            @property
+            def _CATALOG_START_SECONDS(self):
+                return canonical['_CATALOG_START_SECONDS']
+
+            @_CATALOG_START_SECONDS.setter
+            def _CATALOG_START_SECONDS(self, value):
+                canonical['_CATALOG_START_SECONDS'] = value
+
+        accounts = CanonicalAccounts()
+        fake_sys.executable = sys.executable
+        environment = dict(os.environ)
+    if change == 'warm-cache':
+        snapshot()
+    namespace = {
+        'sys': fake_sys, 'os': SimpleNamespace(environ=environment), 'Path': Path,
+        'hashlib': hashlib, 'base64': base64,
+        '_installed': lambda *args: SimpleNamespace(__file__=str(
+            tmp_path / ('other/__init__.py' if change == 'wrong-origin' else '__init__.py'))),
+        'importlib': SimpleNamespace(
+            metadata=SimpleNamespace(
+                entry_points=lambda **kwargs: [object()] if change == 'unexpected-entrypoint' else [],
+                distribution=lambda name: dist),
+            import_module=lambda name: accounts),
+    }
+    gate = catalog_preparation_class(namespace)()
+    if change == 'real-child-timeout':
+        gate.timeout_seconds = 0.5
+    if change == 'none':
+        result = gate.warm()
+        assert result['catalog'] == {} and result['entryPointCount'] == 0
+        assert result['launches'] == 1 and result['cacheReused']
+        assert result['environmentNames'] == ['PATH', 'TMPDIR']
+        assert result['configuredTimeoutSeconds'] == 120 and result['probeTimeoutSeconds'] == 10
+        assert snapshot.cache_info().hits == 1
+    else:
+        with pytest.raises((AssertionError, ValueError, subprocess.SubprocessError)):
+            gate.warm()
+        assert gate.evidence is None
+    assert gate.open is False
+    assert accounts._CATALOG_START_SECONDS == 120
+    if change == 'real-child-timeout':
+        assert started.is_file(), 'Require actual child startup, not a pre-launch timeout'
+        assert len(children) == 1 and json.loads(started.read_text())['pid'] == children[0].pid
+        assert children[0].returncode is not None, 'Canonical timeout must wait/reap the child'
+        with pytest.raises(ChildProcessError):
+            os.waitpid(children[0].pid, os.WNOHANG)
+        with pytest.raises(ValueError) as caught:
+            accounts.catalogs()
+        assert caught.value.diagnostic_facts['decisionCatalog']['category'] == 'timeout'
+        assert len(children) == gate.launches == 1
+        assert accounts._catalog_snapshot.cache_info().currsize == 1
+
+
+@pytest.mark.parametrize('automatic', [False, True])
+@pytest.mark.parametrize('change', [
+    'none', 'missing', 'noop', 'late', 'initializes', 'missing-host-policy', 'wrong-fallback',
+])
+def test_routing_observer_checks_composed_callback_effects_without_repair(automatic, change):
+    import ast
+    import asyncio
+    import copy
+    from types import SimpleNamespace
+    tree = ast.parse((ROOT / 'tests/fixtures/default_routing_probe.py').read_text())
+    node = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef)
+                and n.name == 'observe_early_routing')
+    scope = {'copy': copy}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), '<routing-observer>', 'exec'), scope)
+    capabilities = {}
+    hooks = [{'module': 'hooks-routing', 'config': {'default_matrix': 'balanced'}}]
+    session = SimpleNamespace(initialized=change == 'late', coordinator=SimpleNamespace(
+        config={'hooks': hooks}, get_capability=capabilities.get))
+    calls = []
+
+    async def composed_host_callback(child):
+        calls.append(child)
+        if change == 'noop':
+            return
+        capabilities['routing.defer_agent_resolution'] = True
+        if change != 'missing-host-policy':
+            capabilities['web.default_routing_policy'] = True
+        if automatic:
+            capabilities['web.default_routing_fallback'] = {'hooks': copy.deepcopy(hooks)}
+        if change == 'wrong-fallback':
+            capabilities['web.default_routing_fallback'] = {'hooks': []}
+        if change == 'initializes':
+            child.initialized = True
+
+    callback = None if change == 'missing' else composed_host_callback
+    if change == 'none':
+        asyncio.run(scope['observe_early_routing'](callback, session, automatic))
+        assert calls == [session]
+    else:
+        with pytest.raises(AssertionError):
+            asyncio.run(scope['observe_early_routing'](callback, session, automatic))
+        assert calls == ([] if change in {'missing', 'late'} else [session])
+        if change in {'missing', 'late', 'noop'}:
+            assert capabilities == {}, 'The observer must never supply missing policy'
+
+
+@pytest.mark.parametrize('change', [
+    'none', 'same-binding', 'name', 'anchor-path', 'missing-state', 'uri', 'state-path',
+    'conflicting-binding',
+])
+def test_foundation_resource_anchor_requires_exact_loaded_provenance(tmp_path, change):
+    import ast
+    from types import SimpleNamespace
+    tree = ast.parse((ROOT / 'tests/fixtures/default_mount_probe.py').read_text())
+    node = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                and n.name == 'bind_foundation_resource_anchor')
+    scope = {'Path': Path}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), '<resource-anchor>', 'exec'), scope)
+    root, other = tmp_path / 'foundation', tmp_path / 'other'
+    root.mkdir()
+    other.mkdir()
+    loaded = SimpleNamespace(source_base_paths={'other': other})
+    anchor = SimpleNamespace(name='foundation', base_path=root)
+    state = SimpleNamespace(uri='git+https://github.com/microsoft/amplifier-foundation@main',
+                            local_path=root)
+    if change == 'same-binding':
+        loaded.source_base_paths['foundation'] = root
+    elif change == 'name':
+        anchor.name = 'other'
+    elif change == 'anchor-path':
+        anchor.base_path = other
+    elif change == 'missing-state':
+        state = None
+    elif change == 'uri':
+        state.uri = 'git+https://example.invalid/other@main'
+    elif change == 'state-path':
+        state.local_path = other
+    elif change == 'conflicting-binding':
+        loaded.source_base_paths['foundation'] = other
+    before = dict(loaded.source_base_paths)
+    if change in {'none', 'same-binding'}:
+        scope['bind_foundation_resource_anchor'](loaded, anchor, state, root)
+        assert loaded.source_base_paths == {'other': other, 'foundation': root}
+    else:
+        with pytest.raises(AssertionError):
+            scope['bind_foundation_resource_anchor'](loaded, anchor, state, root)
+        assert loaded.source_base_paths == before
+
+
+@pytest.mark.parametrize('shape', [
+    'quoted-dashes', 'block-dashes', 'crlf', 'missing-open', 'missing-close', 'malformed', 'scalar',
+])
+def test_export_probe_parses_complete_frontmatter_without_truncating_instructions(shape):
+    import ast
+    tree = ast.parse((ROOT / 'tests/fixtures/default_mount_probe.py').read_text())
+    node = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                and n.name == 'exported_frontmatter')
+    scope = {'yaml': yaml}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), '<export-frontmatter>', 'exec'), scope)
+    instruction = 'Before --- divider\n\n---\nAfter with retained ending\n'
+    document = {'bundle': {'name': 'test'}, 'agents': {'operator': {'instruction': instruction}}}
+    body = yaml.safe_dump(document, default_style='"' if shape == 'quoted-dashes' else '|')
+    content = '---\n' + body + '---\n\nBody --- stays outside YAML\n'
+    if shape == 'crlf':
+        content = content.replace('\n', '\r\n')
+    elif shape == 'missing-open':
+        content = content[4:]
+    elif shape == 'missing-close':
+        content = '---\n' + body
+    elif shape == 'malformed':
+        content = '---\nbundle: [unterminated\n---\n'
+    elif shape == 'scalar':
+        content = '---\njust-text\n---\n'
+    if shape in {'quoted-dashes', 'block-dashes', 'crlf'}:
+        assert scope['exported_frontmatter'](content) == document
+        # The old parser stops inside the instruction, not at the closing fence.
+        assert len(content.split('---', 2)[1]) < len(body)
+    else:
+        with pytest.raises((AssertionError, yaml.YAMLError)):
+            scope['exported_frontmatter'](content)
 
 
 def test_source_inventory_checks_links_with_explicit_owned_boundary(tmp_path):
@@ -85,6 +492,64 @@ packages = ["pkg"]
         adapter.verify_candidate_wheel(wheel, source)
 
 
+@pytest.mark.parametrize('change', [
+    'none', 'unflattened', 'changed-license', 'missing-license', 'original-license',
+    'extra', 'duplicate', 'missing-source', 'missing-package', 'unsupported-exclude',
+    'directory-exclude', 'sources', 'collision',
+])
+def test_wheel_package_mapping_and_rehomed_license_remain_exact(tmp_path, change):
+    source = tmp_path / 'candidate'
+    package = source / 'components/delivery/pkg'
+    package.mkdir(parents=True)
+    (package / '__init__.py').write_text('value=1\n')
+    (package / 'LICENSE').write_text('license bytes\n')
+    (source / 'resource.txt').write_text('resource bytes\n')
+    exclusion = '/components/delivery/pkg/LICENSE'
+    if change == 'unsupported-exclude':
+        exclusion = '/components/**/LICENSE'
+    elif change == 'directory-exclude':
+        exclusion = '/components/delivery/pkg'
+    manifest = f'''[tool.hatch.build.targets.wheel]
+packages = ["components/delivery/pkg"]
+exclude = ["{exclusion}"]
+'''
+    if change == 'sources':
+        manifest += 'sources = {"components/delivery" = "other"}\n'
+    destination = 'pkg/__init__.py' if change == 'collision' else 'pkg/license.txt'
+    manifest += f'''[tool.hatch.build.targets.wheel.force-include]
+"components/delivery/pkg/LICENSE" = "{destination}"
+"resource.txt" = "pkg/resource.txt"
+'''
+    (source / 'pyproject.toml').write_text(manifest)
+    payload = {'pkg/__init__.py': 'value=1\n', 'pkg/license.txt': 'license bytes\n',
+               'pkg/resource.txt': 'resource bytes\n'}
+    if change == 'unflattened':
+        payload['components/delivery/pkg/__init__.py'] = payload.pop('pkg/__init__.py')
+    elif change == 'changed-license':
+        payload['pkg/license.txt'] = 'wrong\n'
+    elif change in {'missing-license', 'missing-source'}:
+        payload.pop('pkg/license.txt')
+        if change == 'missing-source':
+            (package / 'LICENSE').unlink()
+    elif change == 'missing-package':
+        (source / 'pyproject.toml').write_text(manifest.replace(
+            'packages = ["components/delivery/pkg"]', 'packages = ["absent"]'))
+    elif change in {'original-license', 'extra'}:
+        payload['pkg/LICENSE' if change == 'original-license' else 'pkg/extra'] = 'extra\n'
+    wheel = fake_wheel(tmp_path / 'candidate.whl', 'example', payload=payload)
+    if change == 'duplicate':
+        with zipfile.ZipFile(wheel, 'a') as archive, pytest.warns(UserWarning, match='Duplicate'):
+            archive.writestr('pkg/__init__.py', 'value=1\n')
+    if change == 'none':
+        actual = adapter.verify_candidate_wheel(wheel, source)
+        assert len(actual) == 3
+        assert actual['pkg/license.txt'] == adapter.digest(package / 'LICENSE')
+        assert actual['pkg/resource.txt'] == adapter.digest(source / 'resource.txt')
+    else:
+        with pytest.raises(ValueError):
+            adapter.verify_candidate_wheel(wheel, source)
+
+
 def test_pins_require_exact_sources(tmp_path):
     data = json.loads((ROOT / 'scripts/default-installed-pins.json').read_text())
     assert adapter.pins(ROOT / 'scripts/default-installed-pins.json')['core']['version'] == '2.0.2'
@@ -93,6 +558,17 @@ def test_pins_require_exact_sources(tmp_path):
     path.write_text(json.dumps(data))
     with pytest.raises(ValueError, match='Exact repository'):
         adapter.pins(path)
+
+
+def test_computer_use_installed_baseline_matches_optional_host_lock():
+    data = adapter.pins(ROOT / 'scripts/default-installed-pins.json')
+    baseline = next(row for row in data['repositories']
+                    if row['name'] == 'amplifier-bundle-computer-use')
+    lock = tomllib.loads((ROOT / 'uv.lock').read_text())
+    for name in ('amplifier-module-tool-computer-use', 'amplifier-module-hook-computer-use'):
+        [module] = [row for row in lock['package'] if row['name'] == name]
+        assert module['source']['git'].rsplit('#', 1)[1] == baseline['commit']
+    assert baseline['packages'] == ['modules/tool-computer-use', 'modules/hook-computer-use']
 
 
 def test_environment_contains_no_caller_credentials(monkeypatch):
@@ -596,8 +1072,9 @@ def test_residual_helpers_keep_module_counts_separate_from_product(tmp_path, cha
     ET.ElementTree(root).write(path)
     report = adapter.residual_helper_result(path, 1 if change == 'exit' else 0)
     assert report['passed'] is (change == 'none')
-    assert report['expectedCounts'] == {
-        'tests.test_integration_clients': 15, 'tests.test_integration_checks': 64}
+    # The independent source inventory test below checks this manifest. Keep
+    # these verdict mutations tied to it, not to a second stale copy of counts.
+    assert report['expectedCounts'] == adapter.RESIDUAL_HELPER_COUNTS
     assert report['exitCode'] == (1 if change == 'exit' else 0)
     assert not (tmp_path / 'junit.xml').exists()
     assert len(report['cases']) == len(list(root))

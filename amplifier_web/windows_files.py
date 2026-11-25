@@ -1,10 +1,22 @@
 """Bounded private config files on native Windows local fixed NTFS.
 
 This is not a general filesystem, settings migration, or durable authority
-checkpoint backend. Pins deny rename/delete; ACL validation, not sharing, blocks
-foreign WRITE_ATTRIBUTES/reparse conversion. Trusted OS administrators and other
+checkpoint backend. ACL validation, not sharing, blocks foreign
+WRITE_ATTRIBUTES/reparse conversion. Trusted OS administrators and other
 processes running as the current TokenUser remain inside the trust boundary.
 Publication flushes the file, not a directory/power-loss durability promise.
+
+A pin is an open handle on every folder of a path, down to the folder that
+the caller named. Each handle asks for attributes and security information
+only. A pin does not keep that last folder in its place: on hosted Windows
+runners another program of this account renamed it, and removed it when it
+was empty, while a pin was open. The pin's next check (`_check`) then
+refused, and nothing was written. Windows refused a rename of the two folders
+above it. So a pin covers what goes through its handles and its checks. It
+does not cover an act by a path, while the pin is open or after it: the path
+can name another folder then. The measurements are described in the design
+("Private config and credential boundary",
+docs/design/native-windows-installation.md).
 """
 from __future__ import annotations
 
@@ -13,6 +25,7 @@ import ctypes as C
 import os
 from pathlib import Path, PureWindowsPath
 import re
+import time
 import uuid
 
 DWORD, WORD, BYTE = C.c_uint32, C.c_uint16, C.c_ubyte
@@ -92,6 +105,23 @@ _INVALID = C.c_void_p(-1).value
 _MUTATION = 0x500D0156  # generic all/write, delete, owner/DACL, data/EA/attributes/delete-child
 _KNOWN_MASK = 0xF01F01FF
 _MAX_CONTENT = 1024 * 1024
+# A reader that meets a replacement opens the name again: at most this many
+# attempts for one name, and no further attempt begins after this many seconds.
+# The first attempt has no time test.
+_REPLACED_ATTEMPTS = 8
+_REPLACED_SECONDS = 2.0
+
+
+class PrivateFileUnlinked(PermissionError):
+    """The open object has no name now: it was replaced or removed while open.
+
+    This is not a statement about the file that has the name now, and it is
+    not a hardlink. The object is never trusted.
+    """
+
+
+class PrivateFileUnsettled(PermissionError):
+    """Each bounded attempt opened an object that lost its name; nothing was read."""
 
 
 def _component(name: str) -> None:
@@ -250,26 +280,42 @@ class _API:
         info = FILE_INFO()
         self.ok(self.GetFileInformationByHandle(handle, C.byref(info)))
         if (info.attributes & 0x400 or bool(info.attributes & 0x10) != directory
-                or not directory and info.links != 1):
+                or not directory and info.links > 1):
             raise PermissionError("private-file path is a reparse point, hardlink, or wrong type")
+        if not directory and not info.links:
+            # A file has exactly one link or it is refused. No link is its own
+            # answer: a replacement (move) or a removal took the name away
+            # after this handle was opened.
+            raise PrivateFileUnlinked("Windows private-file object was replaced or removed while open")
         buffer = C.create_unicode_buffer(32768)
         length = self.GetFinalPathNameByHandleW(handle, buffer, len(buffer), 0)
         if not length or length >= len(buffer):
+            self._still_linked(handle, directory)
             raise OSError("cannot validate final Windows private-file path")
         actual = buffer.value.removeprefix("\\\\?\\")
         # Exact component spelling rejects short aliases, case-sensitive
         # collisions, redirected namespaces and spelling ambiguity. Drive case
         # itself has no distinct Windows namespace identity.
         if actual[2:] != str(path)[2:] or actual[:2].lower() != str(path)[:2].lower():
+            self._still_linked(handle, directory)
             raise PermissionError("Windows private-file path has an alternate namespace/case alias")
         return info
 
-    def open(self, path, *, directory=False, create=False, cleanup=False):
+    def _still_linked(self, handle, directory):
+        """Name the cause when the name went away between the two queries."""
+        info = FILE_INFO()
+        self.ok(self.GetFileInformationByHandle(handle, C.byref(info)))
+        if not directory and not info.links:
+            raise PrivateFileUnlinked("Windows private-file object was replaced or removed while open")
+
+    def open(self, path, *, directory=False, create=False, cleanup=False, exclusive=False):
         _local(str(path))
-        # Pins: read attributes/control, deny WRITE and DELETE sharing.
+        # A folder's pin: read attributes/control only. Its share mode leaves
+        # out WRITE and DELETE, and that keeps no other program from renaming
+        # or removing the folder (measured; see the text at the top).
         # Readers: allow DELETE for atomic replacement, never WRITE/partial reads.
         access = 0x20080 | (0 if directory else 0x80000000)
-        share = 1 if directory else 5
+        share = 1 if directory or exclusive else 5
         if create:
             access = 0x20080 | 0x40000000 | 0x10000  # write + DELETE for exact-handle cleanup
         elif cleanup:
@@ -429,13 +475,56 @@ class PinnedDirectory:
             raise failure
 
     def _existing(self, name):
+        return self._existing_info(name)[0]
+
+    def _existing_info(self, name):
+        """Open and validate the file that has this name now: (handle, its facts).
+
+        Another process can replace the file (publish_private, replace=True)
+        after this reader opened it. The open object then has no name: it is
+        not the named file any more, and what Windows reports for it is not a
+        refusal of the named file. Such an object is never trusted. Close it,
+        check the pins again, open the name again and validate everything
+        again, a bounded number of times within a bounded time.
+
+        The returned handle was valid at its last check. It can lose its name
+        later; it then still holds the complete file that was validated.
+
+        This call blocks its thread for the waits and for one pin check per
+        further attempt. It asks for waits of at most 0.162 seconds in total;
+        the system can make a wait longer. Only a file that is replaced again
+        during each attempt reaches those limits.
+        """
+        deadline = time.monotonic() + _REPLACED_SECONDS
+        for attempt in range(_REPLACED_ATTEMPTS):
+            if attempt:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(0.001 * 2 ** attempt, 0.05, remaining))
+                self._check()
+                # The wait and the pin check take time too, so the limit is
+                # tested again here, as the last step before a further
+                # attempt. It decides only whether an attempt begins: it does
+                # not limit the time of the Windows calls of an attempt.
+                if time.monotonic() >= deadline:
+                    break
+            try:
+                return self._validated(name)
+            except PrivateFileUnlinked as error:
+                unlinked = error
+        raise PrivateFileUnsettled(
+            "Windows private file did not settle: another process replaced it "
+            "during each bounded attempt to open and validate it") from unlinked
+
+    def _validated(self, name):
         handle = self._api.open(self.path / name)
         try:
             self._api.validate_acl(handle, private=True)
             info = self._api.info(handle, self.path / name, directory=False)
             if info.volume != self._pins[-1][2][0]:
                 raise PermissionError("Windows private file crosses volumes")
-            return handle
+            return handle, info
         except BaseException:
             self._api.close(handle)
             raise
@@ -450,6 +539,40 @@ class PinnedDirectory:
             return self._api.read(handle, limit=limit)
         finally:
             self._api.close(handle)
+
+    @contextmanager
+    def removal_private(self, name: str, expected_sha256: str):
+        """Pin verified bytes, denying writes/replacement until exact deletion.
+
+        Callers can acquire a whole set before any effect. Sharing conflicts
+        refuse preparation; genuine later I/O errors are not atomic rollback.
+        """
+        import hashlib
+        import re
+        _component(name)
+        if not isinstance(expected_sha256, str) or not re.fullmatch("[a-f0-9]{64}", expected_sha256):
+            raise ValueError("Private removal requires an exact SHA-256.")
+        self._check()
+        path = self.path / name
+        handle = self._api.open(path, cleanup=True, exclusive=True)
+        try:
+            self._api.validate_acl(handle, private=True)
+            identity = _identity(self._api.info(handle, path, directory=False))
+            if identity[0] != self._pins[-1][2][0]:
+                raise PermissionError("Windows private file crosses volumes")
+            if hashlib.sha256(self._api.read(handle, limit=_MAX_CONTENT)).hexdigest() != expected_sha256:
+                raise ValueError("Owned private file changed; removal refused.")
+            def remove():
+                self._check()
+                self._api.discard(handle, path, identity)
+            yield remove
+        finally:
+            self._api.close(handle)
+
+    def remove_private(self, name: str, expected_sha256: str) -> None:
+        """Remove only the still-open private object whose exact bytes we own."""
+        with self.removal_private(name, expected_sha256) as remove:
+            remove()
 
     def publish_private(self, name: str, content: bytes, *, replace: bool = False) -> None:
         """Publish a complete file, never delete-first or overwrite by default.
@@ -495,7 +618,15 @@ class PinnedDirectory:
                     raise PermissionError("Windows temporary file identity changed")
                 self._api.move(handle, self.path / name, replace=replace)
                 renamed = published = True
-                self._api.info(handle, self.path / name, directory=False)
+                try:
+                    self._api.info(handle, self.path / name, directory=False)
+                except PrivateFileUnlinked:
+                    # The rename succeeded, and this object lost its name
+                    # afterwards (a later publication or a removal). Nothing
+                    # is known here about a file that has the name now, and
+                    # nothing of it is accepted. This object can only be
+                    # closed; its ACL is still checked below.
+                    pass
                 self._api.validate_acl(handle, private=True)
             except BaseException as exc:
                 if renamed:

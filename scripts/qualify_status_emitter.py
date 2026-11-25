@@ -52,6 +52,9 @@ def published_core(identity):
 def matching_source(wheel, prefix, source, force_include=None):
     count = 0
     packaged = set()
+    # The same author directory now carries installed-only standalone tests.
+    # These exact test roots belong in source archives, never either wheel.
+    tests = source/'tests' if prefix == 'amplifier_status' else None
     with zipfile.ZipFile(wheel) as archive:
         for item in archive.infolist():
             if item.is_dir() or not item.filename.startswith(prefix+'/'):
@@ -63,13 +66,15 @@ def matching_source(wheel, prefix, source, force_include=None):
                     break
             if not path.is_file() or path.read_bytes() != archive.read(item):
                 raise ValueError('Candidate wheel differs from reviewed source: '+item.filename)
+            if tests is not None and path.is_relative_to(tests):
+                raise ValueError('Candidate wheel includes standalone tests: '+item.filename)
             if path.is_relative_to(source):
                 packaged.add(path.relative_to(source).as_posix())
             count += 1
     if not count:
         raise ValueError('Candidate wheel has no expected package files')
     missing = {p.relative_to(source).as_posix() for p in source.rglob('*.py')
-               if '__pycache__' not in p.parts} - packaged
+               if '__pycache__' not in p.parts and (tests is None or not p.is_relative_to(tests))} - packaged
     if missing:
         raise ValueError('Candidate wheel omits reviewed Python files: '+', '.join(sorted(missing)))
     return count

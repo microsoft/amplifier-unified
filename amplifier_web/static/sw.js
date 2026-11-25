@@ -1,7 +1,7 @@
 /* Only public branding and the offline help page are cached. No app shell,
    authenticated pages, API responses, chats, attachments, or canvas documents. */
 const CACHE_PREFIX='amplifier-public-';
-const CACHE=CACHE_PREFIX+'3afd0e388877a856';
+const CACHE=CACHE_PREFIX+'e93ef9d632774102';
 const PUBLIC_FILES=[
   '/offline.html','/app-pages.css','/pwa.js','/manifest.webmanifest','/favicon.ico',
   '/branding/favicons/favicon.ico','/branding/favicons/favicon-32.png',
@@ -17,6 +17,14 @@ self.addEventListener('activate',event=>{
 self.addEventListener('fetch',event=>{
   const request=event.request,url=new URL(request.url);
   if(request.method!=='GET'||url.origin!==self.location.origin)return;
+  // Instance metadata can change without a client build. Bypass the old
+  // build-versioned cache, including legacy install-icon addresses.
+  if(url.pathname==='/manifest.webmanifest'||url.pathname==='/favicon.ico'||
+     url.pathname.startsWith('/instance-icon/')||
+     /^\/branding\/(?:favicons\/|pwa\/)/.test(url.pathname)){
+    event.respondWith(fetch(request,{cache:'no-store'}));
+    return;
+  }
   if(PUBLIC_FILES.includes(url.pathname)){
     event.respondWith(caches.open(CACHE).then(async cache=>(await cache.match(url.pathname))||fetch(request)));
     return;
@@ -28,4 +36,11 @@ self.addEventListener('fetch',event=>{
       return cached||new Response('Amplifier is unavailable. Start the Python service and try again.',{status:503,headers:{'Content-Type':'text/plain'}});
     }));
   }
+});
+self.addEventListener('notificationclick',event=>{
+  event.notification.close();
+  const id=event.notification.data?.sessionId;
+  if(typeof id!=='string'||!id||id.length>200||/[\u0000-\u001f\u007f]/.test(id))return;
+  // Explicit click opens only a same-origin chat link, not a command or approval.
+  event.waitUntil(self.clients.openWindow('/?chat='+encodeURIComponent(id)));
 });

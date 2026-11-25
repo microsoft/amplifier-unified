@@ -32,7 +32,8 @@ not current acceptance evidence or new authority.
    dependencies, existing authority and result destination. Keep genuinely
    sequential dependencies explicit; use real machine/provider capacity and any
    deliberately configured limits, not an invented fixed worker count.
-2. Use `coordination.create` for durable independent task roots. Its `text` is
+2. Use `coordination.create` for durable manager-owned workers, without a browser.
+   It inherits the calling manager's workspace and configuration. Its `text` is
    the complete brief, including acceptance and permission limits; there is no
    separate `acceptance` field. Supply `objective` to save its durable goal;
    optional `constraints` belong to that objective. Creation reserves its result
@@ -60,6 +61,13 @@ uses ordinary busy-boundary/idle delivery. `notify` is a non-waking note; use it
 only when no continuation is needed. Ordinary collaboration within the assigned
 intent needs no separate approval. Do not enroll independent chats implicitly.
 
+Use `session.handoff.start` only for independent work in a destination folder,
+without manager ownership or automatic result return. Direct starts need no
+browser: Ask requires an explicit request through the current root; Full also
+supports qualified children and trusted systems. Review and navigation still
+require a client. For work owned by another existing manager, send that manager
+the brief; commissioning from here would inherit this workspace instead.
+
 ## Continue when a dependency is resolved
 
 For an active task changing its own runtime through `configuration.apply` with
@@ -76,6 +84,16 @@ The owner verifies the dependency, then deliberately calls `task.resume` within
 its standing scope. No current `humanInput` or fresh human approval is needed.
 Do not hunt for a human message ID merely because work is dependency-blocked.
 
+If your plan no longer depends on an existing peer request, deliberately use
+`coordination.unsubscribe` for that exact request. This withdraws only your
+saved wait, including a cancelled or uncertain wait; it neither cancels recipient
+execution nor resolves UNKNOWN. Inspect its receipt: queued returns are
+suppressed, but already submitting, admitted or unknown input may still arrive.
+Withdrawal is sticky across cancel, review and exact subscribe/send retries.
+Retained results stay readable. Separately resume your own agent dependency
+block only when your revised plan is justified; never replay uncertain writes
+or clear an actual Stop or human pause by withdrawing a wait.
+
 Use the human-backed `resume` recipe in the reference only for an actual stopped,
 paused or failed commissioned member. Unknown block provenance, unresolved user
 questions and uncertain effects do not become resolved dependencies. Preserve
@@ -89,14 +107,18 @@ back and forth. A test waiting for capacity blocks that dependency, not unrelate
 implementation. Use the host's saved result notification instead of polling or
 adding a second watch for the same work.
 
-Declare one concise `coordination.reply` for the actual delivered `requestId`,
+Ordinary peer speech needs no prior result acknowledgement or qualified artifact
+report. Use `coordination.send` for discussion, questions and review decisions,
+optionally with `replyToRequestId`; do not manufacture an artifact just to speak.
+
+For a saved deliverable or blocker, declare one concise `coordination.reply` for the actual delivered `requestId`,
 with typed outcome, source/PR identity, affected checks, limitations and evidence
 references. Omit `messageIds` unless you know your assistant output IDs from the
 current generation. Never use the incoming peer request's `messageId`. The host
 seals the declaration against actual root completion; a reply is not independent
 review or proof that an unknown effect succeeded.
 
-Retain a local file using `path@sha256:<64 lowercase hex digits>`, relative to
+When returning file evidence, retain a local file using `path@sha256:<64 lowercase hex digits>`, relative to
 your actual execution folder. For a file containing exactly `hello`, use:
 
 ```text
@@ -137,9 +159,14 @@ applies its acceptance criteria and standing scope.
 After accepting a member's exact contribution, use `assignment.task.read` then
 `assignment.task.complete` with current revisions and completion evidence. The
 worker does not need another model turn to acknowledge acceptance or shipment.
-Use the available result acknowledgement and membership-retirement controls when
-appropriate. Unresolved resource custody remains separate; don't call an incident
-resolved merely because its diagnostic task completed.
+Optionally acknowledge an exact reviewed outcome to suppress its pending
+notification; this is not required before replying, continuing work or accepting
+a contribution. `assignment.retire` ends settled participation, not an objective:
+stopped or superseded members can leave with their unfinished tasks and failed
+settings intact. Never fake completion or mount old settings just to retire them.
+Actual writers, pending effects, shared claims and resource custody must settle;
+Stop remains. Standing readmission still needs completed or absent canonical work.
+Don't call an incident resolved merely because its diagnostic task completed.
 
 ## Keep shared context small and current
 

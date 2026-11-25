@@ -41,6 +41,144 @@ for line in sys.stdin:
 '''
 
 
+@pytest.mark.parametrize('capture_kind', ['matching', 'foreign', 'wrong-stage', 'empty-chain', 'invalid-input'])
+async def test_reader_execution_failure_uses_shared_validator_and_exact_runtime(tmp_path, capture_kind):
+    """Actual worker pipe joins the runtime reader and shared public sanitizer."""
+    fixture = r'''
+import json,sys
+for line in sys.stdin:
+    command = json.loads(line)
+    if command['op'] == 'start':
+        print(json.dumps({'type':'runtime.ready'}), flush=True)
+    elif command['op'] == 'control':
+        print(json.dumps({'op':'reply', 'id':command['id'], 'result':{'accepted':True}}), flush=True)
+        print(json.dumps({'type':'runtime.error', 'error':'The worker failed.',
+            'errorType':'RuntimeError', 'executionFailure':command['arguments']['capture']}), flush=True)
+    elif command['op'] == 'stop':
+        break
+'''
+    sid = 'reader-execution-fixture'
+    capture = {'runtimeSessionId': sid, 'stage': 'execution',
+               'generationId': 'reader-generation', 'inputIds': ['reader-input'],
+               'exceptionChain': [{'errorType': 'RuntimeError', 'message': 'PRIVATE payload',
+                   'frames': [{'file': 'runtime_worker.py', 'line': 42}]}],
+               'locals': {'secret': 'PRIVATE'}}
+    if capture_kind == 'foreign':
+        capture['runtimeSessionId'] = 'foreign-runtime'
+    elif capture_kind == 'wrong-stage':
+        capture['stage'] = 'arbitrary'
+    elif capture_kind == 'empty-chain':
+        capture['exceptionChain'] = []
+    elif capture_kind == 'invalid-input':
+        capture['inputIds'] = ['unsafe\ninput']
+    manager = RuntimeManager(command=[sys.executable, '-u', '-c', fixture],
+        startup_timeout=3, retention={'prewarm_on_select': False})
+    manager.home = tmp_path / 'app'
+    errors, observed = [], asyncio.Event()
+    async def emit(kind, payload):
+        if kind == 'runtime.error':
+            errors.append(payload)
+            observed.set()
+    try:
+        await manager.start({'id': sid, 'workspace': str(tmp_path), 'bundle': 'fixture'}, emit)
+        await manager.control(sid, 'fixture.failure', {'capture': capture})
+        await asyncio.wait_for(observed.wait(), 3)
+        from amplifier_web.support_diagnostics import public_execution_failure
+        expected = public_execution_failure(capture)
+        if capture_kind == 'foreign':
+            expected = None
+        assert errors[0].get('executionFailure') == expected
+        if expected:
+            assert errors[0]['generationId'] == 'reader-generation'
+            assert 'PRIVATE' not in json.dumps(expected)
+            assert 'locals' not in expected
+            if capture_kind == 'invalid-input':
+                assert 'inputIds' not in expected
+        else:
+            assert 'generationId' not in errors[0]
+    finally:
+        await manager.close()
+    assert not manager.workers and not manager._preparations
+
+
+@pytest.mark.parametrize('terminal', ['finished', 'detached'])
+@pytest.mark.parametrize('reason', [None, 'configuration', 'retention', 'shutdown'])
+async def test_native_closure_does_not_manufacture_stop_before_late_fault(tmp_path, terminal, reason):
+    """Read actual wire order: closure is neither Stop nor proof that saving succeeded."""
+    fixture = r'''
+import json,sys
+for line in sys.stdin:
+    data=json.loads(line)
+    if data['op']=='start':
+        print(json.dumps({'type':'runtime.ready','report':{}}),flush=True)
+    elif data['op']=='fixture.close':
+        terminal='''+repr(terminal)+r'''
+        fault={'type':'runtime.error','errorType':'RuntimeError','error':'A runtime fault occurred.'}
+        if terminal=='detached':
+            fault.update(event='persistence.failed',errorType='OSError',
+                         error='The conversation could not be saved. Work was not replayed.')
+        for event in [
+            {'type':'generation.'+terminal,'generation_id':'g','input_ids':['once']},
+            {'type':'session.closed','reason':'cancelled'},fault]:
+            print(json.dumps(event),flush=True)
+        print(json.dumps({'op':'reply','id':data['id'],'result':{'observed':True}}),flush=True)
+        break
+    elif data['op']=='stop':
+        print(json.dumps({'type':'session.closed'}),flush=True)
+        break
+'''
+    manager = RuntimeManager(command=[sys.executable, '-u', '-c', fixture],
+                             retention={'prewarm_on_select': False})
+    manager.home = tmp_path
+    events = []
+    async def emit(kind, payload):
+        events.append((kind, payload))
+    try:
+        await manager.start({'id':'closed-probe'}, emit)
+        row = manager.workers['closed-probe']
+        row['stop_reason'] = reason
+        await manager._request('closed-probe', 'fixture.close')
+        await asyncio.wait_for(asyncio.shield(row['reader']), 3)
+        assert [(kind, data['event']) for kind, data in events if kind == 'runtime.generation'] == [
+            ('runtime.generation', 'generation.' + terminal)]
+        assert any(kind == 'runtime.warmth' and data['status'] == 'cold' for kind, data in events)
+        assert not any(kind == 'runtime.status' and data['status'] == 'stopped' for kind, data in events)
+        assert any(kind == 'runtime.error'
+                   and data.get('event') == ('persistence.failed' if terminal == 'detached' else None)
+                   and data['errorType'] == ('OSError' if terminal == 'detached' else 'RuntimeError')
+                   for kind, data in events)
+        assert [data['status'] for kind, data in events if kind == 'runtime.ended'] == ['interrupted']
+        assert row['inputId'] is None  # No new input, retry, or model work was admitted.
+    finally:
+        await manager.close()
+
+
+async def test_only_actual_stop_turns_native_closure_into_stopped(tmp_path):
+    manager = RuntimeManager(command=[sys.executable, '-u', '-c', r'''
+import json,sys
+for line in sys.stdin:
+    data=json.loads(line)
+    if data['op']=='start':
+        print(json.dumps({'type':'runtime.ready','report':{}}),flush=True)
+    elif data['op']=='stop':
+        print(json.dumps({'type':'session.closed','reason':'cancelled'}),flush=True)
+        break
+'''], retention={'prewarm_on_select': False})
+    manager.home = tmp_path
+    events = []
+    async def emit(kind, payload):
+        events.append((kind, payload))
+    try:
+        await manager.start({'id':'stopped-probe'}, emit)
+        await manager.stop('stopped-probe')
+        assert any(kind == 'runtime.status' and data['status'] == 'stopped' for kind, data in events)
+        assert [data['status'] for kind, data in events if kind == 'runtime.ended'] == ['stopped']
+        assert not any(kind == 'runtime.error' for kind, _ in events)
+        assert not any(kind == 'runtime.generation' for kind, _ in events)
+    finally:
+        await manager.close()
+
+
 @pytest.mark.parametrize('boundary', ['admission', 'status', 'qualification', 'spawn'])
 async def test_restart_authority_is_rechecked_after_startup_waits(tmp_path, monkeypatch, boundary):
     """A queued restart cannot mount after Stop/revocation; reap any spawned child."""
@@ -246,6 +384,75 @@ for line in sys.stdin:
         await asyncio.wait_for(manager.close(), 5)
 
 
+@pytest.mark.parametrize('callback,identity', [
+    ('input', {'input_id': 'original-input'}),
+    ('child_report', {'child_session_id': 'original-child', 'call_id': 'original-call', 'report_index': 0}),
+    ('child_event', {'child_session_id': 'original-child', 'call_id': 'original-call', 'report_index': 2**31 - 1}),
+    ('bundle_turn', {}),
+    ('bundle_job', {'job_id': 'original-job', 'call_id': 'original-call'}),
+])
+def test_callback_rejection_retains_only_closed_metadata(callback, identity):
+    from amplifier_web.support_diagnostics import event_detail
+    metadata = {'callback_kind': callback, 'reason': 'invalid_activation',
+                'delivery': 'not_admitted', 'outcome': 'unknown', **identity}
+    raw = {'type': 'command.rejected', 'session_id': 'native', **metadata,
+           'payload': {'secret': 'PRIVATE'}, 'exception': 'PRIVATE', 'text': 'PRIVATE',
+           'unexpected': 'PRIVATE', 'error_type': 'PRIVATE'}
+    kind, payload = normalize_event(raw, 'host', 'unrelated-current-input')
+    assert kind == 'runtime.error'
+    assert payload == {'sessionId': 'host', 'event': 'command.rejected', 'errorType': None,
+                       'error': 'invalid_activation', **metadata}
+    assert event_detail(payload) == {'sessionId': 'host', 'event': 'command.rejected', **metadata}
+    assert 'PRIVATE' not in json.dumps(payload)
+    assert 'generationId' not in payload and 'inputId' not in payload
+
+
+@pytest.mark.parametrize('callback,key,value', [
+    ('input', 'input_id', None), ('input', 'input_id', 42),
+    ('input', 'input_id', {'secret': 'PRIVATE'}), ('input', 'input_id', 'x' * 201),
+    ('input', 'input_id', ''), ('input', 'input_id', 'PRIVATE\nvalue'),
+    ('bundle_job', 'job_id', ['PRIVATE']), ('bundle_job', 'job_id', '/PRIVATE/path'),
+    ('bundle_job', 'call_id', True), ('child_report', 'child_session_id', 'x' * 201),
+    ('child_event', 'call_id', 'PRIVATE value'),
+    ('bundle_turn', 'call_id', 'unexpected-call'),
+    *[('child_report', 'report_index', value) for value in (True, False, -1, 2**31, 1.5, '1', None)],
+])
+def test_callback_rejection_revalidates_bad_identity_fields(callback, key, value):
+    from amplifier_web.support_diagnostics import event_detail
+    raw = {'type': 'command.rejected', 'callback_kind': callback, 'reason': 'invalid_activation',
+           'delivery': 'not_admitted', 'outcome': 'unknown', key: value,
+           'input_id': value if key == 'input_id' else 'unexpected-input',
+           'private_payload': 'PRIVATE'}
+    _, payload = normalize_event(raw, 'host')
+    assert key not in payload and key not in event_detail(raw)
+    assert key not in event_detail({**payload, key: value})
+    if callback != 'input':
+        assert 'input_id' not in payload and 'input_id' not in event_detail(raw)
+    assert 'PRIVATE' not in json.dumps(payload)
+
+
+@pytest.mark.parametrize('patch', [
+    {'callback_kind': 'unexpected'}, {'callback_kind': ['input']},
+    {'reason': 'PRIVATE'}, {'delivery': 'admitted'}, {'outcome': 'none'},
+])
+def test_callback_rejection_requires_fixed_envelope(patch):
+    from amplifier_web.support_diagnostics import event_detail
+    raw = {'type': 'command.rejected', 'callback_kind': 'input', 'reason': 'invalid_activation',
+           'delivery': 'not_admitted', 'outcome': 'unknown', 'input_id': 'original-input', **patch}
+    _, payload = normalize_event(raw, 'host')
+    assert payload == {'sessionId': 'host', 'event': 'command.rejected',
+                       'errorType': None, 'error': 'command.rejected'}
+    assert event_detail(raw) == {'type': 'command.rejected'}
+
+
+def test_generic_command_rejection_is_unchanged():
+    assert normalize_event({'type': 'command.rejected', 'reason': 'no_active_job',
+        'input_id': 'original-input', 'delivery': 'not_admitted', 'outcome': 'unknown',
+        'job_id': 'not-a-callback', 'payload': 'PRIVATE'}, 'host', 'current-input') == (
+        'runtime.error', {'sessionId': 'host', 'error': 'no_active_job',
+                          'event': 'command.rejected', 'errorType': None})
+
+
 class NormalizationTests(unittest.TestCase):
     def test_child_identity_remains_distinct_from_parent(self):
         kind,payload=normalize_event({'type':'child.updated','sessionId':'child','status':'idle','agent':'foundation:explorer'},'parent')
@@ -324,8 +531,8 @@ class WorkerActivityTests(unittest.TestCase):
 
 @pytest.mark.asyncio
 async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unchanged(tmp_path):
+    # Stable CI node ID; the revised contract explicitly retains this writer.
     shared = pytest.importorskip("amplifier_foundation.session.shared_state")
-    from amplifier_web.shared_state import configuration_stamp
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -336,7 +543,6 @@ async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unc
     worker.runtime = SimpleNamespace(session_id="warm-session", queued_inputs=0,
                                      inbox=asyncio.Queue(), generation=None)
     worker.shared_store = shared.SharedSessionStore(workspace, "warm-session", root=tmp_path / "shared")
-    worker.shared_store_stamp = shared.file_stamp
     worker.shared_handle = worker.shared_store.acquire(app="amplifier-unified", fixture=True)
     worker.activation_gate = ActivationGate()
     first = worker.activation_gate.activate()
@@ -345,10 +551,6 @@ async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unc
     native = sessions_dir(workspace) / "warm-session" / "transcript.jsonl"
     native.parent.mkdir(parents=True)
     native.write_text('{"role":"user","content":"before checkpoint"}\n')
-    worker.config_inputs = (str(native),)
-    worker.parked_history_stamp = worker.history_stamp()
-    worker.parked_config_stamp = configuration_stamp(
-        workspace, "warm-session", worker.home, shared.file_stamp, extra_paths=worker.config_inputs)
     checkpoint_calls = []
     async def checkpoint(status):
         checkpoint_calls.append(status)
@@ -360,16 +562,14 @@ async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unc
             if name == "live.checkpoint" else None)))
 
     with patch("amplifier_web.runtime_worker.publish"):
-        await worker.park(activation=first)
-        assert worker.parked
-        assert not worker.shared_handle
-        await worker.acquire_for_mutation()
+        assert await worker.checkpoint_idle()
+        with pytest.raises(shared.SessionBusyError):
+            worker.shared_store.acquire(app="contender")
 
     assert checkpoint_calls == ["completed"]
-    assert not worker.parked
     assert worker.shared_handle.active
-    with pytest.raises(RuntimeError, match="released or superseded"):
-        worker.activation_gate.check(first)
+    worker.activation_gate.check(first)
+    assert not hasattr(worker, 'park') and not hasattr(worker, 'acquire_for_mutation')
     worker.shared_handle.release()
 
 
@@ -378,7 +578,7 @@ async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unc
     ('generation.failed', 'error'),
     ('generation.detached', 'interrupted'),
 ])
-async def test_worker_parking_checkpoints_observed_root_generation_outcome(tmp_path, event, status):
+async def test_worker_retirement_checkpoints_observed_root_generation_outcome(tmp_path, event, status):
     shared = pytest.importorskip("amplifier_foundation.session.shared_state")
     worker = Worker()
     worker.workspace, worker.home = tmp_path / "workspace", tmp_path / "home"
@@ -387,13 +587,9 @@ async def test_worker_parking_checkpoints_observed_root_generation_outcome(tmp_p
     worker.runtime = SimpleNamespace(session_id="outcome-session", queued_inputs=0,
                                      inbox=asyncio.Queue(), generation=None)
     worker.shared_store = shared.SharedSessionStore(worker.workspace, "outcome-session", root=tmp_path / "shared")
-    worker.shared_store_stamp = shared.file_stamp
     worker.shared_handle = worker.shared_store.acquire(app="amplifier-unified", fixture=True)
     worker.activation_gate = ActivationGate()
     worker.activation = worker.activation_gate.activate()
-    worker.config_inputs = ()
-    worker.parked_history_stamp = worker.history_stamp()
-    worker.parked_config_stamp = None
     checkpoint_calls = []
     async def checkpoint(outcome):
         checkpoint_calls.append(outcome)
@@ -403,7 +599,7 @@ async def test_worker_parking_checkpoints_observed_root_generation_outcome(tmp_p
     try:
         with patch("amplifier_web.runtime_worker.publish"):
             worker.observe({'type': event})
-            await worker.park(activation=worker.activation)
+            assert await worker.checkpoint_idle()
         assert checkpoint_calls == [status]
     finally:
         if worker.shared_handle:
@@ -487,7 +683,7 @@ async def test_terminal_cleanup_does_not_checkpoint_completed_or_yielding_outcom
 
 
 @pytest.mark.asyncio
-async def test_parked_worker_rechecks_native_cli_change_before_admitting_input(tmp_path):
+async def test_late_observation_during_save_prevents_retirement_without_releasing_writer(tmp_path):
     shared = pytest.importorskip("amplifier_foundation.session.shared_state")
 
     workspace = tmp_path / "workspace"
@@ -498,7 +694,6 @@ async def test_parked_worker_rechecks_native_cli_change_before_admitting_input(t
     worker.runtime = SimpleNamespace(session_id="warm-session", queued_inputs=0,
                                      inbox=asyncio.Queue(), generation=None)
     worker.shared_store = shared.SharedSessionStore(workspace, "warm-session", root=tmp_path / "shared")
-    worker.shared_store_stamp = shared.file_stamp
     worker.shared_handle = worker.shared_store.acquire(app="amplifier-unified", fixture=True)
     worker.activation_gate = ActivationGate()
     worker.activation = worker.activation_gate.activate()
@@ -508,28 +703,19 @@ async def test_parked_worker_rechecks_native_cli_change_before_admitting_input(t
     native = sessions_dir(workspace) / "warm-session" / "transcript.jsonl"
     native.parent.mkdir(parents=True)
     native.write_text(json.dumps(messages[0]) + "\n")
-    worker.config_inputs = (str(native),)
-    checkpoint_calls, remount_calls = [], []
+    checkpoint_calls = []
     async def checkpoint(status):
         checkpoint_calls.append(status)
+        worker.runtime.inbox.put_nowait("late child status")
     worker.session = SimpleNamespace(coordinator=SimpleNamespace(
         get=lambda name: None,
         get_capability=lambda name: checkpoint if name == "live.checkpoint" else None))
-    async def remount():
-        from amplifier_foundation.session.history import SessionHistoryStore
-        remount_calls.append(SessionHistoryStore(native.parent).load_messages())
-    worker.remount = remount
     try:
         with patch("amplifier_web.runtime_worker.publish"):
-            await worker.park(activation=worker.activation)
-            native.write_text(native.read_text() + '{"role":"assistant","content":"new CLI turn"}\n')
-            after_cli = native.read_bytes()
-            await worker.acquire_for_mutation()
-        assert len(remount_calls) == 1
-        assert remount_calls[0] == messages + [{"role": "assistant", "content": "new CLI turn"}]
+            assert not await worker.checkpoint_idle()
         assert checkpoint_calls == ["completed"]
-        assert worker.runtime.inbox.empty()
-        assert native.read_bytes() == after_cli
+        assert worker.runtime.inbox.get_nowait() == "late child status"
+        assert worker.shared_handle.active and not worker.shutdown.is_set()
         assert worker.shared_handle.read()["messages"] == messages
     finally:
         if worker.shared_handle:
@@ -791,49 +977,34 @@ asyncio.run(Probe().run())
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('change', ['metadata', 'backup', 'removed', 'unreadable'])
-async def test_parked_native_history_invalidation_keeps_authority_and_releases_on_refusal(tmp_path, change):
+@pytest.mark.parametrize('change', ['metadata', 'backup', 'removed'])
+async def test_live_owner_never_hot_reloads_native_history(tmp_path, change):
     from amplifier_foundation.session.shared_state import SharedSessionStore, file_stamp
     from amplifier_web.session_files import sessions_dir
-    from amplifier_web.shared_state import configuration_stamp
     worker = Worker()
     worker.workspace = tmp_path
     worker.home = tmp_path / 'home'
     worker.home.mkdir()
     worker.runtime = SimpleNamespace(session_id='fixture')
     worker.shared_store = SharedSessionStore(tmp_path, 'fixture', root=tmp_path / 'locks')
-    worker.shared_store_stamp = file_stamp
     worker.activation_gate = ActivationGate()
+    worker.activation = worker.activation_gate.activate()
+    worker.shared_handle = worker.shared_store.acquire(app='owner')
     native = sessions_dir(tmp_path) / 'fixture'
     native.mkdir(parents=True)
     (native / 'transcript.jsonl').write_text('{"role":"user","content":"fixture"}\n')
     (native / 'metadata.json').write_text('{"bundle":"anchors"}')
-    worker.parked_history_stamp = worker.history_stamp()
-    worker.parked_config_stamp = configuration_stamp(tmp_path, 'fixture', worker.home, file_stamp)
-    worker.parked = True
-    remounted = []
-    async def remount():
-        remounted.append(True)
-    worker.remount = remount
     if change == 'metadata':
         (native / 'metadata.json').write_text('{"bundle":"new-native-bundle"}')
     elif change == 'backup':
         (native / 'transcript.jsonl').rename(native / 'transcript.jsonl.backup')
     elif change == 'removed':
         (native / 'transcript.jsonl').unlink()
-    else:
-        worker.history_stamp = Mock(side_effect=OSError('stat unavailable'))
     try:
-        if change in {'removed', 'unreadable'}:
-            with pytest.raises((RuntimeError, OSError)):
-                await worker.acquire_for_mutation()
-            assert not remounted
-            other = worker.shared_store.acquire(app='other')
-            other.release()
-        else:
-            await worker.acquire_for_mutation()
-            assert remounted == [True] and worker.shared_handle.active
-            assert worker.shared_store.read() is None
+        from amplifier_foundation.session import SessionBusyError
+        with pytest.raises(SessionBusyError):
+            worker.shared_store.acquire(app='other')
+        assert worker.shared_handle.active and not hasattr(worker, 'remount')
     finally:
         if worker.shared_handle:
             worker.shared_handle.release()
@@ -953,10 +1124,8 @@ async def test_naming_does_not_hold_command_lock_or_require_idle(monkeypatch):
     from unittest.mock import AsyncMock
     worker = Worker()
     started, release, sent = asyncio.Event(), asyncio.Event(), asyncio.Event()
-    worker.acquire_for_mutation = AsyncMock()
     worker.bind_activation = lambda: None
     worker.activation_gate = SimpleNamespace(reset=lambda token: None)
-    worker.park = AsyncMock()
     worker.session = object()
     worker.execution = object()
     worker.controls = SimpleNamespace(require_idle=Mock(side_effect=AssertionError('Naming must run during work')))
@@ -1037,7 +1206,8 @@ async def test_ready_worker_identity_is_private_and_bound_to_native_session(repo
     script = (
         "import json,os,sys;sys.stdin.readline();"
         "print(json.dumps({'type':'runtime.ready','report':{'public':True},"
-        f"'workerIdentity':{{'sessionId':{reported_session!r},'pid':os.getpid()}}}}),flush=True);"
+        f"'workerIdentity':{{'sessionId':{reported_session!r},'pid':os.getpid(),"
+        "'owner':{'pid':os.getpid(),'app':'amplifier-unified','hostname':'fixture-host','acquisition_id':'fixture-acquisition'}}}),flush=True);"
         "sys.stdin.readline()"
     )
     manager = RuntimeManager(command=[sys.executable, '-c', script])
@@ -1048,6 +1218,9 @@ async def test_ready_worker_identity_is_private_and_bound_to_native_session(repo
         row = manager.workers['app-owner']
         assert row.get('native_worker_pid') == (
             row['process'].pid if reported_session == 'identity-owner' else None)
+        assert bool(row.get('native_writer')) is (reported_session == 'identity-owner')
+        if reported_session == 'identity-owner':
+            assert row['native_writer']['acquisition_id'] == 'fixture-acquisition'
         assert all('workerIdentity' not in value and 'native_worker_pid' not in value for _, value in events)
         assert next(value['report'] for kind, value in events if value.get('status') == 'ready') == {'public': True}
     finally:
@@ -1312,6 +1485,49 @@ async def test_windows_communication_error_settles_children_only_after_confirmed
             await row['windows_owner'].completion
             # A failed reader remains diagnostic evidence, not a new test error.
             row['closing'] = True
+        await model.manager.close()
+
+
+@pytest.mark.parametrize('secondary', [None, 'valid', 'invalid', 'missing'])
+@pytest.mark.parametrize('facts_status', ['valid', 'invalid', 'missing'])
+async def test_windows_eof_preserves_originating_worker_failure_without_payload(
+        windows_runtime_model, facts_status, secondary):
+    from amplifier_web.runtime import encode_message
+    from amplifier_web.worker_diagnostics import runtime_failure_witness
+    model = windows_runtime_model
+    model.identify()
+    await model.manager.start({'id': 'worker-error-eof'}, model.emit)
+    row = model.manager.workers['worker-error-eof']
+    pending = asyncio.get_running_loop().create_future()
+    row['pending']['unacknowledged-input'] = pending
+    facts = {'errors': [{'class': 'PermissionError', 'errno': 13, 'winerror': 5, 'frames': []}],
+             'truncated': False}
+    event = {'type': 'runtime.error', 'error': 'private token/path/body', 'failureSource': 'execution'}
+    if facts_status != 'missing':
+        event['failureFacts'] = facts if facts_status == 'valid' else {**facts, 'payload': 'private'}
+    model.job.stdout.feed_data(encode_message(event))
+    if secondary is not None:
+        event = {'type': 'runtime.error', 'error': 'private secondary', 'failureSource': 'stdin'}
+        if secondary != 'missing':
+            event['failureFacts'] = ({'errors': [{'class': 'ValueError', 'frames': []}], 'truncated': False}
+                                     if secondary == 'valid' else {'private': 'body'})
+        model.job.stdout.feed_data(encode_message(event))
+    model.job.finish()
+    try:
+        await asyncio.wait_for(asyncio.shield(row['reader']), 1)
+        with pytest.raises(RuntimeError, match='Amplifier worker disconnected') as caught:
+            await pending
+        witness = runtime_failure_witness(caught.value)
+        assert witness['factsStatus'] == 'not_applicable' and witness['errors'] == []
+        assert witness['reader']['reason'] == 'eof' and witness['reader']['frame'] == 'error'
+        assert witness['reader']['exitObserved'] and witness['reader']['exitCode'] == 0
+        assert not witness['reader']['closing'] and witness['reader']['stopReason'] == 'none'
+        assert witness['workerFailure'] == {'source': 'execution', 'factsStatus': facts_status,
+            **(facts if facts_status == 'valid' else {'errors': [], 'truncated': False})}
+        assert 'private' not in json.dumps(witness)
+        assert not any(write['op'] == 'send' for write in model.job.writes)
+        assert model.job.tree_empty and model.job.io_finalized
+    finally:
         await model.manager.close()
 
 
@@ -3069,7 +3285,7 @@ async def test_default_runtime_probe_uninstrumented_journey_keeps_real_acceptanc
                           io_finalized=False, verify_member=Mock())
     owner = SimpleNamespace(job=job, process=SimpleNamespace(pid=11), created=123, result=None)
     row = {'windows_owner': owner, 'process': owner.process, 'ready': ready,
-           'generation': None, 'source_generation': None, 'native_worker_pid': 11, 'parked': True}
+           'generation': None, 'source_generation': None, 'native_worker_pid': 11, 'idle': True}
     session = {'id': 'synthetic-cold-session'}
     class Runtime:
         command = None
@@ -3167,6 +3383,7 @@ async def test_default_runtime_probe_uninstrumented_journey_keeps_real_acceptanc
         def __exit__(self, *_):
             return False
     def inert_metadata_controls(_, result):
+        assert sys.exception() is (error if failure in {'send', 'send-control'} else None)
         if failure == 'send-control':
             raise ValueError('PRIVATE control failure')
         result.update({label: {'observation': InertMetadataObservation(None).facts,
@@ -3201,6 +3418,8 @@ async def test_default_runtime_probe_uninstrumented_journey_keeps_real_acceptanc
             fixture.validate_metadata_observation(report['metadataObservation'])
             assert ('controlsFailure' in report['metadataObservation']) == (failure == 'send-control')
             assert len(report['metadataObservation']['controls']) == (0 if failure == 'send-control' else 3)
+            if failure == 'send-control':
+                assert [row['class'] for row in report['metadataObservation']['controlsFailure']['errors']] == ['ValueError']
     assert len(calls) == 1 and calls[0].command is None and not calls[0].workers
     assert 'workerStartup' not in report
     assert dict(os.environ) == environment and sys.getprofile() is None
@@ -3232,6 +3451,109 @@ def test_default_runtime_probe_uninstrumented_pass_rejects_historical_injected_a
     fixture.validate_inner_report(old)
     assert fixture.parse_inner_output(json.dumps(old)) == old
     assert old['status'] == 'FAIL'  # Passive validation never promotes old evidence.
+
+
+@pytest.mark.parametrize('active_error', [False, True])
+@pytest.mark.parametrize('fault', [None, 'winerror', 'holder', 'readonly'])
+def test_native_metadata_controls_isolate_ambient_context_without_weakening_checks(
+        tmp_path, monkeypatch, active_error, fault):
+    """Real control body; modeled native IO facts, NOT native Windows evidence."""
+    from contextlib import nullcontext
+    fixture = _default_runtime_probe_module()
+    holders = []
+    reads = {}
+    original_open = Path.open
+    def opened(path, mode='r', *args, **kwargs):
+        handle = original_open(path, mode, *args, **kwargs)
+        if mode == 'rb' and path.name == 'metadata.json':
+            holders.append(handle)
+            reads[path] = reads.get(path, 0) + 1
+            if fault == 'holder' and path.parent.name == 'ordinary-held' and reads[path] == 2:
+                handle.close()
+        return handle
+    monkeypatch.setattr(Path, 'open', opened)
+    class Store:
+        def __init__(self, directory, **kwargs):
+            directory.mkdir(parents=True, exist_ok=True)
+            self.target = directory / 'metadata.json'
+        def set_name(self, text, **kwargs):
+            if text == 'CONTROL replacement' and self.target.parent.name != 'released':
+                try:
+                    error = PermissionError(13, 'PRIVATE local payload', '/PRIVATE/path')
+                    error.winerror = 32 if fault == 'winerror' else 5
+                    raise error
+                except PermissionError as cause:
+                    raise OSError('PRIVATE wrapper') from cause
+            self.target.write_text(text)
+    class Observation:
+        def __init__(self, target):
+            self.target = target
+            self.facts = {'status': 'observed', 'outcome': 'unknown',
+                'primary': {'temporaryClosed': True}}
+            for role in ('temporary', 'destination', 'parent'):
+                self.facts['primary'][role] = {
+                    'status': 'observed', 'ownerMatch': False, 'defaultTokenOwnerMatch': True,
+                    'daclPolicyMatch': True, 'reparse': False, 'directory': role == 'parent',
+                    'readonly': role == 'destination' and (
+                        target.parent.name == 'readonly' or fault == 'readonly')}
+        def __enter__(self): return self
+        def __exit__(self, kind, error, tb):
+            self.facts['outcome'] = 'raised' if error else 'returned'
+            return False
+    monkeypatch.setitem(sys.modules, 'amplifier_foundation.session.metadata',
+                        SimpleNamespace(SessionMetadataStore=Store))
+    monkeypatch.setitem(sys.modules, 'amplifier_web.windows_files',
+                        SimpleNamespace(directory=lambda *a, **k: nullcontext()))
+    monkeypatch.setattr(fixture, 'MetadataRenameObservation', Observation)
+    primary = RuntimeError('PRIVATE original dispatch')
+    result = {}
+    def controls():
+        assert sys.exception() is (primary if active_error else None)
+        if fault:
+            with pytest.raises(AssertionError):
+                fixture.native_metadata_controls(tmp_path / 'controls', result)
+        else:
+            fixture.native_metadata_controls(tmp_path / 'controls', result)
+    if active_error:
+        with pytest.raises(RuntimeError) as caught:
+            try:
+                raise primary
+            finally:
+                controls()
+        assert caught.value is primary
+    else:
+        controls()
+    assert all(handle.closed for handle in holders)
+    assert list(result) == (['ordinary-held'] if fault else ['ordinary-held', 'released', 'readonly'])
+    if not fault:
+        assert result['released']['failure']['errors'] == []
+        for label in ('ordinary-held', 'readonly'):
+            assert [r['class'] for r in result[label]['failure']['errors']] == ['OSError', 'PermissionError']
+            assert result[label]['failure']['errors'][1]['winerror'] == 5
+        assert 'PRIVATE' not in json.dumps(result)
+
+
+def test_metadata_diagnostic_boundary_keeps_genuine_local_context_and_original_chain():
+    fixture = _default_runtime_probe_module()
+    primary = RuntimeError('PRIVATE dispatch')
+    with pytest.raises(RuntimeError) as caught:
+        try:
+            raise primary
+        finally:
+            try:
+                try:
+                    raise ValueError('PRIVATE local')
+                except ValueError:
+                    raise PermissionError(13, 'PRIVATE permission')
+            except PermissionError as cause:
+                try:
+                    raise OSError('PRIVATE wrapper') from cause
+                except OSError as error:
+                    assert len(fixture.failure_facts(error, 'metadata_control')['errors']) == 4
+                    facts = fixture.failure_facts(error, 'metadata_control', stop_at=primary)
+                    assert [r['class'] for r in facts['errors']] == ['OSError', 'PermissionError', 'ValueError']
+                    assert error.__cause__ is cause and cause.__context__.__context__ is primary
+    assert caught.value is primary
 
 
 @pytest.mark.parametrize('fault', [
@@ -3821,7 +4143,7 @@ def test_default_runtime_probe_diagnostic_privacy_bounds_and_schema(monkeypatch)
             fixture.validate_inner_report({**fixture.empty_inner_report(), 'diagnostic': value})
     # Observation itself can fail. It still cannot escape the outcome path or
     # authorize success; there is no private stringification as a fallback.
-    def broken(*args):
+    def broken(*args, **kwargs):
         raise PrivateError()
     monkeypatch.setattr(fixture, '_failure_facts', broken)
     fallback = fixture.parse_inner_output(b'')
@@ -3916,7 +4238,7 @@ async def test_default_runtime_probe_diagnostic_fault_keeps_failed_outer_owner(t
                           output_discarded=False, close=AsyncMock())
     monkeypatch.setattr(windows_jobs.WindowsOwnedProcess, 'start',
                         AsyncMock(side_effect=windows_jobs.CleanupError(job)))
-    def broken(*args):
+    def broken(*args, **kwargs):
         raise RuntimeError('private observer failure')
     monkeypatch.setattr(fixture, '_failure_facts', broken)
     outcome = await fixture.run_owned_probe(

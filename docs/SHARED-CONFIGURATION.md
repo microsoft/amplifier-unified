@@ -76,7 +76,9 @@ Settings writes lock `<file>.lock` across read/modify/atomic replace, matching
 the CLI's locking convention. Unknown fields are preserved. This coordinates
 with CLI writers that use the lock; an older or external editor that ignores
 the lock can still race. Settings reads never import a cache or rewrite YAML.
-File changes invalidate parked session mounts; active work is not interrupted.
+External file changes are checked before reusing a mounted worker. A changed
+configuration requires acknowledged retirement and a fresh worker; active work
+and held resources refuse replacement rather than being silently cancelled.
 New sessions resolve the default bundle from their own workspace. Deliberate
 existing Unified conversation overrides (`configuration.json` and
 `control-state.json`) remain in force; they are not flattened into user defaults.
@@ -251,6 +253,42 @@ New conversations use an explicit bundle choice first,
 then the workspace's shared local/project default, then Unified's optional app
 preference, then the shared user default (falling back to `work`, shown as **Work**). Existing
 conversations retain their saved root.
+
+The last fallback is release-owned intent, not a saved user choice. With no
+explicit override, new conversations follow the installed release's defaults:
+currently `work` generally and `work-amp-dev` in built-in Amplifier development
+workspaces. Those workspaces record `bundle.releaseDefault:
+amplifier-development`, not `bundle.active`. Explicit local/project, app and
+shared defaults always win, even if their value equals a previous shipped
+default. Clearing an override reveals the remaining explicit scopes, then the
+current release fallback. Managed No workspace chats ignore project settings.
+Custom starters retain their literal bundle choice; duplicating a built-in
+copies the choice shown at duplication time, not its automatic provenance.
+
+Blank and Development deliberately mean **inherit the general conversation
+default**, as does an empty bundle in a custom starter. They do not own separate
+specialized fallback identities. With all explicit scopes cleared, their new
+conversations follow changes to the release's general fallback; Amplifier
+development follows its specialized fallback. This policy does not promise
+retroactive specialization if a later release changes a formerly inheriting
+starter into a specialized one. That would require an explicit policy and
+provenance/migration change, not just adding a name to the fallback table. In
+particular, old Blank folders have no starter setup snapshot from which to infer
+such an identity. Attaching an existing folder never invents one.
+
+On startup, registered legacy built-in workspaces can replace an automatic
+project pin with release-default intent only when matching placement and setup
+receipts prove a known built-in snapshot, the allocated directory is unchanged,
+and the file is exactly the generator's `created` YAML (or the inherited starter
+left that file absent). Altered files, preserved files, custom source bindings,
+unknown snapshots and missing evidence remain untouched. Shared-global and app
+values have no comparable automatic-origin proof and are never guessed from a
+bundle name. Historical receipts did not record later direct-file intent: a
+byte-identical manual rewrite of the original generated project setting cannot
+be distinguished and follows the generated-file rule. Explicit same-value
+choices through the UI/agent workspace action are in `settings.local.yaml` and
+remain authoritative. No existing conversation, transcript or mounted
+configuration is migrated. Read-only default inspection never migrates files.
 
 The default picker exposes three scopes. **This Unified app** stores `appBundle`
 in app state and leaves shared settings untouched. **This workspace on this

@@ -1,4 +1,5 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import './composer-test-helpers.mjs';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -123,10 +124,25 @@ try{
 
  // Exercise a real older browser-detail page, not just scrolling a short DOM.
  await fixturePost('scrollback');await page.reload();await showFixtureConversation(page);
- // The earlier explicit reveal restores a focused window across reload.
- // Return through the real control before testing recent→older paging.
+ await workReady();await expect(pane).toHaveAttribute('aria-busy','false');
+ await expect(row('voice-user')).toHaveCount(0);
+ // A saved messageFocus record is not an active focused history window after
+ // streaming and reload. Explicitly open the now-paged-out result, then use
+ // the real return control before testing recent→older paging.
+ const composer=page.getByRole('textbox',{name:'Message Amplifier'});
+ const privateDraft='PRIVATE_VOICE_READING_DRAFT';
+ await composer.fill(privateDraft);
+ await Promise.all([
+  page.waitForResponse(response=>{const request=new URL(response.url());return request.pathname==='/api/conversation/navigation'&&request.searchParams.get('messageId')==='backend-result'&&request.searchParams.get('window')==='true'&&response.ok()}),
+  page.evaluate(sessionId=>window.amplifier.dispatch('message.reveal',{sessionId,messageId:'backend-result'}),before.sessionId),
+ ]);
+ await expect(row('backend-result')).toBeFocused();
+ await expect(first.locator('[data-message-id="backend-result"]')).toHaveCount(1);
+ await expect(row('backend-result')).toBeInViewport();
  const latest=page.getByRole('button',{name:'Return to latest',exact:true});
  await expect(latest).toBeVisible();await latest.click();await workReady();
+ await expect(latest).toHaveCount(0);
+ await expect(composer).toHaveDraft(privateDraft);
  await expect(row('voice-user')).toHaveCount(0);
  for(let attempt=0;attempt<5&&await row('voice-user').count()===0;attempt++){
   const older=page.getByRole('button',{name:'Load earlier conversation',exact:true});
@@ -146,6 +162,7 @@ try{
  await row('backend-result').scrollIntoViewIfNeeded();await expect(row('backend-result').locator('strong')).toBeInViewport();
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  if(process.env.EVIDENCE_DIR)await page.screenshot({path:process.env.EVIDENCE_DIR+'/voice-work-mobile.png'});
+ await expect(composer).toHaveDraft(privateDraft);
  const after=await inspect();assert.equal(after.historyUnchanged,true);assert.equal(after.runtimeSends,0);assert.deepEqual(errors,[]);
  console.log('PASS: first-chunk voice grouping before paint, exact owning work groups, nested final text/actions, no duplicate/orphan drops, spoken/typed/unknown separation, keyboard reveal/reload/paged scrollback/mobile, unchanged original history and zero model sends.');
 }catch(error){

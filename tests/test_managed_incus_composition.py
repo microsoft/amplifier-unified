@@ -17,7 +17,7 @@ from amplifier_web.managed_runner_binding import execution_binding
 
 async def selected_core(app, engine, monkeypatch):
     raw = core.raw_configuration(app)
-    raw.pop('dockerHost'); raw.update(backend='incus', incus=engine.previous)
+    raw.pop('dockerHost', None); raw.update(backend='incus', incus=engine.previous)
     private.write_json(app.data_dir / 'test-environments.json', raw)
     path = private.root(app) / ('c' * 32 + '.json')
     receipt = private.read_json(path); receipt['candidateConfiguration'] = raw
@@ -90,7 +90,7 @@ async def test_mutable_limits_keep_core_and_engine_policy_and_valid_binding(app,
 
 async def test_core_only_capacity_edits_keep_setup_policy_and_qualified_rollback(app, monkeypatch):
     current = core.raw_configuration(app)
-    current['maxRunning'] = 8
+    current['incus']['maxRunning'] = 8
     private.write_json(app.data_dir / 'test-environments.json', current)
     assert core.setup_policy(app, current)['ref'] == 'main'
     app.smart_tools.state['installations'][1]['runnerCandidate'] = True
@@ -98,7 +98,7 @@ async def test_core_only_capacity_edits_keep_setup_policy_and_qualified_rollback
     monkeypatch.setattr(core_probe, 'advance', qualified)
     assert (await core.advance(app, candidate['runnerUpdate']))['complete']
     selected = core.raw_configuration(app)
-    selected['maxInstances'] = 12
+    selected['incus']['maxInstances'] = 12
     private.write_json(app.data_dir / 'test-environments.json', selected)
     assert core.setup_policy(app, selected)['ref'] == 'main'
     assert core.rollback_target(app, selected) == current['installationId']

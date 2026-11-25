@@ -79,6 +79,17 @@ def event(row):
             result['resolutionMismatches'] = fields
     if type(row.get('timedOut')) is bool:
         result['timedOut'] = row['timedOut']
+    from .update_diagnostics import command_attempts
+    attempts = command_attempts(row.get('commandAttempts'))
+    if attempts:
+        result['commandAttempts'] = attempts
+    for key in ('anonymousRetry', 'gitCacheRetry', 'stdoutTruncated', 'stderrTruncated', 'outputLimitExceeded'):
+        if type(row.get(key)) is bool:
+            result[key] = row[key]
+    if row.get('localDetailStatus') in ('saved', 'unavailable'):
+        result['localDetailStatus'] = row['localDetailStatus']
+        if type(row.get('localDetailSlot')) is int and 0 <= row['localDetailSlot'] < 16:
+            result['localDetailSlot'] = row['localDetailSlot']
     if isinstance(row.get('probe'), dict):
         result['probe'] = probe_record(PROBE_PREFIX + json.dumps(row['probe']))
     if row.get('phase') == 'ecosystem-reconcile' and isinstance(row.get('recoveries'), list):
@@ -159,7 +170,7 @@ async def collect(manager):
     # "busy" above is the updater lock, not the activation gate. Use the same
     # evaluator as busy()/blockers(), not cached labels or a second predicate.
     try:
-        gate = assess(manager.service, application=bool(state.get('pendingApp')))
+        gate = assess(manager.service)
         report['activationGate'] = {
             **gate['observation'],
             'blockerCounts': {kind: sum(row['kind'] == kind for row in gate['blockers'])
@@ -186,6 +197,24 @@ async def collect(manager):
         'hasError': bool(state.get('error')),
         'checkInProgress': bool(getattr(manager, 'check_task', None) and not manager.check_task.done()),
     }
+    # Which installed proof the last health refresh of this host process found.
+    from .update_health import cached_evidence, projection
+    proof = cached_evidence(manager)
+    health = projection(manager, state=state, evidence=proof)
+    report['selectedFailure'] = health.get('selectedFailure', {})
+    # The selection above uses the full retained owner state, not this bounded
+    # list or the last 50 events. Omission is coverage, never failure resolution.
+    active = diagnostics.get('activeFailures', {})
+    report['activeFailureCount'] = len(active)
+    report['activeFailures'] = [event(group.get('latest', {})) for group in list(active.values())[:32]]
+    report['activeFailuresOmitted'] = max(0, len(active) - len(report['activeFailures']))
+    report['failureOverflow'] = event((diagnostics.get('failureOverflow') or {}).get('latest', {}))
+    limitation = health.get('proofLimitation', {})
+    report['updateState'].update(
+        activationUnknown=limitation.get('activationUnknown') is True,
+        configurationChanged=limitation.get('configurationChanged') is True)
+    report['updateState']['healthProof'] = ('generation' if proof.get('generation') else
+                                            'setup-record' if proof.get('setupRecord') else 'none')
     from .app_updates import RELEASE_CHECK_STAGES, RELEASE_CHECK_REASONS
     application = state.get('application') or {}
     if (application.get('status') == 'check_failed'

@@ -9,6 +9,9 @@ from .host.storage import SessionStore
 
 
 def view_path(home, session):
+    if session.get('externalAgent'):
+        identity = hashlib.sha256(session['id'].encode()).hexdigest()
+        return Path(home) / 'external-conversations' / identity / 'view.json'
     store = SessionStore.for_app(home, session['workspace'])
     return store.directory(session.get('runtimeSessionId') or session['id']) / 'unified' / 'view.json'
 
@@ -39,7 +42,7 @@ def hydrate(home, state, db):
             from .cold_display import load
             value = load(db, session['$viewPayload'])
         else:
-            value = json.loads(path.read_text())
+            value = json.loads(path.read_text(encoding='utf-8'))
         if value.get('id') != session['id'] or not (isinstance(value.get('messages'), list)
                 or isinstance(value.get(MARKER, {}).get('messages'), dict)):
             raise ValueError('A saved conversation view is invalid; its files were preserved.')
@@ -56,7 +59,7 @@ def migrate(home, state):
     """Migrate legacy roots and children once, without overwriting shared files."""
     workspaces = {s.get('runtimeSessionId') or s['id']: s['workspace'] for s in state.get('sessions', [])}
     for path in (Path(home) / 'sessions').glob('*/checkpoint.json'):
-        payload = json.loads(path.read_text())
+        payload = json.loads(path.read_text(encoding='utf-8'))
         meta = payload.get('metadata', {})
         workspace = meta.get('working_dir') or meta.get('workspace') or workspaces.get(path.parent.name) or workspaces.get(meta.get('parent_id'))
         if workspace:
@@ -67,12 +70,12 @@ def migrate(home, state):
 # from native events. Keep metadata in the existing accounting projection only;
 # never persist action bodies or lazy event-file references here.
 ACCOUNTING_FIELDS = {'id', 'revision', 'producerId', 'budgetRevision', 'admittedAt',
-    'parentId', 'turnId', 'sessionId', 'rootSessionId', 'kind', 'phase', 'provider',
-    'model', 'startedAt', 'endedAt', 'usage', 'lifecycle',
+    'parentId', 'turnId', 'admissionInputId', 'generationId', 'purpose', 'sessionId', 'rootSessionId', 'kind', 'phase', 'provider',
+    'model', 'startedAt', 'endedAt', 'usage', 'lifecycle', 'failure', 'modelOutcome',
     'assignmentId', 'assignmentRevision', 'assignmentReservation'}
 ACCOUNTING_USAGE_FIELDS = {'inputTokens', 'outputTokens', 'totalTokens',
     'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens', 'grossInputTokens',
-    'grossTotalTokens', 'costUsd', 'costType', 'costSource'}
+    'grossTotalTokens', 'costUsd', 'costType', 'costSource', 'costUnavailableReason'}
 
 
 def _accounting_copy(value):
@@ -150,7 +153,10 @@ def accounting_projection(tree, *, _retired=None):
         for field, value in row.items():
             if field not in ACCOUNTING_FIELDS:
                 continue
-            if field == 'usage':
+            if field == 'modelOutcome':
+                from .model_outcome import public_outcome
+                record.update(public_outcome(value))
+            elif field == 'usage':
                 if type(value) is dict:
                     usage = {}
                     for name, amount in value.items():
@@ -211,7 +217,7 @@ def _observed_work(row, turns, accounting):
         result = _receipt_copy(receipt)
     else:
         return None
-    fields = {'id', 'parentId', 'turnId', 'sessionId', 'rootSessionId', 'kind',
+    fields = {'id', 'parentId', 'turnId', 'admissionInputId', 'generationId', 'purpose', 'sessionId', 'rootSessionId', 'kind',
               'phase', 'label', 'tool', 'toolCallId', 'toolObservationId',
               'revision', 'startedAt', 'endedAt', 'runId', 'lifecycle'}
     result.update({key: value for key, value in row.items() if key in fields
@@ -233,6 +239,9 @@ def _stored_nodes(rows, turn_ids, receipts):
 
 def _stored_execution_fields(tree, *, _retired=None):
     """Canonical fields and placement dependencies, before projecting nodes."""
+    # execution.plan is an explicit historical reader's derived value. The
+    # last live report lives separately in the existing session view, so a
+    # history refresh cannot replace it or force a cold execution-body read.
     accounting = accounting_projection(tree, _retired=_retired)
     receipts = {(row.get('sessionId'), row['id']): row for row in accounting}
     turns = [row for row in tree.get('turns', []) if not any(
@@ -290,12 +299,15 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
                 or session.get('titleSource') not in {None, 'native'}
                 or bool(session.get('draftAttachments')) or bool(session.get('draft'))
                 or bool(session.get('messageAnnotations')) or bool(session.get('messageQuotes'))
+                or '_reportedPlan' in session
                 or session.get('recentActivityAt', 0) > baseline
                 or bool(dict.get(session, MARKER)))
             if customized:
                 # Keep an explicit Stop revision in this saved reference only;
                 # native index/default projections are not its authority.
                 result['sessions'].append({**{key: session[key] for key in (*INDEX_FIELDS, 'interruptionRevision') if key in session}, '$native': True,
+                    **({'_reportedPlan': copy.deepcopy(session['_reportedPlan'])}
+                       if '_reportedPlan' in session else {}),
                     **({MARKER: copy.deepcopy(dict.get(session, MARKER)),
                         '_coldMessageCount': session.get('_coldMessageCount', 0),
                         '_coldNotifications': copy.deepcopy(session.get('_coldNotifications', []))}
@@ -308,6 +320,12 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
         from .cold_display import saved as saved_cold, MARKER
         value = {key: item for key, item in saved_cold(session).items()
                  if key not in {'historyActivity', 'questions', 'workProjection'}}
+        from .execution_working_set import PendingExecution
+        owner = getattr(session, '_working_execution', None)
+        if owner is not None and 'execution' not in value and db is not None and pending_execution is not None:
+            reference = owner.stage()
+            value[MARKER] = {**value.get(MARKER, {}), 'execution': reference}
+            pending_execution[session['id']] = PendingExecution(owner, reference)
         if 'execution' in value:
             raw_tree = value['execution']
             if execution_preparation is not None and db is not None and pending_execution is not None:
@@ -357,7 +375,7 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
                 # Restore the pre-transaction presentation if SQLite rejects its
                 # matching manifest. Canonical transcript/event files are never
                 # part of this rollback list.
-                undo.append((path, path.read_text() if path.exists() else None))
+                undo.append((path, path.read_text(encoding='utf-8') if path.exists() else None))
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             # This replaceable compatibility view is not a history authority.
             # Its mutable readers may retain the old object during publication.
@@ -368,7 +386,7 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
         # body. Do not invent defaults or backfill older sparse references.
         result['sessions'].append({**{key: session[key] for key in (
             'id', 'workspace', 'runtimeSessionId', 'sessionKind', 'workingDirectory',
-            'executionRevision', 'interruptionRevision') if key in session}, '$view': 1,
+            'executionRevision', 'interruptionRevision', 'externalAgent') if key in session}, '$view': 1,
                                    **({'$viewPayload': payload} if payload else {}),
                                    **({MARKER: copy.deepcopy(value[MARKER])} if value.get(MARKER) else {})})
     if references is not None:

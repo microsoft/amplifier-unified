@@ -6,7 +6,6 @@ on:
     paths:
       - 'components/web-client.source.json'
       - 'scripts/web_client_*.py'
-      - 'components/web-client/commands.json'
       - 'amplifier_web/browser_*.py'
       - 'amplifier_web/attention.py'
       - 'amplifier_web/directory_attention.py'
@@ -18,7 +17,6 @@ on:
       - 'amplifier_web/task_continuity.py'
       - 'amplifier_web/server_websocket.py'
       - 'amplifier_web/service.py'
-      - 'components/web-client/src/main.jsx'
       - 'tests/web/package.json'
       - 'tests/web/package-lock.json'
       - 'pyproject.toml'
@@ -31,10 +29,7 @@ on:
       - 'tests/fixtures/empty_host_ui_server.py'
       - 'tests/fixtures/configured_browser.py'
       - 'tests/web/browser-chat-pages.mjs'
-      - 'components/web-client/src/state-*.js'
-      - 'components/web-client/src/view-reporter.js'
       - 'tests/web/client-traffic-browser.mjs'
-      - 'components/web-client/tests/state-revision-presentation.test.mjs'
       - 'tests/fixtures/client_traffic_server.py'
       - '.github/workflows/client-performance.yml'
   workflow_dispatch:
@@ -47,6 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          fetch-depth: 2
           persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
@@ -72,11 +68,21 @@ jobs:
           git rev-parse HEAD > output/client-performance/revision.txt
           uv pip freeze > output/client-performance/packages.txt
           echo 'Synthetic source/server and built client; no live provider, installed-wheel or native-startup claim.' > output/client-performance/scope.txt
+      # Fast runs the registry suite on full PR checks. A standalone dispatch
+      # or version-only release still runs it here.
+      - name: Identify the Fast check scope
+        id: fast-scope
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/integration_checks.py fast-scope --base "$PR_BASE" --head "$PR_HEAD" --output "$GITHUB_OUTPUT"
       - name: Projection and causal observation contracts
         run: >-
           uv run --no-sync pytest -q
           tests/test_browser_demand.py tests/test_browser_task_history.py
-          tests/test_state_transport.py tests/test_browser_check_runner.py
+          tests/test_state_transport.py
+          ${{ steps.fast-scope.outputs.scope != 'full' && 'tests/test_browser_check_runner.py' || '' }}
           --junitxml=output/client-performance/python.xml
       - name: Presentation and view-report boundaries
         working-directory: .build/web-client

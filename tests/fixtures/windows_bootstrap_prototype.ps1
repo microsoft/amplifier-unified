@@ -39,6 +39,11 @@ try {
     $refused=$false
     try { $nativeStorage.EnableToolWrites([IO.Path]::GetDirectoryName($nativeRoot)) } catch { $refused=$true }
     Need $refused 'ancestor was allowed tool mutation'
+    $script:InstallWork = $nativeRoot
+    $shortcutPath = Write-PrototypeShortcut 'C:\private tools\python.exe' 'C:\private tools\launch.py' $true
+    $savedLink = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcutPath)
+    Need ($savedLink.Arguments.EndsWith(' --background')) 'logon shortcut lost explicit background selection'
+    Need ($savedLink.TargetPath -ceq 'C:\private tools\python.exe') 'shortcut changed the absolute interpreter'
 } finally {
     $nativeStorage.Dispose()
     [IO.Directory]::Delete($nativeRoot,$true)
@@ -92,7 +97,10 @@ try {
     function Invoke-InstallChild {
         param($Executable,$Arguments,$Environment)
         $script:Children += ,@($Executable,$Arguments,$Environment)
-        if ($Arguments.Count -eq 1 -and $Arguments[0] -eq '--version') { return 'uv 0.12.18' }
+        if ($Arguments.Count -eq 1 -and $Arguments[0] -eq '--version') {
+            if ($script:WrongUvVersion) { return 'uv 0.12.18' }
+            return 'uv 0.13.7'
+        }
         if ($Arguments[0] -eq 'python' -and $Arguments[1] -eq 'find') {
             return (Join-Path $script:InstallWork 'python\cpython-3.13.8\python.exe')
         }
@@ -102,8 +110,8 @@ try {
         return ''
     }
     function Write-PrototypeShortcut {
-        param($Python,$Launcher)
-        $script:Links += ,@($Python,$Launcher)
+        param($Python,$Launcher,$LogonHost=$false)
+        $script:Links += ,@($Python,$Launcher,$LogonHost)
         return (Join-Path $script:InstallWork 'Launch Unified.lnk')
     }
     function Reset-Model {
@@ -112,7 +120,7 @@ try {
                 url='https://github.com/microsoft/amplifier-unified/releases/download/prototype-abc/windows-prototype.zip';
                 sha256=('b'*64)}}
         $script:Downloads=@();$script:Helpers=@();$script:Children=@();$script:Receipts=@();$script:Links=@()
-        $script:BadHash=$false;$script:FailInstall=$false
+        $script:BadHash=$false;$script:FailInstall=$false;$script:WrongUvVersion=$false
         $script:UseExisting=$false
     }
     Reset-Model
@@ -124,11 +132,16 @@ try {
     Need ($env:PATH -ceq $beforePath) 'parent PATH changed'
     $installs=@($script:Children | Where-Object { $_[1][0] -eq 'pip' -and $_[1][1] -eq 'install' })
     Need ($installs.Count -eq 1) 'package mutation must occur once'
-    foreach ($flag in @('--require-hashes','--no-index','--no-deps','--only-binary')) {
+    foreach ($flag in @('--require-hashes','--no-index','--no-deps','--only-binary','--link-mode','copy')) {
         Need ($installs[0][1] -contains $flag) "missing offline immutable install flag $flag"
     }
     Need ($installs[0][2].AMPLIFIER_HOME -ne $installs[0][2].AMPLIFIER_SESSION_STATE_HOME) 'history and ownership merged'
     Need (-not (($script:Children | ForEach-Object { $_[1] }) -contains 'service')) 'service command emitted'
+
+    Reset-Model
+    Invoke-UnifiedPrototype 'https://github.com/microsoft/amplifier-unified/releases/download/prototype-abc/plan.json' ('c'*64) $true $true
+    Need ($script:Links.Count -eq 1 -and $script:Links[0][2]) 'background selection did not reach the relaunch shortcut'
+    Need (-not (($script:Children | ForEach-Object { $_[1] }) -contains 'service')) 'NoOpen must not register or start a task'
 
     Reset-Model
     $script:UseExisting=$true
@@ -137,7 +150,8 @@ try {
     Need ($script:Links.Count -eq 1) 'reusable-tool path did not prepare relaunch'
 
     Reset-Model
-    $script:Plan.source='1c4ac3b4f9ed5d2d3f588f6fa6c74a119e439153'
+    $script:Plan.source='d9b26e7bb3c5270d377520b82e498111384e931d'
+    $script:Plan.version='0.65.0'
     $script:Plan.sourceMode='pinned-vcs'
     $script:UseExisting=$true
     Invoke-UnifiedPrototype 'https://github.com/microsoft/amplifier-unified/releases/download/prototype-abc/plan.json' ('c'*64) $true
@@ -146,14 +160,14 @@ try {
     Need ($installs.Count -eq 2) 'source mode must separate hashed wheels from exact Git'
     Need ($installs[0][1] -contains '--require-hashes') 'registry/app phase lost hash enforcement'
     Need (-not ($installs[1][1] -contains '--require-hashes')) 'Git phase must not claim wheel hashes for source'
-    foreach ($flag in @('--no-deps','--no-index','--no-require-hashes','--verify-hashes',
+    foreach ($flag in @('--no-deps','--no-index','--link-mode','copy','--no-require-hashes','--verify-hashes',
         '--only-binary','--no-binary','--build-constraint','--find-links')) {
         Need ($installs[1][1] -contains $flag) "source phase missing $flag"
     }
     $validations=@($script:Children | Where-Object { $_[1] -contains '--validate-source' })
     $audits=@($script:Children | Where-Object { $_[1] -contains '--audit-source' })
     Need ($validations.Count -eq 1 -and $audits.Count -eq 1) 'source payload and installed origins both require validation'
-    Need ($script:Receipts[0].bootstrapUv -ceq '0.12.18') 'bootstrap uv phase identity missing'
+    Need ($script:Receipts[0].bootstrapUv -ceq '0.13.7') 'bootstrap uv phase identity missing'
     Need ($script:Receipts[0].sourceMode -ceq 'pinned-vcs') 'prepared receipt source mode missing'
     Need ($env:PATH -ceq $beforePath) 'source mode changed parent PATH'
     $inherited = @{}
@@ -167,6 +181,18 @@ try {
     }
     Need ($modelEnvironment.UV_TOOL_DIR -ceq (Join-Path $script:InstallWork 'tools')) 'private tool root missing'
     Need ($modelEnvironment.UV_TOOL_BIN_DIR -ceq (Join-Path $script:InstallWork 'tool-bin')) 'private tool bin root missing'
+
+    Reset-Model
+    $script:Plan.source='d9b26e7bb3c5270d377520b82e498111384e931d'
+    $script:Plan.version='0.65.0'
+    $script:Plan.sourceMode='pinned-vcs'
+    $script:WrongUvVersion=$true
+    $failed=$false
+    try { Invoke-UnifiedPrototype 'https://github.com/microsoft/amplifier-unified/releases/download/prototype-abc/plan.json' ('c'*64) $true }
+    catch { $failed=$true }
+    Need $failed 'pinned mode accepted the old helper with an unavailable selected Python catalog'
+    Need ($script:Children.Count -eq 1 -and $script:Children[0][1][0] -ceq '--version') 'wrong helper reached Python or package installation'
+    Need ($script:Receipts.Count -eq 0 -and $script:Links.Count -eq 0) 'wrong helper reported a prepared installation'
 
     Reset-Model
     $script:Plan.sourceMode='pinned-vcs'

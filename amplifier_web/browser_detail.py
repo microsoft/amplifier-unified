@@ -10,6 +10,7 @@ NATIVE_MESSAGE_LIMIT=100
 NODE_LIMIT=100
 TEXT_LIMIT=4096
 SUMMARY_LIMIT=512
+PRIVATE_SESSION_FIELDS = frozenset({'_externalAgentSource', '_externalRoom', '_lastPromptUsage', '_previousTurnBinding', '_reportedPlan'})
 
 
 def digest(text):return sha256(text.encode()).hexdigest()
@@ -24,6 +25,11 @@ def compact(row, session_id, part, limit):
     if part != 'messages':
         from .tool_observations import metadata as tool_metadata
         result.update(tool_metadata(row))
+        if row.get('kind') == 'llm':
+            from .model_outcome import public_outcome
+            result.update(public_outcome(row.get('modelOutcome')))
+            if row.get('purpose') in ('context_compaction', 'image_generation'):
+                result['purpose'] = row['purpose']
     if 'routing' in result:
         from .host.model_selection import public_routing
         result['routing'] = public_routing(result['routing'])
@@ -243,14 +249,14 @@ def page(session, part, before=None, group=None, revision=None, *, resolver=None
     start=max(0,end-(message_limit if part=='messages' else NODE_LIMIT))
     from .message_interactions import annotate
     from .peer_attribution import display_annotations
-    annotation_source = {**session, 'messageAnnotations': display_annotations(session)} if part == 'messages' else session
     selected = rows[start:end]
+    annotation_source = {'messageAnnotations': display_annotations(session, (row.get('id') for row in selected))} if part == 'messages' else session
     if part == 'messages':
         from .peer_attribution import derive
         selected = derive(session, selected, resolver)
     items=[]
     for row in selected:
-        item=compact(annotate(annotation_source, row) if part == 'messages' else row,session['id'],part,TEXT_LIMIT if part=='messages' else SUMMARY_LIMIT)
+        item=compact(annotate(annotation_source, row, status_source=session) if part == 'messages' else row,session['id'],part,TEXT_LIMIT if part=='messages' else SUMMARY_LIMIT)
         if part == 'messages' and row.get('attribution'):
             item['attribution'] = row['attribution']
         items.append(item)
@@ -330,6 +336,7 @@ def sync_work(session, group, known, *, window_message_id=None):
 
 
 def project(session, *, resolver=None, message_overlay=None, work_overlay=None):
+    status_source = session
     if work_overlay is not None:
         from .cold_display import raw
         # ColdRecord's ordinary mapping interface materializes all virtual
@@ -339,11 +346,11 @@ def project(session, *, resolver=None, message_overlay=None, work_overlay=None):
                    if not key.startswith('_cold') and key not in {'execution', 'historyActivity'}}
         session['messages'] = (message_overlay or {}).get('messages', resident.get('messages', [])[-100:])
         session['execution'] = {'nodes': [], 'turns': []}
-        visible = {row['id'] for row in session['messages']}
-        session['messageAnnotations'] = {key: value for key, value in resident.get('messageAnnotations', {}).items() if key in visible}
-    result=dict(session)
+    result={key: value for key, value in session.items()
+            if key not in PRIVATE_SESSION_FIELDS}
+    from .shared_conversation import public_output
+    result = public_output(result)
     from .peer_attribution import display_annotations
-    result['messageAnnotations'] = display_annotations(session)
     if message_overlay is not None:
         result.update(message_overlay)
         messages = None
@@ -353,6 +360,11 @@ def project(session, *, resolver=None, message_overlay=None, work_overlay=None):
     if messages is not None:
         result.update(messages=messages.pop('items'),messageWindow=messages,
                       sharedHistoryUserTurnOffset=messages['userOffset'])
+    # Requested disk/saved windows may predate current status. Join exact input
+    # annotations after the overlay, without hydrating the retained transcript.
+    from .input_status import annotate as input_annotation
+    result['messages'] = [input_annotation(status_source, row) for row in result.get('messages', [])]
+    result['messageAnnotations'] = display_annotations(status_source, (row.get('id') for row in result['messages']))
     # Native disk paging can retain thousands of previously loaded messages.
     # Browser projection stays bounded independently; older rows remain available
     # through the same message cursor before fetching another disk page.
@@ -365,7 +377,11 @@ def project(session, *, resolver=None, message_overlay=None, work_overlay=None):
         result['executionWindow']={**groups,'part':'groups'}
     # Reports and completed generation bodies are not activity badges.
     from .browser_workers import project as worker_view
-    workers, summary = worker_view(session.get('workers', []), result.get('execution', {}))
+    loading = (work_overlay is not None
+        and result.get('execution', {}).get('detailsDeferred') is True
+        and result.get('workProjection', {}).get('status') == 'loading'
+        and result.get('workProjection', {}).get('current') is False)
+    workers, summary = worker_view(session.get('workers', []), result.get('execution', {}), loading=loading)
     result['workers']=[compact(row,session['id'],'workers',SUMMARY_LIMIT) for row in workers]
     if summary is not None:
         result['workerSummary'] = summary
@@ -373,6 +389,11 @@ def project(session, *, resolver=None, message_overlay=None, work_overlay=None):
     result.pop('messageQuotes', None)
     if 'historyActivity' in result:
         result['historyActivity']={'diagnostics':result['historyActivity'].get('diagnostics',[])}
+    # Absent legacy report means no panel; opening history never reconstructs
+    # this checklist. It is independent of the execution/message window.
+    if 'execution' in result or dict.get(status_source, '_reportedPlan') is not None:
+        result['execution'] = {**result.get('execution', {}),
+                               'plan': deepcopy(dict.get(status_source, '_reportedPlan'))}
     return result
 
 

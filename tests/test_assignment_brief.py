@@ -221,9 +221,9 @@ async def test_child_principal_and_internal_caller_cannot_borrow_brief(app):
     with pytest.raises(AppError, match='child cannot borrow') as refused:
         await app.app_bridge('dispatch', {'action': 'assignment.brief',
             'args': {'sessionId': source['id']}, '_runtimeSessionId': 'child-worker'}, source['id'])
-    assert 'return the requested action, completed effects' in str(refused.value)
+    assert 'Retain the requested action, completed effects' in str(refused.value)
     assert 'Do not retry with a root ID' in str(refused.value)
-    assert 'does not add a requirement for new user approval' in str(refused.value)
+    assert 'neither cancels unrelated work nor requires new user approval' in str(refused.value)
     assert refused.value.status == 403
     assert app.db.execute('SELECT id,receipt FROM commands ORDER BY id').fetchall() == before
     source['sessionKind'] = 'internal'

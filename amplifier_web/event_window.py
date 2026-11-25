@@ -207,6 +207,15 @@ def _observation(event, raw, offset, path, identity):
     at = _time(event.get('timestamp') if event.get('timestamp') is not None else data.get('timestamp'))
     if at is not None:
         row['createdAt'] = at
+    if name == 'llm:response':
+        from .execution_events import public_usage
+        if isinstance(data.get('usage'), dict):
+            # A single event may carry a receipt. It has no admission
+            # identity here and must never enter a turn's accounting rollup.
+            row['observedUsage'] = public_usage(data['usage'], include_cost_source=False)
+        duration = data.get('duration_ms')
+        if at is not None and type(duration) in (int, float) and 0 <= duration < 2**53:
+            row.update(startedAt=at - duration / 1000, endedAt=at)
     for field, keys in {
         'input': ('tool_input', 'arguments', 'input', 'prompt'),
         'output': ('result', 'tool_result'), 'error': ('error', 'error_message'),

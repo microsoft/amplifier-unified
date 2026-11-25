@@ -179,7 +179,7 @@ async def test_foreign_client_selection_rejected(aiohttp_client, tmp_path, selec
         json={'clientId': 'foreign', 'kind': 'native' if foreign_kind == 'device' else 'web', 'protocolVersion': 1})
     assert response.status == 200
     assert (await attach(client, headers)).status == 200
-    target = '/api/companion'
+    target = '/api/attention'
     if selector == 'header':
         headers = {**headers, 'X-Amplifier-Client': 'foreign'}
     else:

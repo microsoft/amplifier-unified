@@ -149,7 +149,7 @@ async def test_full_worker_start_capture(tmp_path,monkeypatch,restore,computer_h
         c.register_capability('live.checkpoint',AsyncMock())
         return session,runtime,{'history_source':'native','config_inputs':[]}
     monkeypatch.setattr('amplifier_web.host.session.prepare_manager',acquire)
-    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides',lambda *a:None)
+    monkeypatch.setattr('amplifier_web.runtime_qualification.active_install_overrides',lambda *a,**kw:None)
     monkeypatch.setattr('amplifier_web.history_revision.recover_pending',lambda *a:None)
     monkeypatch.setattr('amplifier_web.host.naming.LiveSessionNaming',lambda *a:None)
     monkeypatch.setattr('amplifier_web.shared_state.configuration_stamp',lambda *a,**kw:())

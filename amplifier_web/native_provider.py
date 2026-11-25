@@ -1,4 +1,5 @@
 """Opt-in binding to the provider-owned native transport; no wire protocol here."""
+import asyncio
 import copy
 import json
 import inspect
@@ -56,6 +57,8 @@ class NativeProviderHost:
         self.response_origins = {}
         self.open_responses = set()
         self.response_overflow = False
+        self.execution_binding = None
+        self.execution_view_required = False
         self.state = {"version": 1, "sessionId": coordinator.session_id, "receipts": []}
         self.path = directory / "native-provider-state.json"
         self.checkpoint_path = directory / "native-provider-checkpoint.json"
@@ -75,6 +78,48 @@ class NativeProviderHost:
                 if changed:
                     self.save()
         coordinator.register_capability("web.native_provider", self)
+
+    def bind_execution(self, loop, view):
+        """Bind only the view issued to this loop during host preparation.
+
+        Construction closes before the first turn. Ownership lasts until the
+        preparing task ends, not until the hook graph seals; it does not grant
+        any further registration or translate another coordinator.
+        """
+        from .host.media import HostRegistrationView
+        state = self.coordinator.get_capability("web.media.construction")
+        runtime = self.coordinator.get_capability("live.runtime")
+        task = asyncio.current_task()
+        if (loop is not self.loop or type(view) is not HostRegistrationView
+                or view.native is not self.coordinator
+                or self.coordinator.get_capability("web.media.registration") is not view
+                or state is None or state.registration is not view.participant
+                or runtime is None or task is None):
+            raise ValueError("Native execution lacks its exact issued registration view")
+        previous = self.execution_binding
+        if previous is not None and not previous[-1].done():
+            raise ValueError("Native execution already has a live registration binding")
+        binding = (loop, view, state, runtime, task)
+        self.execution_binding = binding
+        self.execution_view_required = True
+        def release(completed):
+            if self.execution_binding is binding:
+                self.execution_binding = None
+        task.add_done_callback(release)
+
+    def owns_loop(self, owner):
+        binding = self.execution_binding
+        if binding is None:
+            return (not self.execution_view_required
+                    and getattr(owner, "coordinator", None) is self.coordinator)
+        loop, view, state, runtime, task = binding
+        return (owner is loop and getattr(loop, "coordinator", None) is view
+                and getattr(loop, "runtime", None) is runtime and loop.running
+                and not task.done() and not task.cancelling()
+                and not runtime.closed and not runtime.stop_requested
+                and self.coordinator.get_capability("live.runtime") is runtime
+                and self.coordinator.get_capability("web.media.registration") is view
+                and self.coordinator.get_capability("web.media.construction") is state)
 
     def save(self):
         write_private(self.path, json.dumps(self.state, ensure_ascii=False))
@@ -605,8 +650,16 @@ async def install_native(loop, coordinator, providers):
         async def _emit(self, kind, **data):
             runtime = getattr(self.owner, "runtime", None)
             command = getattr(runtime, "accepted", {}).get(data.get("input_id"))
-            if command and command.target_generation_id:
-                data["target_generation_id"] = command.target_generation_id
+            if command:
+                if command.target_generation_id:
+                    data["target_generation_id"] = command.target_generation_id
+                # Ordinary input stays unanchored. Its observed delivery uses
+                # the generation captured by this actual provider send.
+                binding = next((b for b in host.send_bindings.values()
+                    if b['record'].get('operation') == 'response.steer'
+                    and b['record'].get('input_id') == command.id), None)
+                if binding:
+                    data["generation_id"] = binding['generationId']
                 data["delivery"] = "native"
             await super()._emit(kind, **data)
             outcome = getattr(runtime, "steering_outcomes", {}).get(data.get("input_id"))
@@ -647,7 +700,9 @@ async def install_native(loop, coordinator, providers):
             attempt = delivery.begin_steer()
             token = WORK_ATTEMPT.set((delivery, attempt))
             steer_token = _STEER_INPUT.set(getattr(command, 'id', None))
-            generation_token = _STEER_GENERATION.set(getattr(command, 'target_generation_id', None))
+            generation_token = _STEER_GENERATION.set(
+                getattr(command, 'target_generation_id', None)
+                or (getattr(coordinator.get_capability('live.runtime'), 'generation', None) or {}).get('id'))
             try:
                 invoke = super().steer_live
                 return await observe(self, SimpleNamespace(model=host.identity['model']),
@@ -663,8 +718,7 @@ async def install_native(loop, coordinator, providers):
 
     def owned_loop():
         owner = LIVE_OWNER.get()
-        return owner if (getattr(owner, "coordinator", None) is coordinator
-                         and host.binding_current()) else None
+        return owner if host.owns_loop(owner) and host.binding_current() else None
     host.identity = identity
     host.provider = LoopNativeProvider.wrap(original, owner_getter=owned_loop,
         lifecycle=host.send_lifecycle, trace=host.work_trace, prepare_send=host.prepare_send)
@@ -679,7 +733,13 @@ async def install_native(loop, coordinator, providers):
                 canonical=await coordinator.get("context").get_messages(), identity=identity)
         except (OSError, ValueError, KeyError, TypeError):
             host.provider._discard_checkpoint("unavailable")
-    await coordinator.mount("providers", host.provider, name=identity["instance"])
+    from .host.media import registration_coordinator
+    registration = registration_coordinator(coordinator)
+    if registration is coordinator:
+        await coordinator.mount("providers", host.provider, name=identity["instance"])
+    else:
+        await registration.mount_adapter("providers", host.provider,
+                                         previous=original, name=identity["instance"])
     if link is not None:
         link.original = host.provider
     return coordinator.get("providers") or providers

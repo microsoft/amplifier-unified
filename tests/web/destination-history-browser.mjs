@@ -1,5 +1,6 @@
 // Owned synthetic host + production bundle. No model calls or shared application.
 import './composer-test-helpers.mjs';
+import {settledAppearance,updateAppearance} from './settings-fixture.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {mkdir,writeFile} from 'node:fs/promises';
@@ -73,7 +74,7 @@ function observeSettingsClose(page){
       const s=state||window.amplifier.getState(),canvas=s.canvas||{},view=s.view||{};
       const rows=(s.canvasArtifacts||[]).filter(row=>row.sessionId===s.selectedSessionId&&row.workspaceId===s.selectedWorkspaceId);
       const artifacts=rows.filter(row=>row.kind==='settings'||row.title==='Settings'||[binding.closedId,binding.successorId,canvas.id].includes(row.id));
-      const tabs=[...document.querySelectorAll('#workspace-canvas .a-canvas-document-tabs > [role="tab"]')];
+      const tabs=[...document.querySelectorAll('#workspace-canvas .a-canvas-document-tab[data-artifact-id]')];
       const openRows=rows.filter(row=>row.tabOpen),currentUrl=new URL(location.href),container=document.querySelector('#workspace-canvas');
       const metadata=row=>({id:token(row.id),title:title(row.title),kind:token(row.kind),tabOpen:row.tabOpen===true});
       return {atMs:performance.now()-started,wallTimeMs:Date.now(),revision:s.revision,clientId:token(s.client?.id),hostInstanceId:token(s.client?.hostInstanceId),
@@ -85,14 +86,14 @@ function observeSettingsClose(page){
        url:{sameOrigin:currentUrl.origin===initialUrl.origin,samePath:currentUrl.pathname===initialUrl.pathname,chat:token(currentUrl.searchParams.get('chat')),shell:token(currentUrl.searchParams.get('shell'))},
        artifacts:artifacts.slice(0,32).map(metadata),openTabs:openRows.slice(0,32).map(metadata),openTabsOmitted:Math.max(0,openRows.length-32),
        artifactsOmitted:Math.max(0,artifacts.length-32),
-       dom:{tabs:tabs.slice(0,32).map((node,index)=>({index,label:title(node.querySelector('[role="tab"] span')?.textContent),
-         selected:node.querySelector('[role="tab"]')?.getAttribute('aria-selected'),closeLabel:title(node.querySelector('[data-action="canvas.tabClose"]')?.getAttribute('aria-label')),
+       dom:{tabs:tabs.slice(0,32).map((node,index)=>({index,id:token(node.dataset.artifactId),label:title(node.querySelector('span')?.textContent),
+         selected:node.getAttribute('aria-selected'),closeLabel:title(node.parentElement.querySelector('.a-canvas-tab-close')?.getAttribute('aria-label')),
          visible:!!node.getClientRects().length})),tabsOmitted:Math.max(0,tabs.length-32),
         closeSettingsCount:document.querySelectorAll('button[aria-label="Close tab Settings"]').length,
         canvasContainer:container?{hidden:container.hidden,inert:container.inert,ariaHidden:container.getAttribute('aria-hidden'),mode:token(container.getAttribute('data-mode'))}:null,
         settingsSurfaces:[...document.querySelectorAll('.a-settings-experience')].slice(0,8).map(node=>({page:token(node.getAttribute('data-settings-page')),compact:token(node.getAttribute('data-compact')),inCanvas:!!node.closest('#workspace-canvas'),visible:!!node.getClientRects().length})),
         unsavedDialogs:document.querySelectorAll('[role="alertdialog"]').length},
-       identityLimit:'DOM tabs have no artifact ID attribute; state IDs and ordered labels are separate observations.'};
+       identityLimit:'Bounded DOM artifact IDs and current state IDs are recorded separately; hidden tabs are not proof of closure.'};
      };
      const capture=(label,state,force=false)=>{
       try{
@@ -303,11 +304,12 @@ try{
  const baseline=await saved();await back.click();await expect.poll(async()=>(await state()).selectedSessionId).toBe(b);
  await expect.poll(async()=>(await saved()).cursor).toBe(baseline.cursor-1);
  assert.equal((await saved()).version,1);assert.equal((await saved()).recent[0].id,b,'Confirmed Back refreshes MRU');
- await expect(back).toBeEnabled();await expect(back).toBeFocused();
+ await expect(back).toBeEnabled();await expect(composer).toBeFocused();
  await forward.click();await expect.poll(async()=>(await state()).selectedSessionId).toBe(c);
  // Selection is optimistic; keyboard focus requires the confirmed history move.
  await expect.poll(async()=>(await saved()).cursor).toBe(baseline.cursor);
  assert.equal((await saved()).recent[0].id,c,'Confirmed Forward refreshes MRU');
+ await expect(composer).toBeFocused();
  await expect(menu).toBeEnabled();
  assert.equal((await saved()).entries.length,baseline.entries.length);
  // Recent places is separate from the directional menus; keyboard dismissal
@@ -592,6 +594,7 @@ try{
  const digest=(await action('shell.packages.stage',{manifest,source})).result.digest;
  assert.equal((await action('shell.packages.validate',{digest})).result.status,'passed');
  await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(digest);
+ await page.getByRole('button',{name:'Close canvas details',exact:true}).click();
  const editor=page.getByLabel('History unsaved input');await editor.fill('UNSAVED HISTORY EDIT');
  const inspect=async()=>(await action('canvas.views.inspect')).result.views.find(row=>row.viewId==='primary');
  await expect.poll(async()=>(await inspect()).dirty).toBe(true);
@@ -663,9 +666,14 @@ try{
    request.headers()['x-amplifier-client']!==beforeClose.client.id)return false;
   const command=request.postDataJSON();return command.action==='canvas.tabClose'&&command.args.id===closingId;
  });
- // Canvas now exposes close through its all-documents list and Delete on tabs.
- // Use the actual keyboard control, keeping the exact close receipt/guard oracle.
- await page.getByRole('tab',{name:'Settings',exact:true}).press('Delete');
+ // Compact Canvas keeps tabs mounted but hidden. Its visible document picker
+ // owns Delete for the active document; preserve the exact close/guard receipt.
+ const canvas=page.locator('#workspace-canvas'),documentPicker=canvas.locator('.a-open-documents');
+ const settingsTab=canvas.locator(`.a-canvas-document-tab[data-artifact-id="${closingId}"]`);
+ await expect(canvas).toHaveAttribute('data-navigation','compact');
+ await expect(documentPicker).toBeVisible();
+ await expect(documentPicker).toHaveAccessibleName(/^Open documents, \d+ open, Settings$/);
+ await documentPicker.press('Delete');
  await page.getByRole('button',{name:'Discard changes',exact:true}).click();
  const closeResponse=await closedResponse,closeReceipt=await closeResponse.json();
  const closeCommandId=closeResponse.request().postDataJSON().id;
@@ -685,7 +693,7 @@ try{
  }).toBe(true);
  await settingsDiagnostic.mark('close-state-poll-completed');
  await expect(page.getByRole('alertdialog',{name:'Unsaved settings changes',exact:true})).toHaveCount(0);
- await expect(page.getByRole('tab',{name:'Settings',exact:true})).toHaveCount(0);
+ await expect(settingsTab).toHaveCount(0);
  await expect(settings).toHaveCount(0);assert.deepEqual(await saved(),settingsTrail);
  await settingsDiagnostic.mark('rendered-close-assertions-completed');
  await writeFile(path.join(out,'settings-close-boundary.json'),JSON.stringify({
@@ -698,11 +706,13 @@ try{
  // would hide the measured close race while breaking this separate user intent.
  assert.equal((await action('canvas.select',{id:closingId})).accepted,true);
  await expect.poll(async()=>(await state()).canvas.id).toBe(closingId);
- await expect(page.getByRole('tab',{name:'Settings',exact:true})).toBeVisible();
+ await expect(settingsTab).toHaveCount(1);await expect(settingsTab).toHaveAttribute('aria-selected','true');
+ await expect(documentPicker).toBeVisible();
+ await expect(documentPicker).toHaveAccessibleName(/^Open documents, \d+ open, Settings$/);
  const reopened=await state();assert.equal(reopened.canvas.kind,'settings');
  assert.equal(reopened.canvasArtifacts.find(row=>row.id===closingId).tabOpen,true);
  assert.equal((await action('canvas.tabClose',{id:closingId})).accepted,true);
- await expect(page.getByRole('tab',{name:'Settings',exact:true})).toHaveCount(0);
+ await expect(settingsTab).toHaveCount(0);
  await expect.poll(async()=>(await state()).canvas.id).toBe(successor.id);
  assert.deepEqual(await saved(),settingsTrail);
  await action('canvas.visibility',{open:false});
@@ -769,43 +779,60 @@ try{
  // deduplication for permission to redesign the sidebar or shrink touch targets.
  const layoutMeasurements=[],longTitle='Beta — a deliberately long chat title for reviewing navigation without losing the current working context',
   longWorkspace='History project — a deliberately long workspace name that must not consume the current chat title';
- const originalScheme=await page.evaluate(()=>window.amplifier.getShellState().effectiveComposition.presentation.scheme);
+ const originalScheme=(await settledAppearance(page)).effective.scheme;
  const scheme=async value=>{
-  await page.evaluate(async scheme=>{
-   const s=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
-   const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:s.revision,
-    composition:{...s.effectiveComposition,presentation:{...s.effectiveComposition.presentation,scheme}}});
-   if(!prepared.accepted)throw Error('Could not prepare test appearance');
-   const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:s.revision,changeId:prepared.result.id});
-   if(!applied.accepted)throw Error('Could not apply test appearance');
-  },value);
-  await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState().effectiveComposition.presentation.scheme)).toBe(value);
-  if(value==='light'||value==='dark')await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',value);
+  const before=await state(),after=await updateAppearance(page,{scheme:value});
+  assert.equal(after.clientId,before.client.id);assert.equal(after.effective.scheme,value);
+  assert.ok(after.composition.id);assert.equal(after.composition.previewId,null);
+  // getShellState exposes retained bootstrap data. Appearance owns the current
+  // profile and rendered composition, which the root consumes independently.
+  await expect.poll(()=>page.evaluate(({clientId,hostInstanceId,namespace,generation,scope,revision,compositionId,scheme})=>{
+   const state=window.amplifier.getState(),a=state.appearance,root=document.querySelector('#amp-one');
+   const profile=a.activeScope==='client'?a.local:a.shared;
+   const resolved=scheme==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):scheme;
+   return state.client.id===clientId&&state.client.hostInstanceId===hostInstanceId
+    &&a.namespace===namespace&&a.generation===generation&&a.activeScope===scope&&profile.revision===revision
+    &&profile.values.scheme===scheme&&a.effective.scheme===scheme&&a.renderedPreferences.scheme===scheme
+    &&a.composition.id===compositionId&&a.observedCompositionId===compositionId
+    &&a.availability==='connected'&&a.local.reported&&!a.local.error&&a.command?.status!=='pending'
+    &&root.dataset.appearanceComposition===compositionId&&root.dataset.themeScheme===resolved
+    &&getComputedStyle(root).colorScheme===(scheme==='system'?'light dark':scheme);
+  },{clientId:before.client.id,hostInstanceId:before.client.hostInstanceId,namespace:after.namespace,
+   generation:after.generation,scope:after.activeScope,revision:after.source.revision,
+   compositionId:after.composition.id,scheme:value})).toBe(true);
  };
  const newChatGeometry=async(width,screenshot)=>{
   await action('view.update',{patch:{navExpanded:true,navPinned:width>900}});
   const newChat=page.locator('#workspace-navigation').getByRole('button',{name:'New chat',exact:true});
   await expect(newChat).toBeVisible();await expect(newChat).toHaveAttribute('data-action','session.draft');
+  await expect(newChat).toHaveAttribute('title','New chat');await expect(newChat).toHaveText('');
+  await expect(newChat.locator('svg.lucide-message-square-plus')).toHaveCount(1);
   const measurement=await newChat.evaluate(button=>{
    const style=getComputedStyle(button),box=button.getBoundingClientRect(),rail=button.closest('.a-nav-rail').getBoundingClientRect(),
-    modes=button.previousElementSibling,icon=button.querySelector('svg').getBoundingClientRect(),round=n=>Math.round(n*100)/100;
-   return {text:button.textContent.trim(),modesImmediatelyBefore:modes.classList.contains('a-sidebar-modes'),
+    modes=button.closest('.a-sidebar-modes'),row=modes.getBoundingClientRect(),icon=button.querySelector('svg').getBoundingClientRect(),round=n=>Math.round(n*100)/100;
+   const siblings=[...modes.querySelectorAll('[aria-label="Sidebar view"]>button')].map(node=>node.getBoundingClientRect());
+   return {text:button.textContent.trim(),native:button.tagName==='BUTTON',insideModes:button.parentElement===modes,
     box:{x:round(box.x-rail.x),y:round(box.y-rail.y),width:round(box.width),height:round(box.height)},
-    afterModes:round(box.y-modes.getBoundingClientRect().bottom),icon:{width:round(icon.width),height:round(icon.height)},
+    sameRow:siblings.length===2&&siblings.every(other=>Math.abs(other.top-box.top)<2&&other.right<=box.left),
+    contained:box.left>=row.left&&box.right<=row.right&&box.left>=rail.left&&box.right<=rail.right
+     &&box.top>=Math.max(0,rail.top)&&box.bottom<=Math.min(innerHeight,rail.bottom),
+    hit:button.contains(document.elementFromPoint(box.left+box.width/2,box.top+box.height/2)),
+    coarse:matchMedia('(pointer:coarse)').matches,icon:{width:round(icon.width),height:round(icon.height)},
     style:Object.fromEntries(['minHeight','paddingTop','paddingRight','paddingBottom','paddingLeft','marginTop','marginBottom','borderRadius','gap','fontSize','lineHeight'].map(key=>[key,style[key]]))};
   });
-  assert.equal(measurement.text,'New chat');assert.equal(measurement.modesImmediatelyBefore,true);
-  // Existing main's authored dimensions, not measurements inferred from the
-  // proposed mockup. The full measured box is also compared across conditions.
-  assert.equal(measurement.style.minHeight,width<=760?'44px':'38px');
-  assert.equal(measurement.style.borderRadius,'8px');
-  assert.equal(measurement.style.marginTop,'4px');assert.equal(measurement.style.marginBottom,'4px');
-  assert.equal(measurement.style.paddingTop,'9px');assert.equal(measurement.style.paddingBottom,'9px');
-  assert.equal(measurement.style.paddingLeft,'10px');assert.equal(measurement.style.paddingRight,'10px');
-  assert.equal(measurement.style.gap,'12px');assert.deepEqual(measurement.icon,{width:18,height:18});
-  assert.ok(measurement.box.height>=(width<=760?44:38));
-  await expect(page.locator('#workspace-navigation .a-sidebar-home')).toHaveCount(1);
-  await expect(page.locator('#workspace-navigation .a-sidebar-home')).toBeVisible();
+  assert.equal(measurement.text,'');assert.equal(measurement.native,true);assert.equal(measurement.insideModes,true);
+  assert.equal(measurement.sameRow,true);assert.equal(measurement.contained,true);assert.equal(measurement.hit,true);
+  // Current compact sidebar's authored target, not the retired full-width row.
+  // Narrow fine-pointer CSS sets height44; its inherited minimum remains36.
+  // Coarse input explicitly sets both. The actual target is checked separately.
+  assert.equal(measurement.style.minHeight,measurement.coarse?'44px':'36px');
+  assert.equal(measurement.box.width,measurement.coarse?44:32);
+  assert.equal(measurement.style.borderRadius,'7px');
+  for(const key of ['paddingTop','paddingRight','paddingBottom','paddingLeft'])assert.equal(measurement.style[key],'6px');
+  assert.deepEqual(measurement.icon,{width:17,height:17});
+  assert.ok(measurement.box.height>=(width<=640||measurement.coarse?44:36));
+  await expect(page.locator('#workspace-navigation .a-sidebar-home')).toHaveCount(0);
+  await expect(headerHome).toBeVisible();
   if(screenshot)await page.screenshot({path:path.join(out,screenshot)});
   await action('view.update',{patch:{navExpanded:false,navPinned:false}});
   return measurement;
@@ -859,7 +886,7 @@ try{
  await action('session.rename',{id:b,title:'Beta'});await action('workspace.rename',{id:workspace.id,name:'History project'});
  if(originalScheme)await scheme(originalScheme);
  await writeFile(path.join(out,'history-layout-measurements.json'),JSON.stringify({schema:1,
-  baseline:'Existing authored New chat dimensions and same-run short-title geometry; not a pre-change screenshot comparison',
+  baseline:'Current compact sidebar authored New chat target and same-run short-title geometry; not a pre-change screenshot comparison',
   conditions:layoutMeasurements},null,2));
  // The separate mobile Canvas overlay close is deliberately retained by Scope A.
  await expect(page.locator('[data-part="header"]').getByRole('button',{name:'Back to chat',exact:true})).toHaveCount(0);

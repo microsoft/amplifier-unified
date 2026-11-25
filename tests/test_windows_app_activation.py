@@ -34,10 +34,12 @@ class NativeActivationAdmissionTests(unittest.IsolatedAsyncioTestCase):
                 return SimpleNamespace(valid_update_intent=intent_namespace["valid_update_intent"])
             if name == "update_restart":
                 return SimpleNamespace(RestartRejected=_RestartRejected)
+            if name == "windows_service":
+                return SimpleNamespace(update_owner=lambda home: None)
             raise AssertionError("Activation escaped its platform admission: " + name)
         namespace = {
             "__builtins__": {**vars(builtins), "__import__": imports},
-            "sys": SimpleNamespace(platform=platform), "re": re, "copy": copy,
+            "sys": SimpleNamespace(platform=platform), "re": re, "copy": copy, "asyncio": asyncio,
         }
         exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), "exec"), namespace)
         return namespace["_activate"]
@@ -47,6 +49,7 @@ class NativeActivationAdmissionTests(unittest.IsolatedAsyncioTestCase):
             "revision": "a" * 40, "generation": "b" * 32, "latest": "v0.68.0",
             "extras": []}, **extra}
         class Manager:
+            home = Path("/synthetic-no-io")
             service = SimpleNamespace(state={"updates": state})
             diagnostics = SimpleNamespace(begin=Mock(), record=Mock())
             @property

@@ -95,7 +95,7 @@ class ManagedUpdates:
         if target['commit'] != source['latest']: raise ValueError('The tool revision changed during installation.')
         # Installing by immutable revision must not change the user's update policy.
         await self._change(lambda state: next(row for row in state['installations'] if row['id'] == target['id']).update(
-            ref=previous.get('ref') or 'HEAD', stagedFrom=previous['id']))
+            ref=source.get('ref') or previous.get('ref') or 'HEAD', stagedFrom=previous['id']))
         await self.validate_update(previous['id'], target['id'])
         return target
 
@@ -177,6 +177,12 @@ class ManagedUpdates:
                             self.schemas.pop(key, None)
                             candidates[key].update(status='disconnected', connectionState='disconnected', catalogState='stale', loadedSchemas={})
                     state['servers'] = [candidates.get(row['id'], row) for row in state['servers']]
+                    # Compress existing ordinary update pointers, including a
+                    # rollback, so selection does not depend on retaining every
+                    # intermediate package or a mutable rollback backlink.
+                    for item in state['installations']:
+                        if item.get('supersededBy') == previous_id and item['id'] != target_id:
+                            item['supersededBy'] = target_id
                     previous['supersededBy'] = target_id
                     target.pop('supersededBy', None)
                     target.pop('stagedFrom', None)

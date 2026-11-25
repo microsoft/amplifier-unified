@@ -88,3 +88,17 @@ matches; an unprovable old change requires review rather than guessed migration.
 Synthetic qualification must include a real due admission after recovery and a
 checkpoint, separate from active readback. It does not reproduce the original
 M365 incident, explain why that owner exited, or establish live-provider success.
+
+A commissioned or scheduled new task inherits the source conversation's named
+static Context Intelligence destination credential, such as `${TEAM_GRAPH_KEY}`.
+The worker resolves it from its own configured environment when loading that
+hook. A required name missing from that environment uses the ordinary startup
+diagnostic. Empty optional references, destination filters, and local capture
+continue to follow the hook's settings.
+
+A literal in an older private plan cannot identify its original variable.
+The creation receipt or new-task schedule preview warns when a configured
+root destination loses an opaque key during inheritance. To restore forwarding
+for new workers, set the named reference on the intended
+destination in the source configuration and prepare that chat again. Review
+the updated configuration for an existing new-task schedule if prompted.

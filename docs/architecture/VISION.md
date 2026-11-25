@@ -21,6 +21,37 @@ session and memory. Workspaces group conversations and shared context/files.
 These November 7 clarifications describe the destination, not shipped support for
 every participant or process arrangement.
 
+Within [Constellation](https://github.com/microsoft/amplifier-constellation/blob/main/docs/VISION.md),
+Amplifier is one Experience among others. A person can work here with agents that
+also participate elsewhere, or use Unified's native execution behind an agent's
+existing boundary. Products can expose several roles together. The
+[five-boundary mapping](#constellation-boundaries)
+connects this family to the shared agreements; Unified retains its own clients,
+host design and runtime composition.
+
+## Constellation boundaries
+
+The [umbrella contracts](https://github.com/microsoft/amplifier-constellation/blob/main/contracts/README.md)
+own these external roles. They map onto existing owners, not five required
+repositories or services.
+
+| Boundary | Unified's part |
+| --- | --- |
+| [Agent Instance](https://github.com/microsoft/amplifier-constellation/blob/main/contracts/agent-instance.md) | Native execution can sit behind a continuing agent or be offered through an agent entrypoint. [ACP support](../../contracts/agent-protocol.v1.md) alone does not establish every participant and accepted-work promise. |
+| [Conversation](https://github.com/microsoft/amplifier-constellation/blob/main/contracts/conversation.md) | Unified's shared conversations and connected sources own their exchanges; participating agents retain separate execution identities. |
+| [Connection](https://github.com/microsoft/amplifier-constellation/blob/main/contracts/connection.md) | Existing attachments and participation adapters connect declared endpoints; they do not become another conversation or work owner. |
+| [Experience](https://github.com/microsoft/amplifier-constellation/blob/main/contracts/experience.md) | Web, native and terminal clients present conversations, work and controls through their existing interfaces. |
+| [Tool](https://github.com/microsoft/amplifier-constellation/blob/main/contracts/tool.md) | Callable capabilities use MCP or supported service APIs. An internal library does not become an external Tool merely by being extracted. |
+
+[Composition](https://github.com/microsoft/amplifier-constellation/blob/main/contracts/composition.md),
+[interaction](https://github.com/microsoft/amplifier-constellation/blob/main/contracts/interaction.md),
+[work authority](https://github.com/microsoft/amplifier-constellation/blob/main/contracts/work-authority.md)
+and [continuity](https://github.com/microsoft/amplifier-constellation/blob/main/contracts/work-continuity.md)
+remain the shared promise owners. Unified contracts govern its own product and
+component behavior. Exact APIs and supported coverage stay with their serving
+owners; this mapping adds no wire method, implementation layout or adoption claim.
+The family's AHP/client/host choices remain internal to Unified's design.
+
 ## Principles
 
 ### 1. Protocols make parts independent

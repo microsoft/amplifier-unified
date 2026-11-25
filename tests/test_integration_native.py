@@ -22,9 +22,18 @@ def test_integration_project_preserves_declared_runtime_and_host_test_inputs():
     dev = host["dependency-groups"]["dev"]
     fixture = [item for item in dev if canonicalize_name(Requirement(item).name)
                in {"amplifier-module-tool-filesystem", "amplifier-module-context-managed",
-                   "amplifier-module-tool-exec"}]
-    assert len(fixture) == 3
-    assert any("@663f26a878ae71e136f439fa73ded52b2eb24174" in item for item in fixture)
+                   "amplifier-module-tool-exec", "amplifier-module-provider-anthropic"}]
+    assert len(fixture) == 4
+    # The host owns its exact fixture selection; the native lane must project
+    # that named input away without pinning itself to an older host revision.
+    lock = tomllib.loads((ROOT / "uv.lock").read_text())
+    [locked_filesystem] = [row for row in lock["package"]
+                          if row["name"] == "amplifier-module-tool-filesystem"]
+    fixture_revision = locked_filesystem["source"]["git"].rsplit("#", 1)[1]
+    assert [item for item in fixture
+            if canonicalize_name(Requirement(item).name) == "amplifier-module-tool-filesystem"] == [
+        "amplifier-module-tool-filesystem @ git+https://github.com/microsoft/"
+        "amplifier-module-tool-filesystem@" + fixture_revision]
     assert set(dev) - set(fixture) <= set(prepared["project"]["dependencies"])
     filesystem = [item for item in prepared["project"]["dependencies"]
                   if canonicalize_name(Requirement(item).name) == "amplifier-module-tool-filesystem"]
@@ -39,6 +48,8 @@ def test_integration_project_preserves_declared_runtime_and_host_test_inputs():
     assert executor == [
         "amplifier-module-tool-exec @ git+https://github.com/microsoft/amplifier-module-tool-exec@main"]
     assert not set(fixture) & set(prepared["project"]["dependencies"])
+    assert prepared["tool"]["uv"]["sources"]["amplifier-module-provider-anthropic"] == (
+        runtime["tool"]["uv"]["sources"]["amplifier-module-provider-anthropic"])
     for name, source in runtime["tool"]["uv"]["sources"].items():
         assert prepared["tool"]["uv"]["sources"][name] == source
     assert prepared["tool"]["uv"]["no-build-package"] == runtime["tool"]["uv"]["no-build-package"]

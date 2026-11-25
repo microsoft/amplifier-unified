@@ -24,7 +24,7 @@ publication (and manually for affected changes before release). It starts and
 retires its own loopback fixture with synthetic state and a fixed scheduler clock;
 no provider/account credentials, active user schedules or external work are used.
 `tests/test_automation_overview.py` belongs to the ordinary full Python suite;
-`components/web-client/tests/automation-hub.test.mjs` belongs to client tests. Existing recurrence,
+[tests/automation-hub.test.mjs](https://github.com/microsoft/amplifier-client-web/blob/main/tests/automation-hub.test.mjs) belongs to client tests. Existing recurrence,
 new-task lifecycle, unknown no-replay and peer-repair tests retain their owners.
 
 ## Invocation

@@ -416,7 +416,7 @@ def test_installed_skills_root_child_and_companions(tmp_path, monkeypatch, caplo
                 async def bridge(operation, args):
                     raise AssertionError("Guidance injection must not dispatch app actions")
 
-                await install_app_access(session.coordinator, bridge)
+                await install_app_access(session.coordinator, bridge, execution_role='root')
                 guidance = await session.coordinator.hooks.emit("provider:request", {"messages": []})
                 assert "search for coordinate-work and load it when found" in guidance.context_injection
                 assert "A missing skill is not a coordination failure" in guidance.context_injection

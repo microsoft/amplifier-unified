@@ -4,18 +4,34 @@ on:
     paths:
       - 'components/web-client.source.json'
       - 'scripts/web_client_*.py'
-      - 'components/web-client/commands.json'
       - 'amplifier_web/capacity.py'
       - 'amplifier_web/execution*.py'
+      - 'amplifier_web/resource_files.py'
+      - 'amplifier_web/state_records.py'
+      - 'amplifier_web/cold_display.py'
+      - 'amplifier_web/session_projection.py'
+      - 'amplifier_web/browser_detail.py'
+      - 'amplifier_web/resident_work_pages.py'
+      - 'amplifier_web/work_windows.py'
+      - 'amplifier_web/open_work_fields.py'
+      - 'amplifier_web/collaboration.py'
       - 'amplifier_web/history_revision.py'
       - 'amplifier_web/runtime*.py'
       - 'amplifier_web/response_completion.py'
       - 'tests/test_response_completion.py'
       - 'amplifier_web/task_continuity.py'
+      - 'amplifier_web/conversation_models.py'
+      - 'amplifier_web/management.py'
+      - 'amplifier_web/worktrees.py'
+      - 'amplifier_web/native_activity.py'
       - 'amplifier_web/service.py'
-      - 'components/web-client/src/capacity.jsx'
-      - 'components/web-client/src/runtime-settings.jsx'
       - 'tests/test_capacity.py'
+      - 'tests/test_execution*.py'
+      - 'tests/test_native_activity_working_set.py'
+      - 'tests/test_cross_workspace_coordination.py'
+      - 'tests/test_collaborative_workspaces.py'
+      - 'tests/test_resident_work_pages.py'
+      - 'tests/test_open_work_fields.py'
       - 'tests/fixtures/capacity_ui_server.py'
       - 'tests/web/capacity-browser.mjs'
       - '.github/workflows/capacity.yml'
@@ -42,6 +58,39 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - run: uv sync --locked --group dev
       - run: uv run --no-sync pytest tests/test_capacity.py tests/test_execution.py tests/test_execution_events.py tests/test_task_continuity.py tests/test_runtime.py tests/test_response_completion.py tests/test_session_fork.py -q
+      - name: Execution storage and ordered accounting contracts
+        # Select bounded ownership/recovery cases explicitly. The 3,000-row
+        # deletion sweep and 28,000-node scale fixture are outside this lane.
+        run: |
+          uv run --no-sync pytest -q \
+            tests/test_execution_usage_continuation.py \
+            tests/test_execution_rollup_prefix.py \
+            tests/test_execution_index_resources.py \
+            tests/test_execution_windows.py \
+            tests/test_execution_record_recovery.py::test_actual_collector_keeps_old_view_until_its_durable_owner_releases_it \
+            tests/test_execution_record_recovery.py::test_failed_publication_restart_and_collection_keep_the_last_committed_graph \
+            tests/test_execution_record_recovery.py::test_root_index_preserves_canonical_bytes_and_recovery_encoding \
+            tests/test_execution_records.py::test_old_roots_and_late_nested_corrections_remain_exact \
+            tests/test_execution_records.py::test_append_delete_and_pending_facts_preserve_record_order \
+            tests/test_execution_records.py::test_failed_transaction_keeps_committed_root_and_never_adopts_staged_pages \
+            tests/test_execution_records.py::test_owner_and_identity_mismatch_leave_original_readable \
+            tests/test_execution_records.py::test_lookup_index_stays_exact_on_correction_and_reinsertion_gets_new_ordinal \
+            tests/test_execution_records.py::test_ordered_window_has_byte_and_row_bounds \
+            tests/test_execution_records.py::test_ordered_page_owns_complete_body_for_rebuild_and_bounded_reads \
+            tests/test_execution_working_set.py::test_current_save_and_detached_history_read_do_not_admit_completed_rows \
+            tests/test_execution_working_set.py::test_borrowed_nested_and_cross_record_aliases_remain_live_across_saves \
+            tests/test_execution_working_set.py::test_full_mutable_read_transfers_current_aliases_to_legacy_contract \
+            tests/test_execution_working_set.py::test_failed_save_keeps_original_root_and_current_changes_for_retry \
+            tests/test_execution_working_set.py::test_stop_and_late_tool_correction_keep_completed_history_and_unknown_outcomes \
+            tests/test_execution_working_set.py::test_ordinary_model_admission_preserves_indexed_history_budget_and_replay_refusal \
+            tests/test_execution_working_set.py::test_real_runtime_send_placement_guard_keeps_execution_cold \
+            tests/test_execution_metadata_callers.py \
+            tests/test_native_activity_working_set.py \
+            tests/test_cross_workspace_coordination.py::test_queued_send_keeps_indexed_owners_and_passes_one_detached_snapshot \
+            tests/test_cross_workspace_coordination.py::test_queued_send_waits_for_idle_and_exact_retry_executes_once \
+            tests/test_cross_workspace_coordination.py::test_recipient_stop_after_cross_workspace_queue_suppresses_without_replay \
+            tests/test_cross_workspace_coordination.py::test_workspace_relocation_after_queue_suppresses_without_retargeting \
+            tests/test_cross_workspace_coordination.py::test_send_preserves_independent_assignment_configuration_permissions_and_placement
       - run: |
           npm ci --prefix .build/web-client
           npm ci --prefix tests/web

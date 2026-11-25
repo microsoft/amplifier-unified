@@ -60,6 +60,7 @@ class LocalChecks:
                 process = subprocess.Popen(args['command'], shell=True, cwd=directory / 'source',
                                            stdout=out, stderr=err, start_new_session=True)
             self.jobs[identity] = {'process': process, 'directory': directory, 'cancelled': False}
+            self.jobs[identity].update(sessionId=row['sessionId'], resourceId=row['id'])
             return self.observe(identity)
         elif action in {'job_read', 'job_cancel'}:
             identity = args['requestId']
@@ -73,8 +74,8 @@ class LocalChecks:
                     job['cancelled'] = True
             return self.observe(identity)
         elif action == 'stop':
-            assert all(job['process'].poll() is not None for job in self.jobs.values()
-                       if job['directory'] == directory)
+            job = self.owned_job(row)
+            assert job['process'].poll() is not None
             result['status'] = 'stopped'
         elif action == 'remove':
             archive = directory / 'retained.tar'
@@ -91,6 +92,35 @@ class LocalChecks:
         elif action != 'start':
             raise AssertionError('Unexpected lifecycle action: ' + action)
         return result
+
+    def owned_job(self, row):
+        identity = row['durableJob']['requestId']
+        job = self.jobs[identity]  # An absent job is never proof of termination.
+        assert job['directory'] == self.root / row['id']
+        assert job['resourceId'] == row['id'] and job['sessionId'] == row['sessionId']
+        return job
+
+    def invoke_cleanup(self, app, config, row, action, args, permit):
+        """Controlled transport, not qualified-wheel loading or permit proof."""
+        assert action == 'remove'
+        job = self.owned_job(row)
+        assert job['process'].poll() is not None
+        identity = row['durableJob']['requestId']
+        receipt = app.operations.requests.read(row['sessionId'], identity)
+        assert receipt['requestId'] == identity and receipt['sessionId'] == row['sessionId']
+        assert receipt['resourceId'] == row['id']
+        assert receipt['action'] == 'workspace.environments.execute'
+        observed = self.observe(identity)
+        assert observed['job']['terminal'] is True
+        assert receipt['result'] == observed
+        assert receipt['state'] == environments.durable_state(observed)
+        stopped = row['lastOperation']
+        assert stopped == app.operations.requests.read(row['sessionId'], stopped['requestId'])
+        assert stopped['action'] == 'workspace.environments.stop' and stopped['state'] == 'completed'
+        assert stopped['resourceId'] == row['id'] and stopped['result']['status'] == 'stopped'
+        # Domain admission and receipts remain real; only the backend transport
+        # is this fixture's archive/remove implementation.
+        return self.invoke(config, app.data_dir, row, action, args)
 
     def observe(self, identity):
         job = self.jobs[identity]
@@ -133,6 +163,7 @@ async def journey(tmp_path, monkeypatch):
     monkeypatch.setattr(environments.setup, 'read', AsyncMock(return_value={'status': 'ready', 'backends': [], 'operation': None}))
     monkeypatch.setattr(environments, 'capacity', lambda *a: {'available': True, 'counts': {'active': 0, 'stopped_retained': 0}})
     monkeypatch.setattr(environments, 'invoke', checks.invoke)
+    monkeypatch.setattr(environments, 'invoke_cleanup', checks.invoke_cleanup)
     monkeypatch.setattr(app.test_queue, 'start', lambda: None)
     app.test_queue.poll_seconds = .02
     context = tmp_path / 'shared-context.txt'
@@ -227,7 +258,7 @@ async def mount(j, source, tmp_path, monkeypatch):
             raise RuntimeError(result['error'])
         return result['result']
     worker.bridge = bridge
-    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
+    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator), execution_role='root')
     store = SessionStore(tmp_path / ('native-' + source['id']))
     async def checkpoint(*args, **kwargs):
         return store.save(source['id'], await parent.coordinator.get('context').get_messages(),
@@ -406,6 +437,7 @@ async def test_native_child_reads_actual_completed_test_receipt(journey, tmp_pat
     builder = await mount(j, j.builder, tmp_path, monkeypatch)
     completed = await check(j, builder, 'observed-check', sys.executable + " -c 'print(42)'")
     assert completed['exitCode'] == 0 and completed['text'] == '42\n'
+    assert completed['check']['status'] == 'passed'
     observations = []
     async def observe(coordinator):
         for action, extra in [('read', {}), ('result', {'requestId': 'observed-check'})]:
@@ -418,6 +450,65 @@ async def test_native_child_reads_actual_completed_test_receipt(journey, tmp_pat
         assert response.success, response.error
     assert observations[0].output['result'] == {'items': [completed['check']], 'nextOffset': None}
     assert observations[1].output['result'] == completed
+
+
+@pytest.mark.parametrize('change', [
+    'missing-job', 'wrong-request', 'wrong-resource', 'wrong-owner', 'wrong-directory',
+    'live-process', 'missing-receipt', 'nonterminal-receipt', 'wrong-receipt-owner',
+    'wrong-receipt-resource', 'unknown-receipt', 'stop-unconfirmed',
+])
+def test_local_cleanup_rejects_missing_or_mismatched_terminal_proof(tmp_path, monkeypatch, change):
+    checks = LocalChecks(tmp_path)
+    row = {'id':'resource', 'sessionId':'root', 'durableJob':{'requestId':'execute'}}
+    directory = tmp_path / row['id']
+    directory.mkdir()
+    for name in ('stdout.txt', 'stderr.txt'):
+        (directory / name).write_text('')
+    job = {'process':SimpleNamespace(poll=lambda: 0), 'directory':directory,
+           'cancelled':False, 'resourceId':row['id'], 'sessionId':row['sessionId']}
+    checks.jobs['execute'] = job
+    receipt = {'requestId':'execute', 'sessionId':'root', 'resourceId':'resource',
+               'action':'workspace.environments.execute', 'state':'completed',
+               'result':checks.observe('execute')}
+    stopped = {'requestId':'stop', 'sessionId':'root', 'resourceId':'resource',
+               'action':'workspace.environments.stop', 'state':'completed',
+               'result':{'status':'stopped'}}
+    row['lastOperation'] = stopped
+    records = {'execute':receipt, 'stop':stopped}
+    app = SimpleNamespace(data_dir=tmp_path, operations=SimpleNamespace(
+        requests=SimpleNamespace(read=lambda sid, identity: copy.deepcopy(records[identity]))))
+    if change == 'missing-job': checks.jobs.clear()
+    elif change == 'wrong-request': row['durableJob']['requestId'] = 'other'
+    elif change == 'wrong-resource': job['resourceId'] = 'other'
+    elif change == 'wrong-owner': job['sessionId'] = 'other'
+    elif change == 'wrong-directory': job['directory'] = tmp_path / 'other'
+    elif change == 'live-process': job['process'] = SimpleNamespace(poll=lambda: None)
+    elif change == 'missing-receipt': records.pop('execute')
+    elif change == 'nonterminal-receipt': receipt['result']['job']['terminal'] = False
+    elif change == 'wrong-receipt-owner': receipt['sessionId'] = 'other'
+    elif change == 'wrong-receipt-resource': receipt['resourceId'] = 'other'
+    elif change == 'unknown-receipt': receipt['state'] = 'outcome_unknown'
+    elif change == 'stop-unconfirmed': stopped['state'] = 'outcome_unknown'
+    monkeypatch.setattr(checks, 'invoke', lambda *a: pytest.fail('Unproven cleanup reached removal'))
+    with pytest.raises((AssertionError, KeyError)):
+        checks.invoke_cleanup(app, {}, row, 'remove', {}, None)
+    assert not checks.archives and not (directory / 'retained.tar').exists()
+
+
+async def test_terminal_process_without_confirmed_cleanup_stays_unknown(journey, tmp_path, monkeypatch):
+    j = journey
+    await initiate(j, tmp_path, monkeypatch)
+    builder = await mount(j, j.builder, tmp_path, monkeypatch)
+    def refuse(app, config, row, action, args, permit):
+        assert j.checks.owned_job(row)['process'].poll() == 0
+        return {'ok':False, 'effectAdmitted':False, 'status':'stopped',
+                'phase':'preparing', 'code':'cleanup_helper_not_started'}
+    monkeypatch.setattr(environments, 'invoke_cleanup', refuse)
+    result = await check(j, builder, 'cleanup-unconfirmed', sys.executable + " -c 'print(42)'")
+    assert result['exitCode'] == 0 and result['text'] == '42\n'
+    assert result['check']['status'] == 'unknown'
+    assert len(j.checks.jobs) == 1 and not j.checks.archives
+    assert not any(action == 'remove' for action, _, _ in j.checks.calls)
 
 
 async def test_native_root_cancels_real_active_check_and_observes_without_replay(journey, tmp_path, monkeypatch):

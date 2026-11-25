@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "source": {
+    "schema": 1,
+    "component": "worktrees",
+    "repository": "bkrabach/amplifier-platform-worktrees",
+    "revision": "5488944cd036a16624f69724d936e9b112baf153",
+    "subdirectory": ".",
+    "tree": "01933d627205fce0e79449a0c666bae6c42fbf14",
+    "version": "0.1.0",
+    "tag": "worktrees-v0.1.0",
+    "sourceFiles": {
+      "CODE_OF_CONDUCT.md": "9d45a586fce701502d173a7c10c71c8bd4f23e23d5a4a06e9d00eb57a9c11205",
+      "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "MANIFEST.in": "34e98013b429affe5e69fccce3540d2d6c04afc72233271f0a765bc3bb516888",
+      "PROVENANCE.json": "36ba0a4c5916fe0f168732f16de584b4a5f18bfe7e1dfbf02dd7fb9e8de4a749",
+      "README.md": "298cb501bda2714f73c4f1af54715cf0ac5238a5596d6e48b19acc3ba4a4c5a6",
+      "SECURITY.md": "b02bf4e236e9335b27298a77688c751d18ca7e6052873d0d3d29eda37d0a72fa",
+      "SUPPORT.md": "bc29be057576bc9576acb59335d95fe6dfef948c1c056e7ad5758cf97e9caa68",
+      "amplifier_worktrees/__init__.py": "f20ae179647e8e5fbdb298242127ce3715b70f20fc1beb31d56282365f5874d2",
+      "amplifier_worktrees/git.py": "1ce3209a65d8cda17c131e694a3174f00433043e981fd21fd06b74e84d83d00c",
+      "pyproject.toml": "c72d0712380174f51a25bd6072c3230462277829e4c210f9b6fecc234e0270df",
+      "tests/test_worktree_archive_library.py": "5e9d2b2664a8343727f8567efeb2a6457047aa18405a41ca10d9e449c33891bf",
+      "tests/test_worktree_concurrency.py": "f2902e1f31c6e3aacf4d245610f761f01f556eaf4ae05cb51e6c880d24a222ad",
+      "tests/test_worktree_filters.py": "a943eab5a6cc7cd2db5412ab594e5de075b9f033dd2b06d9ff88a6c82b317372",
+      "tests/test_worktree_library.py": "9e16ffbcce1b64ec2d2fb57f4f25f123c960873c805226aab8501ecbcdbcf31e",
+      "tests/worktree_fixtures.py": "d3a9ed306db27bed69550542bb831e50ee8c658bcb480ff44f18cfaa48ea8d58"
+    },
+    "artifacts": {
+      "amplifier_worktrees-0.1.0-py3-none-any.whl": {
+        "sha256": "fba1a431efb46e0bf5feb8b4b8721d4294b6979141d615a61a58dfa740815b86",
+        "bytes": 13598
+      },
+      "amplifier_worktrees-0.1.0.tar.gz": {
+        "sha256": "d307e184fe40657dc9436744a0abcf11e713fc3b1739c8f521c1f8a4da5f3b0d",
+        "bytes": 25105
+      }
+    }
+  },
+  "artifact": {
+    "url": "https://github.com/bkrabach/amplifier-platform-worktrees/releases/download/worktrees-v0.1.0/amplifier_worktrees-0.1.0-py3-none-any.whl",
+    "sha256": "fba1a431efb46e0bf5feb8b4b8721d4294b6979141d615a61a58dfa740815b86",
+    "bytes": 13598
+  },
+  "sourceReceiptSha256": "e082efeff8297b6e827a5efe8f69c7bba3483c5cd7c4cc74b97a264180dcf00b",
+  "runtimeRequirements": [
+    "filelock<5,>=4.2.1"
+  ],
+  "files": {
+    "amplifier_worktrees/__init__.py": "f20ae179647e8e5fbdb298242127ce3715b70f20fc1beb31d56282365f5874d2",
+    "amplifier_worktrees/git.py": "1ce3209a65d8cda17c131e694a3174f00433043e981fd21fd06b74e84d83d00c",
+    "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  }
+}

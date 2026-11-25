@@ -1,11 +1,12 @@
 [project]
 name = "amplifier-unified"
-version = "0.75.6"
+version = "0.128.0"
 description = "A local voice-first Amplifier workspace with a shared user and agent interface"
 readme = "README.md"
 requires-python = ">=3.13"
 # python-pam imports six but does not declare it in its distribution metadata.
 dependencies = [
+    "agent-client-protocol==1.0.0",
     "amplifier-memory @ git+https://github.com/microsoft/amplifier-bundle-memory@main",
     "amplifier-core>=2.0.2",
     "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
@@ -17,21 +18,24 @@ dependencies = [
     "six>=1.16,<2",
     "jsonschema>=4.23,<5",
     "tinycss2>=1.4,<2",
+    "tzdata; sys_platform == 'win32'",
     "pyyaml>=6.0.3,<7",
     "filelock>=4.2.1,<5",
     "qrcode>=8.2,<9",
+    "Pillow>=13,<14",
     "watchfiles>=1.1,<2",
     "mcp>=2.2,<3",
     "httpx>=0.28,<1",
+    "certifi>=2025.1.31",
     "amplifier-bundle-context-intelligence[client] @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main",
     "amplifier-bundle-ui-use @ git+https://github.com/microsoft/amplifier-bundle-ui-use@main",
 ]
 
 [project.optional-dependencies]
 tui = ["amplifier-app-tui @ git+https://github.com/microsoft/amplifier-app-tui@main"]
-native-desktop = ["amplifier-module-tool-computer-use @ git+https://github.com/microsoft/amplifier-bundle-computer-use@main#subdirectory=modules/tool-computer-use", "Pillow>=13,<14"]
+native-desktop = ["amplifier-module-tool-computer-use @ git+https://github.com/microsoft/amplifier-bundle-computer-use@main#subdirectory=modules/tool-computer-use"]
 managed-browser = ["amplifier-bundle-ui-use[browser] @ git+https://github.com/microsoft/amplifier-bundle-ui-use@main"]
-decisions-openai = ["amplifier-module-provider-openai[decisions] @ git+https://github.com/microsoft/amplifier-module-provider-openai@main", "Pillow>=13,<14"]
+decisions-openai = ["amplifier-module-provider-openai[decisions] @ git+https://github.com/microsoft/amplifier-module-provider-openai@main"]
 decisions-azure = ["amplifier-module-provider-azure-openai[decisions] @ git+https://github.com/microsoft/amplifier-module-provider-azure-openai@main"]
 decisions-jev = ["amplifier-module-provider-jev @ git+https://github.com/microsoft/amplifier-module-provider-jev@main"]
 decisions-local = ["amplifier-module-provider-local-decisions @ git+https://github.com/microsoft/amplifier-module-provider-local-decisions@main"]
@@ -51,13 +55,45 @@ allow-direct-references = true
 # Produced by the release owner; retained unchanged when rebuilding an sdist.
 artifacts = ["/amplifier_web/release-source.json"]
 
+[tool.hatch.build.hooks.custom]
+path = "scripts/scheduling_build_hook.py"
+
 [tool.hatch.build.targets.wheel]
-packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "amplifier_scheduling", "amplifier_recall", "amplifier_outputs", "amplifier_worktrees", "amplifier_publishing", "amplifier_portability"]
+packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "components/scheduling-delivery/amplifier_scheduling", "components/recall-delivery/amplifier_recall", "components/outputs-delivery/amplifier_outputs", "components/workspace-metadata-delivery/amplifier_workspace_metadata", "components/worktrees-delivery/amplifier_worktrees", "components/publishing-delivery/amplifier_publishing", "components/portability-delivery/amplifier_portability"]
+# Test/build inputs do not ship; selected component provenance is included below.
+exclude = [
+    "/amplifier_web/status_protocol/LICENSE", # Selected license ships with app provenance.
+    "/amplifier_kernels/LICENSE",
+    "/amplifier_operations/LICENSE", # Selected license ships with app provenance.
+]
 
 [tool.hatch.build.targets.sdist]
-exclude = ["/.ci/**", "/components/web-client/**"]
+exclude = [
+    "/.ci/**",
+]
 
 [tool.hatch.build.targets.wheel.force-include]
+"components/shell-sdk.source.json" = "amplifier_web/component_delivery/shell-sdk.json"
+"components/status-emitter.source.json" = "amplifier_web/component_delivery/status-emitter.json"
+"amplifier_web/status_protocol/LICENSE" = "amplifier_web/component_delivery/status-emitter-LICENSE"
+"components/outputs.source.json" = "amplifier_web/component_delivery/outputs.json"
+"components/outputs-delivery/LICENSE" = "amplifier_web/component_delivery/outputs-LICENSE"
+"components/publishing.source.json" = "amplifier_web/component_delivery/publishing.json"
+"components/publishing-delivery/LICENSE" = "amplifier_web/component_delivery/publishing-LICENSE"
+"components/kernels.source.json" = "amplifier_web/component_delivery/kernels.json"
+"amplifier_kernels/LICENSE" = "amplifier_web/component_delivery/kernels-LICENSE"
+"components/workspace-metadata.source.json" = "amplifier_web/component_delivery/workspace-metadata.json"
+"components/workspace-metadata-delivery/LICENSE" = "amplifier_web/component_delivery/workspace-metadata-LICENSE"
+"components/scheduling.source.json" = "amplifier_web/component_delivery/scheduling.json"
+"components/scheduling-delivery/LICENSE" = "amplifier_web/component_delivery/scheduling-LICENSE"
+"components/recall.source.json" = "amplifier_web/component_delivery/recall.json"
+"components/recall-delivery/LICENSE" = "amplifier_web/component_delivery/recall-LICENSE"
+"components/worktrees.source.json" = "amplifier_web/component_delivery/worktrees.json"
+"components/worktrees-delivery/LICENSE" = "amplifier_web/component_delivery/worktrees-LICENSE"
+"components/portability.source.json" = "amplifier_web/component_delivery/portability.json"
+"components/portability-delivery/LICENSE" = "amplifier_web/component_delivery/portability-LICENSE"
+"components/operations.source.json" = "amplifier_web/component_delivery/operations.json"
+"amplifier_operations/LICENSE" = "amplifier_web/component_delivery/operations-LICENSE"
 "bundle.yaml" = "amplifier_web/bundle_data/bundle.yaml"
 "behaviors" = "amplifier_web/bundle_data/behaviors"
 "context" = "amplifier_web/bundle_data/context"
@@ -69,6 +105,12 @@ exclude = ["/.ci/**", "/components/web-client/**"]
 "packages/shell-sdk/package.json" = "amplifier_web/bundle_data/packages/shell-sdk/package.json"
 "packages/shell-sdk/README.md" = "amplifier_web/bundle_data/packages/shell-sdk/README.md"
 "packages/shell-sdk/LICENSE" = "amplifier_web/bundle_data/packages/shell-sdk/LICENSE"
+"packages/shell-sdk/ORIGIN.json" = "amplifier_web/bundle_data/packages/shell-sdk/ORIGIN.json"
+"packages/shell-sdk/examples/shell-controls/index.js" = "amplifier_web/bundle_data/packages/shell-sdk/examples/shell-controls/index.js"
+"packages/shell-sdk/examples/shell-controls/manifest.json" = "amplifier_web/bundle_data/packages/shell-sdk/examples/shell-controls/manifest.json"
+"packages/shell-sdk/examples/shell-controls/README.md" = "amplifier_web/bundle_data/packages/shell-sdk/examples/shell-controls/README.md"
+"packages/shell-sdk/examples/shell-controls/package.json" = "amplifier_web/bundle_data/packages/shell-sdk/examples/shell-controls/package.json"
+"packages/shell-sdk/examples/shell-controls/build.mjs" = "amplifier_web/bundle_data/packages/shell-sdk/examples/shell-controls/build.mjs"
 "examples/shell-navigator" = "amplifier_web/bundle_data/examples/shell-navigator"
 "examples/shell-reader" = "amplifier_web/bundle_data/examples/shell-reader"
 "examples/shell-controls/index.js" = "amplifier_web/bundle_data/examples/shell-controls/index.js"
@@ -89,22 +131,49 @@ default = true
 dev = [
     "pytest>=8", "pytest-asyncio>=0.25", "pytest-aiohttp>=1.1", "hatchling>=1.27",
     # Offline native-input fixtures use the real loop/context, not a fake mount.
-    # Accepted descendant adds independent EOF stdin for job subprocesses.
-    "amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@d4b1e69e3222780ccebdfdb7c07915fdcd5d161f",
+    # Accepted main includes the bounded compaction failure vocabulary.
+    "amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@ddc44d50352c5015c7e27617de5eb389168b3f32",
+    # Real finite/resumed/persistent custody checks use the selected Foundation tool.
+    "amplifier-module-tool-delegate @ git+https://github.com/microsoft/amplifier-foundation@05082c89a171758f8d0fb9d8df630ea581e5bdb5#subdirectory=modules/tool-delegate",
     # Match context-managed's authored source; uv.lock records the exact test
     # revision without imposing a resolver-global runtime source override.
     "amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@main",
-    # Qualified upstream recovery API; provider stays on the existing locked
+    # Accepted ordinary-turn continuation source; provider stays on the existing locked
     # source shared with the optional decisions extra.
-    "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@12166f8effb5e26737bb5f9f7885cbb9bd4cdf43#subdirectory=modules/context-managed",
+    "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@b3ce1a88108ecf1ad5d057edba54a641a7aae755#subdirectory=modules/context-managed",
     "amplifier-module-provider-openai[native] @ git+https://github.com/microsoft/amplifier-module-provider-openai@main",
+    # Subscription handoff requires a confirmed response from this adapter.
+    "amplifier-module-provider-openai-chatgpt @ git+https://github.com/microsoft/amplifier-module-provider-openai-chatgpt@b6473e56a3f73a297cc139fd5414baec1722bc8c",
+    # Accepted cold-budget behavior and optional suggestion-model recommendations.
+    "amplifier-module-provider-anthropic @ git+https://github.com/microsoft/amplifier-module-provider-anthropic@1bb74ede28ce734363f93f0fe499c6dd62c03d84",
     # Same real QuickJS dispatcher used by the maintained native-check workflow.
     "amplifier-module-tool-exec @ git+https://github.com/microsoft/amplifier-module-tool-exec@f267548ccd1b38a236a46afb96252bb6dd474dcd",
     # Ordinary-root switch fixtures retain the real local capture hook offline.
     "amplifier-module-hook-context-intelligence @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@a80ce69d0e96e9a343501f238dcd867350dd9aa2#subdirectory=modules/hook-context-intelligence",
     # Installed skills checks exercise the real loader and companion-file tool.
     "amplifier-module-tool-skills @ git+https://github.com/microsoft/amplifier-bundle-skills@2f58408a879535df36da5c92d2b073f49271ade4#subdirectory=modules/tool-skills",
-    "amplifier-module-tool-filesystem @ git+https://github.com/microsoft/amplifier-module-tool-filesystem@663f26a878ae71e136f439fa73ded52b2eb24174",
+    # Published session image staging, including qualified static GIF/WebP.
+    "amplifier-module-tool-filesystem @ git+https://github.com/microsoft/amplifier-module-tool-filesystem@29ab75b32a5a7c066bb366f43d2c0353a87e814b",
+    # File-policy checks must execute the real patch engines, not skip at import.
+    "amplifier-module-tool-apply-patch @ git+https://github.com/microsoft/amplifier-bundle-filesystem@515599f0d0763a946aa96ed1d0110db723f5c386#subdirectory=modules/tool-apply-patch",
+    "amplifier-module-tool-image @ git+https://github.com/microsoft/amplifier-bundle-imagegen@8acd3773102b77378c0d46da53a901f8297a38fc#subdirectory=modules/tool-image",
+    "amplifier-module-hooks-candidate-guard @ git+https://github.com/microsoft/amplifier-bundle-converge@da7dd8878c9e7b672e86151b32d59c0cce68bcb6#subdirectory=modules/hooks-candidate-guard",
+]
+work-media = [
+    # Opt-in, offline ordinary-Work composition tests mount every declared
+    # module. Keep these out of the host's production dependency set.
+    "amplifier-module-tool-transcript @ git+https://github.com/microsoft/amplifier-bundle-context-managed@b3ce1a88108ecf1ad5d057edba54a641a7aae755#subdirectory=modules/tool-transcript",
+    "amplifier-module-tool-bash @ git+https://github.com/microsoft/amplifier-module-tool-bash@d5bb46d24dcae8e260211bf8fb5c22de3a67f406",
+    "amplifier-module-tool-web @ git+https://github.com/microsoft/amplifier-module-tool-web@2a58cf71f6f941f5b5ef28d59564f5d47af5f294",
+    "amplifier-module-tool-search @ git+https://github.com/microsoft/amplifier-module-tool-search@ccd11795f6bb47853cfd1761b126f3b40d95a517",
+    "amplifier-module-tool-computer-use @ git+https://github.com/microsoft/amplifier-bundle-computer-use@main#subdirectory=modules/tool-computer-use",
+    "amplifier-module-hook-computer-use @ git+https://github.com/microsoft/amplifier-bundle-computer-use@main#subdirectory=modules/hook-computer-use",
+    "amplifier-module-tool-context-intelligence-transcript @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-transcript",
+    "amplifier-module-tool-context-intelligence-set-filters @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/tool-context-intelligence-set-filters",
+    "amplifier-module-tool-mode @ git+https://github.com/microsoft/amplifier-bundle-modes@a29ebceb72f02f4340290346d5a4fe0cf486dfec#subdirectory=modules/tool-mode",
+    "amplifier-module-hooks-mode @ git+https://github.com/microsoft/amplifier-bundle-modes@a29ebceb72f02f4340290346d5a4fe0cf486dfec#subdirectory=modules/hooks-mode",
+    "amplifier-module-hooks-approval @ git+https://github.com/microsoft/amplifier-module-hooks-approval@c149f1e09757567d0dfc82a83bf21ac274a2061d",
+    "amplifier-module-hooks-routing @ git+https://github.com/microsoft/amplifier-bundle-routing-matrix@9d9d1cb17ac958a011c99b80096034663fd245b3#subdirectory=modules/hooks-routing",
 ]
 artifacts = ["python-docx>=1.1,<2", "python-pptx>=1,<2", "openpyxl>=3.1,<4", "reportlab>=4,<5", "pypdf>=6,<7", "Pillow>=13,<14"]
 

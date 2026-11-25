@@ -80,27 +80,38 @@ def base_installation(monkeypatch, tmp_path):
 
 
 def test_packaging_probe_rejects_broken_login_dependency(tmp_path):
-    import os
     import subprocess
     import sys
-
-    # Model the observed wheel's undeclared import in a fresh child process.
-    # A candidate with a usable server but broken PAM must not replace the host.
-    (tmp_path / 'pam.py').write_text('raise ModuleNotFoundError("missing PAM dependency")\n')
-    # Keep the app under test importable when this checkout uses dependencies
-    # from a separate environment. Otherwise an unrelated namespace package can
-    # fail before the deliberately broken login dependency is even reached.
-    source = str(Path(app_updates.__file__).resolve().parent.parent)
-    env = {**os.environ, 'PYTHONPATH': os.pathsep.join(
-        [str(tmp_path), source, os.environ.get('PYTHONPATH', '')])}
-    # This source-layout fixture models an installed prefix, so the package
-    # boundary must pass before the deliberately broken login import is tested.
-    probe = 'import sys; sys.prefix=' + repr(source) + '\n' + app_updates.PROBE
-    result = subprocess.run([sys.executable, '-c', probe],
-                            cwd=tmp_path, env=env, capture_output=True, text=True)
-    assert result.returncode != 0
     from amplifier_web.update_diagnostics import probe_record
-    assert probe_record(result.stdout)['errorType']=='ModuleNotFoundError'
+
+    # Synthetic probe control flow, not installed-wheel qualification. Reach
+    # login even when project source and the dependency interpreter are separate.
+    package = tmp_path / 'amplifier_web'
+    package.mkdir()
+    (package / '__init__.py').write_text('__version__="99.0.0"\n')
+    (package / 'server.py').write_text('def create_app(): pass\n')
+    (package / 'static').mkdir()
+    (package / 'static/index.html').write_text('')
+    ui_use = tmp_path / 'amplifier_ui_use'
+    ui_use.mkdir()
+    (ui_use / '__init__.py').write_text('')
+    (ui_use / 'browser.py').write_text('def observation_for(*args): pass\n')
+    (tmp_path / 'pam.py').write_text('raise ModuleNotFoundError("missing PAM dependency")\n')
+    runner = (
+        'import sys\n'
+        'sys.path.insert(0,sys.argv[1])\n'
+        'sys.prefix=sys.argv[1]\n'
+        'sys.argv=sys.argv[:1]\n'
+        'exec(' + repr(app_updates.PROBE) + ')\n'
+    )
+    result = subprocess.run([sys.executable, '-I', '-S', '-c', runner, str(tmp_path)],
+                            cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    record = probe_record(result.stdout)
+    assert result.returncode == 1
+    assert record is not None
+    assert record['ok'] is False and record['isolated'] is True
+    assert record['packageInEnvironment'] is True and record['frontendPresent'] is True
+    assert record['stage'] == 'login' and record['errorType'] == 'ModuleNotFoundError'
     assert 'missing PAM dependency' not in result.stdout+result.stderr
 
 
@@ -269,6 +280,125 @@ async def test_candidate_isolated_validated_and_busy_host_not_replaced(tmp_path,
     assert service.state['updates']['phase']=='app-staged'
     await service.close()
 
+@pytest.mark.parametrize('observed', ['2.0.0', '2.0.1'])
+async def test_safe_update_second_candidate_pins_and_verifies_required_host_versions(tmp_path, monkeypatch, observed):
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    manager = UpdateManager(service)
+    service.update_manager = manager
+    state = service.state['updates']
+    revision = 'a' * 40
+    state['drain'] = {'safeUpdate': True, 'phase': 'replacing', 'attemptId': 'first',
+                      'target': {'revision': revision}, 'requiredHost': {'amplifier-core': {'version': '2.0.0'}},
+                      'workers': {}, 'messages': []}
+    state['application'] = {'status': 'update', 'revision': revision, 'latest': 'v99.0.0',
+                            'safeUpdateAttempt': 'first'}
+    async def process(*args, **kwargs):
+        if 'install' in args:
+            assert Path(args[args.index('--overrides') + 1]).read_text() == 'amplifier-core==2.0.0\n'
+        synthetic_tool_install(args, kwargs)
+        return '99.0.0' if '-c' in args else ''
+    previous = app_updates.components.read_graph
+    async def graph(*args, **kwargs):
+        return await previous(*args, **kwargs) + [{'name': 'amplifier-core', 'version': observed}]
+    monkeypatch.setattr(app_updates, 'process', process)
+    monkeypatch.setattr(app_updates.components, 'read_graph', graph)
+    try:
+        if observed == '2.0.0':
+            await app_updates.stage(manager)
+            assert state['pendingApp']['safeUpdateAttempt'] == 'first'
+        else:
+            with pytest.raises(ValueError, match='requested component revision'):
+                await app_updates.stage(manager)
+            assert not state.get('pendingApp')
+    finally:
+        await service.close()
+
+
+@pytest.mark.skipif(__import__('os').name != 'posix', reason='POSIX conversation compatibility')
+@pytest.mark.parametrize('case', ['ready', 'bad-marker', 'changed-generation', 'missing-runtime', 'other-profile', 'incumbent-also-broken', 'candidate-only-broken'])
+async def test_app_stage_only_selects_a_candidate_that_can_reopen_its_retained_worker(tmp_path, monkeypatch, case):
+    from amplifier_web import app_worker_qualification as qualification
+    from amplifier_web.runtime_environment import project_path, receipt_directory
+
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    manager = UpdateManager(service)
+    service.update_manager = manager
+    generation = 'c' * 32
+    receipt = receipt_directory(tmp_path, generation)
+    receipt.mkdir(parents=True)
+    (manager.directory / 'active.json').write_text(json.dumps({'current': generation}))
+    packages = ['amplifier-module-loop-live', 'amplifier-module-context-simple'] if case != 'other-profile' else ['custom-loop']
+    (receipt / 'runtime-installed.json').write_text(json.dumps([{'name': n} for n in packages]))
+    project = project_path(tmp_path, generation)
+    interpreter = project / '.venv/bin/python'
+    interpreter.parent.mkdir(parents=True)
+    if case != 'missing-runtime':
+        interpreter.touch()
+    service.state['updates']['application'] = {'status': 'update', 'revision': 'a' * 40, 'latest': 'v99.0.0'}
+    monkeypatch.setattr(app_updates.shutil, 'which', lambda _: '/bin/tool')
+
+    async def install(*args, **kwargs):
+        synthetic_tool_install(args, kwargs)
+        if 'install' in args:
+            site = Path(kwargs['env']['UV_TOOL_DIR']) / 'amplifier-unified/lib/python3.13/site-packages'
+            (site / 'amplifier_web').mkdir()
+        return '99.0.0' if '-c' in args else ''
+
+    checks = []
+    async def run_worker(*args, env, cwd, timeout):
+        checks.append(args)
+        assert args[0] == interpreter
+        assert args[-3:] == ('--tool-registration', 'retained', '--compare-startup')
+        assert set(env) == {'HOME', 'PATH', 'TMPDIR'} and Path(cwd).is_relative_to(manager.directory)
+        if case == 'incumbent-also-broken' or (case == 'candidate-only-broken' and len(checks) == 1):
+            return json.dumps({'startupFailed': '9' * 64, 'attempt': 1})
+        if case == 'changed-generation':
+            (manager.directory / 'active.json').write_text('{}')
+        return json.dumps({'workerStarts': 2, 'resumed': case != 'bad-marker', 'toolCalls': 0,
+                           'modelCalls': 0, 'registration': 'retained', 'sharedRegistryUnchanged': True,
+                           'productionHistoryTouched': False})
+
+    monkeypatch.setattr(app_updates, 'process', install)
+    monkeypatch.setattr(qualification, 'process', run_worker)
+    try:
+        if case in {'ready','other-profile','missing-runtime','incumbent-also-broken'}:
+            await app_updates.stage(manager)
+            assert service.state['updates']['pendingApp']['latest'] == 'v99.0.0'
+            marker, = manager.directory.glob('applications/*/*/validated.json')
+            validated = json.loads(marker.read_text())
+            assert validated['retainedWorker'] == qualification.prepared(tmp_path)
+            if case in {'other-profile','missing-runtime'}:
+                assert not checks and validated['retainedWorkerResult'] is None
+            else:
+                assert validated['retainedWorkerResult']['status'] == ('ready' if case == 'ready' else 'pre-existing-startup-failure')
+                assert len(checks) == (1 if case == 'ready' else 2)
+        else:
+            with pytest.raises(ValueError, match='conversation'):
+                await app_updates.stage(manager)
+            assert not service.state['updates'].get('pendingApp')
+            assert not list(manager.directory.glob('applications/*/*/validated.json'))
+        assert not service.state['updates'].get('pendingReplacement')
+    finally:
+        await service.close()
+
+
+async def test_app_activation_rechecks_a_worker_generation_prepared_after_staging(tmp_path, monkeypatch):
+    from amplifier_web import app_worker_qualification as qualification
+    service, manager, _ = await prepared_activation(tmp_path, monkeypatch)
+    selection = {'generation': 'f' * 32, 'project': 'freshly-prepared', 'installedSha256': 'e' * 64, 'readiness': 'prepared'}
+    monkeypatch.setattr(qualification, 'prepared', lambda _: selection)
+    check = AsyncMock(side_effect=ValueError('conversation compatibility'))
+    monkeypatch.setattr(qualification, 'qualify', check)
+    try:
+        with pytest.raises(ValueError, match='conversation compatibility'):
+            await app_updates.activate(manager)
+        check.assert_awaited_once()
+        assert check.await_args.args[-1] == selection
+        assert not service.state['updates'].get('pendingReplacement')
+    finally:
+        await service.close()
+
+
 async def test_unvalidated_app_cannot_replace_installed_host(tmp_path):
     service=AppService(tmp_path,Runtime(),workspace=tmp_path)
     manager=UpdateManager(service);service.update_manager=manager
@@ -410,6 +540,11 @@ async def test_windows_activation_keeps_host_and_candidate_before_replacement(tm
             for path in tmp_path.rglob('*') if path.is_file()
             and any(part in {'applications','config'} for part in path.relative_to(tmp_path).parts)}
     target=AsyncMock(side_effect=AssertionError('No target probe, install, promotion or restart is admitted'))
+    # This Linux-runnable case exercises the unqualified Windows refusal, not
+    # native Task Scheduler identity discovery or supervised-host qualification.
+    from unittest.mock import Mock
+    owner=Mock(return_value=None)
+    monkeypatch.setattr('amplifier_web.windows_service.update_owner',owner)
     monkeypatch.setattr(app_updates,'sys',SimpleNamespace(platform='win32'))
     monkeypatch.setattr(app_updates,'installed_target',target)
     monkeypatch.setattr(app_updates,'process',target)
@@ -430,6 +565,7 @@ async def test_windows_activation_keeps_host_and_candidate_before_replacement(tm
         assert manager.diagnostics.state['latest']['phase']=='restart-capability'
         assert manager.diagnostics.state['latest']['errorType']=='RuntimeError'
         assert manager.diagnostics.state['latest']['attemptId']==pending['attemptId']
+        owner.assert_called_once_with(manager.home)
         target.assert_not_awaited()
         # Failure is a refused activation, not a host shutdown or a new-work gate.
         result=await service.dispatch('conversation.send',{'text':'Current host remains usable'})

@@ -6,6 +6,7 @@ remain available for reading/migrating pre-0.8 Unified checkpoints.
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import os
 from pathlib import Path
@@ -137,6 +138,22 @@ class SessionStore:
         return SessionHistoryStore(self.directory(session_id), events_path=events_path,
                                    session_id=session_id)
 
+    def media(self, session_id, *, policy_verifier=None, request_only_verifier=None):
+        """One session-owned original store; its caller closes the lifetime."""
+        from amplifier_foundation.session.media import MediaPolicy, SessionMediaStore
+        from amplifier_foundation.session.checkpoint import verified_checkpoint_refs
+        return SessionMediaStore(self.directory(session_id).absolute() / 'media', session_id,
+            policy=MediaPolicy(), checkpoint_verifier=verified_checkpoint_refs,
+            policy_verifier=policy_verifier, request_only_verifier=request_only_verifier)
+
+    def acknowledge_media(self, session_id, canonical, media_store):
+        """ACK the exact saved primary legacy rows; no second save or migration."""
+        from amplifier_foundation.session.checkpoint import acknowledge_legacy_checkpoint
+        receipt = acknowledge_legacy_checkpoint(self.directory(session_id), session_id=session_id,
+                                                expected_messages=canonical, windows_policy='legacy')
+        media_store.acknowledge_checkpoint(receipt)
+        return receipt
+
     def has_transcript(self, session_id):
         directory = self.directory(session_id)
         return any((directory / name).exists() for name in
@@ -198,19 +215,25 @@ class SessionStore:
                 current.update(name_auto=enabled, name_auto_revision=current.get('name_revision', 0), name_policy_revision=1)
                 store.history._save_metadata_unlocked(current)
 
-    def load(self, session_id):
+    def load(self, session_id, *, prepare_index=False):
         """Read native history first, without migrating or writing while browsing."""
         directory = self.directory(session_id)
         from ..naming import read
         if self.has_transcript(session_id):
-            value = self.history(session_id).load(include_events=False)
+            history = self.history(session_id)
+            options = {'include_events': False}
+            # Only explicit resume prepares the next checkpoint's derived index.
+            # A retained worker generation may still use an older Foundation.
+            if prepare_index and 'prepare_index' in inspect.signature(history.load).parameters:
+                options['prepare_index'] = True
+            value = history.load(**options)
             changed = {item.source for item in value.diagnostics if item.code == 'changed_during_read'}
             # A title/status writer can replace metadata during a long history
             # read. Re-read once, but never retry a changing transcript or use
             # the inconsistent first snapshot. Edit callers still validate
             # their expected transcript revision before and after this load.
             if changed and changed <= {'metadata', 'metadata_backup'}:
-                value = self.history(session_id).load(include_events=False)
+                value = self.history(session_id).load(**options)
             if any(item.code == 'changed_during_read' for item in value.diagnostics):
                 raise ValueError('The saved session changed while it was being read.')
             return value.messages, {**value.metadata, **read(directory)}

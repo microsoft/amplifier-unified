@@ -101,14 +101,29 @@ def source_identity(root):
             'envFiles': env_files}
 
 
-def create(root, destination, env):
+def verify_transferred_build(root, output):
+    """Bind detached output to the selected client and current shared inputs."""
+    from web_client_build import read, verify_artifact
+    verify_artifact(root, root / '.build/web-client',
+                    read(output / 'client-component.json'), output)
+
+
+def create(root, destination, env, *, static_directory=None):
     root = root.resolve()
-    if not (root / STATIC).resolve().is_relative_to(root):
+    output = Path(static_directory) if static_directory is not None else root / STATIC
+    if static_directory is None and not output.resolve().is_relative_to(root):
         raise ValueError('Build output escapes the checkout')
+    if static_directory is not None and output.absolute() != output.resolve():
+        raise ValueError('Transferred build path must not contain links or traversal')
     if destination.exists():
         raise ValueError('Artifact destination already exists')
     inputs = source_identity(root)
-    files = regular_tree(root / STATIC)
+    # A detached builder may transfer its complete output to an external folder.
+    # This captures bytes against the local clean source; it does not establish
+    # that the external builder used those inputs (nor qualify its output).
+    files = regular_tree(output)
+    if static_directory is not None:
+        verify_transferred_build(root, output)
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix='.frontend-build-', dir=destination.parent))
     try:
@@ -129,9 +144,11 @@ def create(root, destination, env):
         # Reject source/build changes during capture rather than mixing builds.
         if source_identity(root) != inputs or {
             name: {'sha256': digest(path.read_bytes()), 'bytes': path.stat().st_size}
-            for name, path in regular_tree(root / STATIC)
+            for name, path in regular_tree(output)
         } != assets:
             raise ValueError('Inputs or build output changed during capture')
+        if static_directory is not None:
+            verify_transferred_build(root, output)
         (staging / 'manifest.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
         staging.rename(destination)
         return manifest
@@ -370,7 +387,10 @@ def apply_locked(root, directory, recovery, manifest):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
-    sub.add_parser('create').add_argument('--destination', required=True, type=Path)
+    capture = sub.add_parser('create')
+    capture.add_argument('--destination', required=True, type=Path)
+    capture.add_argument('--static-directory', type=Path,
+                         help='Transferred complete build tree; builder provenance must be verified separately')
     sub.add_parser('verify').add_argument('--directory', required=True, type=Path)
     sub.add_parser('apply').add_argument('--directory', required=True, type=Path)
     args = parser.parse_args()
@@ -379,7 +399,8 @@ def main():
         manifest, summary = apply(Path.cwd(), args.directory)
         application = {'application': summary}
     else:
-        manifest = (create(Path.cwd(), args.destination, os.environ) if args.action == 'create'
+        manifest = (create(Path.cwd(), args.destination, os.environ,
+                           static_directory=args.static_directory) if args.action == 'create'
                     else verify(Path.cwd(), args.directory))
     print(json.dumps({'sourceAndAssetBytesMatch': True, 'qualified': False,
                       'workflowProvenanceVerified': False,

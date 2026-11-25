@@ -13,16 +13,16 @@ def write(path, value):
 
 
 def test_missing_session_scopes_share_reads_and_results_stay_detached(tmp_path, monkeypatch):
-    import amplifier_foundation.settings as foundation
+    from amplifier_web import decision_namespace
     shared = tmp_path / 'shared'
     write(shared / 'settings.yaml', {'config': {'tools': [{'module': 'tool-example', 'config': {'items': ['original']}}]}})
-    original, calls = foundation.read_settings, []
+    original, calls = decision_namespace.read_scopes, []
 
     def read(paths):
         calls.append(tuple(paths))
         return original(paths)
 
-    monkeypatch.setattr(foundation, 'read_settings', read)
+    monkeypatch.setattr(decision_namespace, 'read_scopes', read)
     cache = SettingsReadCache()
     for number in range(20):
         workspace = tmp_path / f'workspace-{number}'
@@ -83,11 +83,11 @@ def test_creation_replacement_deletion_and_malformed_settings_invalidate(tmp_pat
 
 
 def test_changed_during_read_is_not_reused(tmp_path, monkeypatch):
-    import amplifier_foundation.settings as foundation
+    from amplifier_web import decision_namespace
     shared = tmp_path / 'shared'
     path = shared / 'settings.yaml'
     write(path, {'value': 'before'})
-    original, calls = foundation.read_settings, []
+    original, calls = decision_namespace.read_scopes, []
 
     def read(paths):
         calls.append(True)
@@ -96,7 +96,7 @@ def test_changed_during_read_is_not_reused(tmp_path, monkeypatch):
             write(path, {'value': 'after'})
         return result
 
-    monkeypatch.setattr(foundation, 'read_settings', read)
+    monkeypatch.setattr(decision_namespace, 'read_scopes', read)
     cache = SettingsReadCache()
     assert read_settings(tmp_path, shared_home=shared, cache=cache) == {'value': 'before'}
     assert read_settings(tmp_path, shared_home=shared, cache=cache) == {'value': 'after'}
@@ -105,15 +105,15 @@ def test_changed_during_read_is_not_reused(tmp_path, monkeypatch):
 
 
 def test_inventory_cache_is_bounded(tmp_path, monkeypatch):
-    import amplifier_foundation.settings as foundation
+    from amplifier_web import decision_namespace
     shared = tmp_path / 'shared'
-    original, calls = foundation.read_settings, []
+    original, calls = decision_namespace.read_scopes, []
 
     def read(paths):
         calls.append(True)
         return original(paths)
 
-    monkeypatch.setattr(foundation, 'read_settings', read)
+    monkeypatch.setattr(decision_namespace, 'read_scopes', read)
     cache = SettingsReadCache(limit=2)
     for number in range(3):
         paths = settings_paths(tmp_path, shared_home=shared, session_id=f'saved-{number}')

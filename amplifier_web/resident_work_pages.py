@@ -39,18 +39,63 @@ class ResidentWorkPages:
     def _key(self, session, group):
         return self._client(), session['id'], group
 
-    def _source(self, session, start, end):
-        source = self.windows.live_view(session, include_nodes=False)
-        nodes = self.windows.resident_tree(session).get('nodes', [])
-        source['execution']['nodes'] = [self.windows.live_node(session, row) for row in nodes[start:end]
-            if row.get('liveObservation') or not row.get('canonicalHistory') and not row.get('nativeHistory')]
+    def _source(self, session, start, end, *, tree=None):
+        tree = self.windows.resident_tree(session) if tree is None else tree
+        source = self.windows.live_view(session, tree=tree, node_range=slice(start, end))
+        nodes = tree.get('nodes', [])
+        from .execution_windows import ExecutionWindow
+        self._selected_turns(session, source, indexed=nodes if isinstance(nodes, ExecutionWindow) else None)
+        return source
+
+    def _selected_turns(self, session, source, *, indexed=None):
+        from .execution_windows import selection
+        from .execution_records import read_entry, key
+        indexed = indexed if indexed is not None else selection(session)
+        if indexed is None:
+            return
+        owner = getattr(session, '_working_execution', None)
+        current_turns = {row['id']: row for row in owner.current['turns']} if owner is not None else {}
+        turns = {row['id']: row for row in source['execution']['turns']}
+        for identity in {row.get('turnId') for row in source['execution']['nodes']} - {None} - turns.keys():
+            if (owner is not None and identity not in current_turns
+                    and key('turns', {'id': identity}) in owner.admitted['turns']):
+                continue
+            row = current_turns.get(identity)
+            if row is None:
+                selected = read_entry(indexed.db, indexed.reference, 'turns', key('turns', {'id': identity}),
+                                      owner=indexed.owner, read=indexed.read)
+                row = selected['value'] if selected else None
+            if row is not None:
+                turns[identity] = row
+        source['execution']['turns'] = list(turns.values())
+
+    def admitted_source(self, session, entry, identity):
+        """Recheck an admitted indexed step's group without stale list positions."""
+        from .execution_windows import selection
+        indexed = selection(session)
+        if indexed is None or 'ordinals' not in entry:
+            return self._source(session, *entry['ids'][identity])
+        node = self.windows.admitted_node(session, entry, identity, indexed=indexed)
+        if node is None:
+            raise ValueError('This Work changed. Close and reopen its steps.')
+        nodes, seen = [node], {node['id']}
+        while nodes[-1].get('parentId') and len(nodes) < 20:
+            parent = indexed.exact(nodes[-1]['parentId'])
+            if parent is None or parent['value']['id'] in seen:
+                break
+            nodes.append(parent['value'])
+            seen.add(nodes[-1]['id'])
+        source = self.windows.live_view(session, include_nodes=False, tree=indexed.tree())
+        source['execution']['nodes'] = [self.windows.live_node(session, row) for row in reversed(nodes)]
+        self._selected_turns(session, source, indexed=indexed)
         return source
 
     def _stamp(self, session):
         from .work_windows import source_identity
         source = self.windows.live_view(session, include_nodes=False)
         # Stable resident positions and bounded grouping facts, never node bodies.
-        facts = [id(session), id(self.windows.resident_tree(session).get('nodes')),
+        nodes = self.windows.resident_tree(session).get('nodes')
+        facts = [id(session), getattr(nodes, 'identity', id(nodes)),
             source_identity(session),
             [{key: row.get(key) for key in ('id', 'createdAt', 'timestampKnown')}
              for row in source['messages']],
@@ -206,7 +251,7 @@ class ResidentWorkPages:
         self.groups.move_to_end(self._key(session, group))
         return entry
 
-    def _compact(self, session, row, anchor, entry):
+    def _compact(self, session, row, anchor, entry, *, indexed=None):
         item = compact(row, session['id'], 'nodes', SUMMARY_LIMIT)
         item.update(anchorMessageId=anchor, detailVersion=str(detail_version(row)))
         for key, value in item.items():
@@ -227,10 +272,8 @@ class ResidentWorkPages:
                         item.pop(field + suffix, None)
             item.update(recordings)
             item['detailVersion'] = str(detail_version([row, recordings]))
-        nodes = self.windows.resident_tree(session).get('nodes', [])
         def reference(identity):
-            position = entry['positions'].get(identity)
-            original = nodes[position] if type(position) is int and 0 <= position < len(nodes) else None
+            original = self.windows.admitted_node(session, entry, identity, indexed=indexed)
             if (original is not None and original.get('id') == identity and original.get('kind') == 'tool'
                     and not original.get('canonicalHistory') and not original.get('nativeHistory')):
                 return {'sessionId': session['id'], 'part': 'tool', 'group': entry['group'], 'id': identity}
@@ -241,9 +284,9 @@ class ResidentWorkPages:
             result = dict(header)
             exchange = result.get('exchange')
             if isinstance(exchange, dict) and (ref := reference(exchange.get('id'))):
-                original = nodes[entry['positions'][exchange['id']]]
+                original = self.windows.admitted_node(session, entry, exchange['id'], indexed=indexed)
                 result['exchange'] = self.open_fields.retain(session, entry, original,
-                    {**exchange, 'toolDetail': ref})
+                    {**exchange, 'toolDetail': ref}, node=original)
             if isinstance(result.get('ancestors'), list):
                 result['ancestors'] = [exchange_refs(value, depth+1) for value in result['ancestors'][:20]]
             return result
@@ -252,12 +295,14 @@ class ResidentWorkPages:
         item = exchange_refs(item)
         if 'delegate' in item:
             item['delegate'] = exchange_refs(item['delegate'])
-        return self.open_fields.retain(session, entry, row, item)
+        original = self.windows.admitted_node(session, entry, row['id'], indexed=indexed)
+        return self.open_fields.retain(session, entry, row, item, node=original)
 
     def read(self, session, group, before=None, revision=None):
         if not isinstance(group, str) or not 0 < len(group) <= 1024:
             raise ValueError('Choose a current Work group.')
-        nodes = self.windows.resident_tree(session, touch=True).get('nodes', [])
+        tree = self.windows.resident_tree(session, touch=True)
+        nodes = tree.get('nodes', [])
         stamp, fence = self._stamp(session), self.windows._fence(session['id'])
         if before is None:
             start, end = self._initial_range(session, group, stamp, fence, len(nodes))
@@ -275,7 +320,7 @@ class ResidentWorkPages:
             if (type(start) is not int or type(end) is not int
                     or not 0 <= start <= end <= len(nodes) or end - start > NODE_LIMIT):
                 raise ValueError('Invalid resident Work range.')
-        rows, anchors, segment = self._rows(self._source(session, start, end), group)
+        rows, anchors, segment = self._rows(self._source(session, start, end, tree=tree), group)
         if before is None:
             if segment is None:
                 raise ValueError('This Work is no longer available. Refresh this conversation.')
@@ -303,6 +348,19 @@ class ResidentWorkPages:
             entry['ranges'][scope] = True
             entry['ids'].update((row['id'], scope) for row in selected)
             entry['positions'].update(admitted)
+            from .execution_windows import ExecutionWindow
+            if isinstance(nodes, ExecutionWindow):
+                ordinals = entry.setdefault('ordinals', {})
+                record_ids = entry.setdefault('recordIds', {})
+                for identity, position in admitted.items():
+                    actual = nodes.exact(identity)
+                    if actual is None:
+                        parent = next((row.get('parentId') for row in selected if row['id'] == identity), None)
+                        actual = nodes.exact(parent) if parent else None
+                    if actual is None:
+                        raise ValueError('This Work changed. Close and reopen its steps.')
+                    ordinals[identity] = actual['ordinal']
+                    record_ids[identity] = actual['value']['id']
         self.groups.pop(self._key(session, group), None)
         self.groups[self._key(session, group)] = entry
         while len(self.groups) > MAX_GROUPS:
@@ -313,7 +371,9 @@ class ResidentWorkPages:
             next_start, next_end, next_within = max(0, start - NODE_LIMIT), start, None
         entry['older'] = (next_start, next_end, next_within) if begin or start else None
         cursor = self._cursor(session, group, entry)
-        return {'items': [self._compact(session, row, anchors.get(row['id']), entry) for row in selected],
+        from .execution_windows import ExecutionWindow
+        return {'items': [self._compact(session, row, anchors.get(row['id']), entry,
+                                       indexed=nodes if isinstance(nodes, ExecutionWindow) else None) for row in selected],
             'mode': 'cursor', 'offset': None, 'total': None, 'before': cursor,
             'hasEarlier': cursor is not None, 'group': group, 'revision': entry['revision'],
             'coverage': {'kind': 'resident-live', 'historyComplete': False,
@@ -333,10 +393,23 @@ class ResidentWorkPages:
         entry = self._entry(session, group, reconcile=True)
         if not set(known) <= entry['ids'].keys():
             raise ValueError('This Work window expired. Close and reopen its steps.')
-        nodes = self.windows.resident_tree(session, touch=True).get('nodes', [])
+        tree = self.windows.resident_tree(session, touch=True)
+        nodes = tree.get('nodes', [])
         tail_scope = (max(0, len(nodes) - NODE_LIMIT), len(nodes))
         scopes = set(entry['ids'][key] for key in known) | {tail_scope}
-        source = self.windows.live_view(session)
+        from .execution_windows import ExecutionWindow
+        indexed = isinstance(nodes, ExecutionWindow)
+        if indexed:
+            scopes = {tail_scope}
+            for identity in known:
+                record_id = entry.get('recordIds', {}).get(identity, identity)
+                actual = nodes.exact(record_id)
+                if actual is None or actual['ordinal'] != entry.get('ordinals', {}).get(identity):
+                    raise ValueError('This Work changed. Close and reopen its steps.')
+                position = nodes.position(record_id)
+                start = position // NODE_LIMIT * NODE_LIMIT
+                scopes.add((start, min(start + NODE_LIMIT, len(nodes))))
+        source = self.windows.live_view(session, tree=tree)
         positions = {}
         for start, end in sorted(scopes):
             if end > len(nodes):
@@ -344,8 +417,9 @@ class ResidentWorkPages:
             positions.update((i, row) for i, row in enumerate(nodes[start:end], start)
                 if row.get('liveObservation') or not row.get('canonicalHistory') and not row.get('nativeHistory'))
         source['execution']['nodes'] = [self.windows.live_node(session, positions[i]) for i in sorted(positions)]
+        self._selected_turns(session, source, indexed=nodes if indexed else None)
         rows, anchors, segment = self._rows(source, group)
-        latest, _, latest_segment = self._rows(self._source(session, *tail_scope), group)
+        latest, _, latest_segment = self._rows(self._source(session, *tail_scope, tree=tree), group)
         latest = latest[-NODE_LIMIT:]
         desired = set(known) | {row['id'] for row in latest}
         selected = [row for row in rows if row['id'] in desired]
@@ -375,19 +449,30 @@ class ResidentWorkPages:
         # moving these steps. Revalidate only the admitted ranges: the same IDs
         # must still occupy their accepted positions in this exact group. Never
         # search the historical graph to recover a moved or replaced window.
-        if any(current_positions.get(identity) != entry['positions'][identity] for identity in known):
+        if (not set(known) <= current_positions.keys() or not indexed and any(
+                current_positions.get(identity) != entry['positions'][identity] for identity in known)):
             raise ValueError('This Work changed. Close and reopen its steps.')
         ranges = dict.fromkeys(ids.values(), True)
         if len(selected) > MAX_STEPS or len(ranges) > MAX_RANGES:
             raise ValueError('This open Work window reached its page limit. Close and reopen its steps to release it.')
         entry['ids'], entry['ranges'], entry['positions'] = ids, ranges, current_positions
+        if indexed:
+            record_ids, ordinals = {}, {}
+            for row in selected:
+                record_id = row['id'] if nodes.exact(row['id']) is not None else row.get('parentId')
+                actual = nodes.exact(record_id) if record_id else None
+                if actual is None:
+                    raise ValueError('This Work changed. Close and reopen its steps.')
+                record_ids[row['id']], ordinals[row['id']] = record_id, actual['ordinal']
+            entry['recordIds'], entry['ordinals'] = record_ids, ordinals
         for key in tuple(entry.get('fields', {})):
             if key[0] not in ids:
                 del entry['fields'][key]
         entry['stamp'] = self._stamp(session)
         entry['revision'] = (latest_segment or segment or {}).get('detailRevision', entry['revision'])
         older = self._cursor(session, group, entry)
-        compacted = [self._compact(session, row, anchors.get(row['id']), entry) for row in selected]
+        compacted = [self._compact(session, row, anchors.get(row['id']), entry,
+                                   indexed=nodes if indexed else None) for row in selected]
         return {'items': [row for row in compacted if known.get(row['id']) != row['detailVersion']],
             'order': [row['id'] for row in selected], 'offset': None, 'total': None, 'before': older,
             'group': group, 'revision': entry['revision'],
@@ -396,7 +481,7 @@ class ResidentWorkPages:
     def read_text(self, session, args):
         from .browser_detail import read_text
         entry = self._field_entry(session, args)
-        return read_text(self._source(session, *entry['ids'][args['id']]), args)
+        return read_text(self.admitted_source(session, entry, args['id']), args)
 
     def _field_entry(self, session, args):
         reference = str(args.get('windowKey', ''))
@@ -408,10 +493,8 @@ class ResidentWorkPages:
 
     def recording(self, session, args):
         entry = self._field_entry(session, args)
-        position = entry['positions'][args['id']]
-        start, end = entry['ids'][args['id']]
-        nodes = self.windows.resident_tree(session).get('nodes', [])
-        row = nodes[position] if start <= position < min(end, len(nodes)) else None
+        position = entry.get('ordinals', entry['positions'])[args['id']]
+        row = self.windows.admitted_node(session, entry, args['id'])
         if (row is None or row.get('id') != args['id'] or row.get('kind') != 'llm'
                 or not (row.get('liveObservation') or not row.get('canonicalHistory') and not row.get('nativeHistory'))):
             raise ValueError('This provider recording moved. Reopen its Work steps.')

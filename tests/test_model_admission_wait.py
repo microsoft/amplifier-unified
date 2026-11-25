@@ -111,6 +111,39 @@ async def test_uncapped_assignment_runs_more_than_eight_helpers_and_provider_cal
     assert all(item.control.capacity.last_denial is None for item in observed)
 
 
+@pytest.mark.parametrize('constraint', ['maxConcurrentCalls', 'reserveTokens'])
+async def test_more_than_four_child_calls_keep_current_assignment_allowance(app, providers, constraint):
+    source = app.state['sessions'][0]
+    sessions = [source]
+    for index in range(5):
+        helper, _ = await child(app, source, f'limited-{index}')
+        sessions.append(helper)
+    policy = ({'maxConcurrentCalls': 5} if constraint == 'maxConcurrentCalls' else
+              {'maxConcurrentCalls': None, 'maxTotalTokens': 110, 'reserveTokens': 20})
+    await limits(app, source, **policy)
+    observed = [providers(session) for session in sessions]
+    running = []
+    for index, item in enumerate(observed):
+        running.append(item.start(f'limited-{index}'))
+        if index < 5:
+            await until(lambda: item.called or running[-1].done())
+    await until(lambda: sessions[-1].get('activity', {}).get('phase') == 'capacity' or running[-1].done())
+    assert all(item.called for item in observed[:5])
+    assert not observed[-1].called and not running[-1].done()
+    usage = app.assignments.usage(app.assignments.current(source))
+    assert usage['calls'] == 5 and len(app._model_admission_waiters) == 1
+    if constraint == 'reserveTokens':
+        assert sum(row['assignmentReservation']['reserveTokens'] for row in usage['receipts']) == 100
+    observed[0].release.set()
+    await running[0]
+    await until(lambda: observed[-1].called)
+    for item in observed:
+        item.release.set()
+    await asyncio.gather(*running)
+    assert not app._model_admission_waiters
+    assert app.assignments.usage(app.assignments.current(source))['calls'] == 6
+
+
 async def waiting_pair(app, providers, **policy):
     source = app.state['sessions'][0]
     target, _ = await child(app, source)
@@ -183,6 +216,34 @@ async def test_current_cumulative_policy_still_blocks_when_slot_releases(app, pr
     assert not second.called
     assert second.control.capacity.last_denial
     assert app.assignments.usage(app.assignments.current(source))['metrics']['grossTotalTokens']['value'] == 10
+
+
+async def test_nonrenewable_refusal_finishes_once_without_spin_or_renotification(app, providers, monkeypatch):
+    from amplifier_web import capacity_wait
+    source = app.state['sessions'][0]
+    app.assignments.ensure(source, 'nonrenewable-refusal')
+    await limits(app, source, maxTotalTokens=1, reserveTokens=2)
+    attempts, notifications = [], []
+    original_admit, original_notify = capacity_wait.admission, app.coordination.notify
+    async def counted(*args, **kwargs):
+        attempts.append(True)
+        return await original_admit(*args, **kwargs)
+    def notify():
+        notifications.append(True)
+        return original_notify()
+    monkeypatch.setattr(capacity_wait, 'admission', counted)
+    monkeypatch.setattr(app.coordination, 'notify', notify)
+    refused = providers(source)
+    with pytest.raises(ValueError, match='insufficient unreserved'):
+        await refused.start()
+    observed = len(notifications)
+    app.coordination.notify()  # Unrelated capacity publication cannot restart a terminal attempt.
+    await asyncio.sleep(.1)
+    assert attempts == [True] and len(notifications) == observed + 1
+    assert all(task.done() for task in refused.running) and not refused.called
+    assert not app._model_admission_waiters
+    assert refused.control.capacity.last_denial
+    assert app.assignments.usage(app.assignments.current(source))['calls'] == 0
 
 
 async def test_held_reservations_wait_but_real_spend_is_not_erased(app, providers):

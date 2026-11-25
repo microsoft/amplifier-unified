@@ -24,7 +24,7 @@ from amplifier_web.update_sequence import app_selection
 
 # Pytest must see these fixtures explicitly; importing only a helper does not
 # register fixtures from another test module.
-from test_update_partial import git, preparation  # noqa: F401
+from test_update_partial import git, preparation, local_git_inventory  # noqa: F401
 from test_update_sequence import manager  # noqa: F401
 
 
@@ -36,6 +36,10 @@ async def review(preparation, manager, monkeypatch, tmp_path):
     shared = tmp_path / 'review-shared'
     monkeypatch.setattr(host_config, 'amplifier_home', lambda: shared)
     monkeypatch.setattr(session_files, 'amplifier_home', lambda: shared)
+    # The shared home is not below the app home. On Windows the writer needs the folder that owns the path.
+    host_config.write_private(shared / 'settings.yaml', json.dumps({
+        'config': {'providers': [{'module': 'provider-anthropic',
+                                 'config': {'default_model': 'fixture-model'}}]}}), owned_root=shared)
     # Restore the actual pointer digest; only working-baseline qualification is
     # synthetic. The source-selection and owned-checkout guards stay unmocked.
     monkeypatch.setattr(update_health, 'pointer_witness', pointer_witness)
@@ -71,7 +75,7 @@ async def prior_partial(review, monkeypatch):
     # This pointer/baseline seam is NOT actual activation or qualification.
     p.pointer.write_text(json.dumps({'current': p.stage.name, 'previous': 'a' * 32}))
     monkeypatch.setattr(update_health, 'active_evidence',
-                        lambda manager: {'generation': p.stage.name, 'verifiedAt': 1})
+                        lambda manager, **kwargs: {'generation': p.stage.name, 'verifiedAt': 1})
     p.current_rows = partial.adopted_inventory(p.rows, p.prior)
     for row in p.current_rows:
         row['status'] = 'not_checked'
@@ -237,6 +241,7 @@ async def test_fresh_automatic_tier_continuation_does_not_mean_deliberate_retry(
         prior_partial, monkeypatch, tier):
     p = prior_partial
     m = p.manager
+    m.service.state['updates']['componentResults']=partial.public_results(p.prior,adopted=True)
     for row in p.current_rows:
         row['updateTier'] = tier
     calls = checked_inventory(p, monkeypatch, include_other=False)
@@ -262,14 +267,55 @@ async def test_fresh_automatic_tier_continuation_does_not_mean_deliberate_retry(
     assert m.service.state['updates']['sequence']['stage'] == 'complete'
     assert all(row['status'] == 'check_failed' for row in m.inventory
                if row['url'].endswith(('/a', '/c')))
+    assert m.service.state['updates']['currentStatus']['action']=='install'
     assert set((m.directory / 'releases').iterdir()) == before
 
-    # Freshness alone is not intent. A genuinely manual fresh check can expose
-    # the same desired revisions for a new guarded installation.
+    # Neither manual freshness nor a subsequent timer grants retry intent.
     await actual_check(tier=tier, fresh=True, automatic=False)
-    assert m.service.state['updates']['available'] == 2
-    assert all(row['status'] == 'update' for row in m.inventory
+    assert m.service.state['updates']['available'] == 0
+    assert all(row['status'] == 'check_failed' for row in m.inventory
                if row['url'].endswith(('/a', '/c')))
+    assert set((m.directory/'releases').iterdir())==before
+    # A deliberate Install can select the same receipt-derived retained rows.
+    # Stop at ordinary new-candidate validation, not actual profile mounting.
+    calls.clear()
+    async def build(*args):return {'mode':'worker','reason':'fixture','activation':'per-worker'}
+    async def validate(stage,revision):calls.append(revision);raise RuntimeError('fixture stops before mount')
+    monkeypatch.setattr(update_plan,'build',build)
+    monkeypatch.setattr(m,'validate',validate)
+    await m.install()
+    # The known A fetch still fails. The explicit action owns a fresh guarded
+    # candidate, not an assertion that the retained combination now qualifies.
+    assert not calls
+    assert len(set((m.directory/'releases').iterdir())-before)==1
+    assert m.diagnostics.state['lastFailure']['kind']=='ecosystem'
+    assert m.service.state['updates']['phase']=='error'
+
+
+@pytest.mark.parametrize('invalid',['missing','unknown','stale-selection','live-configuration'])
+async def test_retained_retry_projection_does_not_offer_unchecked_target(prior_partial,monkeypatch,invalid):
+    p=prior_partial;m=p.manager
+    m.service.state['updates']['componentResults']=partial.public_results(p.prior,adopted=True)
+    checked_inventory(p,monkeypatch,include_other=False,unknown_a=invalid=='unknown')
+    await m.check()
+    if invalid=='missing':
+        for row in m.inventory:row.pop('latest',None)
+    elif invalid=='stale-selection':
+        for row in m.inventory:row['appSelection']='stale'
+    elif invalid=='live-configuration':
+        host_config.write_private(host_config.amplifier_home()/'settings.yaml',
+            json.dumps({'sources': {'bundles': {'routing-matrix': 'git+https://example.invalid/changed@main'}},
+                        'config': {'providers': [{'module': 'provider-anthropic',
+                                                 'config': {'default_model': 'fixture-model'}}]}}),
+            owned_root=host_config.amplifier_home())
+        m.service.state['configurationRevision']=m.service.state.get('configurationRevision',0)+1
+    else:
+        # No known target remains: C's held result cannot qualify A's unknown.
+        for row in m.inventory:
+            if not row['url'].endswith('/a'):row.pop('latest',None)
+    await update_health.refresh(m);await m.publish()
+    assert m.service.state['updates']['currentStatus']['action']!='install'
+    assert m.service.state['updates']['available']==0
 
 
 async def test_new_unknown_check_failure_is_not_authorized_by_prior_retention(prior_partial, monkeypatch):
@@ -289,17 +335,19 @@ async def test_new_unknown_check_failure_is_not_authorized_by_prior_retention(pr
 
 
 async def test_unrelated_candidate_inherits_exact_prior_retention_from_full_inventory(
-        prior_partial, monkeypatch):
+        prior_partial, local_git_inventory, monkeypatch):
     p = prior_partial
     m = p.manager
     stage = next_candidate(p)
     d = other_source(p, status='update')
     m.inventory = [d]  # Only this tier was checked; A/C are absent, not current.
     reads = []
+    local, local_files = local_git_inventory
+    local_before = copy.deepcopy(local)
 
     async def inventory(*, indexed=False):
         reads.append(indexed)
-        return copy.deepcopy(p.current_rows + [d])
+        return copy.deepcopy(p.current_rows + [d, local])
 
     monkeypatch.setattr(m, 'inventory_sources', inventory)
     fetched_before = list(p.fetched)
@@ -322,6 +370,8 @@ async def test_unrelated_candidate_inherits_exact_prior_retention_from_full_inve
         assert git(stage / 'foundation/cache' / name, 'rev-parse', 'HEAD') == expected
     assert p.fetched == fetched_before
     assert p.pointer.read_bytes() == pointer_before
+    assert local == local_before
+    assert {path: path.read_bytes() for path in local_files} == local_files
     await plan.recheck()
     # Receipt persistence, not promotion: this test does not validate or mount D.
     assert partial.read(stage) == receipt

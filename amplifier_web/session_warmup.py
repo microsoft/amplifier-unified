@@ -37,8 +37,8 @@ class SessionWarmup:
         task.add_done_callback(lambda done: self.pending.pop(identity, None))
 
     def allowed(self, session):
-        from .updates import work_paused
-        return (not self.service.closed and not work_paused(self.service.state)
+        from .updates import new_work_paused
+        return (not self.service.closed and not new_work_paused(self.service.state)
                 and not session.get("configurationBusy")
                 and not session.get("configurationPending")
                 and session.get("workspaceAvailable") is not False
@@ -64,11 +64,10 @@ class SessionWarmup:
             preparing = True
 
             async def emit(kind, payload):
-                if not preparing:
-                    return await self.service.on_runtime_event(kind, payload)
-                if kind == "runtime.status" and payload.get("status") == "ready":
+                if (kind == "runtime.status" and payload.get("status") == "ready"
+                        and (preparing or "report" in payload)):
                     # Visiting a saved chat can prepare a fresh worker. Its
-                    # readiness is not a new successful turn and cannot erase
+                    # mount report can arrive after prewarm returns. It cannot erase
                     # the last turn's failure or change its settled status.
                     async with self.service.lock:
                         current = self.service._session(identity)
@@ -80,6 +79,8 @@ class SessionWarmup:
                             current["runtimeSessionId"] = payload["runtimeSessionId"]
                         self.service._publish_progress(session_ids={identity}, record_only=True)
                     return
+                if not preparing:
+                    return await self.service.on_runtime_event(kind, payload)
                 # Preparation failures are local readiness information, not a
                 # failed user turn or a repeated attention notification.
                 if kind == "runtime.error" or (kind == "runtime.status" and payload.get("status") in {"starting", "stopped"}):

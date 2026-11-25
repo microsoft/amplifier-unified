@@ -115,7 +115,7 @@ def test_expected_listener_failures_are_actionable_and_do_not_open_browser(tmp_p
     monkeypatch.setattr(cli.threading, 'Timer', lambda *a, **kw: pytest.fail('Browser scheduled before bind'))
     def fail(*args, **kwargs):
         raise OSError(code, 'private OS detail should not replace guidance')
-    monkeypatch.setattr(web, 'run_app', fail)
+    monkeypatch.setattr(socket.socket, 'bind', fail)
     with pytest.raises(SystemExit, match=hint) as failure:
         cli.main()
     assert failure.value.__suppress_context__
@@ -124,7 +124,13 @@ def test_expected_listener_failures_are_actionable_and_do_not_open_browser(tmp_p
     assert 'listening on' not in capsys.readouterr().out
 
 
-@pytest.mark.parametrize('error', [OSError(errno.EIO, 'unrelated IO'), PermissionError(errno.EACCES, 'file permissions', '/private/file')])
+@pytest.mark.parametrize('error', [
+    OSError(errno.EIO, 'unrelated IO'),
+    PermissionError(errno.EACCES, 'file permissions', '/private/file'),
+    PermissionError(errno.EACCES, 'filename-less application failure'),
+    OSError(errno.EADDRNOTAVAIL, 'not a bind failure during app startup'),
+    OSError('untyped application error'),
+])
 def test_unrelated_startup_errors_keep_their_identity(tmp_path, monkeypatch, error):
     _minimal_cli(monkeypatch, tmp_path)
     def fail(*args, **kwargs):
@@ -159,7 +165,7 @@ def test_foreground_browser_and_readiness_wait_for_successful_binding(tmp_path, 
 
 
 def test_actual_occupied_port_is_a_concise_cli_refusal_without_takeover(tmp_path):
-    # Real aiohttp socket binding through the public CLI entrypoint. Only the
+    # Real listener acquisition through the public CLI entrypoint. Only the
     # application factory is reduced, so this cannot start models or tools.
     root = Path(__file__).resolve().parents[1]
     with socket.socket() as owner:

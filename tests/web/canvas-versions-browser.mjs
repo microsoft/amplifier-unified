@@ -36,7 +36,14 @@ try{
  const commandsBeforeVersions=commands.length;
  await action('canvas.versions.revise',{id:first.id,expectedRevision:1,content:'# Revised plan\n\nKeep the second facts.'});
  await action('view.update',{patch:{draft:'Keep this unsent draft'}});
- await expect(page.getByRole('tab',{name:'Versioned plan',exact:true})).toHaveCount(1);
+ // Auto may use compact navigation. The open-document inventory still owns
+ // one entry for this artifact across revisions; do not force the Tabs layout.
+ await page.locator('#workspace-canvas .a-open-documents').click();
+ const documents=page.getByRole('dialog',{name:'Open documents',exact:true});
+ const planEntry=documents.locator('li').filter({has:page.getByRole('button',{name:'Close tab Versioned plan',exact:true})});
+ await expect(planEntry).toHaveCount(1);await expect(planEntry).toHaveAttribute('aria-current','true');
+ await documents.getByRole('button',{name:'Close open documents',exact:true}).click();
+ assert.equal((await state()).canvas.id,first.id);
  await expect(page.getByRole('heading',{name:'Revised plan',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Open original plan',exact:true}).click();
  await expect(page.getByRole('combobox',{name:'Artifact version',exact:true})).toHaveValue('1');

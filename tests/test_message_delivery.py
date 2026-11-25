@@ -118,6 +118,77 @@ def post_receipt(app, identity):
     return json.loads(app.db.execute('SELECT receipt FROM commands WHERE id=?', (identity,)).fetchone()[0])
 
 
+@pytest.mark.parametrize('field', ['workspace', 'nativeIdentity'])
+async def test_captured_source_refuses_before_input_draft_attachment_mutation(held_post, field):
+    app, runtime, _ = held_post
+    root = app._session()
+    root.update(runtimeSessionId='execution-owner', nativeIdentity='alias-not-execution')
+    await app.dispatch('attachment.add', {'sessionId': root['id'], 'name': 'private.txt', 'base64': 'aGVsbG8='})
+    app.state['view']['draft'] = 'Private continuing draft'
+    attachments = copy.deepcopy(app.clients.attachments(root))
+    before = copy.deepcopy(root)
+    source = {'workspace': root['workspace'], 'nativeIdentity': 'execution-owner'}
+    source[field] = 'contradictory-source'
+    with pytest.raises(AppError) as refused:
+        await app.dispatch('conversation.send', {'sessionId': root['id'], 'text': 'Captured input',
+            'expectedSource': source, 'attachmentIds': [attachments[0]['id']]}, command_id='source-refused')
+    assert refused.value.status == 409 and refused.value.code == 'source_changed'
+    assert root == before and runtime.sent == []
+    assert app.state['view']['draft'] == 'Private continuing draft'
+    assert app.clients.attachments(root) == attachments
+    assert app.db.execute('SELECT receipt FROM commands WHERE id=?', ('source-refused',)).fetchone() is None
+
+
+@pytest.mark.parametrize('identity_field', ['runtimeSessionId', 'nativeIdentity', 'id'])
+async def test_source_receipt_replay_precedes_changed_identity_and_fresh_admission(held_post, identity_field):
+    app, runtime, _ = held_post
+    root = app._session()
+    root.pop('runtimeSessionId', None)
+    root.pop('nativeIdentity', None)
+    if identity_field != 'id':
+        root[identity_field] = 'captured-native'
+    source = {'workspace': root['workspace'], 'nativeIdentity': root.get(identity_field)}
+    args = {'sessionId': root['id'], 'text': 'Same original payload', 'expectedSource': source}
+    runtime.expect('source-replay')
+    runtime.release['source-replay'].set()
+    receipt = await app.dispatch('conversation.send', args, command_id='source-replay')
+    assert receipt['accepted'] and len(runtime.sent) == 1
+    root['runtimeSessionId'] = 'replacement-native'
+    def must_not_readmit():
+        pytest.fail('Exact saved receipt must precede fresh source and admission checks')
+    replay = await app.dispatch('conversation.send', args, command_id='source-replay', admission_check=must_not_readmit)
+    assert replay['duplicate'] and replay['inputId'] == 'source-replay'
+    with pytest.raises(AppError, match='different contents'):
+        await app.dispatch('conversation.send', {**args, 'expectedSource': {**source, 'nativeIdentity': 'replacement-native'}},
+                           command_id='source-replay', admission_check=must_not_readmit)
+    assert len(runtime.sent) == 1 and len(root['messages']) == 1
+
+
+async def test_source_is_rechecked_after_waiting_for_existing_action_lock(held_post, monkeypatch):
+    from contextlib import asynccontextmanager
+    app, runtime, _ = held_post
+    root = app._session()
+    source = {'workspace': root['workspace'], 'nativeIdentity': root.get('runtimeSessionId') or root.get('nativeIdentity') or root['id']}
+    entered = asyncio.Event()
+    original = app.shell.action_lock
+    @asynccontextmanager
+    async def observe(*args, **kwargs):
+        entered.set()
+        async with original(*args, **kwargs):
+            yield
+    monkeypatch.setattr(app.shell, 'action_lock', observe)
+    async with app.lock:
+        task = asyncio.create_task(app.dispatch('conversation.send', {'sessionId': root['id'],
+            'text': 'Waited input', 'expectedSource': source}, command_id='source-wait'))
+        await asyncio.wait_for(entered.wait(), 5)
+        root['runtimeSessionId'] = 'changed-while-waiting'
+    with pytest.raises(AppError) as refused:
+        await asyncio.wait_for(task, 5)
+    assert refused.value.code == 'source_changed' and runtime.sent == []
+    assert root['messages'] == []
+    assert app.db.execute('SELECT receipt FROM commands WHERE id=?', ('source-wait',)).fetchone() is None
+
+
 @pytest.mark.parametrize('text', [
     '    print("indented")\n    return 1\n',
     'First line  \nSecond line  ',
@@ -201,7 +272,7 @@ async def test_send_blank_text_with_attachment_retains_existing_fallback(held_po
     assert app.clients.attachments(root) == []
 
 
-@pytest.mark.parametrize('guard', ['generation', 'configuration-revision', 'configuration-busy', 'file-access'])
+@pytest.mark.parametrize('guard', ['generation', 'configuration-revision', 'configuration-busy'])
 async def test_send_exact_text_still_obeys_pre_admission_guards(held_post, guard):
     app, runtime, _ = held_post
     root = app._session()
@@ -213,8 +284,6 @@ async def test_send_exact_text_still_obeys_pre_admission_guards(held_post, guard
         args['expectedConfigurationRevision'] = root.get('nextMessageRevision', 0) + 1
     elif guard == 'configuration-busy':
         root['configurationBusy'] = True
-    else:
-        root['fileAccessPending'] = {'status': 'pending'}
     app.state['view']['draft'] = text
     # Materialize the existing client-owned empty attachment view before taking
     # a whole-session snapshot; a rejected send may inspect it but cannot consume it.
@@ -913,6 +982,41 @@ async def test_check_is_passive_and_explains_uncertainty(recovery):
         await app.dispatch('conversation.retry', recovery_args(app), origin='agent', caller_session_id=app._session()['id'])
 
 
+async def test_unknown_delivery_check_skips_history_saves_and_its_own_command_receipt(recovery, monkeypatch):
+    app, runtime, _ = recovery
+    args = recovery_args(app)
+    before = app.db.execute('SELECT id,receipt FROM commands ORDER BY id').fetchall()
+    def forbidden(*args, **kwargs):
+        raise AssertionError('A passive unknown lookup must not refresh or save the conversation')
+    with monkeypatch.context() as isolated:
+        isolated.setattr(app.history, 'ensure_loaded', AsyncMock(side_effect=forbidden))
+        isolated.setattr(app, '_save', forbidden)
+        isolated.setattr(app, '_publish_changes', forbidden)
+        result = await app.dispatch('conversation.delivery', args, command_id='passive-check')
+    assert result['hostInstanceId'] == app.instance_id
+    assert result['result']['delivery'] == 'unknown'
+    assert app.db.execute('SELECT id,receipt FROM commands ORDER BY id').fetchall() == before
+    assert not runtime.sent and not runtime.started and not runtime.retries
+
+
+async def test_delivery_probe_copies_identity_not_unrelated_execution(recovery):
+    app, runtime, _ = recovery
+    session = app._session()
+    class NoCopy:
+        def __deepcopy__(self, memo):
+            raise AssertionError('Unrelated execution copied')
+    missing = object()
+    original = session.get('execution', missing)
+    session['execution'] = NoCopy()
+    try:
+        assert (await app._check_delivery(session['id'], 'original'))['delivery'] == 'unknown'
+    finally:
+        if original is missing:
+            session.pop('execution', None)
+        else:
+            session['execution'] = original
+
+
 async def test_check_reconciles_positive_evidence_and_original_receipt(recovery):
     app, runtime, args = recovery
     runtime.evidence = 'accepted'
@@ -1101,6 +1205,39 @@ async def test_retry_after_restart_requires_explicit_action_and_not_outbox(recov
         await restored.close()
 
 
+async def test_cold_positive_dispatch_commits_original_receipt_and_survives_restart(recovery, tmp_path, monkeypatch):
+    app, _, _ = recovery
+    sid = app._session()['id']
+    original_texts = [(m['id'], m.get('text')) for m in app._session()['messages']]
+    await app.close()
+    app._test_closed = True
+    runtime = RecoveryRuntime()
+    runtime.evidence = 'accepted'
+    restored = AppService(tmp_path, runtime, workspace=tmp_path)
+    try:
+        with monkeypatch.context() as isolated:
+            isolated.setattr(restored.history, 'ensure_loaded', AsyncMock(side_effect=AssertionError('No native history refresh')))
+            checked = await restored.dispatch('conversation.delivery', {'sessionId': sid, 'inputId': 'original'}, command_id='cold-check')
+        assert checked['result']['delivery'] == 'accepted'
+        assert [(m['id'], m.get('text')) for m in restored._session(sid)['messages']] == original_texts
+        # Read another connection before shutdown can create a final checkpoint.
+        database = restored.db.execute('PRAGMA database_list').fetchone()[2]
+        with sqlite3.connect(database) as reader:
+            receipt = json.loads(reader.execute('SELECT receipt FROM commands WHERE id=?', ('original',)).fetchone()[0])
+            assert receipt['delivery'] == 'accepted'
+            assert reader.execute('SELECT 1 FROM commands WHERE id=?', ('cold-check',)).fetchone() is None
+        assert not runtime.sent and not runtime.retries and not runtime.started
+    finally:
+        await restored.close()
+    resumed = AppService(tmp_path, RecoveryRuntime(), workspace=tmp_path)
+    try:
+        checked = await resumed.dispatch('conversation.delivery', {'sessionId': sid, 'inputId': 'original'})
+        assert checked['result']['delivery'] == 'accepted'
+        assert [(m['id'], m.get('text')) for m in resumed._session(sid)['messages']] == original_texts
+    finally:
+        await resumed.close()
+
+
 async def test_unknown_input_not_saved_is_distinct_and_cannot_resend(recovery):
     app, runtime, _ = recovery
     args = {**recovery_args(app), 'inputId': 'missing'}
@@ -1110,9 +1247,47 @@ async def test_unknown_input_not_saved_is_distinct_and_cannot_resend(recovery):
     assert not runtime.sent
 
 
-async def test_retry_never_reorders_later_messages(recovery):
+async def test_retry_after_late_delegate_observation(held_post, tmp_path):
+    from amplifier_web.native_message_projection import display_message
+
+    app, runtime, _ = held_post
+    session = app._session()
+    sid = session['id']
+    failed = await start_post(app, runtime, 'original', 'failed')
+    runtime.release['original'].set()
+    with pytest.raises(AppError) as exc:
+        await failed
+    assert exc.value.code == 'worker_startup_failed'
+    observation = display_message({
+        'role': 'user', 'content': 'Delegated work finished.',
+        'metadata': {'amplifier_input': {'version': 1, 'kind': 'service', 'id': 'report',
+                                         'source': 'amplifier-delegate'}},
+    }, 10, session)
+    session['messages'].append(observation)
+    app._publish_changes(sessions={sid})
+    await app.close()
+    app._test_closed = True
+
+    replacement = RecoveryRuntime()
+    restored = AppService(tmp_path / 'app', replacement, workspace=tmp_path)
+    try:
+        assert not replacement.sent
+        result = await restored.dispatch('conversation.retry', {'sessionId': sid, 'inputId': 'original'})
+        assert result['result'] == {'delivery': 'accepted', 'resent': True}
+        assert replacement.sent == [(sid, 'original', 'original')]
+        assert [row for row in restored._session(sid)['messages'] if row['id'] == observation['id']] == [observation]
+    finally:
+        await restored.close()
+
+
+@pytest.mark.parametrize('later', [
+    {'inputId': 'later'},
+    {},  # Native or legacy human input with no delivery metadata.
+    {'inputId': 'later', 'observation': {'source': 'amplifier-delegate', 'id': 'report'}},
+])
+async def test_retry_never_reorders_later_messages(recovery, later):
     app, runtime, _ = recovery
-    app._message(app._session(), 'user', 'Later request', 'chat', inputId='later')
+    app._message(app._session(), 'user', 'Delegated work finished.', 'chat', **later)
     with pytest.raises(AppError, match='latest'):
         await app.dispatch('conversation.retry', {**recovery_args(app), 'confirmUncertain': True})
     assert not runtime.sent
@@ -1147,14 +1322,22 @@ async def test_worker_retry_never_resubmits_accepted_input(source):
 
 
 async def test_duplicate_retry_restores_settled_turn(recovery):
+    from amplifier_web.execution import ensure_turn
     app, runtime, _ = recovery
+    # The lost-send fixture has no native admission, so ordinary Send must not
+    # invent its execution turn. This case specifically needs a settled turn
+    # whose existing outcome/owner evidence a duplicate retry must preserve.
+    ensure_turn(app._session(), 'original', 'Previously admitted request')
+    settled = app._session()['execution']['turns'][-1]
+    settled.update(phase='error', endedAt=123, runtimeOwnerId='original-owner',
+                   generationId='original-generation')
     before = copy.deepcopy(app._session()['execution']['turns'][-1])
     runtime.retry = AsyncMock(return_value={'accepted': True, 'duplicate': True})
     result = await app.dispatch('conversation.retry', {**recovery_args(app), 'confirmUncertain': True})
     assert result['result']['resent'] is False
     assert app._session()['status'] == 'error'
     after = app._session()['execution']['turns'][-1]
-    for key in ('phase', 'endedAt'):
+    for key in ('phase', 'endedAt', 'retriedAt', 'runtimeOwnerId', 'generationId'):
         assert after.get(key) == before.get(key)
     assert not runtime.sent
 
@@ -1190,19 +1373,22 @@ async def test_late_acceptance_during_check_is_never_downgraded(recovery):
 
 
 async def test_worker_retry_requires_ownership_but_check_does_not():
-    from amplifier_foundation.session import SessionBusyError
     worker = Worker()
     worker.execution = object()
     worker.runtime = SimpleNamespace(accepted={'original': object()}, submit=AsyncMock())
     worker.session = SimpleNamespace(coordinator=SimpleNamespace(get=lambda name: None))
-    worker.acquire_for_mutation = AsyncMock(side_effect=SessionBusyError({'app': 'amplifier-cli', 'pid': 123}))
+    # Lifetime ownership is fenced directly; retry must not hot-reacquire the
+    # old writer through the removed acquire_for_mutation parking path.
+    owner = {'app': 'amplifier-cli', 'pid': 123}
+    handle = worker.shared_handle = SimpleNamespace(owner=owner)
+    worker.ownership.yielding = True
     with patch('amplifier_web.runtime_worker.publish') as publish:
         await worker.command({'op': 'delivery', 'id': 'check', 'input_id': 'original'})
         assert publish.call_args.args[0]['result']['delivery'] == 'accepted'
-        worker.acquire_for_mutation.assert_not_awaited()
         await worker.command({'op': 'retry', 'id': 'retry', 'input_id': 'original', 'text': 'Request'})
         assert publish.call_args.args[0]['code'] == 'session_busy'
-    worker.acquire_for_mutation.assert_awaited_once()
+        assert publish.call_args.args[0]['owner'] == owner
+    assert worker.shared_handle is handle and worker.ownership.yielding
     worker.runtime.submit.assert_not_awaited()
 
 

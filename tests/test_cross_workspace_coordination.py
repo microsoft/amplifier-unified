@@ -194,6 +194,88 @@ async def test_queued_send_waits_for_idle_and_exact_retry_executes_once(cross_ap
     assert len([row for row in target["messages"] if row.get("inputId") == "cross-request"]) == 1
 
 
+@pytest.mark.parametrize('mode', ['queue', 'auto'])
+async def test_queued_send_keeps_indexed_owners_and_passes_one_detached_snapshot(cross_app, monkeypatch, mode):
+    from amplifier_web import execution, execution_records as records
+    from amplifier_web.cold_display import MARKER
+    from amplifier_web.execution_working_set import working
+    from amplifier_web.session_projection import stored_execution
+
+    app = cross_app
+    source, target = app.state['sessions']
+    # The scripted runtime is busy; its retained execution is already terminal.
+    # The real idle event can run finish_execution without rewriting this oracle.
+    target['status'] = 'working'
+    owners, expected = {}, {}
+    for session in (source, target):
+        tree = {'currentTurnId': 'old',
+                'turns': [{'id': 'old', 'phase': 'completed', 'anchorMessageId': None}],
+                'nodes': [{'id': f'saved-{i}', 'kind': 'tool', 'phase': 'completed', 'turnId': 'old',
+                           'output': f"{session['id']} output {i}", 'detail': {'values': [i]}}
+                          for i in range(400)], 'retiredUsageNodes': []}
+        execution.refresh_usage(tree)
+        reference = records.import_tree(app.db, (session['id'],), stored_execution(tree))
+        app.db.commit()
+        dict.pop(session, 'execution', None)
+        dict.setdefault(session, MARKER, {})['execution'] = reference
+        owners[session['id']] = working(session)
+        assert owners[session['id']] is not None
+        expected[session['id']] = records.materialize(app.db, reference)
+
+    def indexed():
+        for session in (source, target):
+            assert not dict.__contains__(session, 'execution')
+            assert getattr(session, '_working_execution', None) is owners[session['id']]
+            assert dict.get(session, MARKER)['execution']['executionProjection'] == 2
+
+    snapshots = []
+    original_input = app.runtime.collaboration_input
+
+    async def observed_input(snapshot, args, guard, emit):
+        indexed()
+        assert snapshot is not target and type(snapshot) is dict
+        assert snapshot['execution'] == expected[target['id']]
+        assert snapshot['messages'] == target['messages']
+        assert snapshot['messages'] is not target['messages']
+        for key in ('id', 'workspace', 'workingDirectory', 'executionRevision', 'location',
+                    'collaborationGeneration', 'task'):
+            assert snapshot.get(key) == target.get(key)
+        snapshots.append(copy.deepcopy(snapshot))
+        result = await original_input(snapshot, args, guard, emit)
+        indexed()  # The real guard and admission must retain both canonical owners.
+        snapshot['execution']['nodes'][0]['detail']['values'].append('detached runtime edit')
+        return result
+
+    monkeypatch.setattr(app.runtime, 'collaboration_input', observed_input)
+    indexed()
+    sent = await request(app, mode=mode)
+    assert sent['delivery'] == 'queued' and not app.runtime.inputs
+    indexed()
+    await app.collaboration.drain(target['id'])
+    # Auto may enter the supported busy request boundary; queue waits for idle.
+    assert app.collaboration.receipt('cross-request')['delivery'] == ('accepted' if mode == 'auto' else 'queued')
+    indexed()
+    assert (await request(app, mode=mode))['duplicate']
+    indexed()
+    if mode == 'queue':
+        await app.on_runtime_event('runtime.status', {'sessionId': target['id'], 'status': 'idle'})
+    accepted = await settled(app, 'cross-request', 'accepted')
+    assert accepted['admission']['accepted'] is True
+    indexed()
+    assert (await request(app, mode=mode))['duplicate']
+    await app.collaboration.drain(target['id'])
+    indexed()
+    assert len(snapshots) == 1
+    assert [(sid, identity) for sid, identity, _ in app.runtime.inputs] == [(target['id'], 'cross-request')]
+    assert 'not a new human instruction' in app.runtime.inputs[0][2]
+    peer, = [row for row in target['messages'] if row.get('inputId') == 'cross-request']
+    assert peer['peerEnvelope']['senderSessionId'] == source['id']
+    assert peer['peerEnvelope']['sourceGenerationId'] == 'source-generation'
+    assert peer['peerEnvelope']['sourceInputIds'] == ['incoming-peer']
+    for session in (source, target):
+        assert owners[session['id']].snapshot() == expected[session['id']]
+
+
 async def test_send_preserves_independent_assignment_configuration_permissions_and_placement(cross_app):
     from amplifier_web.preferences import SettingsStore
 

@@ -142,3 +142,28 @@ async def test_supplied_child_origin_uses_canonical_owner_without_root_fallback(
         else:
             with pytest.raises(AppError, match='native child execution'):
                 app.collaboration.active_binding(source, allow_descendant=True)
+
+
+@pytest.mark.parametrize('completed_at_assignment', [False, True])
+async def test_child_completed_task_boundary_uses_its_captured_assignment(app, completed_at_assignment):
+    """Fresh work can discuss finished A; finishing current B still fences its child."""
+    from amplifier_web.child_execution import current
+
+    source = app.state['sessions'][0]
+    source['status'] = 'working'
+    await started(app, source, 'fresh-generation', interruptionRevision=0)
+    source['collaborationGeneration']['inputIds'] = ['fresh-input']
+    completed = {'id': 'task-A', 'revision': 2, 'status': 'completed'}
+    app.state.setdefault('runtimeControl', {})[source['id']] = {'task.get': {'task': completed}}
+    native = source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']
+    app.runtime.workers = {source['id']: {'process': SimpleNamespace(returncode=None),
+                                         'runtimeOwnerId': 'current-process'}}
+    origin = {'rootSessionId': native, 'runtimeSessionId': 'native-child',
+              'generationId': 'fresh-generation', 'inputIds': ['fresh-input'], 'runId': 'fresh-run',
+              'taskBinding': (completed if completed_at_assignment else
+                              {'id': 'task-A', 'revision': 1, 'status': 'active'}),
+              **{key: source.get(key, 0) for key in
+                 ('interruptionRevision', 'executionRevision', 'configurationPendingRevision')}}
+    with bound(source, principal='native-child'):
+        BINDING.get().update(_childOrigin=copy.deepcopy(origin), _runtimeOwnerId='current-process')
+        assert (current(app, source) == origin) is completed_at_assignment

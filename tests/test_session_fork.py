@@ -6,6 +6,7 @@ import pytest
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.session_store import fork_session, complete_tool_exchanges
 from amplifier_web.service import AppService, AppError
+from test_runtime_controls import managed_module_source
 
 
 def transcript():
@@ -86,7 +87,9 @@ def test_fork_keeps_full_system_tool_context_and_configuration_without_job_owner
     store.save('source-session',original,{'bundle_name':'anchors'},preserve_system=True)
     source_dir=tmp_path/'sessions/source-session';source_dir.mkdir(parents=True)
     (source_dir/'effective-configuration.json').write_text(json.dumps({'session':{'orchestrator':{'module':'loop-live'}},'tools':[{'module':'tool-test'}]}))
-    (source_dir/'control-state.json').write_text(json.dumps({'goal':{'condition':'do not continue automatically'},'budget':{'maxOutputTokens':50}}))
+    (source_dir/'control-state.json').write_text(json.dumps({'goal':{'condition':'do not continue automatically'},
+        'selection': source()['selection'], 'selectionRevision': 'source-choice',
+        'budget':{'maxOutputTokens':50}}))
     (source_dir/'live-jobs').mkdir();(source_dir/'live-jobs/job-old.json').write_text('{}')
     result=fork_session(tmp_path,source(),'fork-session',turn=1)
     messages,metadata=store.load('fork-session')
@@ -98,11 +101,135 @@ def test_fork_keeps_full_system_tool_context_and_configuration_without_job_owner
     assert not (store.directory('fork-session')/'live-jobs').exists()
     controls=json.loads((tmp_path/'sessions/fork-session/control-state.json').read_text())
     assert controls['goal'] is None and controls['budget']['maxOutputTokens']==50
+    assert 'selectionRevision' in controls and controls['selectionRevision'] is None
     assert (tmp_path/'sessions/fork-session/configuration.json').stat().st_mode & 0o777==0o600
     assert store.load('source-session')[0]==original
     # Subsequent standalone checkpoints retain an explicitly forked system row.
     store.save('fork-session',messages,metadata)
     assert store.load('fork-session')[0][0]['role']=='system'
+
+
+@pytest.mark.parametrize('bundle,reset_model', [(None, False), ('work', False), ('work', True)])
+async def test_converted_fork_inherited_pin_never_inherits_transition_admission(
+        tmp_path, monkeypatch, bundle, reset_model):
+    from types import SimpleNamespace
+    from test_provider_selection_lifecycle import mounted_controls, SELECTION
+
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    src = {**source(), 'selection': SELECTION}
+    store = SessionStore.for_app(tmp_path, src['workspace'])
+    store.save(src['id'], transcript(), {}, preserve_system=True)
+    directory = tmp_path / 'sessions' / src['id']
+    directory.mkdir(parents=True)
+    control = directory / 'control-state.json'
+    control.write_text(json.dumps({
+        'selection': SELECTION, 'selectionRevision': 'source-admission',
+        'selectionBinding': 'source-account', 'selectionBindingPending': True,
+        'goal': {'condition': 'source work'}, 'budget': {'maxOutputTokens': 50}}))
+    before = control.read_bytes()
+    fork_session(tmp_path, src, 'independent-fork', bundle=bundle, reset_model=reset_model)
+    target = tmp_path / 'sessions' / 'independent-fork'
+    saved = json.loads((target / 'control-state.json').read_text())
+    assert 'selectionRevision' in saved and saved['selectionRevision'] is None
+    assert 'selectionBinding' not in saved and 'selectionBindingPending' not in saved
+    assert saved.get('selection') == (None if reset_model else SELECTION)
+    assert control.read_bytes() == before
+    assert not (target / 'context-recovery.json').exists()
+
+    controls, _, providers = mounted_controls(None)
+    controls.session.session_id = 'independent-fork'
+    caps = {
+        'web.provider_catalog': {'connectionKeys': {'terra': 'verified-current'}},
+        'web.context_transition.originals': True,
+        'web.context_transition.input': lambda: {
+            'inputId': 'fresh', 'selectionRevision': controls.selection_revision},
+    }
+    controls.coordinator.get_capability = caps.get
+    try:
+        await controls.restore()
+        assert controls.selection_revision is None
+        assert controls.selection_binding is None
+        controls.runtime.accepted = {'fresh': SimpleNamespace(kind='user')}
+        controls.runtime.generation = {
+            'id': 'generation', 'initial_input_id': 'fresh', 'input_ids': ['fresh']}
+        # Even a new delivered input cannot turn the inherited choice into intent.
+        assert controls.transition_foreground() is None
+        assert all(not provider.calls for provider in providers.values())
+        controls.runtime.generation = None
+        await controls.perform('provider.select', {
+            **SELECTION, 'expectedConnectionKey': 'verified-current'})
+        assert controls.selection_revision not in {None, 'source-admission'}
+        assert controls.selection_binding == 'verified-current'
+    finally:
+        await controls.close()
+
+
+@pytest.mark.parametrize('disposition', ['accepted', 'changed-prefix', 'unknown-install', 'changed-config'])
+async def test_full_fork_retains_only_prefix_bound_accepted_context_checkpoint(tmp_path, disposition):
+    from amplifier_web.automatic_history import display_message, revision
+    from amplifier_web.session_files import project_slug
+    from test_context_continuity import native_fixture, native_history
+    original = native_history()
+    coordinator, _, _, adapter, checkpoint, _, prepare = await native_fixture(tmp_path / 'seed', original)
+    await prepare()
+    await checkpoint()
+    accepted = adapter.path.read_bytes()
+    home, workspace = tmp_path / 'home', tmp_path / 'workspace'
+    store = SessionStore.for_app(home, workspace)
+    if disposition == 'changed-prefix':
+        original[0]['content'] += ' Changed canonical input.'
+    store.save('source-session', original, {}, preserve_system=True)
+    directory = home / 'sessions' / 'source-session'
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / 'context-checkpoint.json').write_bytes(accepted)
+    config = copy.deepcopy(coordinator.context.config)
+    if disposition == 'changed-config':
+        config['summary_max_output_tokens'] = 999
+    (directory / 'effective-configuration.json').write_text(json.dumps({
+        'session': {'context': {'module': 'context-managed', 'config': config}}}))
+    if disposition == 'unknown-install':
+        (directory / 'context-recovery.json').write_text(json.dumps({
+            'version': 1, 'current': 'prior-install',
+            'attempts': {'prior-install': {'state': 'unknown',
+                'candidateSha256': json.loads(accepted)['sha256']}}}))
+    src = {**source(), 'workspace': str(workspace), 'nativeProject': project_slug(workspace)}
+    src['nativeRevision'] = revision(src)
+    src['messages'] = [view for i, row in enumerate(original)
+                       if (view := display_message(row, i, src, include_internal=True)) is not None]
+    before = (directory / 'context-checkpoint.json').read_bytes()
+    result = fork_session(home, src, 'context-fork')
+    target = home / 'sessions' / 'context-fork'
+    if disposition == 'accepted':
+        assert (target / 'context-checkpoint.json').read_bytes() == accepted
+    else:
+        assert not (target / 'context-checkpoint.json').exists()
+    assert not (target / 'context-recovery.json').exists()
+    assert (directory / 'context-checkpoint.json').read_bytes() == before
+    assert result['selection'] == src['selection']
+    assert (store.load('context-fork')[0])[:len(original)] == original
+
+
+@pytest.mark.parametrize('filename', ['configuration.json', 'effective-configuration.json'])
+def test_fork_retains_portable_module_identity_without_rewriting_source(managed_module_source, filename):
+    c = managed_module_source
+    src = {**source(), 'workspace': str(c.home.parent)}
+    store = SessionStore.for_app(c.home, src['workspace'])
+    store.save(src['id'], transcript(), {}, preserve_system=True)
+    directory = c.home / 'sessions' / src['id']
+    directory.mkdir(parents=True)
+    plan = {'tools': [{'module': 'tool-fixture', 'source': str(c.module),
+                       'config': {'path': str(c.module)}}],
+            'agents': {'worker': {'hooks': [{'module': 'hook-fixture', 'source': str(c.module)}]}}}
+    path = directory / filename
+    path.write_text(json.dumps(plan))
+    before = path.read_bytes()
+    fork_session(c.home, src, 'portable-fork')
+    saved = json.loads((c.home / 'sessions/portable-fork/configuration.json').read_text())
+    assert saved['tools'][0]['source'] == c.portable
+    assert saved['agents']['worker']['hooks'][0]['source'] == c.portable
+    assert saved['tools'][0]['config'] == plan['tools'][0]['config']
+    assert path.read_bytes() == before
+    assert store.load(src['id'])[0] == store.load('portable-fork')[0]
 
 
 def test_interrupted_calls_get_historical_error_receipts_not_replayed():

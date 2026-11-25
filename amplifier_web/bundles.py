@@ -13,12 +13,14 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import subprocess
 import tempfile
 from urllib.parse import parse_qs, unquote, urlsplit, urlunsplit
 import uuid
 
 import yaml
 
+from .host import hook_config
 from .builtin_behaviors import DEFAULT_BEHAVIORS, app_behaviors
 
 SNAPSHOT_VERSION = "1.0.0+amplifier-unified.snapshot.1"
@@ -85,7 +87,8 @@ async def git(*args: str, cwd: Path | None = None, timeout: int = 60, _env=None)
         from .reset import repository_environment
         env = repository_environment(env)
     process = await asyncio.create_subprocess_exec("git", "-c", "protocol.file.allow=never", "-c", "protocol.ext.allow=never", *args,
-        cwd=cwd, env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        cwd=cwd, env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     try:
         output, error = await asyncio.wait_for(process.communicate(), timeout)
     except BaseException:
@@ -162,7 +165,7 @@ def catalog_metadata(config, registry, name):
     return metadata
 
 
-def sanitize_export(value, path=(), secrets=None):
+def sanitize_export(value, path=(), secrets=None, *, destination=False):
     """Keep placeholders; replace actual credentials and drop private host keys."""
     secrets = secrets if secrets is not None else []
     if isinstance(value, dict):
@@ -171,11 +174,21 @@ def sanitize_export(value, path=(), secrets=None):
             key = str(key)
             if key.startswith("_") or key in {"keys", "keys_file", "keyring", "credential_store"}:
                 continue
+            if (key == "config" and value.get("module") == hook_config.MODULE
+                    and isinstance(item, dict) and isinstance(item.get("destinations"), dict)):
+                fields = {k: v for k, v in item.items() if k != "destinations"}
+                result[key] = sanitize_export(fields, (*path, key), secrets)
+                result[key]["destinations"] = {
+                    name: sanitize_export(dest, (*path, key, "destinations", str(name)), secrets, destination=True)
+                    for name, dest in item["destinations"].items()}
+                continue
             normalized = key.lower().replace("-", "_")
             if normalized in SECRET_KEYS or normalized in {"token_file_path", "credential_file", "credentials_file"} or normalized.endswith(("_api_key", "_secret", "_password", "_token")):
                 if isinstance(item, str) and re.fullmatch(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", item):
                     result[key] = item
                     secrets.append(item[2:-1])
+                elif destination and normalized == "api_key" and hook_config.reference_name(item):
+                    result[key] = item  # An empty fallback is optional.
                 else:
                     name = "AMPLIFIER_" + re.sub(r"[^A-Za-z0-9]+", "_", "_".join((*path, key))).upper()
                     result[key] = "${" + name + "}"
@@ -606,19 +619,28 @@ class BundleManager:
             if key in MODULE_KEYS - {"context"}:
                 document[key] = portable(value, key)
         # Keep literal environment references when inspection redacts them.
-        def restore(current, raw):
+        def restore(current, raw, *, context_hook=False):
             if not isinstance(current, dict) or not isinstance(raw, dict): return
             for key, value in current.items():
-                if isinstance(value, dict): restore(value, raw.get(key))
+                if isinstance(value, dict): restore(value, raw.get(key), context_hook=context_hook)
+                elif context_hook and key == "api_key" and current.get("url") != raw.get("url"):
+                    continue
                 elif isinstance(value, str) and value in ("[REDACTED]", "<redacted>"):
                     candidate = raw.get(key)
-                    if isinstance(candidate, str) and re.fullmatch(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", candidate): current[key] = candidate
+                    if (context_hook and key == "api_key" and hook_config.reference_name(candidate)
+                            or isinstance(candidate, str) and re.fullmatch(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", candidate)):
+                        current[key] = candidate
         for section in ("providers", "tools", "hooks"):
             original = settings.get("config", {}).get(section, [])
             for row in document.get(section, []):
                 identity = row.get("id") or row.get("instance_id") or row.get("module")
-                source = next((item for item in original if (item.get("id") or item.get("instance_id") or item.get("module")) == identity), {})
-                restore(row, source)
+                matches = [item for item in original if (item.get("id") or item.get("instance_id") or item.get("module")) == identity]
+                source = matches[0] if matches else {}
+                context_hook = section == "hooks" and row.get("module") == hook_config.MODULE
+                if context_hook and (len(matches) != 1 or source.get("module") != row["module"]
+                                     or source.get("source") != row.get("source")):
+                    continue
+                restore(row, source, context_hook=context_hook)
         body = expand(resources.get("instruction", ""))
         for key, row in contexts.items():
             if key not in used:

@@ -12,6 +12,8 @@ Verified September 22, 2026 against `microsoft/amplifier-unified` main `fb1fe674
 
 `AMPLIFIER_HOME` defaults to `~/.amplifier` on the execution host/account. It is distinct from Unified's app data directory. `project_slug` resolves the path, replaces slash/backslash with a hyphen, removes colons, and ensures a leading hyphen. Spaces, periods, and underscores remain significant. This is the existing CLI algorithm, not the friendlier name-to-folder normalization used when creating a new workspace.
 
+Later change (November 2026), Windows only: for a chat folder that Unified allocated (`chats\<chat id>\files`), `project_slug` returns `chat-<first 16 hex digits of the chat id>`. A chat with history under the CLI name keeps it. Every other folder and every other platform is unchanged. Reason and limits: [history contract](../contracts/history.v1.md#what-it-is).
+
 For `/home/user/dev/example`, the normal directory is `~/.amplifier/projects/-home-user-dev-example/sessions/<session-id>/`. Do not reverse-engineer the workspace path by replacing hyphens: different real paths can produce the same slug. The native index cross-checks metadata and known canonical paths and keeps ambiguity explicit.
 
 Sources: [path and slug functions](https://github.com/microsoft/amplifier-unified/blob/fb1fe674a23e6d4957c87deabe156fa30df65a19/amplifier_web/session_files.py), [native history index](https://github.com/microsoft/amplifier-unified/blob/fb1fe674a23e6d4957c87deabe156fa30df65a19/amplifier_web/native_history.py).

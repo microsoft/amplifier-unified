@@ -16,7 +16,9 @@ class Shell:
             clients=SimpleNamespace(current=ContextVar('resource_client', default='one'),
                                     records={'one': {'kind': 'web'}}),
             state={'revision': 1, 'selectedSessionId': 'chat', 'selectedWorkspaceId': 'w', 'view': {}},
-            directory=SimpleNamespace(observation_revision={'navigation':1,'attention':1,'workspace':1,'root_navigation':1}), queue_clients={}, queue_sessions={})
+            directory=SimpleNamespace(observation_revision={'navigation':1,'attention':1,'workspace':1,'root_navigation':1},
+                read_frame=lambda project, *args, **kwargs: project(*args, **kwargs)),
+            queue_clients={}, queue_sessions={})
         self.saved = {'composition': {'instances': [{'id':'nav','package':'builtin.chats','slot':'navigation'}],
                                       'presentation': {}}, 'preview': None, 'views': {}, 'baselineView': {}}
         self.recent_limits, self.calls = {}, []
@@ -367,8 +369,104 @@ async def test_real_navigation_resources_reassemble_exact_existing_snapshot(serv
                     if key=='sidebarNavigation': actual.setdefault(key,{}).update(value)
                     else: actual[key]=value
             expected.pop('navigationResources')
+            expected['workspaces'] = [{key: value for key, value in row.items()
+                                       if key not in {'resources', 'setup'}} for row in expected['workspaces']]
             assert actual==expected
             assert 'draft' not in actual['view']
+
+
+@pytest.mark.parametrize('wanted', [[], ['recentNavigation']])
+async def test_bundled_context_omits_workspace_details_before_copy_and_encoding(
+        service, monkeypatch, wanted):
+    from amplifier_web import shell_modules
+    from test_shell_modules import settled_resources
+
+    workspace = next(row for row in service.state['workspaces'] if row['id'] == 'one')
+    workspace.update(resources=[{'id': 'owned', 'evidence': '\u03bb' * 150000}],
+                     setup={'status': 'complete', 'steps': ['recorded' * 1024]},
+                     extraContext={'label': 'Keep every other selected-workspace field'})
+    service._save_changes(sessions={'alpha', 'beta'}, globals={'workspaces'})
+    expected = deepcopy(workspace)
+    service.clients.attach('resource-workspace').update(selectedSessionId='alpha', selectedWorkspaceId='one')
+    owner = service.shell.resources
+    original_copy, encode = shell_modules.copy.deepcopy, resources.encoded
+    encoded_contexts = []
+
+    def copy_context(value, memo=None):
+        assert value is not workspace  # Catch the outer copy before copy's bound recursive helper.
+        assert value is not workspace['resources'] and value is not workspace['setup']
+        return original_copy(value, memo)
+
+    def encode_context(value):
+        if isinstance(value, dict) and 'workspaces' in value:
+            assert all('resources' not in row and 'setup' not in row for row in value['workspaces'])
+            encoded_contexts.append(value['workspaces'])
+        return encode(value)
+
+    with service.clients.bind('resource-workspace'):
+        owner.register('resource-workspace', 1, wanted, resources.scope_for(service.state))
+        with monkeypatch.context() as patch:
+            patch.setattr(shell_modules.copy, 'deepcopy', copy_context)
+            patch.setattr(resources, 'encoded', encode_context)
+            first = await settled_resources(service, 'resource-workspace')
+        projected = [{key: value for key, value in expected.items() if key not in {'resources', 'setup'}}]
+        assert encoded_contexts and all(rows == projected for rows in encoded_contexts)
+        for entry in first['instances'].values():
+            assert entry['resources']['context']['value']['workspaces'] == projected
+        assert workspace == expected
+        preserved = deepcopy(first)
+        full = service.shell.inspect('resource-workspace', snapshots=True, navigation_resources=())
+        assert all(full['snapshots'][name]['workspaces'] == [expected] for name in ('chats', 'workspaces'))
+
+        workspace['resources'][0]['evidence'] = 'Later resource evidence'
+        workspace['setup']['status'] = 'needs-inspection'
+        service._publish_changes(globals={'workspaces'})
+        details_changed = await settled_resources(service, 'resource-workspace')
+        for name, entry in details_changed['instances'].items():
+            assert entry['resources']['context'] == first['instances'][name]['resources']['context']
+        full = service.shell.inspect('resource-workspace', snapshots=True, navigation_resources=())
+        assert all(full['snapshots'][name]['workspaces'] == [workspace] for name in ('chats', 'workspaces'))
+
+        workspace['name'] = 'New workspace label'
+        service._publish_changes(globals={'workspaces'})
+        renamed = await settled_resources(service, 'resource-workspace')
+        assert all(entry['resources']['context']['value']['workspaces'][0]['name'] == 'New workspace label'
+                   for entry in renamed['instances'].values())
+        assert first == preserved
+        assert workspace['resources'][0]['evidence'] == 'Later resource evidence'
+        assert workspace['setup']['status'] == 'needs-inspection'
+
+
+async def test_custom_navigation_and_full_inspection_keep_workspace_details(service):
+    from test_shell_modules import stage, record_validation, prepare, command, settled_resources
+
+    digest = await stage(service)
+    record_validation(service, digest)
+    service.clients.attach('resource-custom-details').update(selectedSessionId='alpha', selectedWorkspaceId='one')
+    composition = deepcopy(service.shell.client('resource-custom-details')['composition'])
+    composition['instances'].append({'id': 'diagnostic-nav', 'package': digest, 'slot': 'navigation'})
+    change = await prepare(service, composition, client='resource-custom-details')
+    await command(service, 'shell.changes.apply', clientId='resource-custom-details',
+                  changeId=change, expectedRevision=0)
+    workspace = next(row for row in service.state['workspaces'] if row['id'] == 'one')
+    workspace.update(resources=[{'id': 'owned', 'status': 'active'}],
+                     setup={'status': 'complete', 'steps': ['Keep this setup receipt']})
+    expected = deepcopy(workspace)
+    with service.clients.bind('resource-custom-details'):
+        owner = service.shell.resources
+        owner.register('resource-custom-details', 1, [], resources.scope_for(service.state))
+        first = await settled_resources(service, 'resource-custom-details')
+        custom = first['instances']['diagnostic-nav']['resources']['customSnapshot']['value']
+        assert custom['workspaces'] == [expected]
+        full = service.shell.inspect('resource-custom-details', snapshots=True, navigation_resources=())
+        assert all(full['snapshots'][name]['workspaces'] == [expected]
+                   for name in ('chats', 'workspaces', 'diagnostic-nav'))
+        for name in ('chats', 'workspaces'):
+            row = first['instances'][name]['resources']['context']['value']['workspaces'][0]
+            assert row == {key: value for key, value in expected.items() if key not in {'resources', 'setup'}}
+        workspace['resources'][0]['status'] = 'observed_absent'
+        workspace['setup']['steps'].append('Later inspection')
+        assert custom['workspaces'] == [expected]  # Issued custom values stay detached.
 
 
 async def test_attention_only_saved_changes_refresh_visible_unselected_notices(service):

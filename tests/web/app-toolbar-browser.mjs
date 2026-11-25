@@ -1,6 +1,6 @@
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
-import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.mjs';
+import {openSettingsPage,settingsButton} from '../../.build/web-client/tests/browser-settings.mjs';
 // Real packaged UI and actions, isolated storage, no model or external feedback.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -36,7 +36,11 @@ try{
  await expect(toggle).toHaveAccessibleName('Open canvas');await expect(toggle).toHaveText('');await expect(toggle).toHaveAttribute('aria-pressed','false');
  const initialBox=await toggle.boundingBox();await toggle.click();await expect(canvas).toBeVisible();
  // Empty Canvas now owns the selected chat overview, not the retired launcher.
- await expect(canvas).toHaveAttribute('data-mode','overview');await expect(canvas.getByRole('tab',{name:'Chat overview',exact:true})).toBeVisible();await expect(canvas.getByRole('searchbox')).toHaveCount(0);await expect(canvas.getByRole('button',{name:/Saved artifacts/})).toHaveCount(0);await page.screenshot({path:out+'/canvas-empty.png'});
+ await expect(canvas).toHaveAttribute('data-mode','overview');
+ await expect(canvas).toHaveAttribute('data-navigation','compact');
+ const overview=canvas.getByRole('button',{name:'Chat overview',exact:true});
+ await expect(overview).toBeVisible();await expect(overview).toHaveAttribute('aria-pressed','true');
+ await expect(canvas.getByRole('searchbox')).toHaveCount(0);await expect(canvas.getByRole('button',{name:/Saved artifacts/})).toHaveCount(0);await page.screenshot({path:out+'/canvas-empty.png'});
  await expect(toggle).toHaveAccessibleName('Hide canvas');await expect(toggle).toHaveAttribute('aria-pressed','true');assert.deepEqual(await toggle.boundingBox(),initialBox);
  await page.getByRole('button',{name:'Hide canvas',exact:true}).click();await expect(page.locator('#workspace-canvas')).toBeHidden();await expect(toggle).toHaveAttribute('aria-pressed','false');assert.deepEqual(await toggle.boundingBox(),initialBox);
  await action('session.create');const session=(await state()).selectedSessionId;
@@ -49,16 +53,21 @@ try{
  await page.screenshot({path:out+'/canvas-open.png'});
  // App-level destinations live in the navigation footer; Canvas remains in
  // WorkHeader. Test the mounted owners rather than legacy toolbarMenuOpen state.
- await footer();await more.focus();await page.keyboard.press('Enter');await expect(menu).toBeVisible();await expect(menu.getByRole('button',{name:'Send feedback'})).toBeFocused();
- await page.keyboard.press('Tab');await expect(menu.getByRole('button',{name:'What the agent sees'})).toBeFocused();await page.keyboard.press('Escape');await expect(menu).toHaveCount(0);await expect(more).toBeFocused();
+ await footer();await more.focus();await page.keyboard.press('Enter');await expect(menu).toBeVisible();
+ await expect(menu.getByRole('button',{name:/^Activity(?: \d+ (?:unread items|items needing attention))?$/})).toBeFocused();
+ for(const label of ['Send feedback','Automations','What agents see']){
+  await page.keyboard.press('Tab');await expect(menu.getByRole('button',{name:label,exact:true})).toBeFocused();
+ }
+ await page.keyboard.press('Tab');await expect(settingsButton(menu)).toBeFocused();
+ await page.keyboard.press('Escape');await expect(menu).toHaveCount(0);await expect(more).toBeFocused();
  await more.click();await page.getByRole('textbox',{name:'Message Amplifier'}).click();await expect(menu).toHaveCount(0);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeFocused();
- for(const [label,panel] of [['Send feedback','feedback'],['What the agent sees','agent']]){
+ for(const [label,panel] of [['Send feedback','feedback'],['What agents see','agent']]){
   await more.click();await menu.getByRole('button',{name:label,exact:true}).click();await expect(page.getByRole('dialog')).toBeVisible();await expect(menu).toHaveCount(0);
   await expect.poll(async()=>(await state()).view.panel).toBe(panel);await page.getByRole('button',{name:'Close panel',exact:true}).click();await expect(more).toBeFocused();
  }
  await openSettingsPage(page,'appearance');await expect(page.locator('.a-settings-experience[data-settings-page="appearance"]')).toBeVisible();
- await page.getByRole('button',{name:'Close panel',exact:true}).click();await expect(page.getByRole('button',{name:/^Settings(?: \d+ unread items)?$/})).toBeFocused();
- await more.click();await expect(menu.getByRole('button',{name:/Activity|Customize appearance/})).toHaveCount(0);await page.keyboard.press('Escape');
+ await page.getByRole('button',{name:'Close panel',exact:true}).click();await expect(more).toBeFocused();await expect(menu).toHaveCount(0);
+ await more.click();await expect(menu.getByRole('button',{name:'Customize appearance',exact:true})).toHaveCount(0);await page.keyboard.press('Escape');
  await action('view.update',{patch:{layout:'work'}});await expect(toggle.locator('.lucide-panel-left')).toHaveCount(1);await action('view.update',{patch:{layout:'balanced'}});await expect(toggle.locator('.lucide-panel-right')).toHaveCount(1);
  for(const scheme of ['light','dark']){
   await action('view.update',{patch:{scheme}});

@@ -27,7 +27,7 @@ async def controlled(app, *, sid=None, name='control_probe'):
         return HookResult()
     async def mount(kind, tool, name):
         tools[name] = tool
-    c = SimpleNamespace(session_id=sid, get=lambda kind: tools if kind == 'tools' else None,
+    c = SimpleNamespace(session_id=sid, session_state={}, get=lambda kind: tools if kind == 'tools' else None,
         get_capability=caps.get, register_capability=caps.__setitem__, mount=mount,
         cancellation=SimpleNamespace(is_cancelled=False),
         hooks=SimpleNamespace(emit=emit, register=lambda *a, **kw: None),
@@ -46,7 +46,7 @@ async def controlled(app, *, sid=None, name='control_probe'):
         requests.append(copy.deepcopy(arguments))
         return await app.app_bridge(operation, arguments, sid)
     worker.bridge = host
-    await install_app_access(c, worker.app_access_bridge(c))
+    await install_app_access(c, worker.app_access_bridge(c), execution_role='root')
     return SimpleNamespace(worker=worker, controls=controls, c=c, tools=tools,
         effects=effects, events=events, requests=requests, caps=caps, host=host)
 
@@ -123,16 +123,16 @@ def mutate(f, fault):
     elif fault == 'handle': w.shared_handle = object()
     elif fault == 'activation': w.activation = object()
     elif fault == 'gate': w.activation_gate = SimpleNamespace(current_valid=True)
-    elif fault == 'parked': w.parked = True
+    elif fault == 'released-handle': w.shared_handle = None
     elif fault == 'yielding': w.ownership.yielding = True
-    elif fault == 'remounting': w.remounting = True
+    elif fault == 'released-activation': w.activation_gate.current_valid = False
     elif fault == 'generation': w.runtime.generation = {'id': 'new', 'input_ids': []}
     elif fault == 'mount': f.tools['control_probe'] = object()
 
 
 @pytest.mark.parametrize('phase', ['approval', 'host'])
 @pytest.mark.parametrize('fault', ['stop', 'stop-requested', 'cancelled', 'closed', 'controls',
-    'root', 'root-coordinator', 'runtime', 'handle', 'activation', 'gate', 'parked', 'yielding', 'remounting', 'generation', 'mount'])
+    'root', 'root-coordinator', 'runtime', 'handle', 'activation', 'gate', 'released-handle', 'yielding', 'released-activation', 'generation', 'mount'])
 async def test_current_owner_is_retained_across_approval_and_host_await(app, phase, fault):
     f = await controlled(app)
     if phase == 'approval':
@@ -217,7 +217,7 @@ async def test_child_control_uses_only_current_registered_child(app, fault, oper
     child.mount = mount
     children = SimpleNamespace(sessions={child.session_id: SimpleNamespace(coordinator=child)})
     f.caps['live.children'] = children
-    await install_app_access(child, f.worker.app_access_bridge(child))
+    await install_app_access(child, f.worker.app_access_bridge(child), execution_role='native_child')
     if fault == 'foreign': children.sessions.clear()
     async def host(operation, arguments):
         result = await f.host(operation, arguments)

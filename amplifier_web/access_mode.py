@@ -342,7 +342,7 @@ class AccessMode:
                     after = self.snapshot(row)
                     if after['revision'] != affected[row['id']]['revision']:
                         changed.add(row['id'])
-                        if after['mode'] != affected[row['id']]['mode']:
+                        if after['mode'] != affected[row['id']]['mode'] and not row.get('externalAgent'):
                             row.update(fileAccessPending=True, configurationPending=True,
                                 configurationPendingRevision=row.get('configurationPendingRevision', 0) + 1)
                         if after['mode'] == 'full':
@@ -400,11 +400,19 @@ class AccessMode:
             revision = self.snapshot(session)['revision']
             interruption = session.get('interruptionRevision', 0)
             replies = []
+            external_replies = []
+            external_before = []
             authority = self.service.configuration_authority
             for approval in session.get('approvals', []):
                 if approval.get('status') != 'pending' or approval.get('resolutionReason'):
                     continue
                 identity = approval['id']
+                if approval.get('source') == 'external':
+                    external_before.append((approval, copy.deepcopy(approval)))
+                    reply = self.service.external_conversations.approvals.allow_once(session, approval)
+                    if reply:
+                        external_replies.append(reply)
+                    continue
                 if identity.startswith('capability:'):
                     grant = authority.record(identity)
                     if grant not in authority.eligible(session):
@@ -428,7 +436,14 @@ class AccessMode:
                         continue
                     replies.append((identity, decision))
                 approval.update(approvedBy='full-access', accessRevision=revision)
-            self.service._publish_changes(sessions={sid})
+            if external_replies:
+                external_tasks = self.service.external_conversations.approvals.commit_full(
+                    session, external_replies, external_before)
+            else:
+                self.service._publish_changes(sessions={sid})
+                external_tasks = []
+        for task in external_tasks:
+            await asyncio.shield(task)
         respond = getattr(self.service.runtime, 'approval', None)
         if not callable(respond):
             return False

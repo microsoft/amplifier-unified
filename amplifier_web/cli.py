@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import contextmanager, ExitStack
 import errno
 import os
+import socket
 import sys
 from pathlib import Path
 import threading
@@ -43,6 +45,11 @@ def _parse() -> argparse.Namespace:
     subcommands = parser.add_subparsers(dest="command")
     subcommands.add_parser("serve", help="Run the authenticated web host")
     subcommands.add_parser("open", help="Open an already running owned web host")
+    acp = subcommands.add_parser("acp", help="Attach ACP stdio to an already running Unified host")
+    acp.add_argument("--server", help="Existing host HTTP(S) origin; defaults to this installation")
+    acp.add_argument("--token-file", help="Private file containing the existing host owner credential")
+    acp.add_argument("--ca-file", help="Trusted CA for the host, when not in the system trust store")
+    acp.add_argument("--bundle", help="Bundle for new conversations; defaults to the host selection")
     for name in ("run", "continue"):
         command = subcommands.add_parser(name, help="Run one task using the shared Amplifier host")
         command.add_argument("prompt", nargs="?", default="")
@@ -84,10 +91,21 @@ def _parse() -> argparse.Namespace:
     config_commands.add_parser("list")
     get = config_commands.add_parser("get"); get.add_argument("key")
     set_value = config_commands.add_parser("set"); set_value.add_argument("key"); set_value.add_argument("value")
+    set_value.add_argument("more", nargs="*", metavar="KEY VALUE", help="More settings to save in the same write")
     reset = config_commands.add_parser("reset"); reset.add_argument("key", nargs="?", default="all")
     service = subcommands.add_parser("service", help="Manage the systemd or launchd user service")
     service.add_argument("service_command", choices=["install", "uninstall", "start", "stop", "restart", "status", "logs"])
     service.add_argument("--replace", action="store_true", help="Back up and replace an existing generated unit (install only)")
+    runtime = subcommands.add_parser("runtime", help="Prepare or inspect the default installation runtime without a conversation")
+    runtime.add_argument("runtime_command", choices=["prepare", "status"])
+    runtime.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+    browsers = subcommands.add_parser("browsers", help="Manage signed-in browsers")
+    browsers.add_argument("browsers_command", choices=["sign-out", "code", "key"],
+                          help="sign-out: sign out every browser on every device; "
+                               "code: make a one-use code that signs in a browser on another device (Windows host); "
+                               "key: make a sign-in key to save, for a browser on another device (Windows host)")
+    browsers.add_argument("--origin", metavar="URL", help="code: the address that the other device opens")
+    browsers.add_argument("--remove", action="store_true", help="key: remove the saved sign-in key and make no new one")
     setup_tls = subcommands.add_parser("setup-tls", help="Create or inspect the app-owned local CA")
     setup_tls.add_argument("mode", nargs="?", choices=["status", "default", "force", "export"], default="default")
     reset = subcommands.add_parser("reset", help="Reinstall a clean app and runtime while preserving user data")
@@ -137,13 +155,13 @@ def _server_overrides(args: argparse.Namespace) -> dict:
 
 
 def _print_completion(shell: str) -> None:
-    words = "serve open tui run continue tool access doctor reset config service setup-tls completion --port --workspace --data-dir --no-open --bind --host --public-origin --tls-cert --tls-key --session-ttl --version"
+    words = "serve open tui acp run continue tool access doctor reset config service setup-tls browsers completion --port --workspace --data-dir --no-open --bind --host --public-origin --tls-cert --tls-key --session-ttl --version"
     if shell == "bash":
         print('complete -W "' + words + '" amplifier-unified')
     elif shell == "zsh":
-        print('#compdef amplifier-unified\n_arguments "1:command:(serve open tui run continue tool access doctor reset config service setup-tls)"')
+        print('#compdef amplifier-unified\n_arguments "1:command:(serve open tui acp run continue tool access doctor reset config service setup-tls browsers)"')
     else:
-        print('complete -c amplifier-unified -f -a "serve open tui run continue tool access doctor reset config service setup-tls"')
+        print('complete -c amplifier-unified -f -a "serve open tui acp run continue tool access doctor reset config service setup-tls browsers"')
 
 
 def _config(args, data_dir: Path) -> None:
@@ -159,7 +177,14 @@ def _config(args, data_dir: Path) -> None:
         else:
             print(value)
     elif args.config_command == "set":
-        save_server_config(data_dir, setting_set(config, args.key, yaml.safe_load(args.value)))
+        # Related settings (a port and the origins that name it) change in one
+        # validated write, so an interrupted command cannot leave them apart.
+        more = getattr(args, "more", None) or []
+        if len(more) % 2:
+            raise SystemExit("config set needs a value for every setting.")
+        for key, value in ((args.key, args.value), *zip(more[::2], more[1::2])):
+            config = setting_set(config, key, yaml.safe_load(value))
+        save_server_config(data_dir, config)
     else:
         if args.key == "all":
             save_server_config(data_dir, DEFAULT_SERVER)
@@ -186,6 +211,7 @@ def _doctor_details(data_dir: Path) -> None:
     from .tls import ca_bytes, ca_fingerprint, tls_ready
     print(f"Amplifier Unified {__version__}")
     print(f"Configuration: {data_dir / 'config' / 'server.yaml'}")
+    print(f"Private update command details (review before sharing): {data_dir / 'updates' / 'command-details'}")
     print("PAM:", pam_state)
     print("TLS local CA:", "configured" if ca_bytes(data_dir) else "not configured")
     print("TLS listener:", "ready" if tls_ready(data_dir, config) else "not configured or not startable")
@@ -206,35 +232,174 @@ def _setup_tls(data_dir: Path, mode: str) -> None:
     from .deployment import load_server_config
     config = load_server_config(data_dir)
     if mode == "status":
-        print("Local CA:", "configured" if ca_bytes(data_dir) else "not configured")
+        configured = bool(ca_bytes(data_dir))
+        print("Local CA:", "configured" if configured else "not configured")
         print("TLS:", config["tls"]["method"])
         print("TLS listener:", "ready" if tls_ready(data_dir, config) else "not configured or not startable")
         print("CA SHA-256 fingerprint:", ca_fingerprint(data_dir) or "not configured")
+        if browser_entry.is_windows():
+            _windows_roots(data_dir, configured)
         return
-    setup_local_ca(data_dir, config, force=mode == "force")
+    stopped = ()
+    if browser_entry.is_windows():
+        from .windows_tls import ReplacedRecord as stopped
+    try:
+        setup_local_ca(data_dir, config, force=mode == "force")
+    except stopped as stop:
+        # `force` changed nothing: the record of earlier certificates cannot take one more.
+        raise SystemExit(str(stop)) from None
     print("Created app-owned local CA and leaf certificate. Restart the service to use HTTPS.")
     print("CA SHA-256 fingerprint:", ca_fingerprint(data_dir))
+    if mode == "force" and browser_entry.is_windows():
+        from .windows_tls import keyless_identity
+        if keyless_identity(data_dir) is not None:
+            # No key can reissue this installation's certificate, so force made a new one.
+            print("This is a new certificate. Windows asks you to confirm it the next time you open "
+                  "Amplifier on this PC. Other devices must import it again (setup-tls export).")
+            # Windows can still hold the replaced root. The launcher asks Windows
+            # to delete it; this command cannot know which launcher the PC has.
+            print("If Windows also asks whether to delete an earlier certificate, select Yes. "
+                  "It asks once for each earlier certificate that it still holds. "
+                  "Amplifier no longer uses them.")
 
 
-def _serve(args, data_dir: Path) -> None:
+def _windows_roots(data_dir: Path, configured: bool) -> None:
+    """`setup-tls status` on Windows: the thumbprints that find Amplifier's certificates in Windows.
+
+    Read-only. Only a key-less identity: for another identity Amplifier added
+    nothing to Windows. Windows shows a certificate's SHA-1 thumbprint, not
+    the SHA-256 fingerprint above. What cannot be read is said, never shown
+    as "none": a person deletes a certificate in Windows by these lines.
+    """
+    from . import windows_tls, windows_trust
+    try:
+        identity = windows_tls.keyless_identity(data_dir)
+    except (OSError, ValueError) as error:
+        # No certificate at all is said above ("Local CA: not configured").
+        if configured or not isinstance(error, FileNotFoundError):
+            print("Thumbprint in Windows (SHA-1): Amplifier could not read its certificate")
+        return
+    if identity is None:
+        return
+    print("Thumbprint in Windows (SHA-1):", windows_trust.thumbprint(identity[0]))
+    try:
+        # Strict: a record that is too long to read is not "no earlier certificate".
+        earlier = windows_trust.replaced(data_dir, identity[0], strict=True)
+    except (OSError, ValueError, RuntimeError):
+        print("Earlier certificates that Windows still holds: Amplifier could not read them")
+        return
+    print("Earlier certificates that Windows still holds:", len(earlier))
+    for der in earlier:
+        print("  " + windows_trust.thumbprint(der))
+
+
+def _serve(args, data_dir: Path, *, task_runner=None) -> None:
     from .reset import repair_lock
+    if task_runner is not None:
+        # The host that the Windows start-at-sign-in task started. It has started
+        # nothing yet and does not hold its own lock yet: the one moment for a
+        # step that needs the data folder to itself. It raises no error.
+        from .source_store_repair import at_host_start
+        at_host_start(data_dir)
     with repair_lock(data_dir, shared=True):
-        _serve_unlocked(args, data_dir)
+        if task_runner is None:
+            _serve_unlocked(args, data_dir)
+        else:
+            _serve_unlocked(args, data_dir, task_runner=task_runner)
 
 
-def _serve_unlocked(args, data_dir: Path) -> None:
-    from aiohttp import web
+@contextmanager
+def _listener_sockets(binds, port):
+    """Reserve real listeners before application startup, without a rebind gap.
+
+    Each configured name must succeed. Like asyncio's per-name resolution, an
+    unavailable address family may yield to another result of that same name.
+    Keep raw bind errors: asyncio discards EADDRNOTAVAIL and loses its errno.
+    """
+    with ExitStack() as owned:
+        sockets = []
+        try:
+            for host in binds:
+                infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM,
+                                           flags=socket.AI_PASSIVE)
+                if not infos:
+                    raise socket.gaierror(socket.EAI_NONAME, "No listener addresses")
+                available = []
+                unavailable = None
+                for family, kind, protocol, _, address in dict.fromkeys(infos):
+                    try:
+                        sock = socket.socket(family, kind, protocol)
+                    except OSError as exc:
+                        if exc.errno not in {errno.EAFNOSUPPORT, errno.EPROTONOSUPPORT}:
+                            raise
+                        unavailable = exc
+                        continue
+                    owned.callback(sock.close)
+                    if os.name == "posix" and sys.platform != "cygwin":
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, True)
+                    if family == socket.AF_INET6 and hasattr(socket, "IPPROTO_IPV6"):
+                        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, True)
+                    try:
+                        sock.bind(address)
+                    except OSError as exc:
+                        if exc.errno != errno.EADDRNOTAVAIL:
+                            raise
+                        sock.close()
+                        unavailable = exc
+                        continue
+                    # Strong reservation, including overlapping wildcard binds.
+                    # TCP may queue here; authenticated HTTP health is not ready.
+                    sock.listen(128)
+                    sock.setblocking(False)
+                    available.append(sock)
+                if not available:
+                    assert unavailable is not None
+                    raise unavailable
+                sockets.extend(available)
+        except socket.gaierror:
+            # EAI codes can collide numerically with ordinary errno values.
+            raise SystemExit(
+                f"Could not resolve configured bind address {host}, port {port}.\n"
+                "Check the bind hostname and this computer's name resolution. "
+                "No running process was stopped or replaced."
+            ) from None
+        except OSError as exc:
+            guidance = {
+                errno.EADDRINUSE: 'The address or port is already in use. Check the existing service with amplifier-unified service status, or choose another port with --port.',
+                errno.EADDRNOTAVAIL: 'The configured bind address is not available on this computer. Check its current network addresses and your bind setting.',
+                errno.EACCES: 'Permission was denied. Check permission to use the configured address and port; choose an allowed port with --port if needed.',
+                errno.EAFNOSUPPORT: 'The configured address family is not supported on this computer. Check its network support and your bind setting.',
+                errno.EPROTONOSUPPORT: 'The configured address family is not supported on this computer. Check its network support and your bind setting.',
+            }.get(exc.errno)
+            if guidance is None:
+                raise
+            raise SystemExit(
+                f"Could not start Amplifier on {host}, port {port}.\n"
+                f"{guidance}\nNo running process was stopped or replaced."
+            ) from None
+        # Do not classify exceptions from application construction or serving as
+        # bind failures. The same owned sockets close on every exit, even when
+        # aiohttp never attaches them or only attaches a prefix.
+        yield sockets
+
+
+def _serve_unlocked(args, data_dir: Path, *, task_runner=None) -> None:
     from .deployment import load_server_config
-    overrides = _server_overrides(args)
-    config = load_server_config(data_dir, overrides=overrides)
+    from .tls import ssl_context
+    config = load_server_config(data_dir, overrides=_server_overrides(args))
     os.environ["AMPLIFIER_WEB_HOME"] = str(data_dir)
+    secure = ssl_context(data_dir, config)
+    with _listener_sockets(config["bind"], config["port"]) as sockets:
+        _serve_listeners(args, data_dir, config, secure, sockets, task_runner=task_runner)
+
+
+def _serve_listeners(args, data_dir, config, secure, sockets, *, task_runner=None):
+    from aiohttp import web
     from .settings_migration import migrate_settings
     migrate_settings(data_dir, [args.workspace])
     from .host.config import load_config
     load_config(args.workspace)
     from .server import create_app
-    from .tls import ssl_context
-    secure = ssl_context(data_dir, config)
     scheme = "https" if secure else "http"
     browser_host = {'0.0.0.0': '127.0.0.1', '::': '::1'}.get(config['bind'][0], config['bind'][0])
     if ':' in browser_host:
@@ -242,13 +407,13 @@ def _serve_unlocked(args, data_dir: Path) -> None:
     url = (config["public_origins"][0] if config["public_origins"] else
            f"{scheme}://{browser_host}:{config['port']}")
     timer = None
-    listener_ready = False
 
     def listening(_message):
-        # aiohttp calls this only after every configured socket has bound.
-        # Application startup signals run earlier and cannot establish this.
-        nonlocal timer, listener_ready
-        listener_ready = True
+        # aiohttp calls this only after every held socket has attached.
+        # TCP reservation and application startup alone cannot establish this.
+        nonlocal timer
+        if task_runner is not None:
+            task_runner.phase("listening")
         print(f"Amplifier Unified · listening on {', '.join(config['bind'])}, port {config['port']} ({scheme})\n"
               f"Workspace: {args.workspace}\nState: {data_dir}")
         if config['public_origins']:
@@ -265,21 +430,19 @@ def _serve_unlocked(args, data_dir: Path) -> None:
     from .mcp_oauth import SafeAccessLogger
     from amplifier_publishing import PublishingError
     try:
-        web.run_app(create_app(data_dir, workspace=args.workspace, server_config=config),
-                    host=config["bind"], port=config["port"], ssl_context=secure, print=listening, access_log_class=SafeAccessLogger, access_log_format='%a %t "%r" %s %b')
-    except OSError as exc:
-        guidance = {
-            errno.EADDRINUSE: 'The address or port is already in use. Check the existing service with amplifier-unified service status, or choose another port with --port.',
-            errno.EADDRNOTAVAIL: 'The configured bind address is not available on this computer. Check its current network addresses and your bind setting.',
-            errno.EACCES: 'Permission was denied. Check permission to use the configured address and port; choose an allowed port with --port if needed.',
-        }.get(exc.errno)
-        # A filesystem error during application startup is not a bind failure.
-        if listener_ready or guidance is None or exc.filename is not None:
-            raise
-        raise SystemExit(
-            f"Could not start Amplifier on {', '.join(config['bind'])}, port {config['port']}.\n"
-            f"{guidance}\nNo running process was stopped or replaced."
-        ) from None
+        if task_runner is None:
+            app = create_app(data_dir, workspace=args.workspace, server_config=config)
+        else:
+            async def managed_app():
+                app = await create_app(data_dir, workspace=args.workspace, server_config=config)
+                task_runner.attach(app)
+                # The definition of the Windows task that started this host. The
+                # host compared it with the Task Scheduler's before it served.
+                app["owner_task"] = task_runner.spec
+                return app
+            app = managed_app()
+        web.run_app(app,
+                    sock=sockets, ssl_context=secure, print=listening, access_log_class=SafeAccessLogger, access_log_format='%a %t "%r" %s %b')
     except PublishingError as exc:
         # The same library error can also mean unsupported OS locking. Only an
         # actual held-lock conflict establishes that another process owns it.
@@ -297,12 +460,24 @@ def _serve_unlocked(args, data_dir: Path) -> None:
             timer.cancel()
 
 
-def _open_browser(args, data_dir, config):
+def _say_waiting():
+    try:
+        print("Amplifier is not ready yet. Waiting up to a minute for it.", file=sys.stderr, flush=True)
+    except OSError:
+        pass  # Nobody reads this output any more. The wait itself goes on.
+
+
+def _open_again():
+    """The next step after a failed `open`. On Windows none: the command does not name itself."""
+    return "" if browser_entry.is_windows() else " " + browser_entry.RUN_OPEN
+
+
+def _open_browser(args, data_dir, config, *, wait=0.0):
     if args.no_open:
         print("Browser opening disabled; no browser grant was issued.")
         return
     if browser_entry.is_windows():
-        url = asyncio.run(browser_entry.owner_browser_url(data_dir, config))
+        url = asyncio.run(browser_entry.owner_browser_url(data_dir, config, wait=wait, waiting=_say_waiting))
     else:
         from types import SimpleNamespace
         from .update_readiness import probe_targets
@@ -313,9 +488,101 @@ def _open_browser(args, data_dir, config):
         opened = webbrowser.open(url)
     except Exception:
         # Some browser backends include the URL (and grant) in exceptions.
-        raise browser_entry.BrowserEntryUnavailable("Could not open the browser. " + browser_entry.REOPEN) from None
+        raise browser_entry.BrowserEntryUnavailable("Could not open the browser." + _open_again()) from None
     if not opened:
-        raise browser_entry.BrowserEntryUnavailable("The browser did not accept the open request. " + browser_entry.REOPEN)
+        raise browser_entry.BrowserEntryUnavailable("The browser did not accept the open request." + _open_again())
+
+
+def _remote_origins(config):
+    """Amplifier's addresses for other devices; none is a plain refusal."""
+    from urllib.parse import urlsplit
+    remote = [origin for origin in config["public_origins"] if origin.startswith("https://")
+              and not browser_entry.loopback_host(urlsplit(origin).hostname)]
+    if not remote:
+        raise SystemExit("Amplifier has no address for other devices yet; add one with "
+                         "amplifier-unified config set public_origins (the deployment guide has the steps).")
+    return remote
+
+
+def _code_origin(config, given):
+    """The address a code is for: the given one, or the only one for other devices."""
+    from .deployment import validate_origin
+    remote = _remote_origins(config)
+    if given is None and len(remote) == 1:
+        return remote[0]
+    try:
+        given = validate_origin(given.rstrip("/")) if given is not None else None
+    except ValueError:
+        given = ""
+    if given in remote:
+        return given
+    raise SystemExit(("That is not one of Amplifier's addresses for other devices." if given is not None
+                      else "Amplifier has more than one address for other devices.")
+                     + " Run the command again with --origin and one of these:\n  " + "\n  ".join(remote))
+
+
+def _browser_code(args, data_dir):
+    """Show the owner one code. The pinned helper alone reads the control credential."""
+    if not browser_entry.is_windows():
+        raise SystemExit("On this computer, sign in with the host account password on the sign-in page.")
+    from .deployment import load_server_config
+    try:
+        config = load_server_config(data_dir, overrides=_server_overrides(args))
+        origin = _code_origin(config, args.origin)
+        code = asyncio.run(browser_entry.owner_browser_code(data_dir, config, origin))
+    except browser_entry.BrowserEntryUnavailable as exc:
+        raise SystemExit(str(exc)) from None
+    except (OSError, ValueError):
+        raise SystemExit("Could not make a code. " + browser_entry.NEW_CODE) from None
+    print(f"Open {origin} on the other device and type this code within two minutes:")
+    print()
+    print("    " + browser_entry.CodeStore.display(code))
+    print()
+    print("The code works once.")
+
+
+def _browser_key(args, data_dir):
+    """Show the owner a new sign-in key once, or remove the saved one. No credential is read."""
+    if not browser_entry.is_windows():
+        raise SystemExit("On this computer, sign in with the host account password on the sign-in page.")
+    if args.remove:
+        try:
+            removed = browser_entry.remove_key(data_dir)
+        except (OSError, ValueError):
+            # The record may or may not have changed: a save can fail after it is in place.
+            raise SystemExit(f"Amplifier could not confirm that the sign-in key is removed (its record is in {data_dir}). "
+                             "Run the command again. To end the key another way, run this: "
+                             "amplifier-unified browsers sign-out.") from None
+        print("The sign-in key is removed. Browsers that are signed in stay signed in." if removed
+              else "No sign-in key was saved.")
+        return
+    from .deployment import load_server_config
+    try:
+        remote = _remote_origins(load_server_config(data_dir, overrides=_server_overrides(args)))
+        key, replaced = browser_entry.make_key(data_dir)
+    except browser_entry.BrowserEntryUnavailable as exc:
+        raise SystemExit(str(exc)) from None
+    except (OSError, ValueError):
+        # The record may or may not have changed: a save can fail after it is in place. A key that was
+        # saved and not shown is known to nobody.
+        raise SystemExit(f"Amplifier could not confirm that a new sign-in key is saved (its record is in {data_dir}). "
+                         "No key is shown. A key that you had before may no longer work. "
+                         "Run the command again. If it fails again, run amplifier-unified browsers sign-out, "
+                         "then this command.") from None
+    print("Save this sign-in key now, for example in a password manager. Amplifier does not show it again.")
+    print()
+    print("    " + browser_entry.SavedKey.display(key))
+    print()
+    print('On the other device, open Amplifier and type the key in the field "Sign-in key". '
+          "Addresses for other devices:")
+    for origin in remote:
+        print("  " + origin)
+    print('Amplifier must be running. It uses a new address only after the steps "Turn remote access on" '
+          "of the deployment guide.")
+    print("The key works until you make a new key, remove it (amplifier-unified browsers key --remove) "
+          "or sign out all browsers.")
+    if replaced:
+        print("The earlier key no longer works.")
 
 
 def _open_browser_safely(args, data_dir, config):
@@ -431,6 +698,32 @@ def main():
     args = _parse()
     from .deployment import load_server_config
     data_dir = _data_dir(args.data_dir)
+    if args.command == "acp":
+        from .acp_stdio import run
+        try:
+            return asyncio.run(run(args, data_dir))
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(str(exc) or "ACP attachment ended; inspect retained work before retrying.", file=sys.stderr)
+            raise SystemExit(1) from None
+    if args.command == "runtime":
+        from .installation_runtime import prepare, status
+        os.environ["AMPLIFIER_WEB_HOME"] = str(data_dir)
+        try:
+            result = (asyncio.run(prepare(data_dir)) if args.runtime_command == "prepare"
+                      else status(data_dir))
+        except (OSError, ValueError, RuntimeError):
+            raise SystemExit("Default runtime preparation did not complete. Private installation receipts were retained; no message was sent.") from None
+        if args.json:
+            import json
+            print(json.dumps(result))
+        else:
+            print(("Runtime dependencies are prepared. Connect an AI account in the app; no conversation worker or model request was started."
+                   if result.get("connectionRequired") else
+                   "Default runtime is prepared; no model request was sent.")
+                  if result["ok"] else result["message"])
+        if not result["ok"]:
+            raise SystemExit(1)
+        return
     if args.command == "tui":
         try:
             return _tui(args, data_dir)
@@ -441,6 +734,37 @@ def main():
         return
     if args.command == "config":
         _config(args, data_dir)
+        return
+    if args.command == "browsers":
+        if args.remove and args.browsers_command != "key":
+            raise SystemExit("--remove is only valid with browsers key.")
+        if args.browsers_command == "code":
+            return _browser_code(args, data_dir)
+        if args.browsers_command == "key":
+            return _browser_key(args, data_dir)
+        from .auth import SignOutUncertain, sign_out_all
+        try:
+            sign_out_all(data_dir)
+        except SignOutUncertain:
+            raise SystemExit("Amplifier could not confirm that every browser is signed out. "
+                             "Run the command again.") from None
+        except (OSError, ValueError):
+            raise SystemExit("Browsers were NOT signed out: the sign-out time could not be saved in "
+                             f"{data_dir}. Nothing was changed.") from None
+        print("All browsers on all devices are signed out. A running Amplifier applies this within a few seconds.")
+        print("To use Amplifier in a browser again, open it from this computer.")
+        if not browser_entry.is_windows():
+            return                                          # Only a Windows host has a sign-in key.
+        try:
+            # The saved second ends a key from before it (auth.sign_in_key_is_current). That rule reads the
+            # clock of this PC, so the record of the key is removed as well: a key must not come back when a
+            # clock that was set back reaches the second of the key again.
+            if browser_entry.remove_key(data_dir):
+                print("The saved sign-in key no longer works. To make a new one, run this: "
+                      "amplifier-unified browsers key.")
+        except (OSError, ValueError):
+            print("Amplifier could not confirm that the saved sign-in key is removed. Run this: "
+                  "amplifier-unified browsers key --remove.")
         return
     if args.command == "doctor":
         from .installation_health import doctor, display
@@ -501,11 +825,16 @@ def main():
         # Explicit foreground-owner entry only. Default Windows launch and
         # Scheduler/installer activation remain independently gated above.
         try:
-            return _open_browser(args, data_dir, config)
+            # The host can be away for some seconds: it restarts to finish an
+            # update. Wait for it, then open the browser once.
+            _open_browser(args, data_dir, config, wait=browser_entry.HOST_WAIT)
         except (OSError, ValueError):
-            raise SystemExit("Cannot open the owned host. " + browser_entry.REOPEN) from None
+            raise SystemExit("Cannot open the owned host." + _open_again()) from None
         except browser_entry.BrowserEntryUnavailable as exc:
             raise SystemExit(str(exc)) from None
+        if not args.no_open:
+            print(browser_entry.OPENED, flush=True)
+        return
     if args.command in {"run", "continue", "tool", "access"}:
         os.environ["AMPLIFIER_WEB_HOME"] = str(data_dir)
         from .settings_migration import migrate_settings

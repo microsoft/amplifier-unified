@@ -17,7 +17,7 @@ from urllib.parse import quote, urlsplit
 from aiohttp import web
 from filelock import FileLock
 
-from .deployment import validate_origin, write_private
+from .deployment import canonical_host, is_loopback, validate_origin, write_private
 from . import browser_entry
 
 SESSION_COOKIE = "amplifier_unified_session"
@@ -161,26 +161,354 @@ def _signed(secret: str, payload: dict) -> str:
     return encoded + "." + signature
 
 
-def _verified(secret: str, value: str | None, ttl: int, kind: str) -> bool:
+def _issued(secret: str, value: str | None, ttl: int, kind: str) -> int | None:
+    """Return the signed issue second of a valid, unexpired value, else None."""
     if not value or "." not in value:
-        return False
+        return None
     encoded, signature = value.rsplit(".", 1)
     expected = hmac.new(secret.encode(), encoded.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(signature, expected):
-        return False
+        return None
     try:
         payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
         issued = payload["issued"]
         if type(issued) is not int:
-            return False
+            return None
         age = time.time() - issued
-        return payload["kind"] == kind and 0 <= age <= ttl
+        return issued if payload["kind"] == kind and 0 <= age <= ttl else None
     except (OverflowError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def _verified(secret: str, value: str | None, ttl: int, kind: str) -> bool:
+    return _issued(secret, value, ttl, kind) is not None
+
+
+def valid_session(app, value: str | None) -> bool:
+    """The one check for a browser session cookie.
+
+    A session from before the owner's last "sign out all browsers" is refused,
+    whatever its remaining lifetime. A session issued in the same second as
+    that sign-out is refused as well.
+    """
+    issued = _issued(app["session_secret"], value, app["server_config"]["session_ttl_seconds"], "session")
+    return issued is not None and issued > getattr(app.get("sessions"), "epoch", 0)
+
+
+class Sessions:
+    """The running host's sign-out time and the change hint of its saved record.
+
+    A holder object: the keys of an application are fixed once it has started,
+    and this value changes while the host runs.
+    """
+
+    def __init__(self, epoch=0, hint=None):
+        self.epoch, self.hint = epoch, hint
+
+    @classmethod
+    def load(cls, data_dir):
+        hint = _epoch_hint(data_dir)  # Read first: a change during the read is seen next time.
+        return cls(session_epoch(data_dir), hint)
+
+
+_EPOCH = "session-epoch"
+
+
+def _epoch_path(data_dir: Path) -> Path:
+    if _WINDOWS:
+        from . import windows_files
+        return windows_files.address(data_dir) / "config" / "auth" / _EPOCH
+    return Path(data_dir).expanduser().resolve() / "config" / "auth" / _EPOCH
+
+
+def _read_epoch(data_dir: Path) -> int:
+    """Read the saved sign-out second. Missing means no sign-out yet (0)."""
+    try:
+        if _WINDOWS:
+            from . import windows_files
+            root = windows_files.address(data_dir)
+            with windows_files.directory(root / "config" / "auth", owned_root=root) as pinned:
+                content = pinned.read_private(_EPOCH, limit=32)
+        else:
+            content = _epoch_path(data_dir).read_bytes()[:33]
+    except FileNotFoundError:
+        return 0
+    if not re.fullmatch(rb"[0-9]{1,12}\n?", content):
+        raise ValueError("The saved sign-out time is malformed.")
+    return int(content)
+
+
+def _write_epoch(data_dir: Path, value: int) -> None:
+    if _WINDOWS:
+        write_private(_epoch_path(data_dir), f"{value}\n", owned_root=validated_data_dir(data_dir, create=True))
+    else:
+        auth_dir(data_dir)
+        write_private(_epoch_path(data_dir), f"{value}\n")
+
+
+def session_epoch(data_dir: Path) -> int:
+    """The second before which every browser session is refused.
+
+    An unreadable or malformed record never revives a session: it is replaced
+    by the present moment, once, so that everyone signs in again. A missing
+    record means no sign-out has happened. Anyone who could delete it can also
+    read the session secret, so its absence is not treated as an attack.
+    """
+    try:
+        return _read_epoch(data_dir)
+    except (OSError, ValueError):
+        now = int(time.time())
+        try:
+            _write_epoch(data_dir, now)
+        except OSError:
+            pass  # Still refused in memory; the next read repeats this.
+        return now
+
+
+class SignOutUncertain(OSError):
+    """The sign-out could not be confirmed.
+
+    A save was too slow, failed after the record had changed, or could not be
+    looked at. The record may have changed. A sign-in at the same moment may
+    have a session that this sign-out does not end.
+    """
+
+
+def sign_out_all(data_dir: Path) -> int:
+    """Sign out every browser of this installation; return the saved second.
+
+    Authority is the owner's own private folder: no network request and no
+    credential are involved. A running host applies the change within a few
+    seconds. The time never moves backward, and a write failure is an error,
+    never a silent success.
+
+    The saved second is never earlier than the second in which the record
+    was saved. A session that the host made before the record was there
+    carries that second or an earlier one, so the host refuses it (see
+    `sign_in`). A write that ends in a later second than its value is
+    therefore made again with the later second, after a short pause.
+
+    The host tells a new record from the file's time, size and identity,
+    not from its content. So each save is checked: a save that the host
+    could not tell from the record before it is made again as well.
+    """
+    try:
+        saved = _read_epoch(data_dir)
+    except (OSError, ValueError):
+        saved = 0
+    published = False
+    for _ in range(3):
+        before = _epoch_hint(data_dir)
+        value = max(int(time.time()), saved)
+        try:
+            _write_epoch(data_dir, value)
+            if _read_epoch(data_dir) != value:
+                raise OSError("The sign-out time was not saved.")
+        except (OSError, ValueError):
+            if published or not _same_record(before, _epoch_hint(data_dir)):
+                # A save of this run is on disk, or the record is not known to
+                # be the one from before: this is not "nothing was changed".
+                raise SignOutUncertain("The sign-out time was not confirmed, and the record may have changed.") from None
+            raise
+        published = True
+        # Done when the host can see this save (both looks worked and differ),
+        # and no later second began before the save was there.
+        if _new_record(before, _epoch_hint(data_dir)) and int(time.time()) <= value:
+            return value
+        saved = value
+        time.sleep(0.05)
+    raise SignOutUncertain("A sign-out time was saved, but not within one second or not visibly to the host.")
+
+
+def _epoch_hint(data_dir: Path):
+    """A cheap change hint for the saved record; never its value.
+
+    Every save puts a new file in place, so the file identity changes with
+    each save, also when two saves have the same file time and size.
+
+    None means that there is no record: no sign-out yet. A look that fails
+    for any other reason gives `_UNSEEN`. That is never "no record" and never
+    "the same record"; compare two looks only with `_same_record` and
+    `_new_record`.
+    """
+    return _record_hint(_epoch_path(data_dir))
+
+
+def _record_hint(path: Path):
+    try:
+        info = os.stat(path)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return _UNSEEN
+    return info.st_mtime_ns, info.st_size, info.st_ino
+
+
+_UNSEEN = object()  # The saved record could not be looked at.
+
+
+def _same_record(first, second) -> bool:
+    """Both looks worked, and they found the same record or both found none."""
+    return first is not _UNSEEN and second is not _UNSEEN and first == second
+
+
+def _new_record(first, second) -> bool:
+    """Both looks worked, and the second found another record than the first."""
+    return first is not _UNSEEN and second is not _UNSEEN and first != second
+
+
+_SIGN_IN_KEY = "sign-in-key"
+_NO_SIGN_IN_KEY = b"none\n"
+_SIGN_IN_KEY_RECORD = re.compile(rb"([0-9]{1,12}) ([0-9a-f]{64})\n?")
+
+
+def _sign_in_key_path(data_dir: Path) -> Path:
+    if _WINDOWS:
+        from . import windows_files
+        return windows_files.address(data_dir) / "config" / "auth" / _SIGN_IN_KEY
+    return Path(data_dir).expanduser().resolve() / "config" / "auth" / _SIGN_IN_KEY
+
+
+def read_sign_in_key(data_dir: Path):
+    """The record of the owner's saved sign-in key, or None when no key is saved.
+
+    The record is the second in which the key was made and the SHA-256 of the
+    key, never the key. A record that cannot be read or is malformed is an
+    error: it is not "no key", and it is not a key that works.
+    """
+    try:
+        if _WINDOWS:
+            from . import windows_files
+            root = windows_files.address(data_dir)
+            with windows_files.directory(root / "config" / "auth", owned_root=root) as pinned:
+                content = pinned.read_private(_SIGN_IN_KEY, limit=78)
+        else:
+            content = _sign_in_key_path(data_dir).read_bytes()[:79]
+    except FileNotFoundError:
+        return None
+    if content == _NO_SIGN_IN_KEY:
+        return None
+    record = _SIGN_IN_KEY_RECORD.fullmatch(content)
+    if not record:
+        raise ValueError("The saved sign-in key record is malformed.")
+    return int(record[1]), record[2].decode("ascii")
+
+
+def write_sign_in_key(data_dir: Path, record) -> None:
+    """Save the record of a new key, or None for no key, in the owner's private folder."""
+    content = _NO_SIGN_IN_KEY if record is None else f"{record[0]} {record[1]}\n".encode("ascii")
+    if _WINDOWS:
+        write_private(_sign_in_key_path(data_dir), content, owned_root=validated_data_dir(data_dir, create=True))
+    else:
+        auth_dir(data_dir)
+        write_private(_sign_in_key_path(data_dir), content)
+
+
+def sign_in_key_hint(data_dir: Path):
+    """The change hint of the saved key's record; compare as for `_epoch_hint`."""
+    return _record_hint(_sign_in_key_path(data_dir))
+
+
+def sign_in_key_is_current(app, made: int) -> bool:
+    """A saved key ends as a session ends: with the owner's sign-out of all browsers.
+
+    The key is good while the second of its making is after the sign-out that
+    this host applied, and not after the present second. It is the rule of
+    `valid_session` for the session's own second.
+    """
+    return getattr(app.get("sessions"), "epoch", 0) < made <= int(time.time())
+
+
+def saved_sign_out(data_dir: Path) -> int:
+    """The saved sign-out second, for the owner's command; an unreadable record is an error."""
+    return _read_epoch(data_dir)
+
+
+def refresh_sessions(app, streams=()) -> bool:
+    """Apply a changed saved sign-out to the running host; True for a newer time.
+
+    Pending sign-in tickets and codes are dropped for every changed record,
+    also when its second is the one already applied: a second sign-out in the
+    same second must still drop a ticket or code that was made in between.
+    For a newer time, open state streams are ended as well, so that a
+    signed-out browser cannot keep watching. A stream that reconnects must
+    pass the session check again.
+    """
+    data_dir, state = app["service"].data_dir, app["sessions"]
+    hint = _epoch_hint(data_dir)
+    if hint is _UNSEEN:
+        # Nothing is applied and nothing is kept from a look that failed.
+        raise OSError("The saved sign-out record could not be looked at.")
+    if _same_record(hint, state.hint):
         return False
+    value = session_epoch(data_dir)
+    # Kept only now: a record that could not be read is read again next time,
+    # and until then no ticket or code opens a session (see sign_in).
+    state.hint = hint
+    for store in (app.get("browser_entry"), app.get("browser_codes")):
+        if store is not None:
+            store.clear()
+    if value <= state.epoch:
+        # No session is older than before: one that is valid now was made
+        # after the second of this record, so no stream needs to end.
+        return False
+    state.epoch = value
+    suggestions = getattr(app["service"], 'prompt_suggestions', None)
+    if suggestions is not None:
+        suggestions.invalidate()
+    for task in list(streams):
+        task.cancel()
+    return True
 
 
-def new_session(secret: str) -> str:
-    return _signed(secret, {"kind": "session", "issued": int(time.time()), "nonce": secrets.token_urlsafe(16)})
+async def watch_sessions(app, streams, *, interval=2.0):
+    """Notice the owner's sign-out while the host runs."""
+    import asyncio
+    reported = False
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            refresh_sessions(app, streams)
+        except Exception as error:  # A watcher fault must never stop the host.
+            if not reported:
+                # Say it once in the host log: a sign-out that the running
+                # host cannot apply must not fail in silence.
+                reported = True
+                try:
+                    print("Sign-out of all browsers could not be checked: " + type(error).__name__
+                          + ". Until it can be checked, no browser can sign in with a ticket, a code or a key.",
+                          flush=True)
+                except (OSError, ValueError):
+                    pass
+
+
+def new_session(secret: str, *, remote: bool = False) -> str:
+    """Mark a session from a typed remote code; a local session is unchanged."""
+    payload = {"kind": "session", "issued": int(time.time()), "nonce": secrets.token_urlsafe(16)}
+    return _signed(secret, {**payload, "via": "remote"} if remote else payload)
+
+
+def sign_in(app, *, remote: bool = False) -> str | None:
+    """A session for a redeemed ticket or code, or None.
+
+    None while a saved sign-out waits for this host to apply it. The ticket or
+    code is then from before that sign-out, and it must not open a session
+    after it.
+
+    The order matters. The session's second is read first; the saved record
+    is looked at after that. So a session that is returned was made before
+    any record that is saved later, and `sign_out_all` saves no second that
+    is earlier than its own record. The host therefore refuses this session
+    when it applies that later sign-out.
+
+    The record is only looked at here. The watcher applies it, and it alone
+    ends the open streams. A look that fails opens no session: it is not
+    known then that no sign-out waits.
+    """
+    value = new_session(app["session_secret"], remote=remote)
+    if not _same_record(_epoch_hint(app["service"].data_dir), app["sessions"].hint):
+        return None
+    return value
 
 
 def new_csrf(secret: str) -> str:
@@ -257,15 +585,27 @@ async def auth_required(request: web.Request, handler):
     cross_site = request.headers.get("Sec-Fetch-Site") == "cross-site"
     if not extension and ((cross_site and not is_entry_navigation(request)) or not allowed_origin(request)):
         return web.json_response({"error": "Cross-origin requests are not permitted."}, status=403)
-    if request.path == browser_entry.ISSUE_PATH:
+    if request.method == "POST" and request.path in request.app.get("linked_instance_peer_paths", ()):
+        # These exact routes authenticate their own narrowly scoped requests.
+        # A link credential never acquires a normal app principal.
+        return await handler(request)
+    if request.headers.get("Authorization", "").lower().startswith("bearer ali_"):
+        return web.json_response({"error": "A link cannot access that operation."}, status=403)
+    if request.path == '/api/room-context/mcp' and request.method == 'POST':
+        # This exact handler checks a room/source-bound transport capability.
+        # Neither that capability nor an owner cookie grants other API access.
+        return await handler(request)
+    if request.path in {browser_entry.ISSUE_PATH, browser_entry.CODE_PATH}:
         authorization = request.headers.get("Authorization", "")
         if (request.method != "POST" or not authorization.startswith("Bearer ")
                 or not hmac.compare_digest(authorization[7:].encode(), request.app["control_token"].encode())):
             return web.json_response({"error": "The owner control credential is required."}, status=403)
         return await handler(request)
-    if request.path == browser_entry.REDEEM_PATH and request.method == "POST":
-        # Only this exact public mutation. The handler requires HTTPS, Origin
-        # and signed form CSRF before atomically consuming the one-use ticket.
+    if (request.path in {browser_entry.REDEEM_PATH, browser_entry.CODE_REDEEM_PATH, browser_entry.KEY_REDEEM_PATH}
+            and request.method == "POST"):
+        # Only these exact public mutations. Each handler requires HTTPS, Origin
+        # and signed form CSRF before atomically consuming the one-use ticket
+        # or typed code, or before it compares the typed key.
         return await handler(request)
     if extension and request.method == 'OPTIONS':
         return await handler(request)
@@ -274,13 +614,14 @@ async def auth_required(request: web.Request, handler):
         return await handler(request)
     if extension and not request.headers.get('Authorization', '').lower().startswith('bearer amd_'):
         return web.json_response({'error': 'An app credential is required.'}, status=401)
-    # Public, immutable UI resources only. Authentication still gates the SPA,
+    # Public UI resources and bounded raster branding only. Authentication still gates the SPA,
     # every API, and all user-authored files/canvas documents.
     public = {"/oauth/mcp/callback", "/oauth/mcp/complete", "/login", "/setup", "/api/ca", "/ca.crt", "/api/health",
               "/manifest.webmanifest", "/sw.js", "/pwa.js", "/offline.html", "/app-pages.css", "/favicon.ico", "/browser-entry.js",
               "/branding/favicons/favicon.ico", "/branding/favicons/favicon-32.png",
               "/branding/favicons/apple-touch-icon.png", "/branding/icons/amplifier-icon-128.png",
               "/branding/pwa/pwa-192.png", "/branding/pwa/pwa-512.png"}
+    public.update(f'/instance-icon/{size}.png' for size in (32, 180, 192, 512))
     if request.path in public and request.method in {"GET", "HEAD"}:
         return await handler(request)
     # Deliberately published snapshots have their own unguessable bearer link.
@@ -325,7 +666,7 @@ async def auth_required(request: web.Request, handler):
                     return web.json_response({'error': 'Device access was removed.'}, status=401)
                 return await handler(request)
         return web.json_response({'error': 'Device access was removed or is invalid.'}, status=401)
-    if _verified(request.app["session_secret"], request.cookies.get(SESSION_COOKIE), request.app["server_config"]["session_ttl_seconds"], "session"):
+    if valid_session(request.app, request.cookies.get(SESSION_COOKIE)):
         return await authenticated(request.cookies[SESSION_COOKIE])
     if is_api_request(request):
         return web.json_response({"error": "Authentication required."}, status=401)
@@ -333,7 +674,22 @@ async def auth_required(request: web.Request, handler):
     raise web.HTTPTemporaryRedirect(login_url(requested))
 
 
+def _other_device_address(request: web.Request) -> bool:
+    """The address in use is not this computer's own.
+
+    The name is read exactly as the host boundary reads it, so that
+    `localhost.` and `localhost` get the same page.
+    """
+    try:
+        return not is_loopback(canonical_host(urlsplit("//" + request.host).hostname or ""))
+    except ValueError:
+        return False  # The host boundary refuses such a name before any page.
+
+
 async def login_page(request: web.Request) -> web.Response:
+    if browser_entry.is_windows() and _other_device_address(request):
+        # Another device cannot use the local launcher; it types an owner-made code.
+        return browser_entry.remote_login_page(request)
     secret = request.app["session_secret"]
     csrf = request.cookies.get(CSRF_COOKIE)
     # Preserve valid issuance for favicon redirects and concurrent login forms.
@@ -341,18 +697,31 @@ async def login_page(request: web.Request) -> web.Response:
         csrf = new_csrf(secret)
     filename = "windows-login.html" if browser_entry.is_windows() else "login.html"
     page = (Path(__file__).parent / "static" / filename).read_text(encoding="utf-8")
+    if "__REOPEN__" in page:
+        # The page's own place for the next step. First of all: no value of the
+        # request is in the page yet. A page without the mark is not changed.
+        page = page.replace("__REOPEN__", html.escape(browser_entry.next_step(request), quote=True))
     next_path = html.escape(validate_next_path(request.query.get("next")), quote=True)
     error = "Could not sign in. Check your host username and password and try again." if request.query.get("error") else ""
-    response = web.Response(text=page.replace("__CSRF__", csrf).replace("__NEXT__", next_path).replace("__ERROR__", error), content_type="text/html")
+    page = page.replace("__CSRF__", csrf).replace("__NEXT__", next_path).replace("__ERROR__", error)
+    page = request.app['service'].instance_branding.document(page, login=True)
+    response = web.Response(text=page, content_type="text/html")
     response.set_cookie(CSRF_COOKIE, csrf, httponly=True, samesite="Strict", secure=request.secure, path="/")
     return response
 
 
 async def post_login(request: web.Request) -> web.Response:
     if browser_entry.is_windows():
-        return web.Response(text=browser_entry.REOPEN, status=403)
+        return web.Response(text=browser_entry.next_step(request), status=403)
     form = await request.post()
-    if not authenticate_pam(str(form.get("username", "")), str(form.get("password", ""))):
+    username, password = str(form.get("username", "")), str(form.get("password", ""))
+    bridge = request.app["server_config"].get("host_pam")
+    if bridge is not None:
+        from .host_pam import authenticate
+        accepted = await authenticate(bridge, username, password)
+    else:
+        accepted = authenticate_pam(username, password)
+    if not accepted:
         url = login_url(request.query.get("next"))
         raise web.HTTPSeeOther(url + ("&" if "?" in url else "?") + "error=1")
     response = web.HTTPSeeOther(validate_next_path(request.query.get("next")))

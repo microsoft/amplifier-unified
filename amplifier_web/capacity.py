@@ -10,7 +10,7 @@ import math
 import time
 
 from .token_usage import with_gross_tokens
-from .model_admission_identity import input_id
+from .execution_working_set import current as current_execution, readonly as execution_snapshot, refresh_usage as refresh_session_usage
 
 METRICS = ('inputTokens', 'outputTokens', 'totalTokens', 'grossInputTokens', 'grossTotalTokens', 'reasoningTokens', 'cacheReadTokens', 'cacheWriteTokens', 'costUsd')
 LIVE = {'running', 'working', 'starting', 'queued', 'retrying', 'pending'}
@@ -49,6 +49,10 @@ def aggregate(calls):
             result[key]['estimatedValue'] = sum(value for row, value in known if row.get('usage', {}).get('costType') == 'estimated')
             result[key]['estimatedCalls'] = sum(row.get('usage', {}).get('costType') == 'estimated' for row, _ in known)
             result[key]['source'] = 'provider-reported or explicitly attributed estimate; no host price table'
+            reasons = sorted({row.get('usage', {}).get('costUnavailableReason') for row, value in rows
+                              if not number(value) and isinstance(row.get('usage', {}).get('costUnavailableReason'), str)})
+            if reasons:
+                result[key]['unavailableReasons'] = reasons
         elif key in ('grossInputTokens', 'grossTotalTokens'):
             result[key]['source'] = 'Core input includes cache reads; add reported cache writes once' + (' and output' if key == 'grossTotalTokens' else '')
     # Voice duration covers session receipts only. Backend model calls do not
@@ -72,7 +76,7 @@ def aggregate(calls):
     return result
 
 
-def usage_snapshot(session, *, admission_only=False):
+def usage_snapshot(session, *, admission_only=False, _tree=None):
     """The root's persisted execution projection already includes mounted children.
 
     Ignore aggregateUsage on tools/workers. IDs denote whole-call replacement
@@ -80,7 +84,7 @@ def usage_snapshot(session, *, admission_only=False):
     Never infer descendants from title, workspace, or a requested session ID.
     """
     root = session['id']
-    tree = session.get('execution', {})
+    tree = execution_snapshot(session) if _tree is None else _tree
     nodes = tree.get('nodes', []) + tree.get('retiredUsageNodes', [])
     descendants = {root, session['id']}
     descendants.update(row.get('sessionId') for row in nodes if row.get('kind') == 'worker' and row.get('rootSessionId') == root)
@@ -131,6 +135,7 @@ def usage_snapshot(session, *, admission_only=False):
 
 
 def evaluate(policy, usage):
+    """Decide from current limits and receipts, never a historical refusal."""
     reasons, warnings = [], []
     for metric, limit_key in (('grossTotalTokens', 'maxTotalTokens'), ('costUsd', 'maxCostUsd')):
         limit = policy.get(limit_key)
@@ -149,8 +154,6 @@ def evaluate(policy, usage):
             warnings.append(f'{label} approaching limit ({value:g} of {limit:g})')
         if uncertain and policy.get('unknownPolicy', 'pause') == 'pause':
             reasons.append(f'{label} is unknown for {uncertain} settled call(s)')
-    if policy.get('enabled') and policy.get('lastDenial'):
-        reasons.extend(reason for reason in policy['lastDenial'].get('reasons', []) if reason not in reasons)
     return {'allowed': not reasons, 'state': 'paused' if reasons else 'warning' if warnings else 'active' if policy.get('enabled') else 'disabled',
             'reasons': reasons, 'warnings': warnings, 'inFlightCalls': sum(row.get('phase') in LIVE and not row.get('endedAt') for row in usage['receipts']),
             'enforcement': 'before each supported model call; existing calls and effects may finish and exceed the limit'}
@@ -270,32 +273,28 @@ def restore_observation(session):
     """A host restart loses observation, not proof of external cancellation."""
     reference = dict.get(session, '_coldFields', {}).get('execution', {})
     if (not dict.__contains__(session, 'execution')
-            and reference.get('executionProjection') == 1
+            and getattr(session, '_working_execution', None) is None
+            and reference.get('executionProjection') in {1, 2}
             and reference.get('pendingObservation') is False):
         return  # Compact metadata proves there is no running receipt to settle.
     changed = False
-    tree = session.get('execution', {})
+    tree = current_execution(session)
     for row in tree.get('nodes', []) + tree.get('retiredUsageNodes', []):
         if row.get('kind') == 'llm' and row.get('producerId') and row.get('phase') in LIVE:
             row['phase'] = 'outcome_unknown'
             changed = True
     if changed:
-        from .execution import refresh_usage
-        refresh_usage(session['execution'])
+        refresh_session_usage(session)
 
 
 def saved_policy(service, sid):
-    identity = service._session(sid).get('runtimeSessionId') or sid
+    identity = service._session(sid, hydrate=False).get('runtimeSessionId') or sid
     path = service.data_dir / 'sessions' / identity / 'control-state.json'
     if not path.exists():
         return {'revision': 0, 'enabled': False}
     try:
         saved = json.loads(path.read_text())
-        policy = saved.get('capacity', {'revision': 0, 'enabled': False})
-        denial = saved.get('capacityLastDenial')
-        if denial and denial.get('budgetRevision') == policy['revision']:
-            policy['lastDenial'] = denial
-        return policy
+        return saved.get('capacity', {'revision': 0, 'enabled': False})
     except (ValueError, OSError):
         # A corrupt policy must not silently disable a previously enabled guard.
         raise ValueError('Saved budget state is unreadable; repair before starting more work') from None
@@ -306,7 +305,7 @@ async def dispatch(service, operation, args, origin, command_id, include_state):
     import uuid
     sid = args['sessionId']
     await service.history.ensure_loaded(sid)
-    session = service._session(sid)
+    session = service._session(sid, hydrate=False)
     if operation != 'capacity.read':
         if not service.runtime or not service.management:
             raise AppError('The Amplifier runtime is unavailable')
@@ -336,38 +335,11 @@ async def dispatch(service, operation, args, origin, command_id, include_state):
         return {'accepted': True, 'result': result, **({'state': service.browser_state()} if include_state else {})}
 
 
-def fresh_human_input(service, session, row, denial):
-    """Recheck a derived pause only for a new host-admitted human input."""
-    active = session.get('collaborationGeneration') or {}
-    identity = input_id(row)
-    if (not active.get('id') or active.get('terminal') or not identity
-            or identity not in active.get('inputIds', [])
-            or row.get('lifecycle') == 'background'
-            or row.get('sessionId') != session['id'] or not number(denial.get('at'))):
-        return False
-    message = next((m for m in reversed(session.get('messages', []))
-                    if m.get('role') == 'user' and (m.get('inputId') == identity
-                        or m.get('inputOrigin') == 'voice' and m.get('voiceInputId') == identity)), None)
-    if (not message or message.get('questionId') or message.get('scheduledRunId')
-            or message.get('createdAt', 0) <= denial['at']):
-        return False
-    if message.get('inputOrigin') in {'ui', 'user', 'voice'}:
-        return True
-    saved = service.db.execute('SELECT receipt FROM commands WHERE id=?', (identity,)).fetchone()
-    receipt = json.loads(saved[0]) if saved else {}
-    return bool(message.get('inputOrigin') == 'peer'
-        and receipt.get('commandAction') == 'coordination.send' and receipt.get('humanResume')
-        and receipt.get('accepted') is True and receipt.get('inputId') == identity
-        and receipt.get('target', {}).get('sessionId') == session['id']
-        and receipt.get('interruptionRevision') == session.get('interruptionRevision', 0)
-        and receipt.get('delivery') in {'accepted', 'applied', 'submitting'})
-
-
 async def admission(service, session_id, args, *, guard=None, queue_turn=None, on_wait=None, before_reserve=None):
     """Private worker-to-host gate; model actions cannot supply accounting data."""
     from .errors import AppError
     async with service.lock:
-        session = service._session(session_id)
+        session = service._session(session_id, hydrate=False)
         row = copy.deepcopy(args.get('call', {}))
         if guard and (reason := guard(session)):
             return {'allowed': False, 'state': 'cancelled', 'reasons': [reason]}
@@ -376,7 +348,7 @@ async def admission(service, session_id, args, *, guard=None, queue_turn=None, o
         for key in ('rootSessionId', 'sessionId'):
             if row.get(key) == session.get('runtimeSessionId'):
                 row[key] = session_id
-        nodes = session.get('execution', {}).get('nodes', [])
+        nodes = current_execution(session).get('nodes', [])
         producer = row.get('producerId')
         previous = session.get('capacityProducerId')
         if producer and producer != previous:
@@ -388,17 +360,12 @@ async def admission(service, session_id, args, *, guard=None, queue_turn=None, o
             session['capacityProducerId'] = producer
             service._save_changes(sessions={session_id})
         policy = saved_policy(service, session_id)
-        if any(prior.get('id') == row.get('id') for prior in nodes + session.get('execution', {}).get('retiredUsageNodes', [])):
+        history = execution_snapshot(session)
+        if any(prior.get('id') == row.get('id') for prior in history.get('nodes', []) + history.get('retiredUsageNodes', [])):
             return {'allowed': False, 'state': 'paused', 'budgetRevision': policy['revision'],
                     'reasons': ['This model-call ID was already admitted; its outcome must not be replayed']}
-        usage = usage_snapshot(session, admission_only=not policy.get('enabled'))
-        effective = policy
-        if policy.get('lastDenial') and fresh_human_input(service, session, row, policy['lastDenial']):
-            # Saved denials are observations, not deliberate budget edits.
-            # Both current policies still apply. The worker clears its cached
-            # denial only after this admission and its durable receipt succeed.
-            effective = {key: value for key, value in policy.items() if key != 'lastDenial'}
-        result = {**evaluate(effective, usage), 'budgetRevision': policy['revision']}
+        usage = usage_snapshot(session, admission_only=not policy.get('enabled'), _tree=history)
+        result = {**evaluate(policy, usage), 'budgetRevision': policy['revision']}
         for key in ('assignmentId', 'assignmentRevision', 'assignmentReservation'):
             row.pop(key, None)  # Assignment authority is selected by the host.
         assignment = service.assignments.admission(session, row)
@@ -445,13 +412,12 @@ async def admission(service, session_id, args, *, guard=None, queue_turn=None, o
                 except Exception:
                     pass  # An unreadable retained projection cannot free capacity.
                 if retained is False:
-                    session['execution']['nodes'] = [item for item in session['execution']['nodes'] if item.get('id') != row['id']]
+                    current_execution(session)['nodes'] = [item for item in current_execution(session)['nodes'] if item.get('id') != row['id']]
                 else:
-                    for item in session['execution']['nodes']:
+                    for item in current_execution(session)['nodes']:
                         if item.get('id') == row['id']:
                             item['phase'] = 'outcome_unknown'
-                from .execution import refresh_usage
-                refresh_usage(session['execution'])
+                refresh_session_usage(session)
                 raise
         return result
 
@@ -459,20 +425,20 @@ async def admission(service, session_id, args, *, guard=None, queue_turn=None, o
 async def abandoned(service, session_id, args):
     """Private transport cancellation: preserve an admitted but unacknowledged call."""
     from .collaboration import PRINCIPAL
-    from .execution import LIVE_PHASES, refresh_usage
+    from .execution import LIVE_PHASES
     async with service.lock:
-        session = service._session(session_id)
+        session = service._session(session_id, hydrate=False)
         row = args.get('call') or {}
         native = session.get('runtimeSessionId') or session_id
         if PRINCIPAL.get() != native or row.get('rootSessionId') != native:
             return {'retained': False}
-        node = next((n for n in session.get('execution', {}).get('nodes', [])
+        node = next((n for n in current_execution(session).get('nodes', [])
                      if n.get('id') == row.get('id') and n.get('kind') == 'llm'
                      and n.get('producerId') == row.get('producerId')
                      and n.get('turnId') == row.get('turnId')), None)
         if node and node.get('admittedAt') and not node.get('endedAt') and node.get('phase') in LIVE_PHASES:
             node['phase'] = 'outcome_unknown'
-            refresh_usage(session['execution'])
+            refresh_session_usage(session)
             service._publish_changes(sessions={session_id})
             return {'retained': True}
         return {'retained': False}

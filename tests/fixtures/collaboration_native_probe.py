@@ -413,7 +413,7 @@ class DirectNativeHost:
             self.bridges.append({"sessionId": row["id"], "operation": operation, "args": copy.deepcopy(args)})
             return await self.app.app_bridge(operation, args, row["id"])
         worker.bridge = bridge
-        await install_app_access(coordinator, worker.app_access_bridge(coordinator))
+        await install_app_access(coordinator, worker.app_access_bridge(coordinator), execution_role='root')
         transform = coordinator.get_capability("web.provider_transform")
         await coordinator.mount("providers", transform(provider), name=provider.name)
         # Deliberately shift context indexes from canonical indexes. The wrapper
@@ -447,7 +447,13 @@ class DirectNativeHost:
                    nativeProject=project_slug(worker.workspace), sessionKind="root",
                    historyManaged=False)
         await self.before_execute(worker)
-        worker.execution = asyncio.create_task(session.execute(""))
+        gate = worker.activation_gate
+        token = gate.bind(worker.activation) if gate else None
+        try:
+            worker.execution = asyncio.create_task(session.execute(""))
+        finally:
+            if gate:
+                gate.reset(token)
         await worker.runtime.wait_for(lambda e: e["type"] == "session.ready", timeout=30)
         await worker.runtime.wait_for(lambda e: e["type"] == "session.idle", timeout=30)
         await self.flush()

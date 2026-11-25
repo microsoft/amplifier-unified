@@ -30,7 +30,7 @@ async def test_real_nested_dispatch_and_final_guard_share_one_parent_execution(a
 
 def worker_scope(count=12):
     caps = {}
-    c = SimpleNamespace(session_id='root', get_capability=caps.get,
+    c = SimpleNamespace(session_id='root', session_state={}, get_capability=caps.get,
                         register_capability=caps.__setitem__,
                         cancellation=SimpleNamespace(is_cancelled=False))
     worker = Worker()
@@ -213,7 +213,7 @@ async def test_real_rust_coordinator_mount_wraps_late_tools():
     c.register_capability('web.work_effect_check', check)
     async def bridge(operation, args):
         return {}
-    await install_app_access(c, bridge)
+    await install_app_access(c, bridge, execution_role='root')
     class Probe:
         name = 'late'
         async def execute(self, args):

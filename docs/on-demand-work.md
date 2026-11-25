@@ -60,6 +60,19 @@ See [selected history projection](selected-history-projection.md) for exact sour
 fences, conservative append recognition, cache and process limits, and the remaining
 cold-tree materialization boundary.
 
+### Reopening older work records
+
+Some earlier Unified versions saved the entire execution history in one resource.
+When a selected chat has a version-1 resource too large for a single Work page,
+the host reads it off the event loop and applies the usual saved-step rules. It
+keeps up to 4 MiB of display pages for that resource. Opening a listed model call
+uses its saved identity and metrics. Full provider recordings still load separately.
+
+The compatibility reader handles sources up to 64 MiB. If the source exceeds
+that limit, or a saved range cannot be displayed, the Work window reports a gap.
+Independently available events remain readable. Opening the chat leaves its
+original execution and accounting records in place.
+
 ### Resident live steps
 
 The bundled browser keeps the initial live source slice at 100 resident nodes.

@@ -9,6 +9,7 @@ that a goal exhausting its last turn during handoff is not restarted.
 import asyncio
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -23,6 +24,8 @@ async def main():
     canonical = '--canonical' in sys.argv[2:]
     cap_one = '--goal-cap-one' in sys.argv[2:]
     with_goal = '--goal' in sys.argv[2:] or cap_one
+    launcher = '--launcher' in sys.argv[2:]
+    command_lock = '--command-lock' in sys.argv[2:]
     goal_cap = 1 if cap_one else 3 if with_child else 2
     root = Path(sys.argv[1]).resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -103,10 +106,30 @@ class FixtureRead:
         result = Path('original.txt').read_text()
         Path(values['childRead']).write_text(result)
         return ToolResult(success=True, output=result)
+class FixtureWait:
+    name = 'fixture_wait'
+    description = 'Hold one isolated command until the test releases it.'
+    input_schema = {'type':'object','properties':{}}
+    def __init__(self, coordinator): self.coordinator = coordinator
+    async def execute(self, arguments):
+        values=json.loads(Path(SCENARIO).read_text())
+        Path(values['commandStarted']).write_text('ready')
+        while not Path(values['commandRelease']).exists():
+            await asyncio.sleep(.01)
+        checkpoint = self.coordinator.get_capability('live.checkpoint')
+        async def delayed(status='completed'):
+            if status == 'cancelled':
+                Path(values['checkpointStarted']).write_text('ready')
+                while not Path(values['checkpointRelease']).exists():
+                    await asyncio.sleep(.01)
+            return await checkpoint(status)
+        self.coordinator.register_capability('live.checkpoint', delayed)
+        return ToolResult(success=True, output='single-command-finished')
 async def mount(coordinator, config=None):
     await coordinator.mount('providers',FixtureProvider(coordinator),name='fixture')
     await coordinator.mount('tools',FixtureDelegate(coordinator),name='delegate')
     await coordinator.mount('tools',FixtureRead(),name='fixture_read')
+    await coordinator.mount('tools',FixtureWait(coordinator),name='fixture_wait')
 '''.replace('SCENARIO', repr(str(scenario))))
     from amplifier_module_context_simple import __file__ as context_module
     from amplifier_web.bundles import SNAPSHOT_VERSION
@@ -130,7 +153,20 @@ providers:
 ''')
     from amplifier_web.runtime import RuntimeManager
     from amplifier_web.service import AppService
-    runtime = RuntimeManager(command=[sys.executable, '-m', 'amplifier_web.runtime_worker'], startup_timeout=90)
+    command = [sys.executable, '-m', 'amplifier_web.runtime_worker']
+    if launcher:
+        command = [shutil.which('uv'), 'run', '--no-project', '--no-sync',
+                   '--python', sys.executable, *command]
+        os.environ['VIRTUAL_ENV'] = sys.prefix
+    runtime = RuntimeManager(command=command, startup_timeout=90)
+    source_identities = []
+    quiesce = runtime.quiesce_for_handoff
+    async def observed_quiesce(session, request_id, **kwargs):
+        row = runtime.workers.get(session['id'])
+        if row:
+            source_identities.append((row['process'].pid, row.get('native_worker_pid')))
+        return await quiesce(session, request_id, **kwargs)
+    runtime.quiesce_for_handoff = observed_quiesce
     app = AppService(root / 'app', runtime, workspace=workspace)
     from amplifier_web.management import Management
     app.management = Management(app)
@@ -148,7 +184,47 @@ providers:
             'sourceRevision': inspected['repository']['sourceRevision']}, command_id='native-checkout'))['result']
         scenario.write_text(json.dumps({'sid': sid, 'checkout': checkout['id'], 'target': checkout['path'],
                                       'calls': str(root / 'calls.jsonl'), 'withChild': with_child, 'childStarted': str(root / 'child-started'),
-                                      'childWork': child_work, 'childRead': str(root / 'child-read')}))
+                                      'childWork': child_work, 'childRead': str(root / 'child-read'),
+                                      **{key: str(root / key) for key in
+                                         ('commandStarted', 'commandRelease', 'checkpointStarted', 'checkpointRelease')}}))
+        if command_lock:
+            await app.management.ensure_runtime(session)
+            control = asyncio.create_task(runtime.control(sid, 'tool.invoke', {'name': 'fixture_wait', 'arguments': {}}))
+            async def wait_file(name):
+                async with asyncio.timeout(15):
+                    while not (root / name).exists():
+                        await asyncio.sleep(.01)
+            await wait_file('commandStarted')
+            receipt = (await app.dispatch('worktree.handoff', {'sessionId': sid,
+                'id': checkout['id'], 'expectedExecutionRevision': 0}, command_id='held-command-move'))['result']
+            async with asyncio.timeout(10):
+                while 'command' not in app.worktrees.read(sid, receipt['id']).get('waitingFor', []):
+                    await asyncio.sleep(.01)
+            assert not source_identities
+            (root / 'commandRelease').write_text('release')
+            await control
+            await wait_file('checkpointStarted')
+            assert app.worktrees.read(sid, receipt['id'])['step'] == 'releasing'
+            assert session.get('workingDirectory', str(workspace)) == str(workspace)
+            from amplifier_foundation.session import SharedSessionStore, SessionBusyError
+            try:
+                proof = SharedSessionStore(workspace, session.get('runtimeSessionId') or sid).acquire(app='fixture-racing-writer')
+            except SessionBusyError:
+                pass
+            else:
+                proof.release()
+                raise AssertionError('The delayed saved boundary released its writer early')
+            (root / 'checkpointRelease').write_text('release')
+            await asyncio.gather(*list(app.worktrees.jobs))
+            record = app.worktrees.read(sid, receipt['id'])
+            assert record['phase'] == 'applied' and session['workingDirectory'] == checkout['path']
+            assert len(app.worktrees.receipts(sid)) == 1 and not record['inputsReplayed']
+            assert not (root / 'calls.jsonl').exists()
+            assert source_identities[0][0] != source_identities[0][1]
+            print(json.dumps({'phase': record['phase'], 'commandProbeNonblocking': True,
+                'delayedAuthoritativeSaveRetainedWriter': True, 'originalMoveCount': 1,
+                'providerCalls': 0, 'inputsReplayed': False, 'launcherNativePidDistinct': True}))
+            return
         if with_goal:
             await app.dispatch('task.create', {'sessionId': sid, 'expectedRevision': 0,
                 'objective': 'Complete the native checkout handoff fixture.', 'maxTurns': goal_cap}, command_id='native-task')
@@ -166,6 +242,10 @@ providers:
         record = app.worktrees.receipts(sid)[0]
         assert record['phase'] == 'applied', record
         assert record['release']['quiesced'] and not record['inputsReplayed']
+        if launcher:
+            launcher_pid, native_pid = source_identities[0]
+            assert native_pid == record['release']['releasedOwner']['pid']
+            assert launcher_pid != native_pid, source_identities
         assert record['origin'] == 'agent' and record['sourceInputIds'] == ['native-original']
         if not cap_one:
             original = app.collaboration.receipt(record['continuation']['requestId'])
@@ -176,7 +256,7 @@ providers:
         from amplifier_foundation.session.history import SessionHistoryStore
         from amplifier_web.session_files import sessions_dir
         async with asyncio.timeout(10):
-            while sid in runtime.workers and not runtime.workers[sid].get('parked'):
+            while sid in runtime.workers and not runtime.workers[sid].get('idle'):
                 await asyncio.sleep(.05)
         messages = SessionHistoryStore(sessions_dir(workspace) / (session.get('runtimeSessionId') or sid)).load_messages()
         originals = [m for m in messages if (m.get('metadata') or {}).get('amplifier_input', {}).get('id') == 'native-original']
@@ -204,7 +284,8 @@ providers:
         print(json.dumps({'phase': record['phase'], 'workerProcesses': process_count, 'originalInputs': 1,
             'toolResultPersisted': True, 'continuationAccepted': not cap_one, 'draftPreserved': True,
             'historyHomePreserved': True, 'goalBudgetPreserved': with_goal,
-            'childResultRetained': with_child, 'childToolAndSecondModelAfterParent': child_work, 'canonicalAlias': canonical, 'provider': 'scripted-offline'}))
+            'childResultRetained': with_child, 'childToolAndSecondModelAfterParent': child_work,
+            'launcherNativePidDistinct': launcher, 'canonicalAlias': canonical, 'provider': 'scripted-offline'}))
     finally:
         await app.close()
 

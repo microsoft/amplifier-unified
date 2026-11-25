@@ -13,6 +13,9 @@ SETUP = {'type': 'object', 'properties': {
     'location': LOCATION,
     'title': {'type': 'string', 'maxLength': 200},
     'workspace': {'type': 'string', 'maxLength': 4000},
+    'externalAgentId': {'type': 'string', 'minLength': 1, 'maxLength': 100},
+    'externalAgentIds': {'type': 'array', 'items': {'type': 'string', 'minLength': 1, 'maxLength': 100},
+                         'uniqueItems': True},
     'bundle': {'type': 'string', 'maxLength': 2000},
     'selection': SELECTION}, 'additionalProperties': False}
 

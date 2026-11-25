@@ -14,6 +14,29 @@ the family vision's truthful recovery principle and the shared clients'
 
 ## Maintained checks
 
+Startup diagnosis stays with the same runtime and session-health owners. The
+worker's existing closed startup facts (at most four exact approved exception
+classes and bounded OS/process numbers) reach the saved failure and on-demand
+inspection under a host-created startup attempt ID. Messages, paths, custom
+class names and receipt bodies remain private. Missing or invalid facts do not
+become a cause; later cleanup cannot replace the first startup failure. This
+does not reconstruct causes for older unbound failures.
+
+`tests/test_startup_failure_details.py` retains the protocol-reader-to-service
+inspection/reopen regression, including absent/invalid facts, cleanup and
+non-delivery. `tests/test_worker_diagnostics.py` checks the original worker
+producer and closed validator. No production retry or provider request is part
+of these fixtures.
+
+For a pending bundle replacement, genuine input preparation must render its
+comparison plan in the same qualified runtime generation and worker environment
+as startup. `tests/test_draft_defaults.py` exercises offline probe and worker
+processes with generation/source-store-dependent settings, default and explicit
+model choices, and a changed-source refusal. The strict bundle, plan and model
+comparison is not relaxed. Read-only previews do not qualify a new runtime.
+This fixes the reproduced mismatched-rendering path; an historical guard
+rejection alone does not establish which field differed.
+
 Terminal support diagnostics use the existing worker and session-health owners.
 The exact failed generation, input IDs, runtime owner and Stop revision bind a
 supplement; a replacement generation or cancellation cannot acquire its cause.

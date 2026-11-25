@@ -77,8 +77,10 @@ class DirectoryAttention:
         count(self.directory.service, 'directory.notices.decoded')
         return json.loads(value)
 
-    def receipts(self, identities=None, *, errors=False):
+    def receipts(self, identities=None, *, errors=False, decisions=False):
         where = 'is_error' if errors else "(is_error OR key GLOB 'completion:*' OR key GLOB 'unread:*')"
+        if decisions:
+            where = "(" + where + " OR key GLOB 'question:*' OR key GLOB 'approval:*')"
         params = self.params
         if identities is not None:
             if not identities:
@@ -90,53 +92,64 @@ class DirectoryAttention:
                     ' SELECT owner,key,fingerprint,is_read FROM current_notices WHERE ' + where +
                     ' ORDER BY ordinal,slot', params)]
 
-    def items(self, identities=None):
-        params, where = self.params, ''
-        if identities is not None:
-            if not identities:
-                return []
-            where = ' WHERE c.owner IN (SELECT value FROM json_each(?))'
-            params += (json.dumps(sorted(identities), separators=(',', ':')),)
-        result = []
-        for owner, key, value, title, workspace, fingerprint, read in self.directory.db.execute(self.sql +
-                ' SELECT c.owner,c.key,n.value,c.title,c.workspace,c.fingerprint,c.is_read'
-                ' FROM current_notices c JOIN directory_notices n ON n.owner=c.owner AND n.slot=c.slot' +
-                where + ' ORDER BY c.ordinal,c.slot', params):
-            item = self.decode(value)
-            item.update(sessionId=owner, workspace=workspace, fingerprint=fingerprint, read=bool(read))
-            if key.startswith(('completion:', 'unread:')):
-                item['label'] = title
-            elif key.startswith('approval:'):
-                item['title'] = 'Approval requested · ' + title
-            result.append(item)
-        return result
-
     def project(self, state, session_ids=None):
         from .attention import snapshot
         result = snapshot(state, session_items=[])
-        items = self.items(session_ids)
-        result['items'].extend(items)
-        if session_ids is not None:
-            # Internal navigation consumers need exact reviewed-error receipts,
-            # not error bodies. Browser demand removes off-page receipt headers.
-            result['items'].extend(item for item in self.receipts(errors=True) if item['sessionId'] not in session_ids)
+        params = self.params
+        sql = self.sql
+        selected = session_ids is not None
+        if selected:
+            sql += ', selected_owners AS (SELECT value id FROM json_each(?))'
+            params += (json.dumps(sorted(session_ids), separators=(',', ':')),)
+        # One statement materializes the exact scalar notice/read join once.
+        # Selected bodies, off-page decision receipts and global counts share
+        # that result; acknowledged off-page notices still allocate no Python
+        # rows. A second browser scope retains its own demanded item bodies.
+        sql += """
+            SELECT 0 kind,c.owner,c.key,n.value,c.title,c.workspace,c.fingerprint,
+                   c.is_read,c.ordinal AS ordinal,c.slot AS slot,NULL unread,NULL badge
+            FROM current_notices c JOIN directory_notices n
+              ON n.owner=c.owner AND n.slot=c.slot"""
+        if selected:
+            sql += ' WHERE c.owner IN (SELECT id FROM selected_owners)'
+            sql += """
+                UNION ALL
+                SELECT 1,owner,key,NULL,NULL,NULL,fingerprint,is_read,ordinal,slot,NULL,NULL
+                FROM current_notices WHERE owner NOT IN (SELECT id FROM selected_owners)
+                  AND (is_error OR key GLOB 'question:*' OR key GLOB 'approval:*')"""
+        sql += """
+            UNION ALL
+            SELECT 2,owner,NULL,NULL,NULL,workspace,NULL,NULL,NULL,NULL,
+                   count(*),sum(key NOT GLOB 'completion:*')
+            FROM current_notices WHERE NOT is_read GROUP BY owner,workspace
+            UNION ALL
+            SELECT 3,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+            WHERE EXISTS (SELECT 1 FROM current_notices)
+            ORDER BY kind,ordinal,slot"""
         completion_badge = state.get('notificationSettings', {}).get('completionBadge', False)
         workspace_ids = {}
         for row in state.get('workspaces', []):
             workspace_ids.setdefault(row['path'], []).append(row['id'])
-        # Acknowledged owners need no Python row allocation. Presence still
-        # preserves the legacy zero-valued chats page when all are reviewed.
-        if self.directory.db.execute(self.sql + ' SELECT 1 FROM visible_notices LIMIT 1', self.params).fetchone():
-            result['pages'].setdefault('chats', 0)
-        for owner, workspace, unread, badge in self.directory.db.execute(self.sql + '''
-                SELECT owner,workspace,count(*),sum(key NOT GLOB 'completion:*')
-                FROM current_notices WHERE NOT is_read GROUP BY owner,workspace''', self.params):
-            result['unread'] += unread
-            result['badgeUnread'] += unread if completion_badge else badge
-            result['sections']['chats'] += unread
-            result['pages']['chats'] = result['pages'].get('chats', 0) + unread
-            if unread:
+        for kind, owner, key, value, title, workspace, fingerprint, is_read, _, _, unread, badge in self.directory.db.execute(sql, params):
+            if kind == 0:
+                item = self.decode(value)
+                item.update(sessionId=owner, workspace=workspace, fingerprint=fingerprint, read=bool(is_read))
+                if key.startswith(('completion:', 'unread:')):
+                    item['label'] = title
+                elif key.startswith('approval:'):
+                    item['title'] = 'Approval requested · ' + title
+                result['items'].append(item)
+            elif kind == 1:
+                result['items'].append({'id': key, 'sessionId': owner,
+                                        'fingerprint': fingerprint, 'read': bool(is_read)})
+            elif kind == 2:
+                result['unread'] += unread
+                result['badgeUnread'] += unread if completion_badge else badge
+                result['sections']['chats'] += unread
+                result['pages']['chats'] = result['pages'].get('chats', 0) + unread
                 result['sessions'][owner] = 1
                 for identity in workspace_ids.get(workspace, ()):
                     result['workspaces'][identity] += unread
+            else:
+                result['pages'].setdefault('chats', 0)
         return result

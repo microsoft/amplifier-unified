@@ -30,6 +30,10 @@ Explicit Open chat / Compose / Settings -> deliberate focus transition
 1. **DC1 — One attention authority.** Desktop updates consume the host's
    [attention receipts](../docs/clients/observations.md), not a second unread store.
    Work alone is distinct from attention; delivery deduplication is local.
+   Explicit dismissal of an observed update is host-owned and shared across the
+   account's approved devices, bound to its exact fingerprint/activity state.
+   It never marks read, answers, approves or stops work. A later state can return.
+   Display preferences remain local; independent services retain separate authority.
    Broken: reading the latest response leaves a second unread badge indefinitely.
    Affected: people moving between desktop, web and mobile.
 

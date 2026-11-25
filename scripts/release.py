@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+from datetime import datetime, timezone
 from email.parser import Parser
 import hashlib
 import importlib.util
@@ -93,12 +94,20 @@ def prepare(root, version, notes_file, build=False):
     if not isinstance(entry, dict) or entry.get('version') != version:
         raise ValueError('Authored notes must be one release entry for the chosen version')
     existing = next((item for item in history['releases'] if item['version'] == version), None)
+    if 'date' not in entry:
+        # Keep retries stable across UTC midnight, including old undated entries.
+        # A new entry records its UTC cut day, not a claim about publication time.
+        if existing is None:
+            entry['date'] = datetime.now(timezone.utc).date().isoformat()
+        elif 'date' in existing:
+            entry['date'] = existing['date']
     if existing is not None and existing != entry:
         raise ValueError('Different notes already exist for this version; review them explicitly')
     if existing is None:
         history['releases'].insert(0, entry)
-        updated[names[3]] = '{\n  "schemaVersion": 1,\n  "releases": [\n    ' + ',\n    '.join(
-            json.dumps(item, ensure_ascii=False, separators=(',', ':')) for item in history['releases']) + '\n  ]\n}\n'
+    retained = validator.retain(history['releases'], expected=version)
+    if existing is None or retained != history['releases']:
+        updated[names[3]] = validator.serialize(retained)
     validator.parse(updated[names[3]], version)
 
     from historical_web_layout import build_command
@@ -135,6 +144,61 @@ def prepare(root, version, notes_file, build=False):
     ]
     result['guidance'] = 'docs/validation/release-qualification.md#preparing-a-version-change'
     return result
+
+
+def import_dates(root, releases_file, expected_notes_sha256):
+    """Offline, date-only backfill from a saved GitHub releases API array."""
+    path = root / 'amplifier_web/release-notes.json'
+    if path.is_symlink():
+        raise ValueError('Release notes destination must not be a link')
+    original = path.read_bytes()
+    before_hash = hashlib.sha256(original).hexdigest()
+    if expected_notes_sha256 != before_hash:
+        raise ValueError('Release notes changed; inspect the source hash before importing dates')
+    validator = notes_module(root)
+    validator.parse(original.decode('utf-8'), version_at(root))
+    history = json.loads(original)
+    raw = releases_file.read_bytes()
+    releases = json.loads(raw)
+    if not isinstance(releases, list) or not releases:
+        raise ValueError('Expected a nonempty GitHub releases API array')
+    dates = {}
+    for row in releases:
+        if (not isinstance(row, dict) or not isinstance(row.get('tag_name'), str)
+                or type(row.get('draft')) is not bool or type(row.get('prerelease')) is not bool):
+            raise ValueError('Invalid GitHub release metadata')
+        tag = row['tag_name']
+        if row['draft'] or row['prerelease'] or not re.fullmatch(r'v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', tag):
+            continue
+        published = row.get('published_at')
+        if not isinstance(published, str) or not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z', published):
+            raise ValueError('Stable GitHub release requires a UTC published_at timestamp')
+        day = datetime.strptime(published, '%Y-%m-%dT%H:%M:%SZ').date().isoformat()
+        number = tag.removeprefix('v')
+        if number in dates:
+            raise ValueError('Ambiguous GitHub releases for the same stable version')
+        dates[number] = day
+    added = []
+    for row in history['releases']:
+        if 'date' not in row and row['version'] in dates:
+            row['date'] = dates[row['version']]
+            added.append(row['version'])
+    # Do not run retention: importing metadata must not remove any history.
+    updated = validator.serialize(history['releases']).encode('utf-8') if added else original
+    validator.parse(updated.decode('utf-8'), version_at(root))
+    if json.loads(updated) != history:
+        raise ValueError('Date import would change other release metadata')
+    if path.read_bytes() != original:
+        raise ValueError('Release notes changed during import; source left unchanged')
+    if updated != original:
+        path.write_bytes(updated)
+    if path.read_bytes() != updated:
+        raise ValueError('Release date import readback differs')
+    return {'addedDates': len(added), 'addedVersions': added,
+            'undatedVersions': [row['version'] for row in history['releases'] if 'date' not in row],
+            'releaseCount': len(history['releases']), 'bytes': len(updated),
+            'beforeSha256': before_hash, 'afterSha256': hashlib.sha256(updated).hexdigest(),
+            'inputSha256': hashlib.sha256(raw).hexdigest()}
 
 
 def plan(root, selected_revision=None, *, fetch_tag=False):
@@ -300,6 +364,28 @@ def release_notes(root, expected):
     return module.markdown(entries, expected)
 
 
+def consumer_assets(root, dist, version, revision):
+    """Require the selected consumer producer's original Windows bytes.
+
+    Historical checkouts without this producer keep their original asset set.
+    An unsigned executable is not Authenticode/SmartScreen or browser trust.
+    """
+    producer = root / "scripts/windows_consumer_release.py"
+    if not producer.is_file():
+        return []
+    value = json.loads(run(sys.executable, str(producer), "verify",
+                           "--wheel", str(next(dist.glob("*.whl"))),
+                           "--revision", revision, "--version", version,
+                           "--output", str(dist), cwd=root))
+    setup = f"AmplifierUnifiedSetup-{version}-windows-x64.exe"
+    rest = ["windows-consumer-plan.json", "windows-consumer-release.json", "WINDOWS_SHA256SUMS"]
+    # Selected sources from before the version-less copy keep their original set.
+    for expected in ([setup, "AmplifierUnifiedSetup-windows-x64.exe", *rest], [setup, *rest]):
+        if isinstance(value, list) and value == [str(dist / name) for name in expected]:
+            return [dist / name for name in expected]
+    raise ValueError("Consumer publisher received an unexpected asset set.")
+
+
 def publish(root, repository, tag, revision, dist):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ValueError("Invalid release repository")
@@ -308,6 +394,7 @@ def publish(root, repository, tag, revision, dist):
     if run("git", "rev-parse", "HEAD", cwd=root) != revision:
         raise ValueError("Release commit changed after validation")
     verify_dist(root, dist, tag[1:], repository, revision)
+    windows = consumer_assets(root, dist, tag[1:], revision)
     # Recheck remote immediately before mutation. Tags are never moved or deleted.
     remote = run("git", "ls-remote", "origin", "refs/tags/" + tag, "refs/tags/" + tag + "^{}", cwd=root)
     rows = [line.split() for line in remote.splitlines()]
@@ -336,7 +423,7 @@ def publish(root, repository, tag, revision, dist):
             "Amplifier Unified " + tag[1:], *(['--notes-file', str(notes_file)] if notes else ['--generate-notes']))
     elif notes:
         run('gh', 'release', 'edit', tag, '--repo', repository, '--notes-file', str(notes_file))
-    assets = [*sorted(dist.glob("*.whl")), *sorted(dist.glob("*.tar.gz")), dist / "SHA256SUMS"]
+    assets = [*sorted(dist.glob("*.whl")), *sorted(dist.glob("*.tar.gz")), dist / "SHA256SUMS", *windows]
     run("gh", "release", "upload", tag, *map(str, assets), "--repo", repository, "--clobber")
     # Do not make an older repair release latest over an already published newer version.
     newer = any(VERSION.fullmatch(item["tagName"].removeprefix("v"))
@@ -351,7 +438,9 @@ def main():
         'In an owned prepared isolated environment, start: '
         'prepare --version X.Y.Z --notes-file /path/to/entry.json --build. '
         'The entry is one JSON object with version, title, changes (a nonempty list), '
-        'and optional notices. Then run uv sync --locked --dry-run --group dev --group artifacts. '
+        'and optional notices and date (YYYY-MM-DD). A new entry defaults to its UTC preparation '
+        'day; this cut date can differ from publication after midnight. Authored dates and retries '
+        'are preserved. Then run uv sync --locked --dry-run --group dev --group artifacts. '
         'Coordinate one owner, version and publisher; reuse matching dependencies. '
         'Output names the remaining steps; merging the prepared PR starts existing publication '
         'and installed-package smoke workflows. Preparation never commits or publishes. '
@@ -360,10 +449,12 @@ def main():
         '--version X.Y.Z --repository OWNER/REPO --revision FULL_COMMIT_SHA. '
         'The workflow verifies its candidate receipt before staging; the record is not publication proof.'
     ))
-    parser.add_argument("command", choices=["prepare", "plan", "stage-source", "verify", "publish"])
+    parser.add_argument("command", choices=["prepare", "import-dates", "plan", "stage-source", "verify", "publish"])
     parser.add_argument("--dist", type=Path, default=Path("dist"))
     parser.add_argument("--version")
     parser.add_argument("--notes-file", type=Path, help="One authored release entry as JSON (prepare only)")
+    parser.add_argument("--releases-file", type=Path, help="Saved GitHub releases API array; import-dates fills only missing dates from stable published_at UTC days")
+    parser.add_argument("--expected-notes-sha256", help="Reviewed SHA-256 of release-notes.json before import-dates")
     parser.add_argument("--build", action="store_true", help="Run the canonical frontend build in the current prepared environment (prepare only)")
     parser.add_argument("--tag")
     parser.add_argument("--revision", help="Full selected commit SHA (plan, stage-source, verify, publish)")
@@ -379,6 +470,14 @@ def main():
             result = prepare(root, args.version, args.notes_file, args.build)
         except (ValueError, OSError) as exc:
             parser.exit(1, f'Release preparation failed: {exc}\n')
+        print(json.dumps(result))
+    elif args.command == "import-dates":
+        if not args.releases_file or not args.expected_notes_sha256:
+            parser.error('import-dates requires --releases-file and --expected-notes-sha256')
+        try:
+            result = import_dates(root, args.releases_file, args.expected_notes_sha256)
+        except (ValueError, OSError) as exc:
+            parser.exit(1, f'Release date import failed: {exc}\n')
         print(json.dumps(result))
     elif args.command == "plan":
         result = plan(root, args.revision, fetch_tag=args.fetch_tag)

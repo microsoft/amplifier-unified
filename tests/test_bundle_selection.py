@@ -70,6 +70,36 @@ def test_transition_recovers_all_original_files_after_interruption(tmp_path):
     assert not transaction.path.exists()
 
 
+@pytest.mark.parametrize('reset_model', [False, True])
+async def test_inplace_bundle_change_keeps_fork_non_admission(tmp_path, monkeypatch, reset_model):
+    from test_provider_selection_lifecycle import mounted_controls, SELECTION
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    store, _ = seed(tmp_path, tmp_path)
+    path = tmp_path / 'sessions/source/control-state.json'
+    path.write_text(json.dumps({
+        'goal': None, 'selection': SELECTION, 'selectionRevision': None,
+        'selectionBinding': 'old-binding', 'selectionBindingPending': True}))
+    transaction = BundleTransaction(tmp_path, tmp_path, 'source')
+    transaction.begin()
+    transaction.select('work', reset_model=reset_model)
+    transaction.commit()
+    saved = json.loads(path.read_text())
+    assert 'selectionRevision' in saved and saved['selectionRevision'] is None
+    assert 'selectionBinding' not in saved and 'selectionBindingPending' not in saved
+    controls, _, providers = mounted_controls(None)
+    controls.session.session_id = 'source'
+    controls.coordinator.get_capability = lambda name: (
+        {'connectionKeys': {'terra': 'verified-current'}} if name == 'web.provider_catalog' else None)
+    try:
+        await controls.restore()
+        assert controls.selection_revision is None
+        assert controls.transition_foreground() is None
+        assert controls.selection == (None if reset_model else SELECTION)
+        assert all(not provider.calls for provider in providers.values())
+    finally:
+        await controls.close()
+
+
 def test_fork_with_bundle_keeps_tools_voice_and_original_but_replaces_instructions(tmp_path):
     home=tmp_path/'app';store,messages=seed(home,tmp_path)
     before=(store.directory('source')/'transcript.jsonl').read_bytes()
@@ -218,7 +248,8 @@ async def test_unavailable_model_requires_explicit_reset_before_any_mutation(tmp
     assert not (home/'sessions/source/bundle-transition.json').exists()
 
 
-async def test_agent_direct_switch_reports_model_choice_then_retries_explicitly(tmp_path):
+async def test_agent_direct_switch_reports_model_choice_then_retries_explicitly(tmp_path, monkeypatch):
+    monkeypatch.setattr('amplifier_web.draft_defaults.resolve_defaults', saved_preview_fixture)
     class ModelRuntime(Runtime):
         async def control(self,sid,operation,args):
             if operation=='bundle.prepare' and not args.get('resetModel'):
@@ -242,7 +273,9 @@ async def test_agent_direct_switch_reports_model_choice_then_retries_explicitly(
         await settled(app)
         assert app._session()['bundle']=='work'
         assert 'selection' not in app._session()
-        assert not any(op=='bundle.preview' for _,op,_ in runtime.calls)
+        # Re-observe the reviewed old graph after candidate qualification,
+        # before retiring its worker.
+        assert sum(op=='bundle.preview' for _,op,_ in runtime.calls) == 1
     finally: await app.close()
 
 
@@ -383,7 +416,8 @@ async def test_replacement_resolves_characteristics_without_loading_saved_root(t
 
 
 @pytest.mark.parametrize('interruption', ['after-prepare', 'during-stop'])
-async def test_stopped_conversation_is_not_restarted_by_bundle_switch(tmp_path, interruption):
+async def test_stopped_conversation_is_not_restarted_by_bundle_switch(tmp_path, interruption, monkeypatch):
+    monkeypatch.setattr('amplifier_web.draft_defaults.resolve_defaults', saved_preview_fixture)
     from amplifier_web.bundle_actions import perform
     runtime = Runtime(); app = AppService(tmp_path, runtime=runtime, workspace=tmp_path)
     app.management = Management(app)
@@ -508,6 +542,7 @@ print('saved', flush=True)
 
 @pytest.mark.parametrize('revocation', ['after-prepare', 'during-stop'])
 async def test_revoked_bundle_authority_cannot_restart_worker(tmp_path, monkeypatch, revocation):
+    monkeypatch.setattr('amplifier_web.draft_defaults.resolve_defaults', saved_preview_fixture)
     from amplifier_web.bundle_actions import perform
     revoked = False
     def check():
@@ -561,7 +596,8 @@ async def test_restart_guard_rechecks_after_history_and_service_lock_waits(tmp_p
     app.state['sessions'].append(source)
     entered, release = asyncio.Event(), asyncio.Event()
     revoked = False
-    async def load(_):
+    async def load(_, *, hydrate=True):
+        assert hydrate is False
         entered.set()
         if boundary == 'history': await release.wait()
     app.history.ensure_loaded = load

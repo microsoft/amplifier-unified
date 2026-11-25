@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import importlib
 import json
 import threading
 from types import SimpleNamespace
@@ -15,6 +16,71 @@ from amplifier_web.session_store import fork_session
 
 
 BAD_IMAGE = "Invalid 'input[86].output.image_url'. Expected a base64-encoded data URL, but got an invalid base64-encoded value."
+
+
+@pytest.mark.parametrize(('code', 'category'), [
+    ('transition_unsupported', 'provider_selection'),
+    ('transition_intent_required', 'provider_selection'),
+    ('recovery_checkpoint_rejected', 'persistence'),
+    ('recovery_unreconciled', 'context_compaction'),
+])
+def test_context_transition_failure_uses_bounded_immediate_cause(code, category):
+    from amplifier_web.context_continuity import ContextRecoveryError
+    from amplifier_web.support_diagnostics import (
+        exception_chain, public_exception_chain, terminal_context_recovery, terminal_exception_capture,
+    )
+    error = ContextRecoveryError(code)
+    error.args = ('PRIVATE path and transcript',)
+    frames = exception_chain(error)
+    assert terminal_context_recovery(public_exception_chain(frames)) == code
+    detail = exception_details(error)
+    assert (detail['category'], detail['code']) == (category, code)
+    assert 'PRIVATE' not in str(detail)
+    if category == 'persistence':
+        assert 'previous model' not in detail['guidance']
+    forged = type('ContextRecoveryError', (RuntimeError,), {'code': code})('PRIVATE')
+    invalid = ContextRecoveryError('PRIVATE')
+    wrapped = RuntimeError('unrelated terminal')
+    wrapped.__cause__ = error
+    for unrelated in [forged, invalid, wrapped]:
+        assert not terminal_context_recovery(exception_chain(unrelated))
+        assert 'code' not in exception_details(unrelated)
+    forged_wrapper = type('ManagerTurnError', (RuntimeError,), {})('unrelated terminal')
+    forged_wrapper.__cause__ = error
+    assert 'code' not in exception_details(forged_wrapper)
+    for row in ({'errorType': 'ContextRecoveryError'}, {'errorType': 'ContextRecoveryError', 'contextRecoveryCode': []},
+                {'errorType': 'Other', 'contextRecoveryCode': code}):
+        assert terminal_exception_capture({'generationId': 'g', 'inputIds': ['i'],
+            'errorType': 'RuntimeError', 'exceptionChain': [row]}) is None
+
+
+def test_saved_transition_hold_reports_only_known_reasons():
+    from amplifier_module_loop_live.failures import ManagerTurnError, turn_failure
+    from amplifier_web.context_continuity import ContextRecoveryError
+    from amplifier_web.session_health import generation_failure, terminal_exception_failure
+    from amplifier_web.support_diagnostics import exception_chain, public_exception_chain
+
+    code = 'recovery_unreconciled'
+    error = ContextRecoveryError(code, reason='contract_changed')
+    row, = exception_chain(error)
+    assert public_exception_chain([row]) == [row]
+    assert row['contextRecoveryReason'] == 'contract_changed'
+    row['contextRecoveryReason'] = 'PRIVATE checkpoint metadata'
+    assert 'contextRecoveryReason' not in public_exception_chain([row])[0]
+    assert 'contextRecoveryReason' not in exception_chain(ContextRecoveryError(code, reason=row['contextRecoveryReason']))[0]
+
+    native = turn_failure(error)
+    wrapper = ManagerTurnError(native)
+    wrapper.__cause__ = error
+    capture = {'generationId': 'g', 'inputIds': ['i'], 'errorType': 'RuntimeError',
+               'exceptionChain': exception_chain(wrapper)}
+    session = {'id': 'root', 'status': 'error',
+               'generations': [{'event': 'generation.failed', 'generation_id': 'g', 'input_ids': ['i'], **native}],
+               'failure': {**generation_failure(native), 'generationId': 'g', 'inputIds': ['i'], 'recordedAt': 2}}
+    detail = terminal_exception_failure(session, capture)
+    assert (detail['stage'], detail['code']) == ('context_preparation', code)
+    assert detail['exceptionChain'][1]['contextRecoveryReason'] == 'contract_changed'
+    assert not detail['retryable']
 
 
 @pytest.mark.parametrize('code', ['native_input_oversized', 'native_checkpoint_invalid', 'native_no_reduction', 'secret payload'])
@@ -99,6 +165,7 @@ async def test_inspection_reports_structured_failure_without_raw_error_or_log_sc
     assert report['historyDirectory'] == str(SessionStore.for_app(tmp_path, session['workspace']).directory(report['runtimeSessionId']))
     assert report['executionDirectory'] == session.get('workingDirectory', session['workspace'])
     assert report['workReplayed'] is False and report['status'] == 'stopped'
+    assert 'recentRequests' not in report and 'performance' not in report
     assert 'error' not in session and session['messages'] == []
     await app.close()
 
@@ -120,9 +187,9 @@ async def test_inspection_does_not_cache_snapshot_changed_while_reading(tmp_path
         if change == 'status':
             await app.on_runtime_event('runtime.status', {'sessionId': session['id'], 'status': 'stopped'})
         elif change == 'failure':
-            await app.on_runtime_event('execution.event', {
-                'sessionId': session['id'], 'id': 'failed-call', 'kind': 'llm', 'phase': 'error',
-                'failure': failure_details('Invalid image base64', 'ValueError'),
+                await app.on_runtime_event('runtime.error', {
+                    'sessionId': session['id'], 'errorType': 'ValueError',
+                    'error': 'Invalid image base64',
             })
         elif change == 'worker':
             session['workers'] = [{'id': 'synthetic-worker', 'status': 'working'}]
@@ -281,6 +348,8 @@ async def test_original_provider_cause_survives_runtime_wrapper(tmp_path, messag
             raise error_class(message)
     provider, emitted = Provider(), []
     events = ExecutionEvents(session['id'], emitted.append)
+    from amplifier_web.execution import ensure_turn
+    ensure_turn(session, 'turn-id')
     events.lifecycle({'type': 'input.delivered', 'input_id': 'turn-id'})
     events.instrument_provider(session['id'], provider)
     with pytest.raises(error_class):
@@ -288,9 +357,13 @@ async def test_original_provider_cause_survives_runtime_wrapper(tmp_path, messag
     for event in emitted:
         kind, payload = normalize_event(event, session['id'], 'turn-id')
         await app.on_runtime_event(kind, payload)
+    assert not session.get('failure')  # A call error alone is not a request failure.
+    await app.on_runtime_event('runtime.generation', {'sessionId': session['id'], 'rootSessionId': session['id'],
+        'event': 'generation.failed', 'generation_id': 'failed-generation', 'input_ids': ['turn-id'],
+        'error_type': error_class.__name__, 'error_category': 'unknown'})
     await app.on_runtime_event('runtime.error', {'sessionId': session['id'], 'error': 'Manager turn failed; no automatic replay'})
     assert session['failure']['category'] == category
-    assert session['failure']['inputId'] == 'turn-id'
+    assert 'turn-id' in session['failure'].get('inputIds', [session['failure'].get('inputId')])
     assert inspect_session(tmp_path, session)['failure']['category'] == category
     assert exception_details(ValueError('unknown error with secret=never-copy'))['category'] == 'unknown'
     await app.close()
@@ -319,6 +392,32 @@ def test_native_tool_definition_rejection_has_safe_actionable_failure():
     assert result['replayed'] is False
 
 
+@pytest.mark.parametrize('module,error_type,arguments,diagnostic', [
+    pytest.param('amplifier_module_provider_openai._token_count', 'TokenCountError',
+                 ({'category': 'timeout', 'retryable': True, 'attempts': 3, 'body': 'private payload'},),
+                 {'category': 'timeout', 'retryable': True, 'attempts': 3}, id='openai'),
+    pytest.param('amplifier_module_provider_anthropic', 'TokenCountError', ('service', 503),
+                 {'category': 'service', 'retryable': True, 'httpStatus': 503}, id='anthropic'),
+    pytest.param('amplifier_module_loop_streaming', 'RequestMeasurementUnavailable', (),
+                 {'category': 'invalid_response', 'retryable': False}, id='strict-streaming'),
+])
+def test_selected_live_loop_routes_count_failures_to_context_preparation(module, error_type, arguments, diagnostic):
+    from amplifier_module_loop_live.failures import turn_failure
+    from amplifier_web.session_health import generation_failure
+
+    error_class = getattr(importlib.import_module(module), error_type)
+    failure = turn_failure(error_class(*arguments))
+    assert failure['error_category'] == 'context_measurement'
+    assert failure['error_stage'] == 'context_preparation'
+    assert failure['count_failure'] == diagnostic
+    assert failure['replayed'] is False
+
+    _, payload = normalize_event({'type': 'generation.failed', **failure}, 'test', 'turn-id')
+    detail = generation_failure(payload)
+    assert detail['summary'] == 'Could not check conversation size.'
+    assert detail['countFailure'] == failure['count_failure']
+
+
 @pytest.mark.parametrize('reason,retryable', [('service', True), ('timeout', True), ('rate_limit', True), ('authentication', False), ('invalid_request', False)])
 def test_count_failure_survives_runtime_normalization_with_safe_details(reason, retryable):
     from amplifier_web.session_health import generation_failure
@@ -334,7 +433,7 @@ def test_count_failure_survives_runtime_normalization_with_safe_details(reason, 
     assert detail['countFailure']['requestId'] == 'req_123'
     assert detail['countFailure']['attempts'] == 3
     assert 'SECRET' not in json.dumps(detail)
-    assert 'Continue conversation' in detail['guidance'] if retryable else 'Continue conversation' not in detail['guidance']
+    assert ('send a new message in this chat' in detail['guidance']) is retryable
 
 
 def test_legacy_missing_count_has_accurate_message_without_invented_cause():
@@ -405,3 +504,22 @@ def test_support_timeline_excludes_payloads_and_bounds_fields():
         'response': 'private answer', 'error': 'private exception'})
     assert event['bridgeId'] == 'bridge-1' and event['phase'] == 'timeout'
     assert not {'args', 'response', 'error'} & event.keys()
+
+
+def test_inspection_omits_stale_execution_and_sorts_only_causal_lifecycle(tmp_path):
+    session = {'id': 'root', 'workspace': str(tmp_path), 'status': 'error',
+        'failure': {'category': 'unknown', 'generationId': 'current', 'recordedAt': 110},
+        'generations': [
+            {'event': 'generation.finished', 'generation_id': 'older', 'at': 1},
+            {'event': 'generation.started', 'generation_id': 'current', 'at': 100},
+            {'event': 'generation.failed', 'generation_id': 'current', 'at': 110}],
+        'runtimeEvents': [
+            {'type': 'runtime.error', 'at': 105, 'errorType': 'TypeError'},
+            {'type': 'runtime.error', 'generationId': 'older', 'at': 106, 'errorType': 'OldError'},
+            {'type': 'runtime.tool', 'at': 106, 'tool': 'noise'},
+            {'type': 'runtime.error', 'at': 111, 'errorType': 'OtherError'}],
+        'execution': {'nodes': [{'startedAt': 1, 'endedAt': 244296, 'error': 'stale'}]}}
+    report = inspect_session(tmp_path, session)
+    assert 'recentExecution' not in report
+    assert [row.get('at') for row in report['timeline']] == [100, 105, 110]
+    assert report['requestOutcome']['event'] == 'generation.failed'

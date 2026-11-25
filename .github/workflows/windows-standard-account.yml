@@ -1,0 +1,147 @@
+name: Windows standard account
+# What the consumer installation does for a standard Windows account: a user
+# who is not a member of Administrators.
+#
+# The runner's own account is the built-in Administrator. The job creates one
+# new local user, member of Users, with a random password that is never
+# printed. The user signs in through Remote Desktop to this same computer and
+# gets a desktop session of its own. As that user, in that session and in the
+# user's own profile, the job runs: setup's own compiled checks, the
+# installation in setup's layout, the Start-menu and Apps-list entries, the
+# first start with the real task and the real host, status, "Stop Amplifier",
+# a second start, the launcher's certificate step (the test records the
+# Windows question and selects Yes), a sign-out and a new sign-in (the task's
+# trigger starts the host), and uninstall with both choices: keep the folder,
+# then delete it. The result has one line for each step.
+#
+# Not shown: the setup file itself (setup refuses Windows Server, and every
+# hosted x64 runner is Windows Server), a person's own answer to the Windows
+# certificate question, the browser, a click on a Start-menu entry and the
+# messages of the windowless launcher, a chat, Windows 11, a sign-in at the
+# PC's own screen, and an answer of the app to one read with a limit of 2
+# seconds at every moment after a start. After the second sign-in and after
+# the start that follows the first uninstall the case waits as the product
+# waits. The run's page can get a warning for a question of the case's
+# watch that took 2 seconds or more after the app had answered.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/windows-standard-account.yml
+      - tests/fixtures/windows_standard_account_native.py
+      - tests/test_windows_standard_account.py
+      - tests/fixtures/windows_start_again_native.py
+      - tests/fixtures/windows_setup_native.py
+      - tests/windows/native_setup.Tests.cs
+      - scripts/windows_bootstrap_native.cs
+      - scripts/windows_bootstrap_native.py
+      - scripts/install.ps1
+      - scripts/release.py
+      - amplifier_web/windows_consumer.py
+      - amplifier_web/windows_consumer_shell.py
+      - amplifier_web/windows_installation.py
+      - amplifier_web/windows_service.py
+      - amplifier_web/windows_task_runtime.py
+      - amplifier_web/windows_files.py
+      - amplifier_web/windows_jobs.py
+      - amplifier_web/windows_launch_guard.py
+      - amplifier_web/windows_uninstall.py
+      - amplifier_web/windows_removal.py
+      - amplifier_web/installation_health.py
+      - amplifier_web/installation_runtime.py
+      - amplifier_web/runtime_environment.py
+      - pyproject.toml
+      - uv.lock
+permissions:
+  contents: read
+jobs:
+  windows-standard-account:
+    name: Consumer journey as a standard user
+    runs-on: windows-latest
+    timeout-minutes: 115
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+      UV_NO_BUILD_PACKAGE: amplifier-core
+      UV_PYTHON_DOWNLOADS: never
+      UV_LINK_MODE: copy
+      # The fixture creates a Windows user. It refuses without this opt-in.
+      AMPLIFIER_CREATE_A_STANDARD_USER_ON_THIS_RUNNER: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        timeout-minutes: 2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        timeout-minutes: 3
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        timeout-minutes: 2
+      # Preparation is not the subject.
+      - name: Build the candidate and setup's compiled checks (CI setup only)
+        timeout-minutes: 12
+        shell: pwsh
+        run: |
+          python -I -B tests/fixtures/windows_standard_account_native.py prepare
+          if ($LASTEXITCODE -ne 0) { throw 'Preparation failed; inspect preparation.json.' }
+      # A failed step fails the job. Nothing here can skip.
+      - name: Create a standard user, sign it in, and run the journey as that user
+        timeout-minutes: 75
+        shell: pwsh
+        run: |
+          python -I -B tests/fixtures/windows_standard_account_native.py run
+          if ($LASTEXITCODE -ne 0) { throw 'A step failed as a standard user; read the lines above and result.json.' }
+      - name: Sign the user out and remove its tasks, its profile, the account and the saved sign-in
+        if: always()
+        timeout-minutes: 12
+        shell: pwsh
+        run: |
+          python -I -B tests/fixtures/windows_standard_account_native.py cleanup
+          if ($LASTEXITCODE -ne 0) { throw 'A part of the cleanup is not done; read cleanup.json.' }
+      - name: Retain the bounded results
+        if: always()
+        timeout-minutes: 2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-standard-account
+          path: ${{ runner.temp }}/standard-account-evidence/
+          if-no-files-found: warn
+          retention-days: 7
+  # The checks of the case's own code: who counts as a standard user, which
+  # step a failure belongs to, the record of the reads of the host, and what
+  # this workflow can never do silently. They need no Windows. No other
+  # workflow names their file, and the full Python suite (python-checks.yml)
+  # does not start on a pull request: without this job no pull request runs
+  # them.
+  portable-checks:
+    name: The case's own checks (Linux, Python 3.13)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        timeout-minutes: 2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        timeout-minutes: 3
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        timeout-minutes: 2
+      - name: Install the locked test environment (CI setup only)
+        timeout-minutes: 5
+        run: uv sync --locked --group dev
+      # The named shell `bash` stops at a failed command, also on the left of a
+      # pipe. pytest's last line must be the number of passed cases, then the
+      # number of warnings or nothing, then the time, and nothing after it: a
+      # case that pytest skipped or deselected fails the step.
+      - name: Run every case of tests/test_windows_standard_account.py, with no skip
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          uv run --no-sync pytest -q -ra -p no:cacheprovider tests/test_windows_standard_account.py | tee "$RUNNER_TEMP/portable-checks.log"
+          tail -n 1 "$RUNNER_TEMP/portable-checks.log" | grep -E '^[0-9]+ passed(, [0-9]+ warnings?)? in [0-9.]+s( \([0-9:]+\))?$'

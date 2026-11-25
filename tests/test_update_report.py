@@ -58,6 +58,59 @@ async def test_diagnostics_action_reads_without_changing_state(tmp_path):
     assert not service.update_manager.lock.locked()
     await service.close()
 
+async def test_support_report_includes_the_exact_health_selection_outside_recent_events(tmp_path, monkeypatch):
+    import copy
+    from types import SimpleNamespace
+    from amplifier_web import update_health
+    from test_update_current_health import acknowledged_app_with_old_component_history
+    state, proof = acknowledged_app_with_old_component_history()
+    selected = state['diagnostics']['activeFailures']['3']['latest']
+    selected.update(message='SECRET', path='/private/path', stderr='SECRET')
+    m = SimpleNamespace(home=tmp_path, lock=asyncio.Lock(), requires_idle=lambda state: False,
+        service=SimpleNamespace(state={'updates': state}), _active_update_evidence=proof)
+    monkeypatch.setattr(update_report, 'runtime_report', lambda home: {})
+    update_health.publish(m)
+    before = copy.deepcopy(state)
+    report = await update_report.collect(m)
+    assert report['lastFailure'] == {}
+    assert all(row['kind'] == 'application' for row in report['events'])
+    assert report['selectedFailure'] == state['currentStatus']['selectedFailure']
+    assert report['selectedFailure']['id'] == selected['id']
+    assert report['selectedFailure']['phase'] == 'ecosystem-runtime-lock'
+    assert report['activeFailureCount'] == 6
+    assert report['activeFailuresOmitted'] == 0
+    assert len(report['activeFailures']) == 6
+    assert report['updateState']['activationUnknown'] is True
+    assert report['updateState']['configurationChanged'] is False
+    assert all(value not in json.dumps(report) for value in ('SECRET', '/private/path'))
+    assert state == before
+
+
+async def test_support_failure_list_is_bounded_without_changing_the_health_selection(tmp_path, monkeypatch):
+    import copy
+    from types import SimpleNamespace
+    from amplifier_web import update_health
+    from test_update_current_health import acknowledged_app_with_old_component_history
+    state, proof = acknowledged_app_with_old_component_history()
+    row = state['diagnostics']['activeFailures']['3']['latest']
+    state['diagnostics']['activeFailures'] = {str(i): {'latest': {
+        **row, 'id': f'{i:032x}', 'attemptId': f'{i + 100:032x}', 'at': row['at'] + i}}
+        for i in range(40)}
+    state['diagnostics']['activeFailures']['39']['latest'].update(
+        message='SECRET', path='/private/path')
+    m = SimpleNamespace(home=tmp_path, lock=asyncio.Lock(), requires_idle=lambda state: False,
+        service=SimpleNamespace(state={'updates': state}), _active_update_evidence=proof)
+    monkeypatch.setattr(update_report, 'runtime_report', lambda home: {})
+    before = copy.deepcopy(state)
+    report = await update_report.collect(m)
+    assert report['activeFailureCount'] == 40 and report['activeFailuresOmitted'] == 8
+    assert len(report['activeFailures']) == 32
+    assert report['selectedFailure']['id'] == f'{39:032x}'
+    assert report['selectedFailure'] == update_health.projection(m)['selectedFailure']
+    assert all(value not in json.dumps(report) for value in ('SECRET', '/private/path'))
+    assert state == before
+
+
 @pytest.mark.parametrize('stage,reason',[
     ('release_revision','git_missing'),('release_metadata','timeout'),
     ('SECRET','timeout'),('release_metadata','SECRET'),([],{}),
@@ -166,11 +219,13 @@ async def test_failed_gate_observation_is_unavailable_not_clear(tmp_path, monkey
     service.runtime.has_pending_operations = fail
     monkeypatch.setattr(update_report, 'runtime_report', lambda home: {})
     report = await update_report.collect(manager)
-    assert report['activationGate']['unavailable']
-    assert report['activationGate']['blocked'] is None
-    assert report['activationGate']['reasonCode'] == 'observation-failed'
+    # The canonical gate now classifies a failed runtime sample as a blocker
+    # rather than throwing away the complete assessment.
+    assert report['activationGate']['initialRuntimeObservation'] == 'unavailable'
+    assert report['activationGate']['blocked'] is True
+    assert report['activationGate']['blockerCounts']['runtime'] == 1
     assert 'SECRET_OBSERVER' not in json.dumps(report) and '/private/path' not in json.dumps(report)
-    with pytest.raises(ValueError, match='SECRET_OBSERVER'):
-        manager.busy()  # Diagnostics did not weaken or replace admission.
+    assert manager.busy()  # Diagnostics did not weaken or replace admission.
+    assert any(row.get('reasonCode') == 'runtime-observer-unavailable' for row in manager.blockers())
     service.runtime.has_pending_operations = lambda: False
     await service.close()

@@ -312,8 +312,9 @@ async def test_child_identity_cannot_borrow_root_generation(app):
         await app.app_bridge("dispatch", {"action": "coordination.send", "_runtimeSessionId": "actual-child",
             "_generationId": source["collaborationGeneration"]["id"],
             "args": {"sessionId": app.state["sessions"][1]["id"], "text": "Synthetic root claim", "mode": "notify"}}, source["id"])
-    assert 'return the requested action, completed effects' in str(refused.value)
-    assert 'existing Stop, scope and permission restrictions still apply' in str(refused.value)
+    assert 'Retain the requested action, completed effects' in str(refused.value)
+    assert 'Actual Stop, stale execution, revocation, scope and permission restrictions still govern' in str(refused.value)
+    assert refused.value.status == 403
     assert app.runtime.inputs == []
 
 
@@ -1629,7 +1630,11 @@ async def test_sealing_rejects_invalid_link_without_breaking_next_runtime_event(
         canonical = "missing-canonical-id"
         legacy = app.collaboration.receipt(request)
         legacy['response']['messageIds'] = [canonical]
-        app.collaboration.save_response(legacy)
+        reply = app.collaboration.receipt('declare-' + request)
+        reply.pop('responseRef', None)
+        reply['result'] = copy.deepcopy(legacy['response'])
+        app.db.execute('UPDATE commands SET receipt=? WHERE id=?',
+                       (json.dumps(reply), 'declare-' + request))
         app.collaboration.save(request, legacy)
     if conflict == "unknown-id":
         assert app.collaboration.resolve_message(target, canonical) is None

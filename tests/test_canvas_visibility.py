@@ -38,7 +38,7 @@ async def test_visibility_retains_generation_dirty_edits_and_client_isolation(ap
         pytest.fail('Visibility must not discover workspaces or persist the shared catalog')
     with monkeypatch.context() as patch:
         patch.setattr(app, '_save', forbidden)
-        patch.setattr('amplifier_web.workspace_canvas.refresh_workspace_availability', forbidden)
+        patch.setattr('amplifier_web.workspace_selection.refresh_workspace_availability', forbidden)
         patch.setattr('amplifier_web.canvas_library.remember', forbidden)
         for open in (False, True, False):
             result = await command(app, 'canvas.visibility', visibility(app, open))
@@ -52,6 +52,35 @@ async def test_visibility_retains_generation_dirty_edits_and_client_isolation(ap
     for action, args in [('session.draft', {}), ('canvas.show', {'kind': 'text', 'content': 'replacement'}), ('canvas.tabClose', {'id': target['resourceId']})]:
         with pytest.raises(AppError, match='viewer edit'):
             await command(app, action, args)
+
+
+@pytest.mark.parametrize('action', ['canvas.visibility', 'view.update'])
+async def test_presentation_delivers_only_matching_client_and_subscription(app, action):
+    await command(app, 'canvas.show', {'kind': 'text', 'content': 'Private canvas'})
+    args = visibility(app, False) if action == 'canvas.visibility' else {'patch': {'navWidth': 380}}
+    sid = app.clients.records['one']['selectedSessionId']
+    shared_before = app.browser_state()
+    with app.clients.bind('two'):
+        peer_before = app.browser_state()
+        peer = app.subscribe()
+    with app.clients.bind('one'):
+        browser = app.subscribe()
+        session = app.subscribe(sid)
+        for index in range(session.maxsize):
+            session.put_nowait(index)
+        receipt = await app.dispatch(action, args)
+        assert browser.get_nowait() is receipt['state']
+        assert [session.get_nowait() for _ in range(session.maxsize - 1)] == list(range(1, session.maxsize))
+        assert session.get_nowait() == app.session_state(sid)
+    assert peer.empty() and browser.empty() and session.empty()
+    with app.clients.bind('two'):
+        peer_after = app.browser_state()
+    shared_after = app.browser_state()
+    for before, after in [(peer_before, peer_after), (shared_before, shared_after)]:
+        assert after['revision'] == receipt['revision'] == before['revision'] + 1
+        assert after['sessions'] is before['sessions']
+    for queue in (browser, session, peer):
+        app.unsubscribe(queue)
 
 
 async def test_visibility_receipts_scope_and_restart(app):

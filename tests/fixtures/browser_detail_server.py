@@ -102,6 +102,18 @@ async def main():
                     return web.json_response({'sessions':[{key:copy.deepcopy(row.get(key)) for key in ('id','messages','execution')} for row in service._state['sessions']],
                         'runtimeStarts':service.runtime.starts,'runtimeSends':service.runtime.sends,
                         'delegateCapture':getattr(service,'fixture_delegate_capture',None)})
+            if op == 'inspect-native-history':
+                # Observe the explicitly seeded fixture without publication,
+                # history refresh, chmod or admitting any dormant owner.
+                async with service.lock:
+                    row = next(row for row in service._state['sessions'] if row['id'] == args['id'])
+                    native = service.fixture_native_path
+                    return web.json_response({
+                        'session': {key: copy.deepcopy(row.get(key)) for key in (
+                            'id', 'messages', 'sharedHistoryOffset', 'sharedHistoryTotal', 'status', 'streaming')},
+                        'files': {name: hashlib.sha256((native/name).read_bytes()).hexdigest()
+                                  for name in ('metadata.json', 'transcript.jsonl')},
+                        'runtimeStarts': service.runtime.starts, 'runtimeSends': service.runtime.sends})
             if op == 'agent-bridge':
                 try:
                     result = await service.app_bridge(args['operation'], args.get('args', {}), args['sessionId'])
@@ -121,7 +133,9 @@ async def main():
                 (native/'metadata.json').write_text(json.dumps({'session_id':'paging-fixture',
                     'working_dir':str(alpha),'name':'Live saved history','bundle':'bundle:anchors'}))
                 (native/'transcript.jsonl').write_text(''.join(json.dumps({'role':'user' if i%2==0 else 'assistant',
-                    'content':f'Saved message {i}\n\n'+('A retained paragraph. '*25)})+'\n' for i in range(305)))
+                    'content':f'Saved message {i}\n\n'+(
+                        ('Long retained paragraph. '*1500)+'LONG-HISTORY-END'
+                        if args.get('longMessage') and i == 150 else 'A retained paragraph. '*25)})+'\n' for i in range(305)))
                 native_receipt = {name: hashlib.sha256((native/name).read_bytes()).hexdigest()
                                   for name in ('metadata.json', 'transcript.jsonl')}
                 service.fixture_native_receipt = native_receipt
@@ -150,6 +164,8 @@ async def main():
                 await service.on_runtime_event('runtime.status',{'sessionId':row['id'],'status':'working'})
                 await service.on_runtime_event('assistant.message',{'sessionId':row['id'],'text':'A new live response.'})
                 await service.on_runtime_event('assistant.delta',{'sessionId':row['id'],'text':'Still writing...'})
+            elif op=='live-history-idle':
+                await service.on_runtime_event('runtime.status',{'sessionId':args['id'],'status':'idle'})
             elif op=='reset':
                 revision=service.state['revision']
                 service.state.clear();service.state.update(copy.deepcopy(baseline));service.state['revision']=revision
@@ -450,9 +466,14 @@ async def main():
                         await hooks.emit('llm:request', {'provider': 'test', 'model': 'bounded-recording',
                             'request_id': 'bounded-attempt', 'raw': {'instructions': 'RECORDED-REQUEST',
                             'largeDiagnostic': 'x' * 1_100_000, 'end': 'FULL-RECORDING-END'}})
+                        response = {'text': 'RECORDED-RESPONSE'}
+                        if args.get('largeResponse'):
+                            response.update(largeDiagnostic='y' * 1_100_000, end='FULL-RESPONSE-END')
                         await hooks.emit('llm:response', {'provider': 'test', 'model': 'bounded-recording',
-                            'request_id': 'bounded-attempt', 'raw': {'text': 'RECORDED-RESPONSE'}})
-                        return {'usage': {'input_tokens': 2500, 'output_tokens': 103}}
+                            'request_id': 'bounded-attempt', 'raw': response})
+                        return {'usage': {'input_tokens': 2500, 'output_tokens': 103,
+                            'cache_read_tokens': 2000, 'cost_usd': 0.0048, 'cost_type': 'estimated'},
+                            'content': [{'type': 'text', 'text': 'A fixture result.'}]}
                 events = ExecutionEvents(aid, emitted.append)
                 events.turn_id = 'recordings'
                 await events.instrument_provider(aid, Provider()).complete(SimpleNamespace(model='bounded-recording'))
@@ -481,20 +502,48 @@ async def main():
                 def no_complete_projection(*args, **kwargs):
                     raise AssertionError('This fixture must use bounded event windows only')
                 service.event_log_view.read = no_complete_projection
+            elif op == 'grouped-long-chat':
+                # Keep the linked recordings and paged work tree. A peer
+                # transport alone cannot prove a sender in a partial transcript.
+                row = service._session(aid)
+                turn = row['execution']['turns'][0]
+                if args.get('complete'):
+                    row['status'] = 'idle'
+                    turn.update(phase='completed', endedAt=time.time())
+                    row['messages'].append({'id': 'final-answer', 'role': 'assistant', 'via': 'chat',
+                        'text': 'The grouped work is complete.', 'createdAt': time.time()})
+                else:
+                    question = row['messages'][0]
+                    at = question['createdAt']
+                    history = [{'id': f'older-{i}', 'role': 'assistant' if i % 2 else 'user',
+                        'via': 'chat', 'text': f'History entry {i}', 'createdAt': at - 800 + i}
+                        for i in range(800)]
+                    peers = [{'id': f'peer-{i}', 'role': 'user', 'via': 'peer', 'inputOrigin': 'peer',
+                        'text': f'Contributing work update {i}', 'createdAt': at + 1 + i}
+                        for i in range(3)]
+                    row.update(status='working', messages=[*history, question, *peers])
+                    turn.update(phase='running')
+                    turn.pop('endedAt', None)
             elif op == 'append-retention-records':
                 count=args.get('count',1)
                 assert type(count) is int and 0<count<=201
                 for index in range(count):
                     log_hook(aid,'tool:post',{'tool_call_id':f'unrelated-{time.time_ns()}-{index}',
                         'tool_name':'Newer saved work','result':{'success':True}})
-                await service.event_log_view.windows.read(aid)
+                refresh = service.event_log_view.windows.request(aid)
+                if refresh is not None:
+                    await refresh
             elif op == 'flush-provider-records':
                 # Only canonical bytes arrive: no execution event can wake an
                 # already open completed call on behalf of the product.
                 for event, data, at in service.fixture_provider_records:
                     log_hook(aid, event, data, at)
                 service.fixture_provider_records = []
-                await service.event_log_view.windows.read(aid)
+                # Share the selected chat's current reader. A second direct
+                # read would supersede (or be superseded by) the active one.
+                refresh = service.event_log_view.windows.request(aid)
+                if refresh is not None:
+                    await refresh
             elif op in {'canonical-work','canonical-append'}:
                 from amplifier_web.event_log_view import event_path
                 row=service._session(aid);base=1700000000

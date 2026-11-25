@@ -17,12 +17,19 @@ async def interrupted_member(app):
     source = app.state['sessions'][0]
     target, creation = await child(app, source)
     active = target['collaborationGeneration']
+    # Process loss needs the real foreground ownership witness. An unbound
+    # runtime.ended must not interrupt another process's current input.
+    from amplifier_web.execution import execution_record, ensure_turn
+    tree = ensure_turn(target, creation['initialInputId'])
+    turn = execution_record(target, 'turns', {'id': tree['currentTurnId']})
+    turn.update(runtimeOwnerId='interrupted-fixture-owner', generationId=active['id'])
     await app.on_runtime_event(*normalize_event({
         'type': 'generation.detached', 'generation_id': active['id'],
         'input_ids': active.get('inputIds', []),
     }, target['id']))
     await app.on_runtime_event('runtime.ended', {
-        'sessionId': target['id'], 'status': 'interrupted', 'reason': 'shutdown'})
+        'sessionId': target['id'], 'status': 'interrupted', 'reason': 'shutdown',
+        'runtimeOwnerId': 'interrupted-fixture-owner'})
     assert target['status'] == 'interrupted'
     assert target['collaborationGeneration']['terminal']
     human = app._message(source, 'user', 'Resume the worker after the update; reconcile saved results first.',

@@ -125,6 +125,7 @@ def test_native_owner_sid_matches_independent_process_token():
 
 @pytest.fixture
 def backend(monkeypatch):
+    from amplifier_web import windows_task_runtime
     state = {"xml": None, "running": False, "calls": [], "backups": []}
     monkeypatch.setattr(service, "_owner", lambda: SID)
     monkeypatch.setattr(service, "_new_spec",
@@ -153,6 +154,14 @@ def backend(monkeypatch):
     monkeypatch.setattr(service, "_scheduler", scheduler)
     monkeypatch.setattr(service, "_backup", lambda old, xml:
                         state["backups"].append((old, xml)) or r"C:\private\task-backup.xml")
+    def request_stop(value, **kwargs):
+        state["calls"].append("request_stop")
+        state["running"] = False
+    monkeypatch.setattr(windows_task_runtime, "request_stop", request_stop)
+    monkeypatch.setattr(windows_task_runtime, "observe", lambda spec: None)
+    def missing_log(spec):
+        raise FileNotFoundError("synthetic")
+    monkeypatch.setattr(windows_task_runtime, "read_log", missing_log)
     return state
 
 
@@ -221,7 +230,7 @@ def _legacy_expansion_xml(field):
 
 @pytest.mark.parametrize("field", ["python", "workspace"])
 def test_scheduler_expansion_definition_rejected_at_adoption(field):
-    with pytest.raises(service.WindowsServiceError, match="unmanaged"):
+    with pytest.raises(service.TaskNotConfirmed, match="could not confirm"):
         service.owned_spec(_legacy_expansion_xml(field), SID)
 
 
@@ -230,7 +239,7 @@ def test_scheduler_expansion_definition_rejected_at_adoption(field):
 def test_scheduler_expansion_existing_task_refused_before_mutation(backend, field, operation):
     backend["xml"] = _legacy_expansion_xml(field)
     original = backend["xml"]
-    with pytest.raises(service.WindowsServiceError, match="unmanaged"):
+    with pytest.raises(service.TaskNotConfirmed, match="could not confirm"):
         if operation in {"install", "replace"}:
             service.install(spec().data_dir, replace=operation == "replace")
         elif operation == "uninstall":
@@ -252,8 +261,12 @@ def test_scheduler_expansion_new_install_refused_before_scheduler_mutation(monke
     monkeypatch.setattr(windows_files, "address", lambda path: PureWindowsPath(path))
     monkeypatch.setattr(shared_state, "shared_state_home", lambda: PureWindowsPath(spec().state_home))
     monkeypatch.setattr(host_dependencies, "tool_path", lambda: spec().tool_path)
+    for name in service.LAUNCH_ROOTS:
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(service.sys, "executable",
                         r"C:\Tools\%USERNAME%\Scripts\python.exe" if field == "python" else spec().python)
+    monkeypatch.setattr(service, "_background_python",
+                        lambda home: str(PureWindowsPath(service.sys.executable).with_name("pythonw.exe")))
     workspace = r"C:\Work\%USERNAME%" if field == "workspace" else spec().workspace
     with pytest.raises(ValueError, match="percent"):
         service.install(spec().data_dir, workspace)
@@ -287,7 +300,7 @@ def test_scheduler_expansion_literal_percent_preserved_in_encoded_roots(backend)
 def test_full_definition_tampering_is_not_owned(before, after):
     xml = service.task_xml(spec())
     assert before in xml
-    with pytest.raises(service.WindowsServiceError, match="unmanaged"):
+    with pytest.raises(service.TaskNotConfirmed, match="could not confirm"):
         service.owned_spec(xml.replace(before, after), SID)
 
 
@@ -305,6 +318,371 @@ def test_scheduler_date_and_formatting_do_not_create_false_ownership_failure():
     ET.SubElement(info, service._q("Date")).text = "2026-01-01T00:00:00"
     ET.indent(tree)
     assert service.owned_spec(ET.tostring(tree, encoding="unicode"), SID) == spec()
+
+
+def test_scheduler_native_omitted_defaults_and_account_spelling_are_equivalent(monkeypatch):
+    tree = ET.fromstring(service.task_xml(spec()))
+    tree.find(f"{service._q('Triggers')}/{service._q('LogonTrigger')}/{service._q('UserId')}").text = "SYNTHETIC\\Owner"
+    omitted = {"Enabled", "RunLevel", "StartWhenAvailable", "WakeToRun", "RunOnlyIfIdle",
+               "RunOnlyIfNetworkAvailable", "AllowStartOnDemand", "Priority",
+               "Hidden", "AllowHardTerminate"}
+    for parent in tree.iter():
+        for node in list(parent):
+            if node.tag.split("}")[-1] in omitted:
+                parent.remove(node)
+    calls = []
+    monkeypatch.setattr(service, "_lookup", lambda name: calls.append(name) or (SID, 1))
+    assert service.owned_spec(ET.tostring(tree, encoding="unicode"), SID) == spec()
+    assert calls == ["SYNTHETIC\\Owner"]
+    # A name that Windows maps is never the renamed-computer case: no second lookup.
+    for other in ((SID + "1", 1), (SID, 4), (SID, 3)):
+        calls.clear()
+        monkeypatch.setattr(service, "_lookup", lambda name, other=other: calls.append(name) or other)
+        with pytest.raises(service.TaskNotConfirmed) as refused:
+            service.owned_spec(ET.tostring(tree, encoding="unicode"), SID)
+        assert calls == ["SYNTHETIC\\Owner"] and refused.value.retry is False
+
+
+OTHER = "S-1-5-21-100-200-300-1002"
+AUTHORITY = "S-1-5-21-100-200-300"
+
+
+def _trigger_xml(text, change=None):
+    """The generated definition with Task Scheduler's stored trigger user text."""
+    tree = ET.fromstring(service.task_xml(spec()))
+    tree.find(f"{service._q('Triggers')}/{service._q('LogonTrigger')}/{service._q('UserId')}").text = text
+    if change:
+        change(tree)
+    return ET.tostring(tree, encoding="unicode")
+
+
+def _windows_names(monkeypatch, table):
+    """Windows' answers by name: (SID, type), None for "maps to nothing", or an error."""
+    calls = []
+
+    def lookup(name):
+        calls.append(name)
+        # Not a KeyError: the ownership check would turn that into a refusal.
+        assert name in table, f"the rule must not look up {name!r}"
+        answer = table[name]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    monkeypatch.setattr(service, "_lookup", lookup)
+    return calls
+
+
+def test_trigger_under_a_computer_name_that_no_longer_exists_is_the_same_account(monkeypatch):
+    # Measured: after the computer's name changes, Task Scheduler still holds
+    # OLDPC\Owner. Windows maps neither that name nor OLDPC, and maps Owner.
+    calls = _windows_names(monkeypatch, {"OLDPC\\Owner": None, "OLDPC": None, "Owner": (SID, 1)})
+    xml = _trigger_xml("OLDPC\\Owner")
+    assert service.owned_spec(xml, SID) == spec()
+    assert calls == ["OLDPC\\Owner", "OLDPC", "Owner"]
+    # The same task is still another owner's task and another data folder's task.
+    for sid, root in ((OTHER, None), (SID, r"C:\Other")):
+        with pytest.raises(service.TaskNotConfirmed):
+            service.owned_spec(xml, sid, root)
+
+
+@pytest.mark.parametrize("text,table", [
+    # Another account of that computer.
+    ("OLDPC\\Other", {"OLDPC\\Other": None, "OLDPC": None, "Other": (OTHER, 1)}),
+    # The authority still exists: its account was deleted or renamed. Not a computer rename.
+    ("PC\\Former", {"PC\\Former": None, "PC": (AUTHORITY, 3)}),
+    ("CORP\\Owner", {"CORP\\Owner": None, "CORP": ("S-1-5-21-9-9-9", 3)}),
+    # The authority text names some other account or group today.
+    ("Owner\\Owner", {"Owner\\Owner": None, "Owner": (SID, 1)}),
+    ("Users\\Owner", {"Users\\Owner": None, "Users": ("S-1-5-32-545", 4)}),
+    # The account part names nothing, a group, or this SID as a non-user type.
+    ("OLDPC\\Gone", {"OLDPC\\Gone": None, "OLDPC": None, "Gone": None}),
+    ("OLDPC\\Admins", {"OLDPC\\Admins": None, "OLDPC": None, "Admins": ("S-1-5-32-544", 4)}),
+    ("OLDPC\\Owner", {"OLDPC\\Owner": None, "OLDPC": None, "Owner": (SID, 4)}),
+    # Not `authority\account`.
+    ("Owner", {"Owner": None}),
+    ("\\Owner", {"\\Owner": None}),
+    ("OLDPC\\", {"OLDPC\\": None}),
+    ("A\\B\\Owner", {"A\\B\\Owner": None}),
+    ("OLDPC\\Owner@corp", {"OLDPC\\Owner@corp": None}),
+    ("OLD/PC\\Owner", {"OLD/PC\\Owner": None}),
+    # SID text is compared as text and never looked up.
+    (OTHER, {}), ("S-1-5-18", {}), ("S-1-x", {}),
+    (None, {}), ("x" * 1025, {}),
+])
+def test_unmapped_trigger_name_is_accepted_for_nothing_but_a_vanished_authority(monkeypatch, text, table):
+    calls = _windows_names(monkeypatch, table)
+    with pytest.raises(service.TaskNotConfirmed, match="could not confirm") as refused:
+        service.owned_spec(_trigger_xml(text), SID)
+    assert refused.value.retry is False and refused.value.entry == service.task_name(SID)
+    assert calls == list(table)  # Exactly these lookups, in this order.
+    # The sentence can reach the owner's status text: no SID, name or path in it.
+    assert SID not in str(refused.value) and str(refused.value) == str(service.TaskNotConfirmed("other"))
+
+
+@pytest.mark.parametrize("table", [
+    {"OLDPC\\Owner": service._LookupFailed("1789")},
+    {"OLDPC\\Owner": None, "OLDPC": service._LookupFailed("1722")},
+    {"OLDPC\\Owner": None, "OLDPC": None, "Owner": service._LookupFailed("1355")},
+])
+def test_a_lookup_that_windows_did_not_answer_is_neither_accepted_nor_called_a_changed_task(monkeypatch, table):
+    calls = _windows_names(monkeypatch, table)
+    with pytest.raises(service.TaskNotConfirmed, match="could not check the account") as refused:
+        service.owned_spec(_trigger_xml("OLDPC\\Owner"), SID)
+    assert refused.value.retry is True and refused.value.entry == service.task_name(SID)
+    assert calls == list(table)
+    assert isinstance(refused.value, service.WindowsServiceError)  # Existing callers still refuse.
+    assert str(refused.value) == str(service.TaskNotConfirmed("other", retry=True))
+
+
+def _child(tree, path):
+    return tree.find("/".join(service._q(part) for part in path.split("/")))
+
+
+@pytest.mark.parametrize("change", [
+    lambda tree: setattr(_child(tree, "Actions/Exec/Command"), "text", r"C:\evil.exe"),
+    lambda tree: setattr(_child(tree, "Actions/Exec/Arguments"), "text", "-c pass"),
+    lambda tree: setattr(_child(tree, "Actions/Exec/WorkingDirectory"), "text", r"C:\Elsewhere"),
+    lambda tree: ET.SubElement(ET.SubElement(_child(tree, "Actions"), service._q("Exec")),
+                               service._q("Command")).__setattr__("text", r"C:\evil.exe"),
+    lambda tree: setattr(_child(tree, "Principals/Principal/UserId"), "text", OTHER),
+    lambda tree: setattr(_child(tree, "Principals/Principal/UserId"), "text", "OLDPC\\Owner"),
+    lambda tree: setattr(_child(tree, "Principals/Principal/RunLevel"), "text", "HighestAvailable"),
+    lambda tree: setattr(_child(tree, "Principals/Principal/LogonType"), "text", "S4U"),
+    lambda tree: setattr(_child(tree, "RegistrationInfo/Author"), "text", "OLDPC\\Owner"),
+    lambda tree: setattr(_child(tree, "RegistrationInfo/URI"), "text", "\\AmplifierUnified-" + OTHER),
+    lambda tree: setattr(_child(tree, "Settings/ExecutionTimeLimit"), "text", "PT72H"),
+    lambda tree: ET.SubElement(_child(tree, "Triggers"), service._q("BootTrigger")),
+    lambda tree: ET.SubElement(_child(tree, "Triggers/LogonTrigger"), service._q("Delay")).__setattr__("text", "PT5M"),
+], ids=["command", "arguments", "working-folder", "second-action", "principal-sid", "principal-name",
+        "run-level", "logon-type", "author", "task-name", "setting", "second-trigger", "trigger-delay"])
+def test_renamed_computer_changes_nothing_else_in_the_ownership_check(monkeypatch, change):
+    _windows_names(monkeypatch, {"OLDPC\\Owner": None, "OLDPC": None, "Owner": (SID, 1)})
+    assert service.owned_spec(_trigger_xml("OLDPC\\Owner"), SID) == spec()
+    with pytest.raises(service.TaskNotConfirmed) as refused:
+        service.owned_spec(_trigger_xml("OLDPC\\Owner", change), SID)
+    assert refused.value.retry is False
+
+
+@pytest.mark.parametrize("operation", ["install", "start", "stop", "restart", "uninstall"])
+def test_every_operation_uses_its_own_task_after_the_computer_was_renamed(backend, monkeypatch, operation):
+    _windows_names(monkeypatch, {"OLDPC\\Owner": None, "OLDPC": None, "Owner": (SID, 1)})
+    backend["xml"] = original = _trigger_xml("OLDPC\\Owner")
+    if operation == "install":
+        # The definition is current: no new registration, the stored name stays.
+        assert service.install(spec().data_dir)["status"] == "current"
+        assert backend["calls"] == ["query", "start"] and backend["xml"] == original
+    elif operation == "uninstall":
+        service.uninstall(spec().data_dir)
+        assert backend["calls"] == ["query", "remove"] and backend["xml"] is None
+    else:
+        service.command(operation, spec().data_dir)
+        assert backend["calls"][0] == "query" and backend["xml"] == original
+    assert not backend["backups"]
+
+
+def _fake_lookup_api(monkeypatch, answers, convert=None):
+    """Stand in for advapi32!LookupAccountNameW: one scripted result for each call."""
+    import ctypes
+    from amplifier_web import windows_files
+    state = {"error": 0, "calls": 0}
+
+    def lookup(system, name, sid, size, domain, domain_size, use):
+        state["calls"] += 1
+        if state["calls"] > len(answers):
+            # Counted, not raised: the lookup turns every exception into a failed lookup.
+            state["error"] = 5
+            return 0
+        result, error, sid_size, kind, *rest = answers[state["calls"] - 1]
+        state["error"] = error
+        size._obj.value, domain_size._obj.value, use._obj.value = sid_size, (rest[0] if rest else 16), kind
+        return result
+
+    def sid_text(pointer):
+        if convert is not None:
+            raise convert
+        return SID
+    monkeypatch.setattr(service, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **k: SimpleNamespace(LookupAccountNameW=lookup), raising=False)
+    monkeypatch.setattr(ctypes, "set_last_error", lambda value: state.update(error=value), raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: state["error"], raising=False)
+    monkeypatch.setattr(windows_files, "_API", lambda: SimpleNamespace(sid_text=sid_text))
+    return state
+
+
+@pytest.mark.parametrize("answers,expected", [
+    ([(0, 1332, 0, 0)], None),                               # Windows: the name maps to nothing.
+    ([(0, 122, 28, 0), (1, 0, 28, 1)], (SID, 1)),             # A user account.
+    ([(0, 122, 28, 0), (1, 0, 28, 3)], (SID, 3)),             # A domain: mapped, and not a user.
+    ([(0, 122, 28, 0), (0, 1332, 28, 0)], "failed"),          # Vanished between the two calls.
+    ([(0, 122, 28, 0), (0, 5, 28, 0)], "failed"),
+    ([(0, 1789, 0, 0)], "failed"), ([(0, 1722, 0, 0)], "failed"), ([(0, 0, 0, 0)], "failed"),
+    ([(1, 1332, 0, 0)], "failed"), ([(1, 0, 28, 1)], "failed"),  # No buffers, yet "success".
+    ([(0, 122, 0, 0)], "failed"), ([(0, 122, 70000, 0)], "failed"),
+    ([(0, 122, 28, 0, 40000)], "failed"),                    # An oversized authority name.
+])
+def test_lookup_reports_no_such_name_only_for_windows_own_answer(monkeypatch, answers, expected):
+    state = _fake_lookup_api(monkeypatch, answers)
+    if expected == "failed":
+        with pytest.raises(service._LookupFailed):
+            service._lookup("OLDPC\\Owner")
+    else:
+        assert service._lookup("OLDPC\\Owner") == expected
+    assert state["calls"] == len(answers)
+
+
+@pytest.mark.parametrize("problem", [OSError("invalid SID"), RuntimeError("not native Win64"),
+                                     ValueError("bad SID text"), TypeError("bad pointer")])
+def test_lookup_with_a_sid_that_windows_cannot_convert_is_a_failed_lookup(monkeypatch, problem):
+    state = _fake_lookup_api(monkeypatch, [(0, 122, 28, 0), (1, 0, 28, 1)], convert=problem)
+    with pytest.raises(service._LookupFailed):
+        service._lookup("OLDPC\\Owner")
+    assert state["calls"] == 2
+    # The person is asked to try again, not to delete the entry.
+    state["calls"] = 0
+    with pytest.raises(service.TaskNotConfirmed) as refused:
+        service.owned_spec(_trigger_xml("OLDPC\\Owner"), SID)
+    assert refused.value.retry is True
+    # For this reason: the same two calls and the same conversion, not a call beyond the script.
+    assert state["calls"] == 2
+    assert isinstance(refused.value.__cause__, service._LookupFailed)
+    assert refused.value.__cause__.__cause__ is problem
+
+
+def test_the_tasks_own_action_refuses_a_task_that_is_not_confirmed_before_any_effect(monkeypatch):
+    # The launcher: Task Scheduler started this action, and the task is not the app's own.
+    value = spec(supervised=True)
+    before = dict(os.environ)
+    monkeypatch.setattr(service, "_require_python", lambda: None)
+    monkeypatch.setattr(service, "_owner", lambda: SID)
+    # The registered definition is this launch's own, except for the trigger's user.
+    tree = ET.fromstring(service.task_xml(value))
+    tree.find(f"{service._q('Triggers')}/{service._q('LogonTrigger')}/{service._q('UserId')}").text = "PC\\Other"
+    registered = ET.tostring(tree, encoding="unicode")
+    operations = []
+
+    def scheduler(op, sid, **kw):
+        operations.append(op)
+        return {"exists": True, "xml": registered, "state": 4, "lastResult": 0, "instances": 1}
+    monkeypatch.setattr(service, "_scheduler", scheduler)
+    calls = _windows_names(monkeypatch, {"PC\\Other": (OTHER, 1)})
+    monkeypatch.setattr(os, "chdir", lambda path: pytest.fail("no effect before the task is confirmed"))
+    with pytest.raises(service.TaskNotConfirmed) as refused:
+        service._run(value.encoded())
+    assert refused.value.entry == service.task_name(SID) and dict(os.environ) == before
+    # The task was read once and nothing was asked of Task Scheduler after that.
+    assert operations == ["query"]
+    # Refused for the trigger's user, and for nothing else in the definition.
+    assert calls == ["PC\\Other"] and refused.value.retry is False
+    assert str(refused.value.__cause__) == "Task trigger belongs to another user."
+
+
+def test_lookup_without_the_windows_library_is_a_failed_lookup(monkeypatch):
+    import ctypes
+
+    problem, loads = OSError("advapi32 did not load"), []
+
+    def missing(*args, **kwargs):
+        loads.append(args)
+        raise problem
+    monkeypatch.setattr(service, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(ctypes, "WinDLL", missing, raising=False)
+    with pytest.raises(service._LookupFailed) as failed:
+        service._lookup("OLDPC\\Owner")
+    # The stand-in ran, and it is the reason.
+    assert loads == [("advapi32",)] and failed.value.__cause__ is problem
+    with pytest.raises(service.TaskNotConfirmed) as refused:
+        service.owned_spec(_trigger_xml("OLDPC\\Owner"), SID)
+    assert refused.value.retry is True and len(loads) == 2
+    assert refused.value.__cause__.__cause__ is problem
+
+
+@pytest.mark.parametrize("sid", ["", "x", "S-1-5-18", None, "OLDPC\\Owner"])
+def test_an_owner_that_is_no_user_sid_is_refused_before_the_task_is_read(monkeypatch, sid):
+    monkeypatch.setattr(service, "_lookup", lambda name: pytest.fail("no lookup for an invalid owner"))
+    with pytest.raises(service.WindowsServiceError, match="owner user SID") as refused:
+        service.owned_spec(_trigger_xml("OLDPC\\Owner"), sid)
+    assert not isinstance(refused.value, service.TaskNotConfirmed)  # No task name exists for this owner.
+
+
+@pytest.mark.parametrize("answer,retry", [
+    ({"PC\\Owner": service._LookupFailed("1789")}, True), ({"PC\\Owner": (OTHER, 1)}, False)])
+def test_a_task_that_is_not_confirmed_after_its_registration_is_not_started(backend, monkeypatch, answer, retry):
+    # `install` registers first and checks the stored definition after that.
+    _windows_names(monkeypatch, answer)
+    scheduler = service._scheduler
+
+    def stores_a_name(op, sid, *, previous=None, xml=None):
+        result = scheduler(op, sid, previous=previous, xml=xml)
+        if op == "create":
+            backend["xml"] = result["xml"] = _trigger_xml("PC\\Owner")
+        return result
+    monkeypatch.setattr(service, "_scheduler", stores_a_name)
+    with pytest.raises(service.TaskNotConfirmed) as refused:
+        service.install(spec().data_dir)
+    assert backend["calls"] == ["query", "create"] and refused.value.retry is retry
+    # The task WAS changed here: the sentence must not say otherwise.
+    for claim in ("did not use or change", "nothing was changed", "not changed"):
+        assert claim not in str(refused.value)
+
+
+def test_lookup_off_windows_is_a_failed_lookup_not_an_unknown_name(monkeypatch):
+    monkeypatch.setattr(service, "sys", SimpleNamespace(platform="linux"))
+    with pytest.raises(service._LookupFailed):
+        service._lookup("OLDPC\\Owner")
+    with pytest.raises(service.TaskNotConfirmed) as refused:
+        service.owned_spec(_trigger_xml("OLDPC\\Owner"), SID)
+    assert refused.value.retry is True
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Read-only native Windows account lookups required")
+def test_native_lookup_answers_for_this_account_an_authority_and_unknown_names():
+    import ctypes
+    from ctypes import wintypes
+    sid = service._owner()
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    advapi.ConvertStringSidToSidW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
+    advapi.LookupAccountSidW.argtypes = [wintypes.LPCWSTR, ctypes.c_void_p, wintypes.LPWSTR,
+                                        ctypes.POINTER(wintypes.DWORD), wintypes.LPWSTR,
+                                        ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD)]
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    pointer = ctypes.c_void_p()
+    assert advapi.ConvertStringSidToSidW(sid, ctypes.byref(pointer))
+    try:
+        name, authority = ctypes.create_unicode_buffer(512), ctypes.create_unicode_buffer(512)
+        sizes = wintypes.DWORD(512), wintypes.DWORD(512)
+        assert advapi.LookupAccountSidW(None, pointer, name, ctypes.byref(sizes[0]), authority,
+                                        ctypes.byref(sizes[1]), ctypes.byref(wintypes.DWORD()))
+    finally:
+        kernel.LocalFree(pointer)
+    qualified = authority.value + "\\" + name.value
+    missing = "nosuch" + uuid.uuid4().hex[:12]
+    # The text that Task Scheduler stores, and the same account in another case.
+    assert service._lookup(qualified) == (sid, 1) == service._lookup(qualified.swapcase())
+    # An authority alone maps, and not to a user: rule 3 then refuses.
+    mapped = service._lookup(authority.value)
+    assert mapped is not None and mapped[1] != 1 and sid.startswith(mapped[0] + "-")
+    assert service._lookup("BUILTIN\\Administrators") == ("S-1-5-32-544", 4)
+    # Windows' own "maps to nothing": an unknown authority, with and without an account.
+    for unknown in (missing, missing + "\\" + name.value, authority.value + "\\" + missing):
+        assert service._lookup(unknown) is None
+    service._same_account(qualified, sid)
+    for refused in (missing + "\\" + missing, authority.value + "\\" + missing, "BUILTIN\\Administrators"):
+        with pytest.raises(ValueError):
+            service._same_account(refused, sid)
+
+
+def test_scheduler_default_normalization_does_not_accept_unsafe_or_unknown_settings():
+    xml = service.task_xml(spec())
+    for before, after in (
+        ("<Enabled>true</Enabled>", "<Enabled>false</Enabled>"),
+        ("<Priority>7</Priority>", "<Priority>4</Priority>"),
+        ("<RunLevel>LeastPrivilege</RunLevel>", "<RunLevel>HighestAvailable</RunLevel>"),
+        ("</Settings>", "<UnknownSecuritySetting>true</UnknownSecuritySetting></Settings>"),
+        ("<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>", ""),
+    ):
+        with pytest.raises(service.WindowsServiceError):
+            service.owned_spec(xml.replace(before, after), SID)
 
 
 def test_install_registration_is_separate_from_health_and_rerun_reuses(backend):
@@ -336,7 +714,7 @@ def test_owned_changed_roots_require_replace_and_private_backup_first(backend):
 @pytest.mark.parametrize("operation", ["install", "replace", "start", "stop", "restart", "uninstall"])
 def test_foreign_or_tampered_task_is_never_stopped_or_overwritten(backend, operation):
     backend["xml"] = service.task_xml(spec()).replace("InteractiveToken", "Password")
-    with pytest.raises(service.WindowsServiceError, match="unmanaged"):
+    with pytest.raises(service.TaskNotConfirmed, match="could not confirm"):
         if operation in {"install", "replace"}:
             service.install(spec().data_dir, replace=operation == "replace")
         elif operation == "uninstall":
@@ -366,8 +744,8 @@ def test_status_and_managed_are_passive_and_logs_are_truthful(backend):
     assert not service.managed(r"C:\Other")
     state = service.command("status", spec().data_dir)
     assert state["state"] == "running" and not state["healthy"]
-    assert not state["processVerified"] and not state["logsAvailable"]
-    with pytest.raises(service.WindowsServiceError, match="not wired"):
+    assert not state["processVerified"] and state["logsAvailable"]
+    with pytest.raises(service.WindowsServiceError, match="recorded yet"):
         service.command("logs", spec().data_dir)
     assert set(backend["calls"]) == {"query"}
 
@@ -379,8 +757,33 @@ def test_command_restart_stop_remove_only_exact_owned_definition(backend):
     backend["calls"].clear()
     service.command("restart", spec().data_dir)
     service.uninstall(spec().data_dir)
-    assert backend["calls"] == ["query", "stop", "start", "query", "remove"]
+    assert backend["calls"] == ["query", "request_stop", "query", "start",
+                                "query", "request_stop", "query", "remove"]
     assert backend["xml"] is None
+
+
+def test_uninstall_names_each_step_before_it_runs_so_a_failure_can_be_reported(backend, monkeypatch):
+    steps = []
+    def progress(name):
+        steps.append((name, list(backend["calls"])))
+    # No task: one read, nothing to stop or remove.
+    service.uninstall(spec().data_dir, progress=progress)
+    assert steps == [("task-read", [])]
+    service.install(spec().data_dir)
+    backend["calls"].clear()
+    steps.clear()
+    service.uninstall(spec().data_dir, progress=progress)
+    assert steps == [("task-read", []), ("stop", ["query"]),
+                     ("task-remove", ["query", "request_stop", "query"])]
+    # A stop that fails is named "stop", and the task is still registered.
+    service.install(spec().data_dir)
+    steps.clear()
+    def refuse(*args, **kwargs):
+        raise service.WindowsServiceError("Task still has a running instance; no force-stop attempted.")
+    monkeypatch.setattr(service, "_stop", refuse)
+    with pytest.raises(service.WindowsServiceError):
+        service.uninstall(spec().data_dir, progress=progress)
+    assert [name for name, _ in steps] == ["task-read", "stop"] and backend["xml"] is not None
 
 
 def test_wrong_root_and_unknown_command_do_not_mutate(backend):
@@ -447,6 +850,87 @@ def test_timeout_is_unknown_not_automatic_retry(monkeypatch):
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("expected", [None, {"registration": "a" * 32, "run": "b" * 32}])
+def test_stop_passes_the_exact_expected_run_and_timeout(backend, monkeypatch, expected):
+    from amplifier_web import windows_task_runtime
+    value = spec()
+    backend["xml"], backend["running"] = service.task_xml(value), True
+    calls = []
+
+    def request_stop(installed, **kwargs):
+        calls.append((installed, kwargs))
+        backend["running"] = False
+
+    monkeypatch.setattr(windows_task_runtime, "request_stop", request_stop)
+    stopped = service._stop({"xml": backend["xml"], "instances": 1}, value, timeout=17, expected=expected)
+    assert stopped["instances"] == 0
+    assert calls == [(value, {"timeout": 17, "expected": expected})]
+    assert calls[0][1]["expected"] is expected
+
+
+@pytest.mark.parametrize("exists", [False, True])
+def test_retire_transport_preserves_name_and_previous_and_requires_absence(monkeypatch, exists):
+    calls = []
+    name = "AmplifierUnifiedLauncher-" + SID
+    previous = "<exact-helper-definition/>"
+    monkeypatch.setattr(service, "_owner", lambda: SID)
+    monkeypatch.setattr(service, "_powershell", lambda: r"C:\Windows\powershell.exe")
+
+    def run(argv, **kwargs):
+        calls.append(json.loads(kwargs["input"]))
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"exists": exists}).encode())
+
+    monkeypatch.setattr(service.subprocess, "run", run)
+    if exists:
+        with pytest.raises(service.WindowsServiceError, match="did not confirm"):
+            service._scheduler("retire", SID, previous=previous, name=name)
+    else:
+        assert service._scheduler("retire", SID, previous=previous, name=name) == {"exists": False}
+    assert calls == [{"op": "retire", "sid": SID, "name": name, "previous": previous, "xml": None}]
+    # The static COM branch shares the exact-XML guard, not the no-instances guard.
+    assert "elseif ($null -eq $task -or $task.Xml -cne $p.previous)" in service._SCRIPT
+    assert "if ($p.op -in @('remove', 'replace'))" in service._SCRIPT
+    assert "'retire' { $folder.DeleteTask($p.name, 0); $task = $null }" in service._SCRIPT
+
+
+@pytest.mark.parametrize("present", [False, True])
+@pytest.mark.parametrize("outcome", [True, False, "error"])
+def test_uninstall_removes_helper_after_main_removal_best_effort(backend, monkeypatch, present, outcome):
+    from amplifier_web import windows_launcher_task
+    if present:
+        service.install(spec().data_dir)
+    backend["calls"].clear()
+    calls = []
+
+    def remove_task(home):
+        assert backend["xml"] is None
+        calls.append((home, list(backend["calls"])))
+        if outcome == "error":
+            raise OSError("helper cleanup failed")
+        return outcome
+
+    monkeypatch.setattr(windows_launcher_task, "remove_task", remove_task)
+    service.uninstall(spec().data_dir)
+    assert calls == [(spec().data_dir, ["query", "request_stop", "query", "remove"] if present else ["query"])]
+
+
+def test_uninstall_does_not_touch_helper_if_main_removal_fails(backend, monkeypatch):
+    from amplifier_web import windows_launcher_task
+    service.install(spec().data_dir)
+    original = service._scheduler
+
+    def refuse(op, sid, **kwargs):
+        if op == "remove":
+            raise service.WindowsServiceError("main removal failed")
+        return original(op, sid, **kwargs)
+
+    monkeypatch.setattr(service, "_scheduler", refuse)
+    monkeypatch.setattr(windows_launcher_task, "remove_task",
+                        lambda *a: pytest.fail("the main task must be removed first"))
+    with pytest.raises(service.WindowsServiceError, match="main removal failed"):
+        service.uninstall(spec().data_dir)
+
+
 def test_wrong_platform_refuses_before_any_subprocess(monkeypatch):
     monkeypatch.setattr(service.sys, "platform", "linux")
     monkeypatch.setattr(service.subprocess, "run", lambda *a, **kw: pytest.fail("no service mutation"))
@@ -455,6 +939,7 @@ def test_wrong_platform_refuses_before_any_subprocess(monkeypatch):
 
 
 def test_action_enters_existing_cli_in_same_process_with_exact_environment(backend, monkeypatch):
+    from amplifier_web import cli, host_dependencies, windows_task_runtime
     monkeypatch.setattr(service, "_require_python", lambda: None)
     service.install(spec().data_dir)
     calls = []
@@ -462,19 +947,34 @@ def test_action_enters_existing_cli_in_same_process_with_exact_environment(backe
     for name in ("PATH", "AMPLIFIER_SESSION_STATE_HOME", "AMPLIFIER_GITHUB_ACCESS"):
         monkeypatch.setenv(name, "prior")
     monkeypatch.setattr(service.sys, "argv", [])
-    monkeypatch.setattr(service.runpy, "run_module", lambda *a, **kw: calls.append(("run", a, kw)))
+    monkeypatch.setattr(host_dependencies, "prepare_environment", lambda: None)
+    monkeypatch.setattr(service.Path, "samefile", lambda *a: True)
+    monkeypatch.setattr(cli, "_parse", lambda: "parsed")
+    class Runner:
+        exit_code = 0
+        def __init__(self, value):
+            assert value == spec()
+        def phase(self, phase):
+            calls.append(("phase", phase))
+    monkeypatch.setattr(windows_task_runtime, "Runner", Runner)
+    @contextmanager
+    def private_log(spec):
+        import io
+        yield io.StringIO()
+    monkeypatch.setattr(windows_task_runtime, "PrivateLog", private_log)
+    monkeypatch.setattr(cli, "_serve", lambda *a, **kw: calls.append(("serve", a[0], str(a[1]))))
     service._run(spec().encoded())
     assert service.sys.argv == [spec().python, "--no-open", "--data-dir", spec().data_dir,
                                 "--workspace", spec().workspace, "serve"]
     assert os.environ["AMPLIFIER_SESSION_STATE_HOME"] == spec().state_home
     assert os.environ["PATH"] == spec().tool_path
-    assert calls == [("cwd", spec().workspace), ("run", ("amplifier_web",), {"run_name": "__main__"})]
+    assert calls == [("cwd", spec().workspace), ("serve", "parsed", spec().data_dir),
+                     ("phase", "stopped")]
 
 
 def test_action_refuses_mismatched_registered_definition(backend, monkeypatch):
     monkeypatch.setattr(service, "_require_python", lambda: None)
     service.install(spec().data_dir)
-    monkeypatch.setattr(service.runpy, "run_module", lambda *a, **kw: pytest.fail("must not serve"))
     with pytest.raises(service.WindowsServiceError, match="does not match"):
         service._run(replace(spec(), workspace=r"C:\Other").encoded())
 
@@ -517,20 +1017,538 @@ def test_private_backup_uses_existing_pinned_no_replace_api(monkeypatch):
 def test_new_spec_freezes_lexical_paths_and_keeps_anonymous_choice(monkeypatch):
     from amplifier_web import host_dependencies, shared_state, windows_files
     monkeypatch.setattr(service.sys, "executable", spec().python)
+    monkeypatch.setattr(service, "_background_python", lambda home: spec().python)
     monkeypatch.setattr(service.sys, "version_info", (3, 13))
     monkeypatch.setattr(service.sysconfig, "get_config_var", lambda key: None)
     monkeypatch.setattr(windows_files, "address", lambda path: PureWindowsPath(path))
     monkeypatch.setattr(shared_state, "shared_state_home", lambda: PureWindowsPath(spec().state_home))
     monkeypatch.setattr(host_dependencies, "tool_path", lambda: spec().tool_path)
     monkeypatch.delenv("AMPLIFIER_GITHUB_ACCESS", raising=False)
+    for name in service.LAUNCH_ROOTS:
+        monkeypatch.delenv(name, raising=False)
     previous = spec(github_access="anonymous")
     result = service._new_spec(spec().data_dir, spec().workspace, SID, previous)
-    assert result == previous
+    assert result == replace(previous, supervised=True)
     monkeypatch.setenv("AMPLIFIER_GITHUB_ACCESS", "auto")
     assert service._new_spec(spec().data_dir, spec().workspace, SID, previous).github_access == "auto"
     monkeypatch.setattr(service.sys, "version_info", (3, 14))
     with pytest.raises(service.WindowsServiceError, match="3.13"):
         service._new_spec(spec().data_dir, spec().workspace, SID, previous)
+
+
+def test_new_background_host_uses_installed_windowless_sibling(tmp_path, monkeypatch):
+    python = tmp_path / "python.exe"
+    python.touch()
+    monkeypatch.setattr(service.sys, "executable", str(python))
+    with pytest.raises(service.WindowsServiceError, match="windowless"):
+        service._background_python()
+    windowless = tmp_path / "pythonw.exe"
+    windowless.touch()
+    assert service._background_python() == str(windowless)
+    monkeypatch.setattr(service.sys, "executable", str(windowless))
+    assert service._background_python() == str(windowless)
+    value = spec(python=r"C:\Owner tools\Scripts\pythonw.exe")
+    assert service.owned_spec(service.task_xml(value), SID) == value
+    # Older console definitions remain inspectable, not silently rewritten.
+    assert service.owned_spec(service.task_xml(spec()), SID) == spec()
+
+
+@pytest.mark.parametrize("mode", ["delegated", "manual-bootstrap", "no-generation",
+                                 "changed-bootstrap", "changed-candidate", "missing-windowless"])
+def test_service_registration_keeps_verified_stable_bootstrap_after_cli_delegation(tmp_path, monkeypatch, mode):
+    from amplifier_web import application_generations as generations
+    bootstrap, candidate = tmp_path / "bootstrap", tmp_path / "app"
+    for prefix in (bootstrap, candidate):
+        (prefix / "Scripts").mkdir(parents=True)
+        (prefix / "Scripts/python.exe").touch()
+        (prefix / "Scripts/pythonw.exe").touch()
+    owner = {"prefix": str(bootstrap), "digest": "a" * 64}
+    target = {"prefix": candidate, "bootstrap": owner}
+    current = bootstrap if mode == "manual-bootstrap" else candidate
+    monkeypatch.setattr(service.sys, "prefix", str(current))
+    monkeypatch.setattr(service.sys, "executable", str(current / "Scripts/python.exe"))
+    monkeypatch.setattr(generations, "active", lambda home: None if mode == "no-generation" else target)
+    checks = []
+    def verify(value):
+        assert value is target
+        checks.append("candidate")
+        if mode == "changed-candidate":
+            raise ValueError("changed candidate")
+    monkeypatch.setattr(generations, "verify_candidate", verify)
+    def identity(prefix):
+        assert prefix == bootstrap
+        checks.append("bootstrap")
+        return {**owner, "digest": "b" * 64} if mode == "changed-bootstrap" else owner
+    monkeypatch.setattr(generations, "bootstrap_identity", identity)
+    if mode == "missing-windowless":
+        (bootstrap / "Scripts/pythonw.exe").unlink()
+    if mode in {"changed-bootstrap", "changed-candidate", "missing-windowless"}:
+        with pytest.raises((ValueError, service.WindowsServiceError)):
+            service._background_python(tmp_path / "data")
+    else:
+        expected = candidate if mode == "no-generation" else bootstrap
+        assert service._background_python(tmp_path / "data") == str(expected / "Scripts/pythonw.exe")
+    assert checks == ([] if mode in {"manual-bootstrap", "no-generation"} else
+                      ["candidate"] if mode == "changed-candidate" else ["candidate", "bootstrap"])
+
+
+@pytest.mark.parametrize("supervised", [False, True])
+def test_task_host_protocol_roundtrip_and_legacy_definition_identity(supervised):
+    value = spec(supervised=supervised)
+    raw = json.loads(base64.b64decode(value.encoded()))
+    assert raw.get("supervised", False) is supervised
+    assert ("supervised" in raw) is supervised
+    assert service.TaskSpec.decode(value.encoded()) == value
+    assert service.owned_spec(service.task_xml(value), SID) == value
+
+
+@pytest.mark.parametrize("supervised", [None, 1, "true", []])
+def test_unknown_supervision_protocol_is_not_adopted(supervised):
+    with pytest.raises(ValueError, match="protocol"):
+        spec(supervised=supervised)
+
+
+def test_supervisor_normal_stop_does_not_restart_or_infer_generation(monkeypatch):
+    from amplifier_web import windows_task_runtime as runtime
+    value = spec(supervised=True)
+    monkeypatch.setattr(service, "_read", lambda home: ({"state": 4, "instances": 1}, value))
+    monkeypatch.setattr(service, "_launch_python", lambda spec: (spec.python, None))
+    events = []
+    async def launch(spec, python, restart, **kwargs):
+        events.append((spec, python, restart))
+        return None, 0, False
+    monkeypatch.setattr(service, "_launch_owned_host", launch)
+    monkeypatch.setattr(runtime, "read_restart", lambda spec: pytest.fail("normal stop must not request a restart"))
+    assert service._supervise(value) == 0
+    assert len(events) == 1
+    assert events == [(value, value.python, None)]
+
+
+@pytest.mark.parametrize("when", ["cleanup", "verification", "failed-verification", "failed-start", "restore", "restored-verification", "failed-run-verification", "stale"])
+def test_late_owner_stop_fences_successor_and_restore_relaunch(monkeypatch, when):
+    from amplifier_web import windows_task_runtime as runtime, windows_app_recovery as recovery
+    value = spec(supervised=True)
+    old = {"schema": 1, "registration": value.registration_id, "run": "b" * 32,
+           "pid": 123, "created": "134000000000000001",
+           "image": r"C:\Python\pythonw.exe", "phase": "stopped"}
+    target = {"revision": "c" * 40, "generation": "d" * 32, "attemptId": "e" * 32}
+    request = {"schema": 1, "run": old, "target": target}
+    failed_run = {**old, "run": "a" * 32, "pid": 456, "created": "134000000000000002"}
+    state = {"launches": 0, "selected": 0, "stop": None, "restores": 0}
+    monkeypatch.setattr(service, "_read", lambda home: ({"state": 4, "instances": 1}, value))
+    monkeypatch.setattr(runtime, "read_restart", lambda spec: request)
+    monkeypatch.setattr(runtime, "read", lambda spec, name: state["stop"])
+    def select(spec):
+        state["selected"] += 1
+        if state["selected"] == 3 and when in {"restored-verification", "failed-run-verification"}:
+            state["stop"] = failed_run if when == "failed-run-verification" else old
+        if state["selected"] == 2:
+            if when in {"verification", "failed-verification"}:
+                state["stop"] = old
+            if when == "failed-verification":
+                raise ValueError("controlled candidate failure after Stop")
+            return value.python, target
+        return value.python, None
+    # Provide only the exact validated metadata read, not candidate IO.
+    class Folder:
+        def __truediv__(self, name):
+            assert name == "validated.json"
+            return SimpleNamespace(read_text=lambda: json.dumps(target))
+    def selected(spec):
+        python, observed = select(spec)
+        return python, {**observed, "folder": Folder()} if observed else None
+    monkeypatch.setattr(service, "_launch_python", selected)
+    async def launch(*args, **kwargs):
+        state["launches"] += 1
+        if state["launches"] == 1:
+            if when == "cleanup":
+                state["stop"] = old
+            elif when == "stale":
+                state["stop"] = {**old, "run": "f" * 32}
+            return old, runtime.RESTART_EXIT, False
+        if when in {"failed-start", "restore", "restored-verification", "failed-run-verification"}:
+            if when == "failed-start":
+                state["stop"] = old
+            return failed_run if when == "failed-run-verification" else None, 1, True
+        return {**old, "run": "a" * 32}, 0, False
+    monkeypatch.setattr(service, "_launch_owned_host", launch)
+    def restore(*args):
+        state["restores"] += 1
+        assert when in {"restore", "restored-verification", "failed-run-verification"}
+        if when == "restore":
+            state["stop"] = old
+    monkeypatch.setattr(recovery, "restore", restore)
+    assert service._supervise(value) == 0
+    assert state["launches"] == (2 if when in {"failed-start", "restore", "restored-verification", "failed-run-verification", "stale"} else 1)
+    assert state["restores"] == (1 if when in {"restore", "restored-verification", "failed-run-verification"} else 0)
+
+
+def test_delayed_failed_run_stop_after_rollback_receipt_stops_current_child(monkeypatch):
+    import asyncio
+    import threading
+    from amplifier_web import windows_task_runtime as runtime
+    value = spec(supervised=True)
+    failed = {"schema": 1, "registration": value.registration_id, "run": "b" * 32,
+              "pid": 123, "created": "134000000000000001",
+              "image": r"C:\Python\pythonw.exe", "phase": "stopped"}
+    restored = {**failed, "run": "c" * 32, "pid": 456, "created": "134000000000000002"}
+    read_failed, release, monitor_started = (threading.Event() for _ in range(3))
+    state = {"current": failed, "stop": None, "published": [], "restored_exited": False}
+    monkeypatch.setattr(runtime, "read", lambda spec, name=runtime.RECEIPT:
+                        state["current"] if name == runtime.RECEIPT else state["stop"])
+    @contextmanager
+    def process(pid):
+        if pid == failed["pid"]:
+            read_failed.set()
+            assert release.wait(5)
+            yield {**failed, "exited": lambda: True}
+        else:
+            assert pid == restored["pid"]
+            yield {**restored, "exited": lambda: state["restored_exited"]}
+    monkeypatch.setattr(runtime, "process", process)
+    async def run():
+        loop = asyncio.get_running_loop()
+        finished = loop.create_future()
+        def publish(spec, record, name):
+            assert name == runtime.STOP
+            state["stop"] = dict(record)
+            state["published"].append(record["run"])
+            if record["run"] == restored["run"]:
+                state["restored_exited"] = True
+                loop.call_soon_threadsafe(finished.set_result, "settled-child")
+        monkeypatch.setattr(runtime, "publish", publish)
+        real_stop_requested = runtime.stop_requested
+        def observed(spec, record):
+            monitor_started.set()
+            return real_stop_requested(spec, record)
+        monkeypatch.setattr(runtime, "stop_requested", observed)
+        # The real Stop owner reads B, then pauses before it can publish.
+        old_stop = asyncio.create_task(asyncio.to_thread(runtime.request_stop, value, expected=failed))
+        assert await asyncio.to_thread(read_failed.wait, 5)
+        state["current"] = restored
+        monitor = asyncio.create_task(service._finish_owned_host(value, finished, restored, (failed,)))
+        assert await asyncio.to_thread(monitor_started.wait, 5)
+        assert not state["published"] and not finished.done()
+        # C has passed initial checks. B's delayed signal must still be applied.
+        release.set()
+        await asyncio.wait_for(old_stop, 5)
+        assert await asyncio.wait_for(monitor, 5) == "settled-child"
+    asyncio.run(run())
+    assert state["published"] == [failed["run"], restored["run"]]
+    assert state["restored_exited"]
+
+
+def test_deliberate_fresh_start_does_not_inherit_stop_monitor(monkeypatch):
+    import asyncio
+    from amplifier_web import windows_task_runtime as runtime
+    monkeypatch.setattr(runtime, "stop_requested", lambda *a:
+                        pytest.fail("fresh start has no inherited run"))
+    async def run():
+        finished = asyncio.get_running_loop().create_future()
+        finished.set_result("ordinary-exit")
+        assert await service._finish_owned_host(spec(), finished, {}, ()) == "ordinary-exit"
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("failure", ["timeout", "foreign-child", "reused-pid"])
+def test_supervisor_identity_failure_cannot_restart_or_restore(monkeypatch, failure):
+    from amplifier_web import windows_task_runtime as runtime
+    from amplifier_web import windows_app_recovery as recovery
+    value = spec(supervised=True)
+    monkeypatch.setattr(service, "_read", lambda home: ({"state": 4, "instances": 1}, value))
+    monkeypatch.setattr(service, "_launch_python", lambda spec: (spec.python, None))
+    async def launch(*args, **kwargs):
+        raise service.WindowsServiceError(failure)
+    monkeypatch.setattr(service, "_launch_owned_host", launch)
+    monkeypatch.setattr(recovery, "restore", lambda *a: pytest.fail("Unknown launch cannot restore"))
+    monkeypatch.setattr(runtime, "read_restart", lambda *a: pytest.fail("Unknown launch cannot restart"))
+    with pytest.raises(service.WindowsServiceError, match=failure):
+        service._supervise(value)
+
+
+@pytest.mark.parametrize("mode", ["normal", "pre-identity-exit", "foreign-member", "reused-pid",
+                                 "guard-error", "tree-not-empty", "io-not-finalized", "lost-output"])
+def test_owned_launch_never_infers_settlement_from_redirector_exit(monkeypatch, mode):
+    import asyncio
+    from amplifier_web import windows_jobs, windows_task_runtime as runtime
+    value = spec(supervised=True)
+    events, state = [], {"reads": 0, "exited": False}
+    record = {"schema": 1, "registration": value.registration_id, "run": "b" * 32,
+              "pid": 123, "created": "134000000000000001",
+              "image": r"C:\Python\pythonw.exe", "phase": "starting"}
+    class Stream:
+        async def read(self, size):
+            return b""
+    class Owner:
+        tree_empty = mode != "tree-not-empty"
+        io_finalized = mode != "io-not-finalized"
+        stdout = stderr = Stream()
+        stdin = SimpleNamespace(close=lambda: events.append("stdin-close"))
+        @classmethod
+        async def start(cls, argv, **kwargs):
+            assert argv == [value.python, "-I", "-m", "amplifier_web.windows_service",
+                            "--host", value.encoded()]
+            assert kwargs["trusted_python"] == sys._base_executable
+            assert kwargs["cwd"] == value.workspace
+            events.append("launch")
+            return cls()
+        def verify_member(self, pid, created):
+            assert (pid, created) == (record["pid"], int(record["created"]))
+            if mode == "foreign-member":
+                raise OSError("not in the exact owned job")
+            events.append("member")
+        async def wait(self):
+            state["exited"] = True
+            return SimpleNamespace(guard_returncode=1 if mode == "guard-error" else 0,
+                payload_returncode=1 if mode == "pre-identity-exit" else 0,
+                active_processes=0, output_discarded=mode == "lost-output")
+        async def close(self):
+            events.append("closed")
+    monkeypatch.setattr(windows_jobs, "WindowsOwnedProcess", Owner)
+    def read(spec):
+        state["reads"] += 1
+        return None if state["reads"] == 1 or mode == "pre-identity-exit" else record
+    monkeypatch.setattr(runtime, "read", read)
+    @contextmanager
+    def process(pid):
+        yield {**record, "created": "2" if mode == "reused-pid" else record["created"],
+               "exited": lambda: state["exited"]}
+    monkeypatch.setattr(runtime, "process", process)
+    if mode not in {"normal", "pre-identity-exit"}:
+        with pytest.raises((OSError, service.WindowsServiceError)):
+            asyncio.run(service._launch_owned_host(value, value.python, None))
+    else:
+        observed, code, failed = asyncio.run(service._launch_owned_host(value, value.python, None))
+        assert (observed, code, failed) == ((None, 1, True) if mode == "pre-identity-exit"
+                                            else (record, 0, False))
+    assert events.count("launch") == events.count("closed") == 1
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native Windows launch guard and exact descendant settlement")
+def test_native_owned_background_failure_before_any_runtime_receipt(tmp_path):
+    import asyncio
+    from amplifier_web.windows_files import directory
+    # The installed host's controlled base has no app distribution. Do not
+    # manufacture an app receipt or replace an actual installation to fail it.
+    base = sys._base_executable
+    probe = subprocess.run([base, "-I", "-c",
+        "import importlib.util; print(importlib.util.find_spec('amplifier_web') is None)"],
+        capture_output=True, text=True, timeout=10, check=False)
+    if probe.returncode or probe.stdout.strip() != "True":
+        pytest.skip("This base interpreter already has the app; it is not the no-identity fixture")
+    home = tmp_path / "absent-app"
+    with directory(home / "config/services", owned_root=home, create=True):
+        pass
+    value = spec(python=base, data_dir=str(home), workspace=str(tmp_path), supervised=True)
+    observed, code, failed = asyncio.run(service._launch_owned_host(value, base, None))
+    assert observed is None and code != 0 and failed is True
+    # Successful return requires payload/guard/empty-tree/final-I/O checks.
+    assert not (home / "config/services/task-runtime.json").exists()
+    assert (home / "config/services/task-launcher-output.log").is_file()
+
+
+def test_host_does_not_start_attached_to_a_console_without_protection(monkeypatch):
+    from amplifier_web import windows_hidden_console, windows_task_runtime
+    saved = []
+
+    def unsafe():
+        raise windows_hidden_console.HiddenConsoleError("attached, not protected, not released")
+
+    monkeypatch.setattr(windows_hidden_console, "ensure_hidden_console", unsafe)
+    monkeypatch.setattr(windows_task_runtime, "record_failure",
+                        lambda value, error, source: saved.append((value, str(error), source)))
+    monkeypatch.setattr(service, "_read", lambda *a: pytest.fail("an unsafe host must not continue"))
+    monkeypatch.setattr(windows_task_runtime, "Runner",
+                        lambda *a: pytest.fail("an unsafe host must not publish a runtime receipt"))
+    # The launcher sees a host that ended before its receipt: a failed start.
+    with pytest.raises(windows_hidden_console.HiddenConsoleError):
+        service._host(spec(supervised=True))
+    # The reason is saved for the owner's status command.
+    assert saved == [(spec(supervised=True), "attached, not protected, not released", "host")]
+
+
+@pytest.mark.parametrize("ending,recorded", [
+    (None, False), (SystemExit(0), False), (SystemExit(), False), (KeyboardInterrupt(), False),
+    (SystemExit("Could not start Amplifier on 127.0.0.1, port 21603."), True),
+    (SystemExit(1), True), (OSError("unexpected"), True)])
+def test_host_saves_a_reason_only_when_it_ends_with_an_error(monkeypatch, ending, recorded):
+    from amplifier_web import windows_task_runtime
+    saved = []
+    monkeypatch.setattr(windows_task_runtime, "record_failure",
+                        lambda value, error, source: saved.append((error, source)))
+
+    def serve(value):
+        if ending is not None:
+            raise ending
+        return 75  # A restart request is a normal return, not a failure.
+
+    monkeypatch.setattr(service, "_serve_host", serve)
+    if ending is None:
+        assert service._host(spec()) == 75
+    else:
+        with pytest.raises(type(ending)):
+            service._host(spec())
+    assert saved == ([(ending, "host")] if recorded else [])
+
+
+@pytest.mark.parametrize("outcome", [0, 3, "error"])
+def test_launcher_saves_a_reason_when_the_host_or_the_launch_fails(monkeypatch, outcome):
+    from amplifier_web import windows_files, windows_jobs, windows_task_runtime
+    value = spec(supervised=True)
+    saved, files = [], {}
+    for name in ("PATH", "AMPLIFIER_SESSION_STATE_HOME", "AMPLIFIER_GITHUB_ACCESS", "AMPLIFIER_WEB_HOME"):
+        monkeypatch.setenv(name, "prior")
+    monkeypatch.setattr(service, "_require_python", lambda: None)
+    monkeypatch.setattr(service, "_owner", lambda: SID)
+    monkeypatch.setattr(service, "_read", lambda home: ({"state": 4, "instances": 1}, value))
+    monkeypatch.setattr(service.os, "chdir", lambda path: None)
+    monkeypatch.setattr(windows_jobs, "contain_current_host", lambda: None)
+    monkeypatch.setattr(windows_files, "address", PureWindowsPath)
+
+    @contextmanager
+    def directory(path, **kwargs):
+        yield SimpleNamespace(publish_private=lambda name, content, replace: files.update({name: content}))
+
+    monkeypatch.setattr(windows_files, "directory", directory)
+    monkeypatch.setattr(windows_task_runtime, "record_failure",
+                        lambda value, error, source, **options: saved.append((str(error), source, options)))
+
+    def supervise(value):
+        if outcome == "error":
+            raise service.WindowsServiceError("The scheduled launch definition changed.")
+        return outcome
+
+    monkeypatch.setattr(service, "_supervise", supervise)
+    with pytest.raises(SystemExit) as ended:
+        service._run(value.encoded())
+    if outcome == 0:
+        assert ended.value.code == 0 and saved == [] and files == {}
+    elif outcome == 3:
+        # The host ended with an error: the launcher exits with that code and
+        # does not replace a newer reason that the host saved itself.
+        assert ended.value.code == 3 and files == {}
+        (text, source, options), = saved
+        assert (text, source) == ("Its background process ended unexpectedly (exit code 3).", "launcher")
+        assert abs(options["unless_since"] - time.time()) < 60
+    else:
+        # This path ends with exit code 0, so the saved reason is the only signal.
+        assert ended.value.code == 0 and set(files) == {"task-launcher-error.json"}
+        (text, source, options), = saved
+        assert (text, source) == ("The scheduled launch definition changed.", "launcher")
+        assert abs(options["unless_since"] - time.time()) < 60
+
+
+def test_host_attaches_the_windowless_console_before_any_other_step(monkeypatch):
+    from amplifier_web import windows_hidden_console
+    order = []
+    monkeypatch.setattr(windows_hidden_console, "ensure_hidden_console",
+                        lambda: order.append("console") or {"status": "attached"})
+
+    def read(home):
+        order.append("task")
+        raise service.WindowsServiceError("stop here")
+
+    monkeypatch.setattr(service, "_read", read)
+    with pytest.raises(service.WindowsServiceError):
+        service._host(spec(supervised=True))
+    assert order == ["console", "task"]
+
+
+def test_unqualified_supervised_update_owner_is_closed_before_any_native_read(monkeypatch):
+    monkeypatch.setattr(service, "SUPERVISED_UPDATES_QUALIFIED", False)
+    monkeypatch.setattr(service, "_read", lambda *a: pytest.fail("closed gate must not inspect native tasks"))
+    assert service.update_owner(spec().data_dir) is None
+
+
+@pytest.mark.parametrize("change", ["legacy", "instances", "missing", "other-pid", "starting"])
+def test_supervised_update_requires_the_actual_listening_host(monkeypatch, change):
+    from amplifier_web import application_generations, windows_task_runtime
+    value = spec(supervised=change != "legacy")
+    task = {"state": 4, "instances": 2 if change == "instances" else 1}
+    record = None if change == "missing" else {
+        "pid": os.getpid() + (1 if change == "other-pid" else 0),
+        "phase": "starting" if change == "starting" else "listening"}
+    monkeypatch.setattr(service, "SUPERVISED_UPDATES_QUALIFIED", True)
+    monkeypatch.setattr(service, "_read", lambda home: (task, value))
+    monkeypatch.setattr(windows_task_runtime, "observe", lambda spec: record)
+    monkeypatch.setattr(application_generations, "supports", lambda *a: pytest.fail("unverified owner cannot inspect candidate"))
+    assert service.update_owner(value.data_dir) is None
+
+
+def test_supervised_update_owner_preserves_stable_bootstrap(monkeypatch):
+    from amplifier_web import application_generations, windows_task_runtime
+    value = spec(supervised=True)
+    monkeypatch.setattr(service, "SUPERVISED_UPDATES_QUALIFIED", True)
+    monkeypatch.setattr(service, "_read", lambda home: ({"state": 4, "instances": 1}, value))
+    monkeypatch.setattr(windows_task_runtime, "observe",
+                        lambda spec: {"pid": os.getpid(), "phase": "listening"})
+    seen = []
+    monkeypatch.setattr(application_generations, "supports", lambda path: seen.append(str(path)) or True)
+    assert service.update_owner(value.data_dir) == value
+    assert len(seen) == 1
+
+
+def test_supervised_release_admission_is_enabled_not_inferred_from_registration():
+    assert service.SUPERVISED_UPDATES_QUALIFIED is True
+
+
+def test_launch_roots_are_public_paths_not_arbitrary_environment():
+    value = spec(launch_roots={"AMPLIFIER_HOME": r"C:\Private\shared",
+                              "UV_CACHE_DIR": r"C:\Private\cache"})
+    assert service.TaskSpec.decode(value.encoded()) == value
+    for roots in ({"OPENAI_API_KEY": "secret"}, {"PATH": r"C:\Other"},
+                  {"AMPLIFIER_HOME": "relative"}, {"UV_CACHE_DIR": "C:\\bad\npath"}):
+        with pytest.raises(ValueError):
+            spec(launch_roots=roots)
+
+
+@pytest.mark.parametrize("change", [None, "foreign-pid", "starting", "two-instances", "wrong-python"])
+def test_background_target_discovery_uses_exact_owned_task_not_uv_global_state(tmp_path, monkeypatch, change):
+    from pathlib import Path
+    from amplifier_web import application_generations, windows_files, windows_task_runtime
+    monkeypatch.setattr(service, "SUPERVISED_UPDATES_QUALIFIED", False)
+    prefix = tmp_path / "private-host"
+    (prefix / "Scripts").mkdir(parents=True)
+    python = prefix / "Scripts/pythonw.exe"
+    python.write_bytes(b"test interpreter")
+    other = prefix / "Scripts/other.exe"
+    other.write_bytes(b"other")
+    value = spec(supervised=True)
+    # Native path/type/private checks are tested independently; this portable
+    # seam isolates actual task/host binding and never grants restart capability.
+    object.__setattr__(value, "python", str(python))
+    monkeypatch.setattr(service, "_read", lambda home: (
+        {"state": 4, "instances": 2 if change == "two-instances" else 1}, value))
+    monkeypatch.setattr(windows_task_runtime, "observe", lambda spec: {
+        "pid": os.getpid() + (1 if change == "foreign-pid" else 0),
+        "phase": "starting" if change == "starting" else "listening"})
+    monkeypatch.setattr(windows_task_runtime, "current_process_record", lambda home: {"pid": os.getpid()})
+    monkeypatch.setattr(service.sys, "executable", str(other if change == "wrong-python" else python))
+    monkeypatch.setattr(service, "_launch_python", lambda spec: (str(python), None))
+    monkeypatch.setattr(windows_files, "address", Path)
+    seen = []
+    @contextmanager
+    def directory(path, **kwargs):
+        seen.append((path, kwargs))
+        yield SimpleNamespace(read_private=lambda name, limit: b"MZ launcher")
+    monkeypatch.setattr(windows_files, "directory", directory)
+    monkeypatch.setattr(application_generations, "bootstrap_identity",
+                        lambda path: {"prefix": str(path), "digest": "0" * 64})
+    if change is None:
+        assert service.installed_target(value.data_dir) == (prefix, prefix / "Scripts/amplifier-unified.exe")
+        assert len(seen) == 2
+        assert service.SUPERVISED_UPDATES_QUALIFIED is False
+    else:
+        with pytest.raises(service.WindowsServiceError):
+            service.installed_target(value.data_dir)
+        assert not seen
+
+
+def test_foreground_discovery_does_not_contact_scheduler(monkeypatch):
+    from amplifier_web import windows_task_runtime
+    monkeypatch.setattr(windows_task_runtime, "current_process_record", lambda home: None)
+    monkeypatch.setattr(service, "_read", lambda *a: pytest.fail("foreground must not query Scheduler"))
+    assert service.installed_target(spec().data_dir) is None
 
 
 def test_free_threaded_interpreter_is_not_ordinary_python(monkeypatch):
@@ -541,13 +1559,11 @@ def test_free_threaded_interpreter_is_not_ordinary_python(monkeypatch):
 
 
 def test_failed_stop_cannot_start_successor_or_remove_task(backend, monkeypatch):
+    from amplifier_web import windows_task_runtime
     service.install(spec().data_dir)
-    original = service._scheduler
-    def fail(op, sid, **kwargs):
-        if op == "stop":
-            raise service.WindowsServiceError("stop outcome unknown")
-        return original(op, sid, **kwargs)
-    monkeypatch.setattr(service, "_scheduler", fail)
+    def fail(*args, **kwargs):
+        raise service.WindowsServiceError("stop outcome unknown")
+    monkeypatch.setattr(windows_task_runtime, "request_stop", fail)
     backend["calls"].clear()
     with pytest.raises(service.WindowsServiceError, match="unknown"):
         service.command("restart", spec().data_dir)
@@ -589,7 +1605,7 @@ def test_native_argv_unicode_and_quoting_roundtrip():
 
 @pytest.mark.skipif(os.name != "nt" or os.environ.get("AMPLIFIER_TEST_WINDOWS_TASKS") != "1",
                     reason="Opt-in only: AMPLIFIER_TEST_WINDOWS_TASKS=1 on an interactive Windows test account")
-def test_native_synthetic_task_create_run_stop_remove(tmp_path):
+def test_native_synthetic_task_create_run_exit_remove(tmp_path):
     # This is a transport probe, NOT Unified host/sign-out/readiness acceptance.
     # Never register the production task name or run the real application.
     sid = service._owner()
@@ -600,7 +1616,7 @@ def test_native_synthetic_task_create_run_stop_remove(tmp_path):
     root.find(f"{service._q('RegistrationInfo')}/{service._q('URI')}").text = "\\" + name
     root.find(f"{service._q('RegistrationInfo')}/{service._q('Description')}").text = "synthetic transport probe"
     action = root.find(f"{service._q('Actions')}/{service._q('Exec')}/{service._q('Arguments')}")
-    action.text = subprocess.list2cmdline(["-I", "-S", "-c", "import time; time.sleep(60)"])
+    action.text = subprocess.list2cmdline(["-I", "-S", "-c", "import time; time.sleep(5)"])
     xml = ET.tostring(root, encoding="unicode")
     assert service._scheduler("query", sid, name=name)["exists"] is False
     # Cleanup always reconciles the exact unique task after a lost receipt.
@@ -622,8 +1638,11 @@ def test_native_synthetic_task_create_run_stop_remove(tmp_path):
                 break
             assert time.monotonic() < deadline, "Synthetic task did not run in this interactive account"
             time.sleep(.1)
-        stopped = service._scheduler("stop", sid, name=name, previous=current["xml"])
-        assert stopped["instances"] == 0
+        deadline = time.monotonic() + 15
+        while current["instances"]:
+            assert time.monotonic() < deadline, "Synthetic task did not finish; exact task retained"
+            time.sleep(.1)
+            current = service._scheduler("query", sid, name=name)
     finally:
         current = service._scheduler("query", sid, name=name)
         if current["exists"]:

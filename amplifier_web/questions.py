@@ -14,6 +14,14 @@ import time
 import uuid
 
 
+def reminder_dismissed(record):
+    """A disposition covers only this answered question's immutable input."""
+    input_id = (record.get("delivery") or {}).get("inputId")
+    return (record.get("status") == "answered" and
+            input_id == "question:" + record["id"] + ":answer" and
+            (record.get("reminderDismissal") or {}).get("inputId") == input_id)
+
+
 def definitions(schema, string):
     identity = {"sessionId": {**string(200), "minLength": 1}, "id": {**string(100), "minLength": 1}}
     revision = {"expectedRevision": {"type": "integer", "minimum": 1}}
@@ -35,6 +43,7 @@ def definitions(schema, string):
         "question.list": ("Read this conversation's saved questions without selecting it or starting work. Pending is not answered, regardless of elapsed time.", schema({"sessionId": identity["sessionId"], "status": {"enum": ["pending", "answered", "cancelled", "superseded"]}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 50}}, ["sessionId"])),
         "question.read": ("Read one exact question, its answer provenance and separate runtime delivery state.", schema(identity)),
         "question.answer": ("Record an explicit answer once for this question revision. Choose optionId or text. Cite the actual user's sourceMessageId. For an answer delivered from another chat, also supply sourceRequestId from that coordination.send; the host verifies the original human input and exact handoff. Do not ask the user to repeat an answer already delivered this way. Answering does not grant tool permissions or reset budgets. Duplicate answers never replay work.", schema({**identity, **revision, "optionId": string(100), "text": string(8000), "sourceMessageId": string(200), "sourceRequestId": string(200)}, ["sessionId", "id", "expectedRevision"])),
+        "question.dismiss": ("Clear only this answered question's delivery reminder at the exact revision and saved inputId. Preserves the answer, provenance and unknown/rejected delivery evidence. Does not check, retry, resend, cancel, grant permission or start dependent work. Pending questions cannot be dismissed. Late acceptance remains independent. Keep a stable command ID.", schema({**identity, **revision, "inputId": {**string(200), "minLength": 1}}, ["sessionId", "id", "expectedRevision", "inputId"])),
         "question.cancel": ("Cancel a pending question at the exact revision. Cancellation is not an answer and does not authorize the dependent work.", schema({**identity, **revision, "reason": string(1000)}, ["sessionId", "id", "expectedRevision"])),
         "question.supersede": ("Replace a pending question atomically. Late answers to the old question are rejected. The replacement has its own ID and revision.", schema({**identity, **revision, **content}, ["sessionId", "id", "expectedRevision", "prompt", "required", "dependency"])),
     }
@@ -151,9 +160,11 @@ class Questions:
                 if not isinstance(session.get("questions"), list) or session["questions"]:
                     session["questions"] = []
                 continue
-            # Retain every active/uncertain question and bounded recent history.
+            # Reviewed uncertainty is history, not an indefinitely active card.
             visible = {r["id"] for r in records[-10:]}
-            visible.update(r["id"] for r in records if r["status"] == "pending" or (r.get("delivery") or {}).get("status") in {"sending", "unknown", "rejected"})
+            visible.update(r["id"] for r in records if r["status"] == "pending" or (
+                (r.get("delivery") or {}).get("status") in {"sending", "unknown", "rejected"}
+                and not reminder_dismissed(r)))
             # An older closed question can still host a mounted review. Do not
             # evict its editor merely because newer questions filled history.
             visible.update(binding['questionId']
@@ -298,6 +309,22 @@ class Questions:
             self.store.put(record)
             return copy.deepcopy(record)
         record = self.store.get(session["id"], args["id"])
+        if action == "question.dismiss":
+            delivery = record.get("delivery") or {}
+            if (record["revision"] != args["expectedRevision"] or
+                    record["status"] != "answered" or not record.get("answer") or
+                    args["inputId"] != "question:" + record["id"] + ":answer" or
+                    delivery.get("inputId") != args["inputId"] or
+                    delivery.get("status") not in {"unknown", "rejected", "accepted"}):
+                raise AppError("This answered question changed or its delivery input does not match. Read it before clearing the reminder.", 409)
+            if not reminder_dismissed(record):
+                now = time.time()
+                record.update(revision=record["revision"] + 1, updatedAt=now,
+                              reminderDismissal={"inputId": args["inputId"], "dismissedAt": now,
+                                                 "origin": origin, "clientId": client_id})
+                self.store.put(record)
+            # No Canvas transition, runtime input, dependency or delivery check.
+            return copy.deepcopy(record)
         if record["revision"] != args["expectedRevision"] or record["status"] != "pending":
             raise AppError("This question changed or is already closed. Read it before continuing; the answer was not sent.", 409)
         # The action lock orders this check with renderer dirty declarations.
@@ -366,7 +393,15 @@ class Questions:
             status, message = "unknown", "Delivery was interrupted. The saved answer has not been sent again."
             cancelled = True
         except Exception as exc:
-            status = "rejected" if isinstance(exc, AppError) and exc.code == "session_busy" else "unknown"
+            # Only this send's exact pre-input startup receipt proves that the
+            # saved answer was not delivered. Error text/code alone, malformed
+            # receipts and another session/input's failure remain uncertain.
+            startup_rejected = (
+                isinstance(exc, AppError) and exc.code == "worker_startup_failed"
+                and isinstance(exc.receipt, dict)
+                and exc.receipt == {"delivery": "failed", "inputId": input_id, "sessionId": session["id"]}
+            )
+            status = "rejected" if startup_rejected or isinstance(exc, AppError) and exc.code == "session_busy" else "unknown"
             message = str(exc)
         async with self.app.lock:
             record = self.store.get(session["id"], question_id)

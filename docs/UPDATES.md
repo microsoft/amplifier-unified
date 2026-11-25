@@ -31,7 +31,15 @@ finish its turn before adopting the new one.
   and rollback. They do not turn a configured moving ref into a permanent pin
   for later updates.
 
-### Explicit app-only requests and terminal configuration holds
+When configuration explicitly replaces a module's full commit pin with another
+commit of the same repository and package, preparation replaces the old generated
+retention entry in its new candidate. The actual selected manifest must declare
+that module and agree with its configured commit, package and source identity.
+Authored dependency constraints and resolver overrides still apply. Preparation
+rechecks configuration, source and generation identity before qualification;
+it never rewrites the serving generation or its rollback receipts.
+
+### Explicit app-only requests and idle configuration holds
 
 `updates.app` requests only application preparation and activation, including the
 app package's qualified dependencies. It supersedes an older whole-install
@@ -42,22 +50,47 @@ readiness ends that request; it does not install components from the superseded
 sequence. `updates.install` still requests the whole app → included → other
 sequence. A later ordinary policy check can start a new update cycle.
 
-Normal app replacement may leave an operation-bound configuration error held
-when the exact current operation, immutable request/payload and every bounded
-native attempt prove a terminal known effect, with unchanged saved configuration
-for a saved outcome. The target must have no mounted worker, preparation, running
-turn or child work, refresh, unsettled management task or runtime operation.
-Missing, forged, contradictory, partial or unknown native evidence stays blocked.
-The app owner rechecks the same operation, target, Stop and revision across
-validation waits and holds the absent native writer boundary through activation.
+An application check can discover a newer published app while a Smart Tool
+with a known staged target is waiting to activate. An explicit app request
+refreshes a missing selection. Install can prepare the newer app and still
+waits for an idle host before replacement. The tool keeps its staged target,
+its activation gate, and any existing failure receipts. An interrupted tool
+stage with no known target keeps its existing handoff protection.
+
+Normal app, component and Smart Tool updates do not require recovery of an idle
+configuration error or adoption of saved configuration by an absent worker.
+`configurationPending` and retained operation phases describe intent/evidence, not executing work.
+For example, a lost native receipt can leave settings unresolved without keeping
+the host on old software. The held conversation must have no mounted worker,
+preparation, running turn or child work, executing refresh, unsettled management task or
+runtime operation. Cancellation requested is not settled work. The app owner
+rechecks held-owner, execution/native target and Stop bindings across validation
+waits and holds the absent native writer boundary through activation. A changed
+candidate or intent must be qualified again before replacement.
 
 This is update quiescence, not configuration success or renewed configuration
 authority: the original error, request, payload, settings, authority, attempts,
 native seal and input fence remain unchanged. It never resumes, reconciles,
 mounts, cancels or rewrites that operation, and does not enqueue target model
-input. Component activation does not inherit this app-only exception. Legacy
-non-operation recovery holds retain their existing qualification checks; explicit
-user-only force-restart semantics are unchanged.
+input. Missing, contradictory, partial or unknown historical evidence stays
+unresolved; replacement does not upgrade it to a known outcome. Status reads do
+not rescan native receipts or saved configuration to decide update quiescence.
+All update paths use the same activity assessment, without classifying old
+operations as legacy or modern. Component and tool activation retain their
+runtime-lifecycle and admission locks; generation promotion keeps active workers
+on their leased generation. Explicit user-only force-restart semantics are
+unchanged. Real active work can still require waiting or deliberate interruption;
+an idle recovery hold alone cannot.
+
+At ordinary error settlement and startup, the configuration owner can observe
+an authenticated terminal no-effect receipt for the exact native attempt without
+renewing its permission. Startup holds exclusive absent-writer ownership, retains
+the original request, attempts and history, and persists an old-input cutoff before
+releasing that operation's local fence. It neither warms the old chat nor drains
+its queued input. Missing, conflicting, partial and saved-but-unloaded outcomes
+remain local fences; no consumer recovery action is required for an unrelated
+update. This bookkeeping is not a prerequisite for updates or a second recovery
+service.
 
 ### Partial failure does not abort independent progress
 
@@ -150,16 +183,18 @@ every running worker. The existing worker-adoption status remains separate.
 
 `includedCanProceed` permits an independent eligible installation despite included
 source issues. It does not clear a pending replacement, restart or uncertain
-operation, and does not make the failed tier “Up to date.” An unchanged automatic
-check does not silently retry retained failures; a deliberate manual check can
-refresh the desired sources for a new guarded attempt.
+operation, and does not make the failed tier “Up to date.” Neither a manual nor
+an automatic Check retries unchanged retained failures. A deliberate Install
+can request a new guarded attempt; a genuinely changed desired revision can
+also make new work eligible.
 
 Automatic availability freshness is not deliberate retry intent. Unchanged
 retained outcomes survive later unrelated tier promotions through the existing
 generation receipt and reverified source identities. A fresh unknown failure
 cannot borrow an older settled outcome. Cancellation during later preparation
 retains the inspection fence even if the visible diagnostic still names the
-earlier fetch failure. Changes to source identity, desired revision or relevant
+earlier fetch failure. The successor-host retirement rule below can release
+that fence only with proof that the owning process has stopped. Changes to source identity, desired revision or relevant
 configuration can make new work eligible; a retention-only status projection
 does not.
 
@@ -201,6 +236,20 @@ repeat an unknown installation.
 Available updates are listed immediately at the top of Settings. The application has its own card showing the installed version even before the first check, plus the latest published release after a successful check. The complete source inventory is behind **Show all sources**; failed checks are called out separately. Successfully installed application releases are removed from the pending count on restart. An installation newer than the published release is identified explicitly; application updates follow stable GitHub Releases, not every commit on main.
 
 Automatic update checks default to every **4 hours**. Under **Update preferences**, choose every **1 hour**, **4 hours**, **8 hours**, or **daily**. Existing saved schedules remain unchanged on upgrade, including the previous daily default and older 6-hour or weekly choices. Older choices are shown with an explanation until replaced. Resetting app settings restores the 4-hour check interval while leaving automatic installation off.
+
+A host start adds one check. When the host starts and its last check, or its last attempt to check, is **1 hour** old or more, the update owner checks soon after the start and does not wait for the rest of the interval. This check asks again; it does not reuse saved availability results. That holds for every such start, also when the timed interval has passed as well. Everything else is as for a timed check: it follows **Keep Amplifier up to date**, it interrupts no running work, and it retries no failed update. The first check that is admitted after the start ends this reason: the owner's own check, a person's check, and also a check that fails. The owner then follows the timed interval again, counted as before from the newest saved check or attempt. A check saves the time of its attempt before it looks. So a start check that fails, for example because the network is not up yet, is not repeated; the next automatic check is one interval later, as after any failed check. When a part of the old interval remained at the start, that next automatic check is later than it was before this rule, and no completed check lies between: without the start check, the timed check ran when the rest of the old interval had passed. A person's **Check for updates** does not wait for the interval. Like every check, it is refused in some states, for example while a prepared component update waits for its activation or while a restart is pending. A clock that is set back after the start brings no second start check. A start with a younger last check or attempt starts no check. With automatic checks off, the owner starts neither a timed check nor a check at a host start; an update sequence that has already begun still continues with its next check. The two numbers are `DEFAULT_CHECK_INTERVAL_HOURS` and `HOST_START_CHECK_AFTER_HOURS` in `amplifier_web/updates.py`. `UpdateManager.check_due` is the one rule for a check that time causes: the timed check and the check at a host start. A check that continues an update sequence, and the new check of a selection that changed, are not caused by time and do not use it. When a host starts while an update sequence waits for its next component check, and the sequence is not stopped at an error or an interruption, the owner asks for that check before a check that time causes, unless a state that the owner's pass handles earlier is present (for example a staged application or an unresolved preparation). When that check is admitted, it ends the start reason, although it looks only at components. The owner's next check that time causes, with its look for an application release, then follows the timed interval.
+
+Release qualification starts an ordinary worker from the installed candidate wheel in the prepared
+conversation interpreter. It reopens a synthetic saved conversation using both current tool
+registration and the older direct-registration contract. A local provider refuses all model
+requests. A failed start or reopen stops publication before a tag is created.
+
+On POSIX, ordinary application staging repeats the retained-registration check with an existing
+prepared conversation interpreter before selecting the update. If the selected component generation
+changes while the app waits, activation first qualifies the new pairing. An identical startup
+failure on the current and candidate applications is recorded as an existing component problem so
+an app repair can proceed. First setup and custom runtimes without the tested loop and context
+continue with the ordinary application checks. The worker check uses a disposable local conversation.
 
 Settings also provides manual checks, installation, and ecosystem rollback. Scheduled checks run while the local host is open; this is not a separate OS daemon. The Settings icon shows an update indicator. These controls use the shared action registry; forced interruption requires an explicit user confirmation.
 
@@ -266,6 +315,13 @@ is labeled separately: restarting does not reconcile it or clear its chat fence.
 Ordinary automatic updates wait for idle work. An owner can explicitly yield its
 active objective at a supported native turn boundary as described below.
 
+`updates.activation` describes the prepared app: `waiting` while work blocks it,
+or `starting` when it can continue by itself. When no work runs, the update starts
+by itself and the page offers no interruption. The saved phase stays `app-staged`
+until the replacement marker is written. `updates.forceRestartTarget` stays in
+the saved state in both cases, because `task.waitForUpdate` names it. Only the
+bundled page's view omits it: when no work delays the update, and on Windows.
+
 `updates.forceRestart` requires `confirm: true` and the exact
 `hostInstanceId`, staged `revision`, `generation`, and `attemptId` from
 `updates.forceRestartTarget`. Only user/UI origins may confirm; an agent cannot
@@ -273,7 +329,10 @@ supply its own confirmation. A changed host or candidate rejects the request
 before effects. The action returns a request ID; a queued rejection is reported
 in `updates.forceRestartResult` for that request, without an automatic retry.
 Force is available only for an immutable qualified application generation, not
-an in-place legacy installation or an ecosystem-only update.
+an in-place legacy installation or an ecosystem-only update. On Windows a forced
+restart is not available. `update_restart.require` refuses it: at dispatch,
+before the request is recorded, and again before activation reaches its own
+Windows check. The update state stays as it is.
 
 Candidate and serving-component validation still run. At final admission the
 normal durable replacement fence blocks new work, then the owned runtime is
@@ -292,19 +351,241 @@ Shared remote/ref lookups join across application and worker checks, with bounde
 
 Installation stages changed source bindings and prepares the **currently offered app profiles** with the enabled app behaviors. Saved chats and historical workspace/bundle combinations do not expand this qualification set. A single dependency batch collects selected modules and bundle-root packages, resolves their union once in an isolated environment, freezes the graph, and mounts each offered profile in a fresh process. These checks deny approval requests, verify required host capabilities and absence of CLI libraries, and never execute a model turn. Module initialization hooks still run.
 
+A component update qualifies the selected conversation profile, and a profile
+with no provider cannot qualify. While the app's own profile is selected and no
+AI connection is set up, the update owner starts no component candidate and
+records no attempt. Settings says that components update after an AI connection
+is set up, and that nothing failed. When the application release check failed,
+the text says that instead of "nothing failed", and that the component update
+waits for another reason. The published status is `waiting` with
+`action: connect`; it requires no attention. This holds for the automatic update of a new
+installation and for a person's own Update request, on every platform. The
+update starts after the first connection: a connection changes the checked
+configuration, so the owner checks once more and installs that checked
+selection. An installation that never gets a connection never updates its
+components; it also cannot hold a conversation. An application update does not
+wait, and neither does a check that finds only Smart Tool updates. The other
+tier is still checked after the included tier, so it waits behind an included
+component update that waits.
+
+The rule (`profile_catalog.connection`) reads the same global settings as the
+stage, and it merges and drops provider rows by the same steps as composition
+(`host.config.merge`, `host.config.provider_dropped`). It makes a claim only for the app's own
+profiles from their own source with the app's own behaviors, which declare no
+provider. A profile from another source, a bundle source override or another
+app behavior can declare a provider itself: there the stage runs and the probe
+decides. Its refusal of an incomplete selected profile carries a reason,
+`ai-connection-needed` when only a provider is missing and the loop is
+supported, and `incomplete-conversation-profile` otherwise.
+
+Update health does not reclassify an earlier failure record. Releases before
+this rule started the component update of a new installation by themselves and
+recorded its refusal as a failed update. That record named no reason, and the
+refusal covered every incomplete selected profile, so the record cannot prove
+that only a connection was missing. It keeps its priority as component attention
+until a later component update completes; a separate application success does
+not resolve that attempt. The
+existing rule for an older preparation failure then makes it history. While no
+AI connection is set up, the record's text also names the missing connection,
+because a retry cannot start without one; a record of `ai-connection-needed`
+says that already. On such
+an installation the person sets up an AI connection; the update then starts
+when a component update is available
+(by itself, or at the person's Update request when automatic installation is
+off). A new installation never gets such a record, because no attempt starts.
+
+The owner's pass and a person's Update request share one step for a selection
+that changed after its check (`UpdateManager.install_checked`): the refusal
+before anything is prepared leads to one new check, and that checked selection
+is installed under the caller's own admission. A second refusal, and a check
+that fails, are reported as before; nothing is repeated.
+
+A new installation has a prepared worker environment and no component
+generation until its first component update. Until then a conversation fetches
+each declared source and installs its modules at its first use. A check there
+does not offer that first use as an update. A declared source that nothing has
+fetched yet is not listed "to install": the count would be withdrawn by the
+next check. A module that a chat installed follows the branch of the binding
+that the chat wrote below the data folder's `foundation/cache/.source-bindings`.
+It is not a fixed version, and it starts no "Refresh included components"
+update. A fetched source and an installed module are still checked like every
+other component: when their branch has a newer revision, the check lists a
+real update. The rule for an absent source holds only with a worker environment
+and no selected generation; the rule for a module only with no selected
+generation. A generation is immutable, so there an absent declared source stays
+an update, and a module's branch comes only from that generation's own
+bindings. With no worker environment the first component update still lists
+the environment and every declared source. The bindings must name exactly one
+ref for a module's source and commit; with none, or with two different refs,
+the commit stays a fixed version as before.
+
+The first real component update of such an installation makes its first
+generation. Qualification asks the branch of each chat-installed module again
+(`runtime_source_policy.qualify_cache_policies`). A module at the head of its
+branch is recorded with that branch. The sequence installs included components
+first and checks the other components after that. So a chat-installed module of
+the other components that is behind its branch is still behind when an update
+of included components makes the first generation, and the existing rule
+records it as a moved reference. The check of the other components follows as
+the continuation of the same sequence. It lists the module's source as an
+update, and that second update moves the module to its branch and records the
+branch again. Such an installation therefore runs two component updates, one
+after the other, where one was enough before this rule. Settings says "Updates
+available" between them, not "You're up to date". A full check between the two
+lists the moved reference as "Refresh included components"; that update settles
+it in the same way. Before this rule a new installation ran one component
+update after its first chat, also when no module was behind and nothing
+changed. With this rule it runs none there.
+
+A new installation with no AI connection waits for a connection only when a
+check found a component update. When the check found none, Settings says that
+the installation is up to date.
+
 A proven catalog-data-only change reuses an already qualified runtime. This requires an exact tree comparison, an allowlisted data contract and unchanged app-profile inputs. Unknown files, code, dependency or profile changes take the qualification path. Failed qualification leaves the active pointer unchanged.
 
-Qualified component generations use per-worker activation. Promotion atomically changes the generation selected by new starts. Running workers retain their source generation and environment; after they park with no active jobs, queued input, approval or uncertain operation, the existing retirement handshake releases them. The next explicit work starts a fresh worker on the current generation and resumes native history. Active voice protects its worker. The updater does not interrupt a turn, automatically replay an operation, or add another checkpoint format. Application replacements, incompatible worker protocols and legacy generations retain the coordinated restart boundary.
+Qualified component generations use per-worker activation. Promotion atomically changes the generation selected by new starts. Running workers retain their source generation, environment and native writer, including while idle. The existing retirement handshake saves, rechecks pending work/resources and exits before releasing ownership. The next explicit work starts a fresh worker on the current generation and resumes native history. Active voice protects its worker. The updater does not interrupt a turn, automatically replay an operation, or add another checkpoint format. Application replacements, incompatible worker protocols and legacy generations retain the coordinated restart boundary.
 
 Custom workspace/session dependency overrides qualify a separate environment on explicit execution, coalesced by effective configuration and source content. Browsing a chat does not prepare it. Identical qualified graphs share immutable environments; provider keys, connection IDs, model selection and prompt text do not define a dependency graph. Conflicting distribution sources in an offered union fail candidate qualification instead of silently choosing one. Local overrides retain their explicit source semantics.
 
 The logical roles are candidate, current and previous. Physical generations remain while live workers, custom profiles, recorded environments or explicit source references need them. Private worker leases protect admission and process lifetime. Cleanup retires only proven, unreferenced owned generations and environments; uncertain data and shared source objects are retained. A busy worker on one generation does not block cleanup of an unrelated unused generation. Rollback promotes the previous qualified generation through the same adoption boundary and disables automatic installation.
 
+If Git reports a missing file object while uv checks out a component, Unified retries once using a cache under its own data directory. After the candidate passes validation, later updates using the same original cache start with the recovered cache, including after a host restart. Existing installations remain usable throughout. If that private cache develops the same fault, Unified uses uv to clear it before retrying. Offline and explicit command-line cache selections keep their usual behavior.
+
 Availability checks reuse a private inventory index, invalidated by generation, registry and configuration changes, with periodic full reconciliation. Remote-ref requests retain coalescing and bounded cached availability; a manual refresh refreshes remote availability. Every installation repeats exact source preflight, so cached availability cannot authorize overwriting an intervening local edit. Unified owns its registry, source store and runtimes. CLI caches and registries remain separate; shared settings, credentials and native projects/history authorities are unchanged.
 
 Core follows published PyPI releases using the app's wheel-only policy. Foundation's host library, the streaming engine and loop-live track their configured `@main` sources. Provider/tool modules also follow their configured mutable sources. Candidate preparation resolves exact revisions in an isolated runtime and records them as validation evidence; these receipts do not replace branch-tracking configuration with commit pins. Activation still requires the candidate runtime checks described above. Application releases come from the private `microsoft/amplifier-unified` GitHub repository. Checks use the signed-in GitHub CLI and resolve the release tag to an exact commit. Installation first builds a separate uv tool environment and checks the host import, packaged frontend assets and package version. This validates packaging, not every provider account or live audio connection. Once idle, the host installs that exact revision into its normal uv tool location and restarts on the same port, workspace and data directory. Restart output is retained privately in `updates/restart.log`; the prior Git install reference is recorded in `updates/previous-app.json` for manual recovery. Ecosystem rollback does not roll back application code. If there is no accessible release or GitHub sign-in, the UI reports a failed check rather than claiming the application is current.
 
+App-authored direct Git dependencies also retain their update policy independently
+of frozen revisions. Before recording a new generation, an untyped Git requirement
+must resolve unambiguously to a branch at the exact installed commit. For an older
+generation whose app dependency was recorded as an unresolved full-SHA pin,
+prospective checking additionally requires matching current and stored app
+declarations, unchanged recorded manifest/lock/installed graph, and the exact
+stored source identity and origin. A moving branch may now be newer than that
+verified old installation; the ordinary checked-candidate resolution guard still
+binds the next revision. This proof changes only the prospective inventory and
+new candidate's policy, never the old generation's receipts. Explicit pins, tags
+(including same-name branch/tag ambiguity), custom sources, local edits and
+external resolver policy do not acquire branch authority from an `originalRef`
+spelling or matching commit.
+
+A provider module has one reference in the app's own files. A profile composes a
+provider that has no source of its own from `amplifier_web/provider_sources.json`.
+The worker environment declares the same repository in
+`amplifier_web/runtime_deps/pyproject.toml`; a decision support pack adds rows
+from `runtime_deps/features.toml`. A component update that prepares a worker
+environment compares the two references of each provider that a profile
+composes, and it refuses the update when they differ, also when both name the
+same commit (`runtime_source_alignment.verify_checked_selection`, reason
+`protected-runtime-source`). Releases 0.108.0 and 0.109.0 named a commit for the
+OpenAI module in the list and the branch in the manifest. On an installation
+whose "OpenAI API" connection takes its source from the list, no component
+update that prepares a worker environment could complete. An installation whose
+settings name the module's branch themselves was not affected: its profile does
+not take that module's source from the list. Change the two files together;
+`tests/test_provider_source_alignment.py` fails when they differ and names both.
+A commit in both files does not repair an installed PC: a new candidate keeps
+the reference that the installation already has
+(`runtime_environment.augmented_manifest`), so the worker manifest's sources are
+branches (`tests/test_standalone.py`). The list is also an input of the web
+client: the selected client records its hash, and the built client holds its
+text. A change of the list needs a client revision whose
+`build-inputs.lock.json` has the new hash, that selection in
+`components/web-client.source.json`, and the normal client build.
+
+The worker's transitive Foundation override names the distribution without
+independently declaring a URL/ref. The effective `tool.uv.sources` choice owns
+that identity, including an installed fork or pin carried into a new candidate.
+The naming hook is a separate distribution: sharing a repository does not make
+its explicitly selected revision follow the Foundation root. Memory's existing
+app-source override remains necessary for its old pinned-hook counterexample.
+This removes a redundant policy declaration; the local resolver comparison also
+honors the effective fork under the previous declaration, so it is not evidence
+of the historical Mac resolver failure whose stderr was unavailable.
+
 Local data: `updates/inventory.json` (private source details), `updates/releases/<id>/` (staged sources/configuration), `updates/active.json` (current/previous pointer), and per-generation runtime environments. Previous and referenced generations remain available for rollback and active workers; unreferenced, verified owned generations and environments are reclaimed. Shared source objects are retained pending complete proof that no references remain. State shown to the UI/agent contains credential-safe source labels and commit IDs, not credential-bearing remote URLs.
+
+A stage holds no copy of the app's own `config` or `routing` folder. `config`
+holds the sign-in secrets and the TLS key of the installation, and a stage reads
+neither folder: its settings and routing are in `shared-config`, with the
+temporary copy of the keys file that the next paragraph describes.
+An earlier version of the app made such copies. Idle maintenance removes the
+entries `config` and `routing` from every stage that still has them, whether
+the stage settled or failed, and at every age. It does that before it looks for
+keys files (next paragraph), with the same admission: after an activation,
+after a start of the app and then about each hour, never while an update
+operation runs or waits, and not in the stage of an unresolved preparation.
+This removal has its own bounds, and it changes no rule of a keys file. One
+pass handles at most eight stages with such a copy and at most 64 entries
+(files, links and folders): an entry that it removes, and an entry that it must
+leave. A larger copy goes on when a later pass comes to its stage again, after
+the other stages. An entry that cannot be removed stays, and a later pass tries
+again: no update, retry or restore fails or waits because of it. A pass lists
+each folder from its start again. So when the first 64 listed entries of a
+folder all stay, the entries behind them stay too. A link is
+never followed: an entry `config` or `routing` that is a link, a junction or no
+folder stays, and a link inside a copy is removed as a link (on Windows it
+stays). This removal reads the list of stages, and it looks at each stage, through
+an open folder and not by a path: at a link or a junction that has the name of
+the folder of the stages, or of a stage, it lists nothing and handles nothing.
+On Windows a folder of a copy that another program has open in a way that does
+not permit its deletion, for example as its working folder, stays with
+everything below it until that program lets it go.
+
+Component qualification uses a temporary `shared-config/keys.env` copy.
+The manager removes only that file after qualification succeeds or a handled
+preparation failure. Settings and routing stay. Cancellation keeps the copy.
+Later activation or rollback qualification uses fresh credentials from the live
+shared home, then removes the copy again unless interrupted. That qualification
+never reads a copy that its refresh did not write: an old copy never stands in
+for credentials that the person removed or changed. When the live shared home
+has no keys file, the stage's copy is removed. When the refresh is refused for
+any reason, the stage's copy is removed too, and the qualification runs without
+a keys file in the stage; the refused refresh is not an update failure. When
+the copy can be neither replaced nor removed, the qualification does not run.
+No version is switched and no failed attempt is recorded; the page says "Update
+needs attention" with the reason, for an update and for a rollback. The next
+activation or rollback request tries again (the owner's pass does that by
+itself for a prepared update) and takes the text back when the refusal is over.
+After a rollback request nothing tries the rollback again by itself. Its text
+goes when a later activation or rollback request gets past this refusal or
+switches versions, when a check for updates runs while no update is prepared,
+or when a prepared app update starts to install.
+A qualification that runs there and fails is recorded and shown like any other
+failed update step; the old copy is gone then too.
+Time alone does not repeat a qualification at activation that failed. The
+update owner's pass runs it again for a prepared update only when something
+that can change its result has changed: another prepared update, the runtime
+settings or the component selection (the same witness that holds a failed
+preparation), or the live keys file (its time and size; its content is not
+read for this). An Install request of a person runs it again in every case.
+So does the first pass after a start of the app: the hold is in memory and is
+never saved. While the hold is in force the update stays prepared, the page
+says "Update needs attention" with the failure, and the count of failed
+attempts does not grow. As before, no check for updates runs while an update
+is prepared. A refused keys refresh is not such a failure: the owner's pass
+still tries that again by itself. It also ends a hold: a request that stops
+at that refusal validated nothing, so the owner's pass comes back and
+validates when the refusal is over. A rollback has no hold: only a request
+starts one, and it neither makes nor ends the hold of a prepared update.
+Idle maintenance also scrubs at most eight stage copies per pass, even when
+unused-code cleanup is off. A validated stage qualifies immediately. An
+unvalidated stage that holds no `profile-attempt.json` qualifies only when both
+its folder and `shared-config` are older than 24 hours and it is not an
+unresolved preparation candidate.
+A chat's own setup makes the same copy in a stage of its own and records the
+attempt there in `profile-attempt.json`. When that preparation fails or is
+stopped, it removes the copy itself; settings and routing stay. A successful
+preparation keeps the copy for idle maintenance: its stage is validated. For an
+unvalidated stage that holds such a record, idle maintenance goes by the record
+alone, never by age. A record that says `failed` or `cancelled` qualifies
+immediately, so a removal that was refused is tried again. Any other record
+keeps the copy: age does not prove that the preparation ended. So an app that
+ended during a preparation leaves a record that says `preparing`, and that
+stage keeps its copy. So does a preparation that could neither record its end
+nor remove its copy; its error says that the copy stays.
+Unsafe paths or removal refusals keep the copy for a later pass.
+Failed stage folders stay; this credential cleanup deletes no folder.
 
 If a worker dependency resolves differently from the checked update, activation
 stops. The diagnostic receipt identifies the component, checked/resolved commit
@@ -344,6 +625,30 @@ of the displayed error phase. Cancellation, failed replacement verification and
 process exits retain it; a package appearing on disk cannot satisfy installation
 or permit another feature request. Updates shows **Installation needs
 verification** and disables additional installs while this outcome is unknown.
+It does not show that warning for this host's running installation:
+`updates.activation` is `installing` only while this process executes the exact
+replacement attempt. The browser shows **Updating Amplifier** instead. The saved
+marker and the complete state read by agents remain unchanged. The field is a
+copy for readers and is never the evidence: the page's view and update health
+also require that this process executes that attempt at this moment (a set in
+memory that is never saved). The owner withdraws from that set first, before
+any wait, when it ends. So an error, a cancellation, a restart handoff, a failed
+state write or a cancelled cleanup each leave the marker with its warning, and
+a new host or a restored state never inherits the claim.
+
+A failed probe after immutable generation promotion can recover without a second
+installation or restart. For an ordinary app update (not a forced shutdown or
+optional-feature installation), the still-running host must prove its unchanged
+identity, previous interpreter, isolated package/import probe, full installed
+component graph and optional extras. Only then may it restore the exact prior
+launch pointer, under the same pointer-write lock used for promotion. The current
+promotion and bootstrap binding must still match; another promotion or a manual
+bootstrap replacement is not overwritten. With no previous generation, recovery
+returns to the verified bootstrap. The candidate and original failure receipts
+remain retained, the update remains failed, and ordinary drain settlement can
+release positively unsubmitted inputs once. A failed/cancelled recovery or
+unconfirmed state publication retains the work fence; pointer restoration alone
+is not installation success or permission to replay work.
 
 Successful replacement verification atomically converts the marker to the normal
 pending restart. If the process exits earlier, a healthy new host can reconcile a
@@ -418,15 +723,19 @@ check setup again and grant observation separately for a connected voice call.
 
 ### Changelog and high-impact notices
 
-Updates includes an offline changelog packaged from `amplifier_web/release-notes.json`. History begins at 0.11.0; earlier releases are not reconstructed. Update checks fetch this same file from the exact published Git commit, so skipped releases and their notices appear before installing. Unavailable or invalid notes show a fallback message without blocking installation. Cached notes survive failed checks and restarts; installed package entries take precedence over older cached wording.
+Updates includes an offline changelog packaged from `amplifier_web/release-notes.json`. The full archive begins at 0.11.0 in Git and the immutable GitHub releases; earlier releases are not reconstructed. The packaged and cached changelog is a bounded displayed history: it retains every notice-bearing release, regardless of age, plus the newest 256 ordinary releases. It removes the oldest ordinary entries first if the unchanged 512-entry or 512,000-UTF-8-byte hard limit needs more room. This does not delete conversation history, published releases or notice acknowledgements.
 
-Add an entry for every release with `version`, a concise `title`, a nonempty `changes` list, and `notices` (empty for ordinary changes). Add a notice for configuration migrations, compatibility changes, changes to existing workflows, or required action. Each notice needs a stable `id`, `title`, `detail` explaining the impact, and `action` explaining what to check or do. Do not use HTML or invent notices from commit titles. Keep existing entries so users who skip versions can review the intervening changes.
+Update checks fetch the same history from the exact published Git commit. Cached notes survive failed checks and restarts. For a duplicate version, the whole installed package entry still takes precedence over cached wording; superseded cached notices are not revived or combined with the installed entry. Fetched future entries retain the existing latest-version ceiling. After that merge, the shared retention rule protects notices before selecting ordinary entries; old cached ordinary entries cannot displace guidance.
+
+Add an entry for every release with `version`, a concise `title`, a nonempty `changes` list, and `notices` (empty for ordinary changes). Add a notice for configuration migrations, compatibility changes, changes to existing workflows, or required action. Each notice needs a stable `id`, `title`, `detail` explaining the impact, and `action` explaining what to check or do. Do not use HTML or invent notices from commit titles. Retention selects complete records without rewriting their fields, notice identities, wording or `previousTitles` aliases. The full older ordinary history remains in Git and immutable GitHub releases.
 
 The release owner follows the [version and notes checklist](validation/release-qualification.md#version-choice-and-release-notes), including maintenance-only releases. Historical omissions are backfilled under their actual release versions and delivered in the next package; published tags and assets remain immutable.
 
 Updates shows a release summary above its actions without expanding a disclosure: the available release before installation, the update owner's exact target during preparation/restart, and the verified running release afterward. Newer discovery cannot relabel an in-flight target. While components finish, the app summary stays on the installed release; unknown target identity and missing notes are labeled rather than inferred. The summary uses the existing bounded release history and never marks high-impact notices read. Important changes and the full Changelog remain expandable below the actions, outside Advanced details. Ordinary release entries do not create attention badges. High-impact notices contribute to the shared Settings / Updates attention badges. `attention.read` marks the current notice wording reviewed across devices when its content is visible. Reviewing is acknowledgment, not confirmation that an action was performed, and never gates installation. Notices remain in history after review; changed wording becomes unread again. Fresh installations begin attention at their installed version, while older history remains browsable; legacy state without that boundary retains its existing notices.
 
-The release validator requires an entry for the package version, rejects future or duplicate versions and malformed notices, and checks that the wheel and source archive contain the validated history. The publisher generates GitHub release text from that entry. Historical immutable releases through 0.11.2 can still be rerun without a changelog; new releases require one. The bounded format supports up to 512 releases, five notices per release and 512,000 UTF-8 bytes; plan older-history retention deliberately when approaching those limits.
+The release validator requires an entry for the package version, rejects future or duplicate versions and malformed notices, and checks that the wheel and source archive contain the validated history. Release preparation and runtime merging use the same retention policy. All rows are validated before selection, including ordinary entries that would age out. The unchanged format supports up to 512 releases, five notices per release and 512,000 UTF-8 bytes, including serialization overhead. If protected notices alone cannot fit, or a newly prepared current release cannot fit beside them, the operation fails explicitly instead of dropping guidance or returning an empty-success history. Preparation fails before writing metadata. Oversized input histories likewise report a capacity error rather than silently clearing notices; missing or malformed history retains the damaged-app fallback. None of this marks a notice reviewed or changes its acknowledgement fingerprint.
+
+The publisher generates GitHub release text from the current entry. Published tags and assets remain immutable. Historical immutable releases through 0.11.2 can still be rerun without a changelog; new releases require one.
 
 ### Release workflow
 
@@ -469,6 +778,17 @@ evidence can establish current health without matching old requested URL labels
 or update-tier batch counts. This does not rewrite or resolve the historical
 attempt. A missing package, changed configuration/source, newer failure, incomplete
 desired check, partial or uncertain activation remains a current limitation.
+A package that the generation's record does not name does not end the health
+proof: a connection check can add one. A recorded package that is missing or
+changed ends it. A preparation still compares the installed packages with the
+record exactly.
+After a switch to another generation, the owner publishes the new selection
+before it has read that generation's proof. Until that read ends, the page shows
+"Checking components" in place of a result from an earlier component failure
+record; an error of the switch itself is shown at once. When the switch is
+cancelled before it has published the result of that read, or its own error,
+the update owner's next pass that no hold stops makes the read and
+publishes what it found.
 No installation or model call runs just to clear old attention.
 An exact verified app restart also supersedes older candidate failures only when
 their requested feature scope is known and present. Intentional local source
@@ -477,16 +797,110 @@ If bounded activation history has aged out, a matching selected graph can be
 reported as retained with activation verification unavailable, not falsely healthy
 or a request to reinstall. Newer failures, failed activation and unrelated source
 scope remain actionable. Settings revalidation uses a neutral pending state.
+When a verified application restart is newer than unresolved component attention,
+the headline names the successful application update and the earlier component
+issue separately, including the attempt's UTC date. Attention and source/retry
+guards remain unchanged; an application success is not component recovery.
+Current health identifies its selected failure through the sanitized diagnostic
+allowlist, independently of the last failure pointer and recent event window.
+The support report uses that same selector and includes at most 32 retained
+failure summaries, total/omitted counts, and activation/configuration proof
+limitations. It does not rename the selected record as the last failure or
+discard history. A missing older activation receipt alone remains neutral,
+does not request reinstallation, and does not claim full component verification.
+If the selected installation's graph and lock still verify, and its activation
+receipt verifies or is no longer kept, but its source-configuration key no
+longer matches, that alone is no failure and requires nothing of the person.
+A saved AI connection for all folders can give this
+state: a second connection, a connection of another kind, or another order of
+connections of different kinds changes the key; another model for the same
+connection does not. A new app version that computes another key for the same
+settings gives it too, and health cannot tell the two apart. So the text says
+only that the record of the component check is not for the current settings.
+After a save that moved `configurationRevision`, the next publication of
+changes marks health for another read and wakes the update owner
+(`UpdateManager.configuration_changed`). The owner makes that read in its
+first pass that reaches it: `tick` returns before the
+read while the outcome of a manual hand-over commit is not known, and while
+`awaiting_restart()` holds. Until a health read for the new revision ends,
+health gives "Checking current configuration" when the proof that it holds,
+with this limit taken out, gives a quiet value (`projection`). When that
+read finds this state, an earlier rule of `current()` can still decide the
+value, for example an
+operation that runs or waits, a failure that the proof does not cover, a
+listed update or a failed application check. When none does, and either the
+check sequence is complete with the application current or a local source
+change is listed, the value has the quiet status `unchecked`, with no
+attention item for it, so the Settings entry gets no unread mark from it: "The components
+need a new check for your current settings" / "The components that Amplifier
+recorded are installed as recorded. Amplifier has no record that it checked
+them with your current AI connections and other settings. A new AI connection
+is one cause. The next update check looks for the components that your current
+settings need. To check now, select Check for updates." The first sentence
+speaks of the recorded components because the health proof accepts a package
+that the record does not name. When no earlier rule decides and neither of
+those two holds, the value is "Check for updates" / "The full desired
+component state has not been checked.", also with the status `unchecked`. The
+bundled page shows a quiet health value when no update operation runs or
+waits; while one does, the page shows its own text of that operation. The
+text of this state ends when a check lists an update, or when the settings
+again have the key of the record. For the other key a check's
+inventory adds the row "Qualify current component configuration", unless it
+already lists a row for the worker environment; each such row is an update.
+A health read is not an update check, and no rule for a check reads this
+status. The text is the same with automatic checks on and off, and it promises
+no result of the next check. It is not a renewed claim that an older source
+conflict is occurring. On Windows the launcher step
+(`windows_launcher_follow.project`) reads this status as a quiet one. With no
+open launcher request, in the phases `waiting`, `ready`, `failed` and
+`failed-unchanged` of that step, the published value holds the launcher's text
+in place of this text, in the last three with its button; with no phase, and
+in the phase `done`, this text stays.
+Only covered failures predating that installation remain historical; newer
+failures, missing source scope and uncertain operations retain their priority.
+This explanatory proof cannot authorize partial-source retention or declare the
+changed configuration qualified. No settings or qualification receipts are rewritten.
+A new installation has no selected generation until its first component update.
+When setup recorded the worker dependencies it installed, and no generation was
+ever selected, health verifies the installed lock, manifest, recorded packages
+and installer policy against that record, as a conversation-worker start does.
+A complete check that finds nothing newer is then reported as up to date, in
+words that name setup's record and do not call those components qualified.
+Packages are compared by name, version and source; packages that a conversation
+added after setup are not part of the record and are not compared. This record
+has no activation time: it cannot supersede a recorded failure and cannot
+authorize preparation. It never describes a selected generation: a held setup
+proof is checked against the generation pointer each time it is shown or
+reported, so it ends when an activation writes the pointer, also when the
+promotion after that write fails. A missing or changed record, and an
+installation that went back from its first generation, keep the
+incomplete-verification report.
+An ordinary Check offers an included runtime qualification when app-level source
+declarations differ, even if every Git branch is unchanged. Install still uses
+the checked selection and existing unchanged-input, source-policy and activation
+guards. A successful new qualification can establish current health; Check alone
+does not prepare or activate it.
 
-Automatic preparation remembers the input witness and disposition of its last
-attempt. An unchanged deterministic source/configuration conflict performs no
-duplicate copy, resolver or installer work. Changed source/configuration/application
-inputs or an explicit install request can re-evaluate; transient failures use a
-bounded backoff. When that backoff expires, the normal background timer must
-resume an already-authorized component installation without a manual check or
-waiting for the next availability-check interval. It reuses the install owner's
-source, intent and uncertain-operation guards. Interrupted or unknown effects
-wait quietly on automatic ticks.
+Preparation remembers its input witness and disposition independently of the
+displayed application or Smart Tool batch. A settled failure performs no duplicate
+copy, resolver or installer work for unchanged inputs. This includes failures
+whose cause is unknown: an elapsed deadline or attempt counter does not prove
+them transient. Changed source/configuration/application inputs or an explicit
+Install request can re-evaluate through the existing install owner. Check is
+availability discovery, not retry intent. Saved legacy backoff records retain
+the same unchanged-input hold; no timer replays the whole failed preparation.
+After a failed component preparation, Try update again checks sources again before
+installing what the new check finds. If that check fails or finds nothing to
+install, no installation starts. `updates.retryCheck.result` is `retried` (with
+the ID of the component attempt that this request started), `not-started`
+(checked, and no attempt started, for example while no AI connection is set up),
+`other-update` (the request started an update of another kind first, for example
+the application),
+`nothing-to-install`, or `check-failed` (the new check ended with an error or
+could not run). The page identifies the rechecked
+attempt. When the earlier failure record keeps its priority, its text says that
+the sources were checked again.
+Interrupted or unknown effects retain their separate inspection fence.
 Pinned and exact checked-revision mismatches retain a typed source-policy reason
 and sanitized package identity; they are not transient transport failures.
 The preparation witness includes the canonical source-configuration key, checked
@@ -506,12 +920,38 @@ loads keys into the host process.
 The dependency graph key alone omits values that can repair a failed profile.
 It excludes the unrelated settings publication counter. Reading, ordinary rechecks and non-runtime preferences do not
 authorize another identical preparation. Explicit retry still runs every guard.
-A fresh install request can reconcile only a recorded, settled candidate-only
-snapshot copy with the same durable active pointer and no activation/rollback
-handoff. It creates a new candidate, never resumes the interrupted copy. Unknown
-or legacy operations, unsettled threads, fetch/installer/native initialization
-and activation effects remain fenced; cancellation alone proves none of them
-safe to replay.
+A deliberate Install can still reconcile a recorded, settled candidate-only
+snapshot copy in its owning host, with the same durable active pointer and no
+activation/rollback handoff. Later preparation has a stricter host boundary:
+new preparation proofs record the owning host instance and process ID. A
+successor host can retire an interrupted `copy-only` or `preparing` candidate
+only when the instance differs **and** a passive OS liveness check proves that
+the recorded process has exited. A different instance ID, cancellation, an old
+timestamp or a restart request alone is not proof. Permission errors, unknown
+liveness and reused live PIDs keep the fence. On Windows this uses a passive
+process handle, never `os.kill(pid, 0)`.
+
+Both paths require the original candidate directory identity, byte-identical
+active pointer, an exact interrupted preparation receipt, no active/previous
+selection of that candidate, and no pending handoff or activation/rollback
+events. Successor retirement may leave an unvalidated `plan.json`, but never
+accepts `validated.json` (including a dangling link). Unknown boundaries and
+older proofs without process ownership remain fenced for diagnostic review;
+this is deliberately not an age-based migration or an instruction to edit
+saved diagnostics. Same-host later preparation remains refused even if it was
+cancelled, because its threads or helpers may still be settling.
+
+Restart Amplifier normally, then choose **Check for updates**, and **Install**
+after a fresh check offers an update. With automatic checks enabled, a successor
+that verifies retirement runs a fresh check itself; automatic installation still
+obeys the normal settings, desired-selection and admission guards. With automatic
+checks off, Check remains the deliberate path; retiring the fence does not turn
+those settings on. No old candidate is reused, resumed, activated or declared
+successful. It stays inert for ordinary storage maintenance, and earlier failure
+receipts remain history. Shared source reuse still passes its existing integrity
+checks; retirement never rolls back or certifies earlier shared-store effects.
+If ownership or another guard cannot be verified, retain the diagnostics for
+review rather than resetting the installation or removing the fence by hand.
 The unresolved component operation is retained separately from the current
 diagnostic display batch; starting an app, tool or rollback batch cannot erase
 its fence. Its exact interrupted receipt, not an unrelated latest event, anchors
@@ -552,6 +992,37 @@ interruption still has its own receipt. These display changes do not alter
 eligibility, installer concurrency, idle admission or automatic-update policy.
 
 Receipts contain only a fixed set of operational facts: phase/status, correlation IDs, elapsed time, exit status, output byte counts, fixed error classifications and allowlisted probe results. Subprocess text, command arguments, workspace paths, source URLs, exception messages and environment variables are never included. Python probes return framed JSON, so unrelated startup messages cannot be mistaken for the package version. Missing imports, missing assets, package location checks, version mismatches, command failures and timeouts remain distinguishable.
+
+Failed update commands also save a **host-local private explanation**, separately
+from those receipts, in `updates/command-details/00.json` through `15.json` under
+the app data folder. The application-install error identifies its slot. Match the
+file's command and attempt IDs to the receipt: later failures reuse slots, so
+an old receipt is not a promise that its explanation remains available. Files
+are owner-private (0600 on POSIX, private data-root ACLs on Windows). Storage
+failure does not replace the installer result or cause a retry.
+`amplifier-unified doctor --verbose` identifies this folder locally, including
+when a custom app data folder is selected; it does not read or print the excerpts.
+
+These files contain at most two physical attempts, with best-effort redacted
+stderr excerpts of at most 8 KiB each. URLs, paths, recognized credential lines
+and their following text, known secret environment values and terminal escapes
+are removed **before** excerpt truncation. Redaction is not a guarantee that
+arbitrary installer prose is safe to share: review these files locally before
+copying any text. They never enter app state, diagnostic capture destinations,
+the support report or feedback by default. No new browser exposure is implied.
+Both pipes are drained concurrently with bounded retained memory (16 MiB stdout,
+128 KiB stderr); oversized stdout fails explicitly rather than returning corrupt
+partial command data. Captured byte counts cover observed output, not just the
+retained prefix; timeout/cancellation counts may be partial. Incomplete stderr
+lines at the capture boundary are omitted. Truncation is explicit.
+
+An allowed anonymous GitHub retry preserves the first failure and the second
+attempt in order, including when the retry fails, times out or is cancelled.
+Top-level command exit/count/duration facts still describe the final attempt;
+each physical attempt has its own elapsed time.
+Eligibility, the shared deadline, isolation, active-host retention and the
+at-most-one anonymous retry rule are unchanged. These explanations do not infer
+the cause of earlier installer failures whose stderr was discarded.
 
 When the app diagnostic collector is available it owns durable storage and configured routing of these events. Otherwise the updater writes a private `updates/diagnostics.jsonl` fallback (0600), rotated at approximately 1MB with one previous file. App state retains the latest 50 events. There is no automatic replay after an interrupted install, paid call, or uncertain result. Historical failures without command receipts cannot be reconstructed from successful later probes; a successful retry does not establish the original cause.
 
@@ -734,9 +1205,10 @@ pins for future update checks. The Core source-build prohibition remains enabled
 Checking, staging and validating an application update do not pause conversations,
 block new messages or freeze delegation. A qualified update waits for the normal
 idle readiness check. Active tools, children, calls and unresolved operations
-postpone the update, not unrelated work. Continuously busy hosts can leave an
-update pending; the existing explicit **Restart now** control is the separate
-operator choice to interrupt work for a qualified restart.
+can keep an update waiting. On a busy host, choose
+[Update safely and resume](#update-safely-and-resume) to queue incoming work
+while current turns settle. **Interrupt work and restart** is the separate
+explicit choice to interrupt running work.
 
 An agent with an active saved objective can instead use `task.waitForUpdate` with
 its own `sessionId`, exact task `expectedRevision`, and `target` copied from
@@ -753,7 +1225,12 @@ still report on its original request. Other conversations remain usable.
 
 Routine idle configuration refresh retains that exact enrolled worker while its
 authorized update wait remains current, including after its checkpoint is ready.
-It must not destroy the checkpoint owner or manufacture a settings failure. New
+The updater may then use the ordinary acknowledged idle-retirement handshake
+for that exact owner when only saved configuration freshness is pending, before
+requiring writer absence at the application gate. A refused or unknown retirement
+does not prove release; active resources and unresolved configuration operations
+remain held. Retirement is not configuration adoption or a continuation input.
+Routine refresh must not destroy the checkpoint owner or manufacture a settings failure. New
 settings, Stop or task changes still supersede the wait; an absent or replacement
 worker is not retained by an older owner's boundary.
 
@@ -796,8 +1273,8 @@ new explicit wait can then use the current task and staged target, even while
 other owners are waiting. Missing or uncertain cancellation does not free the
 slot; a late observation cannot replace a newer wait or rewrite the old receipt.
 
-After final candidate validation, activation rechecks readiness under the same
-host lock that commits replacement. Work arriving during validation takes priority
+Under the ordinary idle-update policy, activation rechecks readiness after final
+candidate validation under the same host lock that commits replacement. Work arriving during validation takes priority
 and postpones that replacement. Only the actual replacement/restart window holds
 ordinary new human messages. They are saved under their original input IDs,
 acknowledged as saved, and sent in order after the exact restarted installation
@@ -811,3 +1288,24 @@ allowance. An unconfirmed boundary cancellation remains unresolved; it is not
 assumed successful. Replacement uncertainty remains fenced and is never treated
 as a pre-replacement withdrawal. No new automatic worker-yield boundary is created
 merely because an update is staged.
+
+### Update safely and resume
+
+For a staged application update, a person can choose **Update safely and resume**
+in Settings → Updates. The client sends the staged host, revision, generation and
+attempt identities to `updates.safeResume`.
+The host saves the admission hold before acknowledging the request. New ordinary
+messages keep their input IDs. Queued coordination and due schedules remain with
+their existing owners. Active native tasks receive one save-and-yield instruction
+on their next model request in the current turn. They yield through their guarded checkpoint
+at a supported continuation boundary. Other turns, calls, and tools may finish.
+Stop and changes of task, input, placement, or access retain their usual precedence.
+
+After the first healthy restart the host checks its installed app dependencies.
+If any need updating, the same release is qualified again and restarted while
+the original work stays queued. Its selected package revisions must match both
+the candidate and the running host. The included worker components are checked next.
+A failed or unverified required component keeps the work waiting through retry.
+Once included revisions are verified current or promoted for new workers, the
+host admits saved messages and eligible continuations through their original
+receipts. Optional sources may continue updating independently.

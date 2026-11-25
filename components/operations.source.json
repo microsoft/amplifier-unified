@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "source": {
+    "schema": 1,
+    "component": "operations",
+    "repository": "bkrabach/amplifier-platform-operations",
+    "revision": "62e4a1b62e3923e7013f7bac3d84b77b36204229",
+    "subdirectory": ".",
+    "tree": "237783ff2055f970d9bb8fdd1efa26002a2080be",
+    "version": "0.1.0",
+    "tag": "operations-v0.1.0",
+    "sourceFiles": {
+      "CODE_OF_CONDUCT.md": "9d45a586fce701502d173a7c10c71c8bd4f23e23d5a4a06e9d00eb57a9c11205",
+      "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "MANIFEST.in": "86af977ce224f77a92c70e167b31d4229b8566d5f2ac7ace5d8a100e43955134",
+      "PROVENANCE.json": "c6f67f14bf64260c00848a9c764a754899225924a0ce4c5c257d2626e1cd82d0",
+      "README.md": "2057d175e69ed0e2b5ed66b169ceb01b6ecd1f1db6cb328c5f9c0d900e1ca406",
+      "SECURITY.md": "b02bf4e236e9335b27298a77688c751d18ca7e6052873d0d3d29eda37d0a72fa",
+      "SUPPORT.md": "bc29be057576bc9576acb59335d95fe6dfef948c1c056e7ad5758cf97e9caa68",
+      "__init__.py": "e88653a95152ffb42aec84c73b92966035c224a186c1e499342cddd4f29f5757",
+      "coordination.py": "06a33dfe3e12abda9b2f3a417077af38ec7d860eb19d350bb1fe4853174551f3",
+      "journal.py": "8e6fa1b1b2945c4ce5ab3b77ffe3ec5d8fe740e5ad0ab6a5fe8d98e3097d70ce",
+      "pyproject.toml": "ec7dcaa6cdefa1032dc48b0693ed45ceb72a7af5122c3e83eb213774f90f698a",
+      "tests/operation_observations.py": "d54ba9f511561aed6be283b7a69ad58b1f76b6e40410bc7e7a63397462749479",
+      "tests/test_operations_coordination.py": "e981e08bcadb34380dd3fb308764b03a12c06ea07139ceccca829a839edd8c8c",
+      "tests/test_operations_journal.py": "0557fbc58d4d1f0f9a510c6952f63b79b6cc9be8522f0c9b2ad06416e402a850",
+      "tests/test_operations_retention.py": "bbd8fd4e10d0d3714b8cabfddc96cfd2501f78b619c5380fe7bb36981115d630"
+    },
+    "artifacts": {
+      "amplifier_operations-0.1.0-py3-none-any.whl": {
+        "sha256": "3d1437824a87f6e2f547857687caa359d0385f2c73fbe361342c5ef869e48f5d",
+        "bytes": 14794
+      },
+      "amplifier_operations-0.1.0.tar.gz": {
+        "sha256": "4983995a717ee829b3e5e6ca9e0a304bb588358c7676ed87ed6aa0292821435e",
+        "bytes": 20501
+      }
+    }
+  },
+  "artifact": {
+    "url": "https://github.com/bkrabach/amplifier-platform-operations/releases/download/operations-v0.1.0/amplifier_operations-0.1.0-py3-none-any.whl",
+    "sha256": "3d1437824a87f6e2f547857687caa359d0385f2c73fbe361342c5ef869e48f5d",
+    "bytes": 14794
+  },
+  "sourceReceiptSha256": "3f421eea6c6e0d80f8f5a973097d1b9e723c6e6a2f046f700dbeefcca5a9ba38",
+  "runtimeRequirements": [],
+  "files": {
+    "__init__.py": "e88653a95152ffb42aec84c73b92966035c224a186c1e499342cddd4f29f5757",
+    "coordination.py": "06a33dfe3e12abda9b2f3a417077af38ec7d860eb19d350bb1fe4853174551f3",
+    "journal.py": "8e6fa1b1b2945c4ce5ab3b77ffe3ec5d8fe740e5ad0ab6a5fe8d98e3097d70ce",
+    "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  }
+}

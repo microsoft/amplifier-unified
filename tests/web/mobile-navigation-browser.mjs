@@ -1,6 +1,7 @@
 import {fixturePython} from './fixture-python.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {readComposerDraft} from './composer-test-helpers.mjs';
+import {updateAppearance} from './settings-fixture.mjs';
 import {spawn} from 'node:child_process';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {combinedFailure} from './chat-reference-harness.mjs';
@@ -36,22 +37,44 @@ const workReady=()=>page.waitForFunction(()=>{
  return session?.workProjection?.status==='ready'&&!document.querySelector('[data-part="work-projection-status"]');
 });
  await page.goto(base);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
- await action('theme.reset');
+ // Select the current Reference baseline through the real scoped preference
+ // owner and browser acknowledgement, never the retired theme reset action.
+ const appearance=await updateAppearance(page,{appearanceId:'reference',accent:null,
+  scheme:'light',layout:'balanced',density:'comfortable',decorations:true,
+  interfaceDetail:'standard',executionDetail:'standard'});
+ assert.equal(appearance.effective.appearanceId,'reference');
+ await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme','light');
+ await expect(page.locator('#amp-one')).toHaveAttribute('data-layout','balanced');
  await action('session.create',{title:'Improve mobile navigation and Canvas'});
  await action('conversation.send',{text:'How can we make navigation work better on a phone?'});
  await patch({navPinned:true,navExpanded:false});
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this unsent draft');
  const drawer=page.getByRole('dialog',{name:'Workspaces and chats',exact:true});
- for(const width of focusOnly?[]:[320,360,390,412,600,760,1024,1440]){
-  await page.setViewportSize({width,height:844});await page.waitForTimeout(150);
+ const responsiveReady=()=>page.waitForFunction(()=>{
+  const layout=document.querySelector('.a-layout[data-pane-layout]');
+  return layout?.dataset.navigationNarrow===String(matchMedia('(max-width:640px)').matches)
+   &&layout.dataset.narrow===String(matchMedia('(max-width:900px)').matches);
+ });
+ for(const width of focusOnly?[]:[320,360,390,412,600,640,641,760,761,1024,1440]){
+  await page.setViewportSize({width,height:844});await responsiveReady();
   const metrics=await page.evaluate(()=>{
    const box=s=>{const el=document.querySelector(s),b=el.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height,display:getComputedStyle(el).display}};
    const title=document.querySelector('.a-work-heading strong'),style=getComputedStyle(title),measure=document.createElement('canvas').getContext('2d');measure.font=style.font;
-   return {viewport:innerWidth,body:document.documentElement.scrollWidth,header:box('.a-work-header'),home:box('.a-work-home-nav'),title:{...box('.a-work-heading strong'),text:title.textContent,full:title.title,readableWidth:measure.measureText(title.textContent.split(/\s+/)[0]+'…').width},nav:box('.a-nav-slot'),chat:box('.a-conversation'),font:getComputedStyle(document.querySelector('#amp-one')).fontSize,actions:[...document.querySelectorAll('.a-work-header button[aria-label]')].filter(b=>b.getClientRects().length).map(b=>({label:b.getAttribute('aria-label'),x:b.getBoundingClientRect().x,y:b.getBoundingClientRect().y,width:b.getBoundingClientRect().width,height:b.getBoundingClientRect().height}))};
+   return {viewport:innerWidth,body:document.documentElement.scrollWidth,header:box('.a-work-header'),home:box('.a-work-home-nav'),title:{...box('.a-work-heading strong'),text:title.textContent,full:title.title,readableWidth:measure.measureText(title.textContent.split(/\s+/)[0]+'…').width},nav:box('.a-nav-slot'),chat:box('.a-conversation'),
+    layout:box('.a-layout[data-pane-layout]'),layoutGap:parseFloat(getComputedStyle(document.querySelector('.a-layout')).columnGap),
+    navDocked:document.querySelector('.a-nav-slot').dataset.docked,
+    font:getComputedStyle(document.querySelector('#amp-one')).fontSize,actions:[...document.querySelectorAll('.a-work-header button[aria-label]')].filter(b=>b.getClientRects().length).map(b=>({label:b.getAttribute('aria-label'),x:b.getBoundingClientRect().x,y:b.getBoundingClientRect().y,width:b.getBoundingClientRect().width,height:b.getBoundingClientRect().height}))};
   });
   results.push(metrics);assert.equal(metrics.body,width);assert.equal(metrics.font,'14px');
-  if(width<=760){
+  if(width<=640){
    assert.equal(metrics.chat.width,width);assert.equal(metrics.nav.display,'none');
+  }else{
+   assert.notEqual(metrics.nav.display,'none');assert.equal(metrics.navDocked,'true');
+   assert.equal(metrics.nav.x,metrics.layout.x);
+   assert.equal(metrics.chat.x,metrics.nav.x+metrics.nav.width+metrics.layoutGap);
+   assert.equal(metrics.chat.x+metrics.chat.width,metrics.layout.x+metrics.layout.width);
+  }
+  if(width<=760){
    assert.equal(metrics.title.text,'Improve mobile navigation and Canvas');assert.equal(metrics.title.full,metrics.title.text);
    // Phone headers wrap. Keep the title readable and every control contained
    // without assuming the title and actions occupy the same row.
@@ -63,11 +86,12 @@ const workReady=()=>page.waitForFunction(()=>{
    assert.ok(metrics.actions.every(row=>separate(metrics.title,row)&&(row.label==='Home'||separate(metrics.home,row))));
    assert.ok(metrics.actions.every((row,i)=>metrics.actions.slice(i+1).every(other=>separate(row,other))));
    assert.notEqual(metrics.home.display,'none');assert.ok(metrics.home.width>=44&&metrics.home.height>=44);
-   assert.deepEqual(metrics.actions.map(row=>row.label),['Open navigation','Home','Back in navigation history','Forward in navigation history','Recent places','Browser & computer','Chat','Open canvas']);
-   assert.ok(metrics.actions.every(row=>contained(row)&&row.width>=44&&row.height>=44&&row.x>=0&&row.x+row.width<=width));
+   assert.deepEqual(metrics.actions.map(row=>row.label),['Amplifier Home',width<=640?'Open navigation':'Close navigation','Home','Back in navigation history','Forward in navigation history','Recent places','Browser & computer','Chat','Open canvas']);
+   for(const row of metrics.actions)assert.ok(contained(row)&&row.width>=44&&row.height>=44&&row.x>=0&&row.x+row.width<=width,
+    `Visible header target ${row.label} must be contained and at least 44x44: ${JSON.stringify(row)}`);
   }
   await page.screenshot({path:`${out}/chat-${width}.png`});
-  if(width<=760){
+  if(width<=640){
    await page.getByRole('button',{name:'Open navigation',exact:true}).tap();await drawer.waitFor();
    const navigation=await drawer.evaluate(el=>{
     const rect=el.getBoundingClientRect(),rail=el.querySelector('.a-nav-rail').getBoundingClientRect();
@@ -87,6 +111,7 @@ const workReady=()=>page.waitForFunction(()=>{
   }
  }
  await page.setViewportSize({width:390,height:844});
+ await responsiveReady();
  await page.getByRole('button',{name:'Open navigation',exact:true}).click();
  await drawer.waitFor();assert.equal((await drawer.boundingBox()).width,390);
  assert.ok(await page.locator('.a-conversation').evaluate(el=>el.inert));
@@ -99,11 +124,12 @@ const workReady=()=>page.waitForFunction(()=>{
   drawerHidden:document.querySelector('.a-nav-slot').hidden,
   chatInert:document.querySelector('.a-conversation').inert,
   detailsCount:document.querySelectorAll('.a-navigation-flyout').length}));
- await expect(drawer.getByRole('button',{name:'Home',exact:true})).toBeFocused();
+ const firstDrawerControl=drawer.getByRole('group',{name:'Sidebar view',exact:true}).getByRole('button',{name:'Browse',exact:true});
+ await expect(firstDrawerControl).toBeFocused();
  await page.keyboard.press('Shift+Tab');await expect(toggle).toBeFocused();
  await page.keyboard.press('Shift+Tab');assert.ok(await drawer.evaluate(el=>el.contains(document.activeElement)));
  await page.keyboard.press('Tab');await expect(toggle).toBeFocused();
- await page.keyboard.press('Tab');await expect(drawer.getByRole('button',{name:'Home',exact:true})).toBeFocused();
+ await page.keyboard.press('Tab');await expect(firstDrawerControl).toBeFocused();
  const details=drawer.locator('.a-navigation-more').first();await details.focus();await details.click();await page.locator('.a-navigation-flyout').waitFor();
  await page.screenshot({path:`${out}/details.png`});
  await page.keyboard.press('Escape');assert.equal(await drawer.isVisible(),true);
@@ -127,7 +153,8 @@ const workReady=()=>page.waitForFunction(()=>{
  assert.ok(await page.getByRole('group',{name:'Chat',exact:true}).evaluate(el=>el.contains(document.activeElement)));
  await page.keyboard.press('Escape');
  for(const scheme of ['dark','light']){
-  await patch({scheme});await page.setViewportSize({width:320,height:740});
+  await updateAppearance(page,{scheme});await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',scheme);
+  await page.setViewportSize({width:320,height:740});await responsiveReady();
   await page.getByRole('button',{name:'Open navigation',exact:true}).click();
   assert.equal(Math.round((await drawer.boundingBox()).width),320);assert.equal(Math.round((await drawer.locator('.a-nav-rail').boundingBox()).width),320);
   await page.screenshot({path:`${out}/drawer-${scheme}-320.png`});
@@ -159,6 +186,8 @@ const workReady=()=>page.waitForFunction(()=>{
  await page.screenshot({path:`${out}/canvas.png`});
  assert.equal(await page.evaluate(()=>window.amplifier.getState().renderedView.panes.conversation.interactive),false);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().renderedView.controls.some(control=>control.label==='Message Amplifier')),false);
+ assert.doesNotMatch(await page.evaluate(()=>JSON.stringify(window.amplifier.getState().renderedView)),
+  /Keep this unsent draft|Keep my viewer state/,'Covered private inputs are absent from ordinary rendered readback');
  await page.getByRole('button',{name:'Hide canvas',exact:true}).click();
  assert.equal(await readComposerDraft(page.getByRole('textbox',{name:'Message Amplifier'})),'Keep this unsent draft');
  const after=await readingPosition();
@@ -174,7 +203,9 @@ const workReady=()=>page.waitForFunction(()=>{
  await page.evaluate(()=>{window.heldPreference=window.amplifier.dispatch('view.update',{patch:{workerDraft:'Held fixture preference'}})});
  for(let i=0;i<30&&!held;i++)await page.waitForTimeout(20);assert.equal(held,true);
  const acknowledged=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='canvas.visibility',{timeout:1500});
- await page.getByRole('button',{name:'Open canvas',exact:true}).click();await acknowledged;
+ await page.getByRole('button',{name:'Open canvas',exact:true}).click();
+ const acknowledgement=await acknowledged;assert.ok(acknowledgement.ok());
+ assert.equal((await acknowledgement.json()).accepted,true);
  assert.equal(await page.locator('#workspace-canvas').isVisible(),true);
  releaseCommand();await page.evaluate(()=>window.heldPreference);await page.unroute('**/api/actions',hold);
  let rejected=false;

@@ -8,10 +8,11 @@ def key(row, index):
     return row.get('callId') or row.get('call_id') or row.get('id') or ('ordinal', index)
 
 
-def project(rows, execution):
-    # This is exactly the existing frontend legacy-timeline condition. A focused
-    # empty window later remains authoritative via the bounded marker.
-    if not execution.get('nodes') and not execution.get('turns'):
+def project(rows, execution, *, loading=False):
+    # The bounded marker prevents legacy reconstruction while the deferred Work
+    # window loads. It does not claim complete history; a nonloading empty view
+    # retains the existing legacy fallback.
+    if not loading and not execution.get('nodes') and not execution.get('turns'):
         return rows, None
     retained = {key(row, i) for i, row in enumerate(rows)
                 if row.get('status') not in TERMINAL or not row.get('id')}

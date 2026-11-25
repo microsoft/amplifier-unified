@@ -3,11 +3,25 @@ from collections import Counter
 from functools import lru_cache
 import re
 from .session_activity import activity_flags
+from .questions import reminder_dismissed
 
 
 def task_blocked(state, sid):
     task = state.get('runtimeControl', {}).get(sid, {}).get('task.get', {}).get('task') or {}
     return task.get('status') == 'blocked'
+
+
+def observed_step(activity):
+    """Use original step timestamps. Repeated status events do not advance them."""
+    from .input_status import timestamp
+    event = activity.get('lastEvent') or {}
+    times = [('Turn started', timestamp(activity.get('startedAt'))),
+             ('Model request started', timestamp(activity.get('lastModelRequestAt')))]
+    tool_phase = {'pre': 'Tool started', 'post': 'Tool finished', 'error': 'Tool failed'}.get(event.get('phase'))
+    if event.get('tool') and tool_phase:
+        times.append((tool_phase, timestamp(event.get('at'))))
+    label, at = max(times, key=lambda item: item[1] or 0)
+    return {'label': label, 'at': at} if at else None
 
 
 def activity(session, unread=False, *, error_reviewed=False, blocked=False, task=None, db=None):
@@ -18,6 +32,7 @@ def activity(session, unread=False, *, error_reviewed=False, blocked=False, task
            for row in session.get('questions', [])):
         return {'kind': 'attention', 'label': 'Answer requested'}
     if any((row.get('delivery') or {}).get('status') in {'unknown', 'rejected'}
+           and not reminder_dismissed(row)
            for row in session.get('questions', [])):
         return {'kind': 'attention', 'label': 'Check answer delivery'}
     status = session.get('status', 'idle')

@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "source": {
+    "schema": 1,
+    "component": "kernels",
+    "repository": "bkrabach/amplifier-platform-kernels",
+    "revision": "a94517d0c3074aba131c4d7734d8cad5b8d89e80",
+    "subdirectory": ".",
+    "tree": "fe2e4594b6b175adadb73f01b74d4fabeba967ec",
+    "version": "0.1.0",
+    "tag": "kernels-v0.1.0",
+    "sourceFiles": {
+      "CODE_OF_CONDUCT.md": "9d45a586fce701502d173a7c10c71c8bd4f23e23d5a4a06e9d00eb57a9c11205",
+      "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "MANIFEST.in": "e740251716575e72b434d991033ab5bde5c83bcc4c2fef453b7b4c38eb5b8937",
+      "PROVENANCE.json": "b764544888a41da551518d730ad65781812a12fe28f6810c8b86898bff6cfd26",
+      "README.md": "682db106588b4e0ec0fe9c3efc6c83eaa4ad54df32d2c4a43da996f536edfb04",
+      "SECURITY.md": "b02bf4e236e9335b27298a77688c751d18ca7e6052873d0d3d29eda37d0a72fa",
+      "SUPPORT.md": "bc29be057576bc9576acb59335d95fe6dfef948c1c056e7ad5758cf97e9caa68",
+      "__init__.py": "88dbc352e811be5002f1116b0cf75ebc0ccd19bb29a0c99811e5bee8c4e5b727",
+      "manager.py": "3ecb0cc276ac3639c7b1e276e519961ac335b2f47f28f58709363bb89e7fba48",
+      "node_runner.cjs": "77a11d877b7f670c1c97e3f62e5740812185c29b8dccdf5f56cde5051383f202",
+      "pyproject.toml": "e56b80a46feecbb5363c3d72aa6c3a8b590641ae1bf7b4ad68e60e6469a112f8",
+      "python_runner.py": "2b067e9a04ce6226a7af130acb472c7a49c67b8c316c9f46eb5c6a904fdf7515",
+      "tests/test_kernel_mechanism.py": "477de78f92f7f4e5446729288d3422d3bf7bd089211b5fb96e77ed2bcd203869"
+    },
+    "artifacts": {
+      "amplifier_kernels-0.1.0-py3-none-any.whl": {
+        "sha256": "3f0c1c3e0fc7dd6af11d177d77440cdc64d691cb40ef4690154bf6c91972b487",
+        "bytes": 14159
+      },
+      "amplifier_kernels-0.1.0.tar.gz": {
+        "sha256": "91f632ae81013e546f3b8302c90130058eac5e08e177c1d306cf087d878e2940",
+        "bytes": 18026
+      }
+    }
+  },
+  "artifact": {
+    "url": "https://github.com/bkrabach/amplifier-platform-kernels/releases/download/kernels-v0.1.0/amplifier_kernels-0.1.0-py3-none-any.whl",
+    "sha256": "3f0c1c3e0fc7dd6af11d177d77440cdc64d691cb40ef4690154bf6c91972b487",
+    "bytes": 14159
+  },
+  "sourceReceiptSha256": "f607cae1c5e705ffa8fcccb9163adcdbf37a3945b999401ff1090c7d17740957",
+  "runtimeRequirements": [],
+  "files": {
+    "__init__.py": "88dbc352e811be5002f1116b0cf75ebc0ccd19bb29a0c99811e5bee8c4e5b727",
+    "manager.py": "3ecb0cc276ac3639c7b1e276e519961ac335b2f47f28f58709363bb89e7fba48",
+    "node_runner.cjs": "77a11d877b7f670c1c97e3f62e5740812185c29b8dccdf5f56cde5051383f202",
+    "python_runner.py": "2b067e9a04ce6226a7af130acb472c7a49c67b8c316c9f46eb5c6a904fdf7515",
+    "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  }
+}

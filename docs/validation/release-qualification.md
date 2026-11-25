@@ -87,10 +87,11 @@ maintenance releases:
    the effect and what the person should do. Ordinary fixes need an entry, not
    an attention badge; `notices: []` is valid. Preserve existing notice IDs and
    acknowledgments. Substantive wording corrections may require review again.
-3. Check that skipped releases remain represented and that a person can tell
+3. Check that skipped releases' high-impact guidance remains represented and that a person can tell
    what they are installing. Backfill omissions under the version that actually
    shipped the behavior, using verified source/release evidence. Deliver those
    corrections in the next package; never rewrite published tags or assets.
+   The full older ordinary changelog remains archived in Git and GitHub releases.
 4. In the prepared PR, state the version rationale and whether high-impact
    guidance is included (or why none is needed). Use the existing release-notes
    tests, Fast release checks and package validation; no extra broad gate.
@@ -102,14 +103,34 @@ consumes the bounded history budget. Formatting changes must preserve all parsed
 values, including notice IDs, wording, aliases and release order.
 
 The same data supplies installed/offline history and GitHub release text.
-The validator already requires the current entry and a nonempty changes list,
-and rejects invalid, duplicate or future versions; it cannot judge whether the
-words cover the shipped behavior. Keep within `release_notes.py`'s bounded
-history limits (512 entries and 512,000 UTF-8 bytes); plan retention deliberately
-before either bound is reached rather than silently dropping notes. The entry
-limit accommodates the authored backfill; the byte budget preserves the complete
-history as it grows. Cached entries are validated in compact UTF-8 form, so JSON
-spacing and ASCII escaping do not discard otherwise valid saved notes.
+Entries may include a calendar `date` (`YYYY-MM-DD`) for daily changelog grouping;
+unknown historical dates stay absent. Preparation stamps a new entry with the
+current UTC cut day unless an explicit date was authored, and preserves it on
+retries. This is the preparation day, which may differ from actual publication
+if the release crosses UTC midnight. Historical backfills use stable GitHub
+releases' actual `published_at` UTC days, never commit dates or version inference.
+The validator requires the current entry and a nonempty changes list, and
+rejects invalid, duplicate or future versions; it cannot judge whether the words
+cover the shipped behavior. One shared `release_notes.retain` policy serves
+normal preparation and runtime merged/cached history: protect every complete
+notice-bearing record, regardless of age, and keep the newest 256 ordinary
+records. Remove the oldest ordinary records further if necessary to fit the
+unchanged hard limits of 512 entries and 512,000 UTF-8 bytes, including the exact
+package-format overhead. Preserve retained values, notice IDs, wording and
+`previousTitles` aliases; never rewrite acknowledgement records.
+
+Validate all input rows before selection. Protected guidance that cannot fit
+fails explicitly, never silently drops notices or returns empty-success history.
+A newly prepared current entry must fit beside that guidance; otherwise preparation
+fails before any metadata write. Identical repeated preparation is a no-op.
+Malformed history still fails validation; oversized saved/package input reports
+a capacity error instead of hiding protected loss as the damaged-app fallback.
+Cached input is checked in compact UTF-8 form; valid JSON spacing/escaping does
+not age out rows. Installed entries retain whole-version precedence over cached
+conflicts, including notice corrections and aliases, before runtime retention.
+The bounded package/cache is displayed history, not the full archive: Git and
+immutable GitHub releases preserve older ordinary entries. Do not edit published
+assets, session history or live notice acknowledgements to compact this view.
 
 Write one entry JSON file outside the source checkout, replacing the sample values:
 
@@ -335,6 +356,13 @@ publication evidence. After an uncertain outcome, reconcile the existing operati
 before considering a retry. Never move a published tag or replace release assets.
 
 ### Release completion and follow-up
+
+For a publisher, installed-package smoke or nightly verification run, read its
+status with `python scripts/post_release_checks.py status RUN_ID`. To inspect an
+earlier attempt, add `--attempt N`. The output links to the run and its jobs,
+names running or failed steps, gives finished job times, and counts skipped jobs.
+Open a failed job for its original evidence. The displayed commit belongs to the
+workflow. Use the candidate receipt for the packaged revision.
 
 Routine release work ends after immutable publication and the short published
 asset/install smoke. Do not create a per-release model monitor, full-suite task,
@@ -633,6 +661,26 @@ never receives repository-write credentials.
 Qualification tools come from the workflow revision, copied before selecting a
 historical application commit. They are transferred as an artifact within this
 run. Package/native qualification and candidate receipts remain fresh.
+
+The `windows-consumer` job installs the built wheel in a new Windows environment
+without pins. So each branch requirement takes the head of that moment, after the
+host graph and the runtime checks resolved it. That installation becomes the plan
+that the setup file carries. Before publication, `release_qualification.py
+verify-consumer` compares each row of the plan except the app. When the plan or
+the host graph has the component from Git, it must be the same commit of the same
+repository and subdirectory in the plan, in the host graph and in the runtime
+graph. On a difference the run stops before it publishes. The message has one
+line for each difference. A line names the component, the graph that differs
+and each commit that the tool knows.
+
+When a branch moved during the run, run all jobs again. A new run resolves all
+three again. A re-run of only the failed jobs does not run the jobs that
+succeeded, so it resolves nothing again. A new run does not help in three cases. The wheel requires an exact commit that the run's checks
+did not use. The Windows installation has a Git component that the host graph
+does not have. The runtime project does not install a Git component of the wheel
+from Git. Each of these needs a change of what a release run qualifies. Registry
+versions are not compared. No step of a release run starts the app that the
+`windows-consumer` job installed.
 
 The frontend lane may reuse an immutable artifact from successful **Fast release
 checks** for the same-repository PR whose merge commit is this publishing main

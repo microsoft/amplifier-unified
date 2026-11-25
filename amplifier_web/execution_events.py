@@ -13,11 +13,36 @@ import weakref
 import os
 from dataclasses import dataclass
 from .token_usage import with_gross_tokens
+from .model_outcome import response_outcome
 
 CALL_PURPOSE = contextvars.ContextVar('amplifier_web_call_purpose',default=None)
 CURRENT_CALL = contextvars.ContextVar("amplifier_web_public_call", default=None)
 CURRENT_PROVIDER = contextvars.ContextVar("amplifier_web_public_provider", default=None)
 ADMITTED_CALL = contextvars.ContextVar("amplifier_web_admitted_provider_call", default=None)
+
+_CONTINUATION_WARNING = (
+    "Older context may be incomplete. Omitted exchanges remain in saved history and are "
+    "not represented or summarized in this request. Tell the user if missing history affects "
+    "the answer. Do not invent missing details or replay actions because their evidence "
+    "is absent; inspect saved history and receipts first."
+)
+
+
+def _incomplete_history(request):
+    from amplifier_core.message_models import Message, TextBlock
+
+    for message in getattr(request, "messages", ()) or ():
+        if not isinstance(message, Message) or message.role != "developer":
+            continue
+        metadata = message.metadata or {}
+        if metadata.get("source") != "context-managed-continuation" or metadata.get("ephemeral") is not True:
+            continue
+        content = message.content
+        if isinstance(content, list) and len(content) == 1 and isinstance(content[0], TextBlock):
+            content = content[0].text
+        if content == _CONTINUATION_WARNING:
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -33,7 +58,7 @@ class _ImageOperationResult(Exception):
         self.result = result
 
 
-def public_usage(value):
+def public_usage(value, *, metadata=None, include_cost_source=True):
     if hasattr(value, "model_dump"):
         value = value.model_dump()
     if not isinstance(value, dict):
@@ -41,7 +66,8 @@ def public_usage(value):
     if "normalized" in value and "provider" in value:
         # Optional image operations separate normalized evidence from native
         # usage. Do not infer costs from another modality's model price.
-        value = value.get("normalized") or {}
+        normalized = value["normalized"]
+        value = normalized if isinstance(normalized, dict) else {}
     result = {}
     for source, target in (("input_tokens", "inputTokens"), ("output_tokens", "outputTokens"),
                            ("cache_read_tokens", "cacheReadTokens"), ("cache_write_tokens", "cacheWriteTokens"),
@@ -58,10 +84,21 @@ def public_usage(value):
         if not math.isfinite(cost) or cost < 0:
             raise ValueError()
         result.update(costUsd=cost, costType="estimated" if value.get("cost_type") == "estimated" else "reported")
-        if value.get("cost_source"):
+        if include_cost_source and value.get("cost_source"):
             result["costSource"] = str(value["cost_source"])[:300]
     except (KeyError, TypeError, ValueError):
         result["costType"] = "unavailable"
+        # Only documented diagnostic codes cross the response-metadata boundary.
+        # Never retain arbitrary response metadata, exception text or payloads.
+        reason = metadata.get("anthropic_cost_unavailable") if isinstance(metadata, dict) else None
+        if isinstance(reason, str) and reason in {
+            "invalid_usage_counts", "cache_write_ttl_split_incomplete",
+            "cache_write_ttl_split_mismatch", "cache_write_ttl_unavailable",
+            "model_rates_unavailable", "inference_geo_unavailable",
+            "request_speed_unavailable", "response_speed_unavailable",
+            "fast_mode_rates_unavailable",
+        }:
+            result["costUnavailableReason"] = reason
     return with_gross_tokens(result)
 
 
@@ -70,6 +107,7 @@ class ExecutionEvents:
         self.root_id, self.emit = root_id, emit
         self.producer_id = str(uuid.uuid4())
         self.turn_id = None
+        self.generation_id = None
         self.admission_inputs = {}
         self.calls = {}
         self.children = {}
@@ -84,6 +122,8 @@ class ExecutionEvents:
         # Optional status-only observation of live accepted plans, not a plan
         # store. Never read logs or retain tool text/arguments for discovery.
         self.status_plan_inputs = {} if os.environ.get('AMPLIFIER_STATUS_DIR') else None
+        # Only bounded in-flight root todo proposals, not tool-owned storage.
+        self.plan_inputs = {}
 
     def publish(self, row):
         # Observe both wrapped and hook-only provider paths. Optional naming or
@@ -105,12 +145,15 @@ class ExecutionEvents:
     def lifecycle(self, event):
         kind = event.get("type")
         sid = event.get('sessionId') or event.get('session_id') or self.root_id
-        if sid == self.root_id and kind == 'generation.started':
+        root = event.get('rootSessionId') or event.get('root_session_id') or self.root_id
+        is_root = sid == self.root_id and root == self.root_id
+        if is_root and kind == 'generation.started':
             self.admission_inputs[sid] = event.get('initial_input_id')
-        elif sid == self.root_id and kind == 'input.delivered' and not event.get('target_generation_id'):
+            self.generation_id = event.get('generation_id')
+        elif is_root and kind == 'input.delivered' and not event.get('target_generation_id'):
             self.admission_inputs[sid] = event.get('input_id')
-        if (sid == self.root_id and kind == "input.delivered" and event.get("source", "user") == "user"
-                and not event.get('target_generation_id')):
+        if (is_root and kind == "input.delivered" and event.get("source", "user") == "user"
+                and not event.get('target_generation_id') and event.get('delivery') != 'request_boundary'):
             self.turn_id = event.get("input_id") or self.turn_id
         elif kind == "child.updated":
             identity = event.get("sessionId")
@@ -168,7 +211,7 @@ class ExecutionEvents:
         return (child["id"], child.get("turnId")) if child else (None, self.turn_id)
 
     def admission_input(self, sid):
-        return self.admission_inputs.get(sid, self.admission_inputs.get(self.root_id, self.turn_id))
+        return self.admission_inputs.get(sid, self.admission_inputs.get(self.root_id))
 
     async def _begin_provider_call(self, sid, provider, request, *, label=None, run_id=None, request_options=None):
         from . import request_projection
@@ -198,6 +241,7 @@ class ExecutionEvents:
         provider_id = info.get("id") if isinstance(info, dict) else getattr(info, "id", type(provider).__name__)
         row = {"id":call_id,"parentId":parent,"turnId":turn,"sessionId":sid,
                "admissionInputId":admission_input,
+               "generationId":self.generation_id if sid == self.root_id else None,
                "rootSessionId":self.root_id,"producerId":self.producer_id,"kind":"llm","phase":"running","label":label or (purpose["label"] if purpose else "Model call"),
                "provider":str(provider_id)[:160],
                "model":str(getattr(request,"model",None) or defaults.get("model") or defaults.get("default_model") or "")[:160],
@@ -225,6 +269,17 @@ class ExecutionEvents:
         # Synchronous passive validation after the existing awaits. No guard,
         # quota, Work join, refit or provider-entry authority is changed here.
         observer = self.context_inspectors.get(sid)
+        if sid == self.root_id and not purpose:
+            row['turnModelSettings'] = None  # Mark an actual foreground call even if the mount is ambiguous.
+        if getattr(observer, 'coordinator', None) is not None and sid == self.root_id and not purpose:
+            from .next_message_impact import capture_basis
+            basis = observe(capture_basis, observer.coordinator, provider, info, row['model'])
+            if basis:
+                row['promptCostBasis'] = basis
+                from .turn_model_settings import capture as capture_turn_settings
+                settings = observe(capture_turn_settings, observer.coordinator, basis['instance'], row['model'], admission_input)
+                if settings:
+                    row['turnModelSettings'] = settings
         captured_budget = (observe(consume, capture, self, row, provider, request, request_options)
                            if observer is not None else None)
         diagnostic = observe(public_trace, trace, capture, captured_budget)
@@ -232,7 +287,8 @@ class ExecutionEvents:
                    defaults, captured_budget, diagnostic)
         return row
 
-    async def provider_call(self, sid, provider, request, invoke, *, label=None, run_id=None, request_options=None):
+    async def provider_call(self, sid, provider, request, invoke, *, label=None, run_id=None,
+                            request_options=None, foreground=False):
         """Observe one host-owned provider action through the same admission gate.
 
         Optional provider actions such as explicit compaction do not implement
@@ -247,7 +303,8 @@ class ExecutionEvents:
             purpose_token = CALL_PURPOSE.set({**(CALL_PURPOSE.get() or {}), "label": "Context compaction", "purpose": "context_compaction"})
             label = "Context compaction"
         try:
-            return await self._observed_provider_call(sid, provider, request, invoke, label=label, run_id=run_id, request_options=request_options)
+            return await self._observed_provider_call(sid, provider, request, invoke, label=label,
+                run_id=run_id, request_options=request_options, foreground=foreground)
         finally:
             if purpose_token is not None:
                 CALL_PURPOSE.reset(purpose_token)
@@ -269,18 +326,29 @@ class ExecutionEvents:
         finally:
             CALL_PURPOSE.reset(purpose)
 
-    async def _observed_provider_call(self, sid, provider, request, invoke, *, label=None, run_id=None, request_options=None):
+    def _degraded_foreground(self, row, request):
+        return (self.admission_guard is not None and row["sessionId"] == self.root_id
+                and row.get("generationId") and row.get("admissionInputId")
+                and not CALL_PURPOSE.get() and _incomplete_history(request))
+
+    async def _observed_provider_call(self, sid, provider, request, invoke, *, label=None, run_id=None,
+                                      request_options=None, foreground=False):
         row = await self._begin_provider_call(sid, provider, request, label=label, run_id=run_id, request_options=request_options)
         from .context_inspection_adapter import safe_observe
         token = CURRENT_CALL.set(row["id"])
         owner = CURRENT_PROVIDER.set(id(provider))
         admitted = ADMITTED_CALL.set(AdmittedProviderCall(row['id'], self.root_id, sid,
                                                         self.admission_guard is not None))
-        self.publish(row)
         try:
+            self.publish({**row, "incompleteHistoryDispatched": True}
+                         if foreground and self._degraded_foreground(row, request) else row)
             response = await invoke()
             usage = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
-            terminal = {**row, "phase": "completed", "endedAt": time.time(), "usage": public_usage(usage)}
+            metadata = response.get("metadata") if isinstance(response, dict) else getattr(response, "metadata", None)
+            terminal = {**row, "phase": "completed", "endedAt": time.time(), "usage": public_usage(usage, metadata=metadata)}
+            if row.get('label') == 'Model call':
+                from .provider_capture import observe
+                terminal.update(observe(response_outcome, response) or {})
             await safe_observe(self.context_inspectors.get(sid), 'finish', terminal)
             self.publish(terminal)
             return response
@@ -318,7 +386,8 @@ class ExecutionEvents:
         async def complete(request, **kwargs):
             if CURRENT_PROVIDER.get() == id(provider):
                 return await original(request, **kwargs)
-            return await self.provider_call(sid, provider, request, lambda: original(request, **kwargs), run_id=run_id, request_options=kwargs)
+            return await self.provider_call(sid, provider, request,
+                lambda: original(request, **kwargs), run_id=run_id, request_options=kwargs, foreground=True)
 
         original_budget = getattr(provider, 'request_budget', None)
         @wraps(original_budget)
@@ -373,9 +442,9 @@ class ExecutionEvents:
                 return
             row = await self._begin_provider_call(sid, provider, request, run_id=run_id, request_options=kwargs)
             self.streaming_calls.add(row["id"])
-            self.publish(row)
             iterator = None
             phase = "completed"
+            returned_text = False
             admission = AdmittedProviderCall(row['id'], self.root_id, sid, self.admission_guard is not None)
             async def scoped(awaitable):
                 # Do not leak context across a yield or retain a token that
@@ -390,6 +459,9 @@ class ExecutionEvents:
                     CURRENT_PROVIDER.reset(owner)
                     ADMITTED_CALL.reset(admitted)
             try:
+                # Preparing a stream is not dispatch. Pulling it is.
+                self.publish({**row, "incompleteHistoryDispatched": True}
+                             if self._degraded_foreground(row, request) else row)
                 iterator = original_stream(request, **kwargs).__aiter__()
                 while True:
                     try:
@@ -400,7 +472,11 @@ class ExecutionEvents:
                     # token delta. A later snapshot replaces the receipt.
                     usage = chunk.get("usage") if isinstance(chunk, dict) else getattr(chunk, "usage", None)
                     if usage is not None:
-                        self.publish({**self.nodes[row["id"]], "usage": public_usage(usage)})
+                        metadata = chunk.get("metadata") if isinstance(chunk, dict) else getattr(chunk, "metadata", None)
+                        self.publish({**self.nodes[row["id"]], "usage": public_usage(usage, metadata=metadata)})
+                    if (not returned_text and type(chunk) is dict and chunk.get('block_type') in (None, 'text')
+                            and chunk.get('visibility') in (None, 'user') and type(chunk.get('content')) is str):
+                        returned_text = bool(chunk['content'])
                     yield chunk
             except GeneratorExit:
                 phase = "interrupted"
@@ -417,6 +493,8 @@ class ExecutionEvents:
                     raise
                 finally:
                     terminal = {**self.nodes[row["id"]], "phase": phase, "endedAt": time.time()}
+                    if returned_text and phase == 'completed':
+                        terminal['modelOutcome'] = {'text': True}
                     from .context_inspection_adapter import safe_observe
                     await safe_observe(self.context_inspectors.get(sid), 'finish', terminal)
                     self.publish(terminal)
@@ -468,9 +546,11 @@ class ExecutionEvents:
             key = (sid, call)
             row = self.calls.get(key) or {"id": f"tool:{sid}:{call}", "parentId": parent, "turnId": turn,
                 "admissionInputId": self.admission_input(sid),
+                "generationId": self.generation_id if sid == self.root_id else None,
                 "sessionId": sid, "rootSessionId": self.root_id, "kind": "tool", "toolCallId": call,
                 "label": str(data.get("tool_name") or "Tool")[:120], "startedAt": now}
             row = dict(row)
+            row.pop('reportedPlan', None)
             # Bind this host update to ONE canonical event, not an inferred
             # attempt. Hook callbacks are separate tasks and repeated call IDs
             # cannot prove which earlier pre belongs to a late terminal.
@@ -497,6 +577,27 @@ class ExecutionEvents:
 
             from .image_generation import observe
             observe(row, event, data)
+            if sid == self.root_id and row['label'] == 'todo':
+                from .chat_plan import accepted_report
+                if event == 'tool:pre':
+                    self.plan_inputs.pop(key, None)
+                    args = data.get('tool_input', data.get('arguments', data.get('input')))
+                    if (isinstance(args, dict) and args.get('action') in {'create', 'update'}
+                            and key not in self.calls and len(self.plan_inputs) < 32):
+                        proposed = accepted_report({'todos': args.get('todos')})
+                        if proposed is not None:
+                            self.plan_inputs[key] = proposed
+                else:
+                    proposed = self.plan_inputs.pop(key, None)
+                    if input_key is not None:
+                        args = data[input_key]
+                        proposed = (accepted_report({'todos': args.get('todos')})
+                                    if isinstance(args, dict) and args.get('action') in {'create', 'update'}
+                                    else None)
+                    if event == 'tool:post' and row['phase'] == 'completed':
+                        accepted = accepted_report(data.get('result', data.get('tool_result')), proposed)
+                        if accepted is not None:
+                            row['reportedPlan'] = accepted
             if self.status_plan_inputs is not None and row['label'] == 'todo':
                 from .status_protocol.hook import accepted_plan
                 if event == 'tool:pre':
@@ -509,6 +610,10 @@ class ExecutionEvents:
                                          if row['phase'] == 'completed' else None)
             self.calls[key] = row
             self.publish(row)
+            # The current Session owns the last report. Completed tool/node
+            # caches retain ordinary observation metadata, not checklist copies.
+            row.pop('reportedPlan', None)
+            self.nodes[row['id']].pop('reportedPlan', None)
             if event == 'tool:post' and row['label'] == 'image_generate':
                 from .image_results import completed_receipt
                 receipt = completed_receipt(data.get('result', data.get('tool_result')))
@@ -525,7 +630,7 @@ class ExecutionEvents:
                 if row and event == "provider:retry":
                     self.publish({**row,"phase":"retrying"})
                 elif row and current in self.streaming_calls and event == "llm:response" and data.get("usage") is not None:
-                    self.publish({**row, "usage": public_usage(data["usage"])})
+                    self.publish({**row, "usage": public_usage(data["usage"], metadata=data.get("metadata"))})
                 return
             purpose = CALL_PURPOSE.get() or {}
             if purpose: parent, turn = None, purpose.get("turnId", turn)
@@ -536,6 +641,8 @@ class ExecutionEvents:
             row = self.requests.get(task)
             if event == "llm:request":
                 row = {"id": "llm:" + str(uuid.uuid4()), "parentId": parent, "turnId": turn,
+                    "admissionInputId": self.admission_input(sid),
+                    "generationId": self.generation_id if sid == self.root_id else None,
                     "sessionId": sid, "rootSessionId": self.root_id, "kind": "llm", "phase": "running",
                     **scope, "startedAt": now,
                     **{key:str(data[key])[:160] for key in ("provider", "model") if data.get(key)}}
@@ -550,7 +657,7 @@ class ExecutionEvents:
             row = dict(row)
             if event == "llm:response":
                 row.update(phase="error" if data.get("status") == "error" else "completed", endedAt=now,
-                    usage=public_usage(data.get("usage")),
+                    usage=public_usage(data.get("usage"), metadata=data.get("metadata")),
                     **{key:str(data[key])[:160] for key in ("provider", "model") if data.get(key)})
                 self.requests.pop(task, None)
             elif event == "provider:retry":

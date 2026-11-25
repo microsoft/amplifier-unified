@@ -35,11 +35,11 @@ class AttemptReceipts(MutableMapping):
 
 
 def idle(service):
-    from .updates import work_paused
+    from .updates import new_work_paused
     state = service.state
     return (not service.closed and bool(service.queue_clients)
             and not state.get('sharedHistory', {}).get('loading')
-            and not work_paused(state)
+            and not new_work_paused(state)
             and state.get('voice', {}).get('status') not in {'starting', 'connecting', 'connected', 'reconnecting'}
             and not any(row.get('status') in BUSY or row.get('configurationBusy') for row in state['sessions']))
 

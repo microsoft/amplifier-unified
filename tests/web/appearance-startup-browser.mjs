@@ -4,13 +4,16 @@ import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/browser_detail_server.py',root],{stdio:['ignore','pipe','inherit']});
-let browser,release,page,primary,historyFacts;
+const stopFixture=ownFixture(fixture,{label:'Appearance startup fixture'});
+let browser,release,page,primary,historyFacts,initialWindow;
+const pageFacts=[];
 const secondary=[],requests=[],trackedRequests=new Map();
 let requestDropped=0;
-const out=root+'output/browser-checks/appearance-startup';
+const out=process.env.AMPLIFIER_TEST_ARTIFACTS||root+'output/browser-checks/appearance-startup';
 const errorFact=error=>({name:error.name,code:error.code??null});
 try{
  const port=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.port){clearTimeout(timer);resolve(row.port)}}catch{}})});
@@ -18,26 +21,12 @@ try{
  const control=async body=>{const response=await fetch(url+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)});assert.equal(response.status,200);return response.json()};
  const {alpha}=await control({op:'heavy',active:false,messages:160,otherMessages:1,chars:500,nodes:0});
  await control({op:'patch',sessions:{[alpha]:{completion:{id:'startup-completion',at:Date.now()/1000}}}});
+ const before=await control({op:'inspect-work-source'});
  browser=await chromium.launch({headless:true});
  page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:headers});const errors=[];
  page.on('pageerror',error=>errors.push(error.message));
- const gate=new Promise(resolve=>{release=resolve});
- await page.route('**/api/shell?*',async route=>{await gate;await route.continue()});
- await page.goto(url,{waitUntil:'domcontentloaded'});
- await expect(page.locator('.boot')).toBeVisible();
- // State arrives while the conversation DOM is deliberately absent. Effects
- // must attach when the shell is ready even if that state never changes.
- await page.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId);
- await showFixtureConversation(page);
- const read=()=>page.evaluate(id=>window.amplifier.getState().attention.items.find(item=>item.id==='completion:'+id)?.read,alpha);
- assert.equal(await read(),false);
- release();await page.unrouteAll({behavior:'wait'});
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
- await expect(page.locator('[data-message-id]')).toHaveCount(100);
- await expect.poll(read).toBe(true);
- const pane=page.getByRole('log',{name:'Conversation messages'});
- await expect.poll(()=>pane.evaluate(el=>el.scrollTop)).toBeGreaterThan(120);
- const detailReads=[];page.on('request',request=>{if(new URL(request.url()).pathname==='/api/conversation/detail')detailReads.push(request.url())});
+ const earlierMessage=url=>url.pathname==='/api/conversation/detail'&&url.searchParams.get('part')==='messages'&&url.searchParams.has('before')&&!url.searchParams.has('field');
+ const detailReads=[];page.on('request',request=>{if(earlierMessage(new URL(request.url())))detailReads.push(request.url())});
  page.on('request',request=>{
   const url=new URL(request.url());if(url.pathname!=='/api/conversation/detail')return;
   if(requests.length>=8){requestDropped++;return}
@@ -54,6 +43,33 @@ try{
  page.on('requestfailed',request=>{
   const row=trackedRequests.get(request);if(row){row.failed=true;row.failedAt=performance.now()}
  });
+ const gate=new Promise(resolve=>{release=resolve});
+ await page.route('**/api/shell?*',async route=>{await gate;await route.continue()});
+ await page.goto(url,{waitUntil:'domcontentloaded'});
+ await expect(page.locator('.boot')).toBeVisible();
+ // State arrives while the conversation DOM is deliberately absent. Effects
+ // must attach when the shell is ready even if that state never changes.
+ await page.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId);
+ await showFixtureConversation(page);
+ const read=()=>page.evaluate(id=>window.amplifier.getState().attention.items.find(item=>item.id==='completion:'+id)?.read,alpha);
+ assert.equal(await read(),false);
+ initialWindow=await page.evaluate(id=>{
+  const row=window.amplifier.getState().sessions.find(row=>row.id===id);
+  return {window:row.messageWindow,ids:row.messages.map(message=>message.id)};
+ },alpha);
+ const expectedIds=(start,end)=>Array.from({length:end-start},(_,index)=>`${alpha}-m-${start+index}`);
+ const renderedIds=()=>page.locator('[data-message-id]').evaluateAll(rows=>rows.map(row=>row.dataset.messageId));
+ assert.equal(initialWindow.window.mode,'cursor');
+ assert.equal(initialWindow.window.total,null);assert.equal(initialWindow.window.offset,null);
+ assert.equal(initialWindow.window.hasEarlier,true);assert.ok(initialWindow.window.before);
+ assert.deepEqual(initialWindow.ids,expectedIds(140,160));
+ release();await page.unrouteAll({behavior:'wait'});
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
+ await expect(page.locator('[data-message-id]')).toHaveCount(initialWindow.ids.length);
+ assert.deepEqual(await renderedIds(),initialWindow.ids);
+ await expect.poll(read).toBe(true);
+ const pane=page.getByRole('log',{name:'Conversation messages'});
+ await expect.poll(()=>pane.evaluate(el=>el.scrollTop)).toBeGreaterThan(120);
  // Observe the existing single gesture, without reading or changing the private
  // follower arm/busy variables. Frame probes are not awaited by the gesture.
  await pane.evaluate((el,alpha)=>{
@@ -109,10 +125,34 @@ try{
   requestAnimationFrame(()=>{window.__appearanceHistoryDiagnostic?.record('original-restoration-frame-two');resolve()});
  })));
  assert.equal(detailReads.length,0,'restoration/anchoring does not load unrequested older history');
- await expect(page.locator('[data-message-id]')).toHaveCount(100);
+ await expect(page.locator('[data-message-id]')).toHaveCount(initialWindow.ids.length);
+ const firstResponse=page.waitForResponse(response=>earlierMessage(new URL(response.url())));
  await pane.hover();await page.mouse.wheel(0,-60);
- await expect(page.locator('[data-message-id]')).toHaveCount(160);
+ const first=await firstResponse;assert.equal(first.status(),200);
+ const firstPage=await first.json();pageFacts.push(firstPage);
+ assert.deepEqual(firstPage.items.map(row=>row.id),expectedIds(40,140));
+ assert.equal(new URL(first.url()).searchParams.get('before'),initialWindow.window.before);
+ assert.equal(firstPage.mode,'cursor');assert.equal(firstPage.total,null);assert.equal(firstPage.offset,null);
+ assert.equal(firstPage.hasEarlier,true);assert.ok(firstPage.before);assert.notEqual(firstPage.before,initialWindow.window.before);
+ await expect(page.locator('[data-message-id]')).toHaveCount(120);
+ assert.deepEqual(await renderedIds(),expectedIds(40,160));
  assert.equal(detailReads.length,1,'one intentional older-history gesture loads one page');
+ // The remaining earlier messages are reachable through a separate deliberate
+ // page request; the default startup suffix is not missing canonical history.
+ const finalResponse=page.waitForResponse(response=>earlierMessage(new URL(response.url())));
+ await page.getByRole('button',{name:'Load earlier conversation',exact:true}).click();
+ const final=await finalResponse;assert.equal(final.status(),200);
+ const finalPage=await final.json();pageFacts.push(finalPage);
+ assert.equal(new URL(final.url()).searchParams.get('before'),firstPage.before);
+ assert.deepEqual(finalPage.items.map(row=>row.id),expectedIds(0,40));
+ assert.equal(finalPage.hasEarlier,false);assert.equal(finalPage.before,null);
+ await expect(page.locator('[data-message-id]')).toHaveCount(160);
+ assert.deepEqual(await renderedIds(),expectedIds(0,160));
+ assert.equal(detailReads.length,2);
+ await expect(page.getByRole('button',{name:'Load earlier conversation',exact:true})).toHaveCount(0);
+ const after=await control({op:'inspect-work-source'});
+ assert.deepEqual(after.sessions,before.sessions,'History paging preserves the original messages and work');
+ assert.equal(after.runtimeStarts,before.runtimeStarts);assert.equal(after.runtimeSends,before.runtimeSends);
  assert.deepEqual(errors,[]);
  console.log('Delayed appearance startup attaches completion acknowledgement; only intended earlier-history scrolling loads another page.');
 }catch(error){primary=error}
@@ -127,10 +167,11 @@ finally{
  }
  try{
   await mkdir(out,{recursive:true});
-  await writeFile(out+'/history-gesture.json',JSON.stringify({historyFacts,requests,requestDropped,
+  await writeFile(out+'/history-gesture.json',JSON.stringify({historyFacts,initialWindow,
+   pages:pageFacts.map(({items,...window})=>({window,ids:items.map(row=>row.id)})),requests,requestDropped,
    primary:primary?errorFact(primary):null,diagnosticErrors:secondary.map(errorFact)},null,2)+'\n');
  }catch(error){secondary.push(error)}
- for(const cleanup of [()=>release?.(),()=>browser?.close(),()=>fixture.kill()])
+ for(const cleanup of [()=>release?.(),()=>finishFixture({label:'Appearance startup fixture',close:[['browser',()=>browser?.close()]],stop:stopFixture})])
   try{await cleanup()}catch(error){secondary.push(error)}
 }
 if(primary&&secondary.length)throw new AggregateError([primary,...secondary],'History primary failure with diagnostic/cleanup failures',{cause:primary});

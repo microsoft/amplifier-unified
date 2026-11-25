@@ -5,12 +5,12 @@ from .session_creation import template, configuration_changes
 from .managed_chats import is_managed
 
 
-def creation_guard(schedules, source, identity, destination):
+def creation_guard(schedules, source, identity, destination, *, stage='conversation creation'):
     """Runs under the same app lock as shared session.create."""
     run = schedules.store.run(source, identity)
     record = schedules.store.get(source, run['scheduleId'])
     if not schedules.store.owns(schedules.clock()) or run['owner'] != schedules.store.owner:
-        raise ValueError('Scheduler ownership changed before conversation creation')
+        raise ValueError(f'The scheduler lease expired or changed owner before {stage}.')
     if run['phase'] != 'creating' or run.get('destinationSessionId') != destination:
         raise ValueError('This occurrence has no matching new-task reservation')
     if record['status'] != 'active' or record['revision'] != run['scheduleRevision']:
@@ -28,7 +28,8 @@ async def create_destination(schedules, current, run):
     def guard():
         nonlocal rejected
         try:
-            creation_guard(schedules, sid, run['id'], identity)
+            creation_guard(schedules, sid, run['id'], identity,
+                           stage='task creation' if run.get('creationConfirmed') else 'conversation creation')
             if run.get('creationConfirmed'):
                 destination = app._session(identity, hydrate=False)
                 if (destination.get('interruptionRevision', 0) != run['destinationInterruptionRevision']
