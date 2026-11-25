@@ -177,12 +177,15 @@ async def lifecycle(app, home):
     service._message(source, 'user', 'A completed question', inputId='completed-input')
     await complete('completed-input', 'The saved answer is complete.')
     completed_messages = copy.deepcopy(source['messages'])
-    if os.environ['LIFECYCLE_FIXTURE'] == 'request-failure':
+    retry_preparation = os.environ['LIFECYCLE_FIXTURE'] == 'retry-preparation'
+    if os.environ['LIFECYCLE_FIXTURE'] == 'request-failure' or retry_preparation:
         service._message(source, 'user', 'A request that failed', inputId='failed-input')
         await generation('generation.started', 'failed-input', 'failed-generation')
         await generation('generation.failed', 'failed-input', 'failed-generation',
-            error_category='provider_unavailable', error_type='ServiceUnavailableError',
-            error_stage='provider_request', retryable=True)
+            error_category='context_compaction' if retry_preparation else 'provider_unavailable',
+            error_type='CompactionError' if retry_preparation else 'ServiceUnavailableError',
+            error_code='summary_output_limit' if retry_preparation else None,
+            error_stage='context_preparation' if retry_preparation else 'provider_request', retryable=True)
         await service.on_runtime_event('runtime.error', {
             'sessionId': sid, 'rootSessionId': sid, 'inputId': 'failed-input',
             'runtimeOwnerId': 'lifecycle-fixture-owner',
@@ -205,7 +208,10 @@ async def lifecycle(app, home):
 
     async def send(session, text, input_id, emit, **kwargs):
         calls.append({'operation': 'send', 'inputId': input_id})
-        if text == 'A later different failure':
+        if retry_preparation:
+            await emit('runtime.status', {'sessionId': sid, 'status': 'starting',
+                                         'phase': 'runtime-setup', 'detail': 'Preparing synthetic continuation'})
+        elif text == 'A later different failure':
             await generation('generation.started', input_id, 'later-generation')
             await generation('generation.failed', input_id, 'later-generation',
                 error_category='authentication', error_type='AuthenticationError',
@@ -287,13 +293,33 @@ async def lifecycle(app, home):
             'completedUnchanged': source['messages'][:len(completed_messages)] == completed_messages,
             'messages': [annotate(source, row) for row in source['messages']],
             'status': source['status'], 'failure': source.get('failure'),
-            'attention': source.get('attention'), 'activity': source.get('activity'),
+            'attention': service.browser_state()['attention'], 'activity': source.get('activity'),
             'interruptionRevision': source.get('interruptionRevision', 0),
             'runtimeFaults': [row for row in source.get('runtimeEvents', [])
                               if row.get('type') == 'runtime.error' and row.get('scope') == 'runtime'],
             'calls': calls,
             'sessions': len(service.state['sessions']), 'selected': service.state['selectedSessionId']})
 
+    async def preparation_phase(request):
+        authorized(request)
+        if not retry_preparation:
+            raise web.HTTPNotFound()
+        phase = (await request.json())['phase']
+        input_id = calls[-1]['inputId']
+        if phase == 'warm':
+            await service.on_runtime_event('runtime.warmth', {'sessionId': sid, 'status': 'warm'})
+        elif phase == 'ready':
+            await service.on_runtime_event('runtime.status', {'sessionId': sid, 'status': 'ready'})
+        elif phase == 'admitted':
+            await complete(input_id, 'A fresh explicit message worked.')
+        elif phase == 'startup-error':
+            await service.on_runtime_event('runtime.error', {'sessionId': sid,
+                'errorType': 'RuntimeStartupError', 'error': 'Synthetic new worker could not start.'})
+        else:
+            raise web.HTTPBadRequest()
+        return web.json_response({'phase': phase})
+
+    app.router.add_post('/fixture/preparation-phase', preparation_phase)
     app.router.add_post('/fixture/late-runtime-fault', fault)
     app.router.add_post('/fixture/newer-failure', newer_failure)
     app.router.add_post('/fixture/human-stop', human_stop)

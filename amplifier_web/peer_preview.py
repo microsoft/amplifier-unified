@@ -87,10 +87,11 @@ class PeerPreview:
         # Reuse exact-original checks, not the transcript page's broad cache
         # fence: unrelated arrivals may invalidate pages without changing this
         # receipt-bound original. Never hydrate a cold receiver for the link.
-        originals = self.windows.exact_saved_originals(parent)
-        original = next((m for m in originals if m.get('id') == value['messageId']), None)
-        owner = {'id': parent['id'], 'messages': originals}
-        if original is None or not self.service.peer_attribution.resolve(owner, [original])[0].get('attribution', {}).get('peer'):
+        proof = self.windows.exact_peer_original(parent, value['messageId'], value['requestId'])
+        original = proof.originals.get(value['messageId'])
+        owner = {'id': parent['id']}
+        if original is None or not self.service.peer_attribution.resolve(
+                owner, [original], proof=proof)[0].get('attribution', {}).get('peer'):
             raise AppError('The original source binding is unavailable. Reopen its message.', 403)
         target = self._target(value['targetId'], parent, receipt)
         if self._identity(target) != value['targetIdentity']:

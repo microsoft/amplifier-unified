@@ -296,6 +296,10 @@ class TruncationFailureTests(unittest.IsolatedAsyncioTestCase):
                 events.lifecycle(start)
                 events.lifecycle({'type': 'input.delivered', 'input_id': 'i'})
                 await app.on_runtime_event(*normalize_event(start, session['id']))
+                # ExecutionEvents accounts calls; the worker also forwards the
+                # native delivery to the host's canonical generation reducer.
+                await app.on_runtime_event(*normalize_event(
+                    {'type': 'input.delivered', 'input_id': 'i'}, session['id']))
                 provider = events.instrument_provider(session['id'], Provider())
                 with self.assertRaises(FunctionCallTruncationError):
                     await provider.complete(SimpleNamespace(model='fixture'))
