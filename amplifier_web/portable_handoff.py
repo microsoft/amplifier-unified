@@ -89,19 +89,23 @@ class PortableHandoff:
         host = self.host
         source = host._accepted_record
         if (not isinstance(target, dict) or host._transition is None or host._foreign_rejection or host._recovery_busy
-                or not source or not isinstance(source.get(_ORIGIN), str)
-                or len(source[_ORIGIN]) != 64 or not source[_ORIGIN].isascii()
+                or not source
                 or (source.get("identity") or {}).get("provider") != target.get("provider")
                 or source["identity"] == target or host._transition.get("sha256") != source.get("sha256")):
             return None
         unit = _unit(source)
         if unit is None:
             return None
+        legacy = _ORIGIN not in source
+        if not legacy and (not isinstance(source[_ORIGIN], str)
+                           or len(source[_ORIGIN]) != 64 or not source[_ORIGIN].isascii()):
+            return None
         provider = host._provider()
         coordinator = host.coordinator
         try:
             key = self._connection(provider, target)
-            if (not key or not hmac.compare_digest(source[_ORIGIN], _proof(key, _fingerprint(host.session_id, unit)))
+            if (not key or (not legacy and not hmac.compare_digest(
+                    source[_ORIGIN], _proof(key, _fingerprint(host.session_id, unit))))
                     or callable(getattr(provider, "request_budget", None)) or callable(getattr(provider, "stream", None))):
                 return None
             execution = provider._execution_provider()
@@ -132,6 +136,24 @@ class PortableHandoff:
             host._check_writer()
             host._check_transition_file({"sourceCheckpointDigest": source_digest})
 
+        def commit(candidate, *, restore=False):
+            _stamp(candidate, _proof(key, _fingerprint(host.session_id, _unit(candidate))))
+            classify = coordinator.get_capability("context.checkpoint.transition")
+            if classify(candidate, target).get("status") != "compatible":
+                raise ContextRecoveryError("recovery_candidate_invalid")
+            host._write_record(candidate, writer)
+            if restore:
+                restored = coordinator.get_capability("context.checkpoint.restore")
+                host.status.update(restored(candidate, target))
+            host._transition = None
+
+        if legacy:
+            # This old record may fence replacement. It never supplies note bytes.
+            empty = coordinator.get_capability("context.checkpoint.prepared_originals")
+            if callable(empty) and empty(target) is True:
+                self._observe_rebuild(provider, target, key, source, check, commit)
+            return None
+
         def stage(candidate, note, context_guard):
             check()
             context_guard()
@@ -140,7 +162,7 @@ class PortableHandoff:
                     or candidate["summary"] != source["summary"]):
                 raise ContextRecoveryError("recovery_candidate_invalid")
 
-            def admit(request):
+            def admit(_selected, request):
                 if ((getattr(request, "metadata", None) or {}).get("purpose")
                         or request.model != target["model"]
                         or sum(row.role == "user" and row.content == note for row in request.messages) != 1):
@@ -151,19 +173,61 @@ class PortableHandoff:
                 def accepted():
                     check()
                     context_guard()
-                    _stamp(candidate, _proof(key, _fingerprint(host.session_id, _unit(candidate))))
-                    classify = coordinator.get_capability("context.checkpoint.transition")
-                    if classify(candidate, target).get("status") != "compatible":
-                        raise ContextRecoveryError("recovery_candidate_invalid")
-                    host._write_record(candidate, writer)
-                    restore = coordinator.get_capability("context.checkpoint.restore")
-                    host.status.update(restore(candidate, target))
-                    host._transition = None
+                    commit(candidate, restore=True)
                 return accepted
 
             provider.portable_handoff = admit
 
         return source, stage
+
+    def _observe_rebuild(self, provider, target, key, source, check, commit):
+        """An empty target context may publish its own completed work after its reply."""
+        coordinator = self.host.coordinator
+        initial = self.created
+        export = coordinator.get_capability("context.checkpoint.export")
+        writer = coordinator.get_capability("context.persist_checkpoint")
+        if not callable(export) or writer != self.host.save:
+            return
+
+        def current_owner():
+            return (coordinator.get_capability("context.checkpoint.export") is export
+                    and coordinator.get_capability("context.persist_checkpoint") is writer)
+
+        def admit(selected, request):
+            if (self.created is initial or not self.created or selected.model != target["model"]
+                    or request.model != target["model"] or (request.metadata or {}).get("purpose")
+                    or not current_owner()):
+                return None
+            try:
+                check()
+                candidate = export(target)
+            except (OSError, RuntimeError, ValueError):
+                return None  # Optional publication must not obstruct the ordinary reply.
+            unit = _unit(candidate)
+            if (unit is None or unit[0] != target
+                    or unit[2]["messages"] < source["sourceRevision"]["messages"]):
+                return None
+            fingerprint = _fingerprint(self.host.session_id, unit)
+            if self.created != (fingerprint, _proof(key, fingerprint)):
+                return None
+            # Identify the Context-rendered row on the ordinary request, then
+            # require that entire carrier to survive the host's final projection.
+            text = candidate["summary"]["text"]
+            carriers = [row for row in selected.messages if row.role == "user"
+                        and (row.metadata or {}).get("source") == "context-managed"
+                        and isinstance(row.content, str) and row.content.partition("\n")[2] == text]
+            if len(carriers) != 1 or sum(row == carriers[0] for row in request.messages) != 1:
+                return None
+
+            def accepted():
+                check()
+                if current_owner():
+                    current = export(target)
+                    if _unit(current) == unit:
+                        commit(current)
+            return accepted
+
+        provider.portable_handoff = admit
 
 
 async def complete(provider, execution, selected, options, admit):
@@ -172,7 +236,7 @@ async def complete(provider, execution, selected, options, admit):
 
     def observe(outgoing):
         nonlocal accepted
-        accepted = admit(outgoing)
+        accepted = admit(selected, outgoing)
 
     if isinstance(execution, SurfaceProvider):
         response = await execution._complete(selected, options, observe)
