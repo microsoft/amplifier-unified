@@ -654,3 +654,21 @@ async def test_session_observation_prepares_live_rows_once_and_observes_next_pol
     assert changed['title'] == 'Changed between polls' and changed['activity']['execution']
     assert after['revision'] != before['revision']
     assert service.directory._read_frame.get() is None
+
+async def test_chat_status_matches_sidebar_for_unpinned_notices(observation_host):
+    app, client = observation_host
+    service = app['service']
+    catalog(service, 2)
+    row = service._state['sessions'][0]
+    row.update(status='paused', approvals=[])
+    service._state['pinnedSessionIds'] = []
+    service.projections.invalidate(state=service._state, session_ids={'s0'})
+    params = {'chatStatus': '1', 'limit': '1'}
+    notices = await traverse(client, '/api/attention', params)
+    sessions = await traverse(client, '/api/sessions', {**params, 'view': 'observation'})
+    status = {s['id']: s['chatStatus'] for s in sessions}
+    assert status['s0'] == {'kind': 'paused', 'label': 'Paused'}
+    assert status['s1'] == {'kind': 'attention', 'label': 'Approval requested'}
+    assert all(n['chatStatus'] == status[n['target']['sessionId']] for n in notices)
+    assert 'PRIVATE TOOL' not in str(notices)
+    assert 'chatStatus' not in (await traverse(client, '/api/attention', {}))[0]

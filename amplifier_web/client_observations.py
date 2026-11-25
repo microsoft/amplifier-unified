@@ -68,7 +68,8 @@ class DirectoryFacts:
     """A leased SQLite view; retain one bounded decoded block, never all facts."""
     BLOCK = 64
 
-    def __init__(self, owner, directory, state, *, where='1', params=()):
+    def __init__(self, owner, directory, state, *, where='1', params=(), chat_status=False):
+        self.chat_status = chat_status
         self.owner, self.directory, self.state = owner, directory, state
         self.where, self.params = where, tuple(params)
         self.sql, self.base = directory.effective(state)
@@ -115,10 +116,22 @@ class DirectoryFacts:
         if not self.has(index):
             raise IndexError(index)
         if self.raw_block is not None:
-            self.block = [self.owner.row_facts(self.directory.decode(row), self.read, self.pins) for row in self.raw_block]
+            self.block = [self.facts(row) for row in self.raw_block]
             self.raw_block = None
         start = self.block_start
         return self.block[index-start]
+
+    def facts(self, record):
+        session, workspace, notices = self.owner.row_facts(self.directory.decode(record), self.read, self.pins)
+        if self.chat_status:
+            from .history_directory import COLUMNS
+            # These are the effective directory columns used by the sidebar,
+            # including its current read receipts and dependency/task precedence.
+            status = {'kind': record[COLUMNS.index('activity_kind')],
+                      'label': record[COLUMNS.index('activity_label')]}
+            session['chatStatus'] = status
+            notices = tuple({**notice, 'chatStatus': status} for notice in notices)
+        return session, workspace, notices
 
     def for_query(self, query):
         scope = query['scope']
@@ -150,7 +163,8 @@ class DirectoryFacts:
         if self.query_view is None or (self.query_view.where,self.query_view.params) != (predicate,tuple(params)):
             if self.query_view is not None:
                 self.query_view.discard_block()
-            self.query_view = DirectoryFacts(self.owner,self.directory,self.state,where=predicate,params=params)
+            self.query_view = DirectoryFacts(self.owner,self.directory,self.state,where=predicate,params=params,
+                                             chat_status=query.get('chatStatus', False))
         return self.query_view
 
     def activity_counts(self):
@@ -321,10 +335,13 @@ class Observations:
             return self.directory_key(collection,self.directory_revision)
         return f'{self.service.instance_id}:{collection}:{self.generations[collection]}'
 
-    def directory_key(self, collection, revisions, db=None):
+    def directory_key(self, collection, revisions, db=None, *, chat_status=False):
         from .client_presentation import revision as presentation_revision
         receipt_revision = presentation_revision(db or self.service.directory.db) if collection in {'sessions', 'attention'} else 0
-        digest = hashlib.sha256(json.dumps([revisions[collection],receipt_revision],sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        dependencies = [revisions[collection], receipt_revision]
+        if chat_status:
+            dependencies.append(revisions['navigation'])
+        digest = hashlib.sha256(json.dumps(dependencies,sort_keys=True,separators=(',',':')).encode()).hexdigest()
         return f'{self.service.instance_id}:{collection}:{digest}'
 
     def require_client(self):
@@ -390,7 +407,8 @@ class Observations:
     def snapshot(self, token, query):
         self.refresh()
         self.reclaim()
-        revision = self.revision_for(query['collection'])
+        revision = (self.directory_key(query['collection'], self.directory_revision, chat_status=True)
+                    if query.get('chatStatus') else self.revision_for(query['collection']))
         position, lease_id = [0, 0], None
         if token:
             try:
@@ -432,7 +450,8 @@ class Observations:
                     # Native discovery can commit on another thread between
                     # refresh and BEGIN. Label exactly these pinned read views.
                     from .history_directory_observations import revision as directory_revision
-                    actual = self.directory_key(collection,directory_revision(reader,reader._frozen_state),reader.db)
+                    actual = self.directory_key(collection,directory_revision(reader,reader._frozen_state),reader.db,
+                                                chat_status=query.get('chatStatus', False))
                     if actual != revision:
                         revision = actual
                         owner = self.service.clients.current.get()
@@ -451,7 +470,7 @@ class Observations:
         return self.snapshots[revision], position, lease_id, None
 
     def query(self, params, collection):
-        allowed = {'cursor', 'limit', 'scope', 'clientId'}
+        allowed = {'cursor', 'limit', 'scope', 'clientId', 'chatStatus'}
         allowed |= {'workspace', 'activity', 'pinned', 'view'} if collection == 'sessions' else {'read'}
         if set(params) - allowed or any(len(params.getall(k)) != 1 for k in params if hasattr(params, 'getall')):
             raise AppError('Unsupported or repeated observation parameter.')
@@ -463,6 +482,10 @@ class Observations:
         if not 1 <= limit <= MAX_PAGE or scope not in {'roots', 'delegates', 'all'}:
             raise AppError('Choose limit 1–200 and scope roots, delegates or all.')
         query = {'collection': collection, 'scope': scope, 'limit': limit}
+        if 'chatStatus' in params:
+            if params['chatStatus'] != '1' or getattr(self.service, 'directory', None) is None:
+                raise AppError('Unsupported chat status projection.')
+            query['chatStatus'] = True
         if collection == 'sessions':
             activity = params.get('activity', 'all')
             pinned = params.get('pinned', 'all')
@@ -622,7 +645,10 @@ class Observations:
 
 
 def discovery(service):
-    return {'hostIdentity': data_identity(service.data_dir), 'capabilities': CAPABILITIES}
+    observations = CAPABILITIES['observations']
+    if getattr(service, 'directory', None) is not None:
+        observations = {**observations, 'chatStatus': True}
+    return {'hostIdentity': data_identity(service.data_dir), 'capabilities': {'observations': observations}}
 
 
 def setup_routes(app):

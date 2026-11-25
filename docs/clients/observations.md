@@ -222,3 +222,12 @@ leaves a service unavailable with an update message.
 The rollout record must distinguish source qualification, service publication,
 actual host adoption, client publication and actual device adoption. Browser
 execution/device-v1 remains a separate enrollment and authority boundary.
+
+When discovery advertises `observations.chatStatus: true`, request
+`chatStatus=1` on either paginated collection to include the sidebar's current
+`chatStatus: {kind, label}` for each session or notice target. Carry the option
+through every continuation. The label is the bounded navigation status, without
+question text, dependency targets or transcripts. Presentation dismissal and
+unread receipts remain independent. A chat bubble can combine multiple visible
+occurrences for the same host and session while retaining their individual
+dismissal identities. The displayed count is the number of eligible chat bubbles.
