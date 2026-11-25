@@ -176,7 +176,7 @@ async def test_two_https_hosts_pair_deduplicate_fence_and_revoke(tmp_path, monke
                 status, used = await request(1, "join", {**join, "commandId": "not-the-original"})
                 assert status == 409 and used["code"] == "link_offer_used"
                 with monkeypatch.context() as unavailable:
-                    unavailable.setattr(links_a, "enabled", False)
+                    unavailable.setitem(links_a.config, "linked_instances", False)
                     status, refusal = await request(1, "join", join)
                     assert status == 503 and refusal["code"] == "link_join_unconfirmed"
 

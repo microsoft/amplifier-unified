@@ -25,6 +25,7 @@ DEFAULT_SERVER = {
     "port": 8941,
     "public_origins": [],
     "linked_instances": False,
+    "linked_instances_peer_listener": False,
     "linked_instances_discovery": {},
     "session_ttl_seconds": 604800,
     "host_pam": None,
@@ -176,6 +177,8 @@ def validate_server(value: dict) -> dict:
         raise ValueError("port must be an integer from 1 through 65535.")
     if type(config["linked_instances"]) is not bool:
         raise ValueError("linked_instances must be true or false.")
+    if type(config["linked_instances_peer_listener"]) is not bool:
+        raise ValueError("linked_instances_peer_listener must be true or false.")
     config["linked_instances_discovery"] = validate_discovery(config["linked_instances_discovery"])
     if type(config["session_ttl_seconds"]) is not int or config["session_ttl_seconds"] <= 0:
         raise ValueError("session_ttl_seconds must be a positive integer.")

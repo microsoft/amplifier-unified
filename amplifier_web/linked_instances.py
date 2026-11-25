@@ -22,9 +22,10 @@ from aiohttp import web
 from filelock import FileLock, Timeout
 from yaml import YAMLError
 
-from .deployment import load_server_config, save_server_config, validate_origin, write_private
+from .deployment import is_loopback, load_server_config, save_server_config, validate_origin, write_private
 from .errors import AppError
 from .linked_discovery import DEVICE, Discovery, Unavailable
+from .linked_peer_listener import Listener
 
 PREFIX = "/api/linked-instances/v1"
 PEER_PREFIX = PREFIX + "/peer"
@@ -57,6 +58,7 @@ ERRORS = {
     "link_capacity": (409, "This installation reached its link or receipt limit."),
     "link_store_unavailable": (503, "The private link store is unavailable."),
     "link_setup_unavailable": (503, "Linking settings could not be saved. Read the settings again before retrying."),
+    "link_setup_conflict": (409, "Linking settings changed. Refresh the settings before making another change."),
 }
 
 
@@ -78,6 +80,15 @@ def _json(value):
 
 def _digest(value):
     return hashlib.sha256(value).hexdigest()
+
+
+def _setup_revision(saved):
+    # The change mark also fences an on/off/on sequence, while the choices
+    # detect edits by the existing CLI/configuration owner.
+    return _digest(_json({key: saved.get(key) for key in (
+        "linked_instances", "linked_instances_peer_listener", "linked_instances_discovery",
+        "linked_instances_setup_mark", "bind", "port", "public_origins", "tls",
+    )}))
 
 
 def _origin(value):
@@ -398,35 +409,53 @@ def _leaf_fingerprint(root, config):
 class LinkedInstances:
     def __init__(self, root, config, *, transport=None, clock=time.time, discovery=None):
         self.config = config
-        self.origins = tuple(origin for origin in config["public_origins"] if origin.startswith("https://"))
-        self.enabled = config.get("linked_instances") is True and bool(self.origins) and config.get("tls") == LOCAL_TLS
+        self.configured_origins = tuple(origin for origin in config["public_origins"] if origin.startswith("https://"))
+        self.configured = bool(self.configured_origins) and config.get("tls") == LOCAL_TLS
         self.store = LinkStore(root)
+        self.listener = Listener(self.store)
+        self.setup_lock = asyncio.Lock()
+        self.listener_stopping = False
         self.generation = uuid.uuid4().hex
         self.transport = DirectTransport() if transport is None else transport
         self.clock = clock
+        self.discovery_backend = discovery
         self.discovery = Discovery(config, backend=discovery)
         self.route_writes = asyncio.Lock()
         self.route_checks = asyncio.Semaphore(4)
+
+    @property
+    def origins(self):
+        return (self.listener.origin,) if self.listener.origin else self.configured_origins
+
+    @property
+    def enabled(self):
+        return self.listener.origin is not None or (self.configured and self.config.get("linked_instances") is True)
 
     def require_enabled(self):
         if not self.enabled:
             raise failure("link_unsupported")
 
-    def setup(self, args=None):
+    def _setup(self, args=None):
         from .tls import tls_ready
 
         live = self.discovery.capabilities()
         enabled = self.config.get("linked_instances") is True
+        peer_listener = self.config.get("linked_instances_peer_listener") is True
         blockers = []
         try:
             saved = load_server_config(self.store.root, create=False)
             if args is not None:
+                if args.get("expectedRevision") != _setup_revision(saved):
+                    raise failure("link_setup_conflict")
                 discovery = saved["linked_instances_discovery"]
-                if saved["linked_instances"] != args["enabled"] or any(
-                    discovery[key] != args[key] for key in live
-                ):
+                consent = args.get("peerListener", saved["linked_instances_peer_listener"])
+                if (saved["linked_instances"] != args["enabled"]
+                        or saved["linked_instances_peer_listener"] != consent
+                        or any(discovery[key] != args[key] for key in live)):
                     saved = save_server_config(self.store.root, {
                         **saved, "linked_instances": args["enabled"],
+                        "linked_instances_peer_listener": consent,
+                        "linked_instances_setup_mark": uuid.uuid4().hex,
                         "linked_instances_discovery": {**discovery, **{key: args[key] for key in live}},
                     })
         except (OSError, ValueError, YAMLError, RecursionError):
@@ -435,7 +464,28 @@ class LinkedInstances:
             saved = None
             blockers.append("saved_configuration_unavailable")
         choice = saved["linked_instances"] if saved is not None else enabled
+        consent = saved["linked_instances_peer_listener"] if saved is not None else peer_listener
+        revision = _setup_revision(saved) if saved is not None else None
         discovery = {key: saved["linked_instances_discovery"][key] for key in live} if saved is not None else live
+        listener = ("peer-only" if self.listener.origin else
+                    "configured" if self.configured and enabled else "none")
+        if not self.configured and (consent or listener == "peer-only"):
+            if self.listener.blocker and choice and consent:
+                blockers.append(self.listener.blocker)
+            if "saved_configuration_unavailable" in blockers:
+                status = "unavailable"
+            elif not choice and listener == "none":
+                status = "off"
+            elif choice and consent and blockers:
+                status = "unavailable"
+            elif choice and consent and listener == "peer-only" and discovery == live:
+                status = "active"
+            else:
+                status = "pending"
+            return saved, {"status": status, "enabled": choice, "peerListener": consent, "revision": revision,
+                           "listener": listener, "discovery": discovery,
+                           "origins": [self.listener.origin] if self.listener.origin else [],
+                           "blockers": blockers, "lanExpiresAt": self.discovery.expires_at()}
         # Effective startup config can include explicit launch flags. They
         # apply over the saved settings, not the other way around. Do not copy
         # startup overrides into server.yaml or claim the socket was tested.
@@ -447,7 +497,7 @@ class LinkedInstances:
             blockers.append("app_tls_unavailable")
         if "saved_configuration_unavailable" in blockers:
             status = "unavailable"
-        elif not choice and not enabled:
+        elif not choice and not (enabled and self.configured):
             status = "off"
         elif not choice:
             status = "pending"
@@ -457,9 +507,105 @@ class LinkedInstances:
             status = "pending"
         else:
             status = "active"
-        return {"status": status, "enabled": choice, "discovery": discovery,
-                "origins": list(self.origins), "blockers": blockers,
-                "lanExpiresAt": self.discovery.expires_at()}
+        if listener == "configured" and "app_tls_unavailable" in blockers:
+            listener = "none"
+        return saved, {"status": status, "enabled": choice, "peerListener": consent, "revision": revision,
+                       "listener": listener, "discovery": discovery,
+                       "origins": list(self.origins), "blockers": blockers,
+                       "lanExpiresAt": self.discovery.expires_at()}
+
+    def setup(self):
+        return self._setup()[1]
+
+    async def _apply_listener(self, saved):
+        if self.configured or self.listener_stopping:
+            return
+        choice = saved.get("linked_instances") is True
+        consent = saved.get("linked_instances_peer_listener") is True
+        discovery = saved.get("linked_instances_discovery", {})
+        binding = self.listener.binding
+        if not choice or not consent or (binding and binding.route == "tailscale" and not discovery["tailscale"]):
+            try:
+                await self.listener.close()
+            finally:
+                await self.discovery.close(None)
+        if not choice or not consent:
+            return
+        if self.listener.origin is None:
+            if self.config["public_origins"] or not all(is_loopback(item) for item in self.config.get("bind", ())):
+                self.listener.blocker = "peer_listener_unsupported"
+                return
+            await self.listener.open(PEER_PATHS, self.dedicated_peer, tailscale=discovery["tailscale"])
+        binding = self.listener.binding
+        if binding is not None and (self.discovery.closed or self.discovery.port != self.listener.port
+                                    or self.discovery.config != discovery):
+            await self.discovery.close(None)
+            self.discovery = Discovery(
+                {"port": self.listener.port, "bind": [str(binding.local.ip)], "linked_instances_discovery": discovery},
+                backend=self.discovery_backend,
+            )
+
+    async def startup(self, _app):
+        if self.config.get("linked_instances_peer_listener") is True:
+            async with self.setup_lock:
+                await self._apply_listener(self.config)
+
+    async def save_setup(self, args):
+        async with self.setup_lock:
+            if self.listener_stopping:
+                raise failure("link_setup_unavailable")
+            saved, result = self._setup(args)
+            if not self.configured and (saved["linked_instances_peer_listener"] or self.listener.origin is not None):
+                await self._apply_listener(saved)
+                result = self.setup()
+            elif not saved["linked_instances_peer_listener"]:
+                self.listener.blocker = None
+            return result
+
+    async def shutdown(self, app):
+        self.listener_stopping = True
+        async with self.setup_lock:
+            try:
+                await self.listener.close()
+            finally:
+                await self.discovery.close(app)
+
+    async def dedicated_peer(self, request):
+        headers = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+        try:
+            listener = self.listener
+            # The accepted socket, not a claimed or forwarded host, selects
+            # this listener. Reject alternate wire authorities and paths.
+            if (listener.origin is None or request.raw_path not in PEER_PATHS
+                    or request.headers.getall("Host", []) != [listener.origin.removeprefix("https://")]
+                    or not listener.binding.accepts(request.transport, listener.port)):
+                raise failure("link_unsupported")
+            result = await self.peer(request, listener.origin, binding=listener.binding)
+            return web.json_response({"result": result}, headers=headers)
+        except AppError as exc:
+            return web.json_response({"error": str(exc), "accepted": False, "code": exc.code},
+                                     status=exc.status, headers=headers)
+
+    async def peer(self, request, origin, *, binding=None):
+        if not request.secure or "Origin" in request.headers or "Cookie" in request.headers:
+            raise failure("link_unsupported")
+        try:
+            async with asyncio.timeout(5):
+                args = await _read_body(request)
+        except TimeoutError:
+            raise failure("link_invalid") from None
+        if binding is not None and (self.listener.binding is not binding or self.listener_stopping):
+            raise failure("link_unsupported")
+        authorization = request.headers.getall("Authorization", [])
+        if request.path == PEER_PREFIX + "/status":
+            if len(authorization) != 1 and binding is not None:
+                raise failure("link_revoked")
+            return self.peer_status(args, request.headers.get("Authorization", ""))
+        if authorization and (binding is not None or request.path == PEER_PREFIX + "/identity"):
+            raise failure("link_unsupported")
+        if request.path == PEER_PREFIX + "/identity":
+            return self.peer_identity(args)
+        return self.enroll(args, origin)
 
     def list(self, *, outgoing_only=False):
         self.require_enabled()
@@ -481,7 +627,7 @@ class LinkedInstances:
             saved = _command(state, "offer", args, create=True)
             if "offer" not in saved:
                 saved["offer"] = {"origin": origin, "instanceId": state["instanceId"],
-                                  "fingerprint": _leaf_fingerprint(self.store.root, self.config),
+                                  "fingerprint": self.listener.fingerprint or _leaf_fingerprint(self.store.root, self.config),
                                   "secret": secrets.token_urlsafe(32)}
                 saved["expiresAt"] = int(self.clock()) + OFFER_TTL
             code = _encode_offer(saved["offer"])
@@ -814,16 +960,16 @@ def install(app, service):
     from .browser_entry import _on_this_computer
 
     links = service.linked_instances
-    app["linked_instance_peer_paths"] = PEER_PATHS
 
     async def owner(request):
         operation = request.match_info["operation"]
         setup = operation in {"setup", "setup-save"}
         # Only the owner control credential and regular authenticated browser
         # sessions get a history scope. Restricted/legacy devices never do.
-        # A default HTTP install can stage a preference on actual loopback,
-        # but never invoke pairing or discovery from that listener.
-        if (not request.get("history_scope") or not (request.secure or (setup and _on_this_computer(request)))
+        # A default HTTP install only gets the owner linking controls on
+        # actual loopback; the dedicated socket never acquires this principal.
+        local = (setup or links.listener.origin is not None) and _on_this_computer(request)
+        if (not request.get("history_scope") or not (request.secure or local)
                 or len(request.headers.getall("Origin", [])) != 1 or not request.headers.get("Origin")
                 or not allowed_origin(request)):
             raise failure("link_unsupported")
@@ -835,9 +981,12 @@ def install(app, service):
         if setup:
             if operation == "setup" and args == {}:
                 result = links.setup()
-            elif (operation == "setup-save" and isinstance(args, dict) and args.keys() == {"enabled", "lan", "tailscale"}
-                  and all(type(value) is bool for value in args.values())):
-                result = links.setup(args)
+            elif (operation == "setup-save" and isinstance(args, dict)
+                  and {"enabled", "lan", "tailscale", "expectedRevision"} <= args.keys()
+                  <= {"enabled", "lan", "tailscale", "peerListener", "expectedRevision"}
+                  and isinstance(args["expectedRevision"], str) and re.fullmatch(DIGEST, args["expectedRevision"])
+                  and all(type(args[key]) is bool for key in args.keys() - {"expectedRevision"})):
+                result = await links.save_setup(args)
             else:
                 raise failure("link_invalid")
             return web.json_response({"result": result})
@@ -879,33 +1028,26 @@ def install(app, service):
             raise failure("link_invalid")
         return web.json_response({"result": result})
 
-    async def peer(request):
+    async def configured_peer(request):
         links.require_enabled()
-        if not request.secure or "Origin" in request.headers or "Cookie" in request.headers:
-            raise failure("link_unsupported")
         try:
             origin = validate_origin(f"https://{request.host}")
         except ValueError:
             raise failure("link_unsupported") from None
         if origin not in links.origins:
             raise failure("link_unsupported")
-        try:
-            async with asyncio.timeout(5):
-                args = await _read_body(request)
-        except TimeoutError:
-            raise failure("link_invalid") from None
-        if request.path == PEER_PREFIX + "/identity":
-            if "Authorization" in request.headers:
-                raise failure("link_unsupported")
-            result = links.peer_identity(args)
-        elif request.path == PEER_PREFIX + "/enroll":
-            result = links.enroll(args, origin)
-        else:
-            result = links.peer_status(args, request.headers.get("Authorization", ""))
+        result = await links.peer(request, origin)
         return web.json_response({"result": result})
 
     app.router.add_post(PREFIX + "/{operation:setup|setup-save|list|offer|join|status|revoke|"
                         "lan-browse|lan-discoverable|tailscale-devices|tailscale-find|route-remember}", owner)
-    for path in sorted(PEER_PATHS):
-        app.router.add_post(path, peer)
-    app.on_shutdown.append(links.discovery.close)
+    if links.configured:
+        # Retain previously deployed TLS endpoints and pins. A fresh local
+        # browser app never installs the peer routes or their auth exemption.
+        app["linked_instance_peer_paths"] = PEER_PATHS
+        for path in sorted(PEER_PATHS):
+            app.router.add_post(path, configured_peer)
+    app.on_startup.append(links.startup)
+    app.on_shutdown.append(links.shutdown)
+    # AppRunner skips on_shutdown if a later startup hook failed.
+    app.on_cleanup.append(links.shutdown)

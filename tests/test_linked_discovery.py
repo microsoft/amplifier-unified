@@ -189,7 +189,7 @@ async def test_verified_route_preference_keeps_the_same_grant(tmp_path):
     assert "discovery" not in links.list(outgoing_only=True)
 
 
-def test_setup_passive_status_and_narrow_saved_choices(tmp_path):
+async def test_setup_passive_status_and_narrow_saved_choices(tmp_path):
     off = LinkedInstances(tmp_path, {"public_origins": []})
     assert off.setup()["status"] == "off"
     assert not (tmp_path / "config").exists()
@@ -197,24 +197,29 @@ def test_setup_passive_status_and_narrow_saved_choices(tmp_path):
                                           "extension": {"keep": "value"}})
     off = LinkedInstances(tmp_path, before)
     # The configured layout is not proof of usable TLS.
-    res = off.setup({"enabled": True, "lan": False, "tailscale": True})
+    res = await off.save_setup({"enabled": True, "lan": False, "tailscale": True,
+                                "expectedRevision": off.setup()["revision"]})
     assert res["status"] == "unavailable" and res["blockers"] == ["app_tls_unavailable"]
     saved = load_server_config(tmp_path, create=False)
-    assert saved == {**before, "linked_instances": True, "linked_instances_discovery": {
+    assert saved["linked_instances_setup_mark"]
+    assert {key: value for key, value in saved.items() if key != "linked_instances_setup_mark"} == {
+        **before, "linked_instances": True, "linked_instances_discovery": {
         **before["linked_instances_discovery"], "lan": False,
     }}
     assert not off.enabled and not off.store.path.exists()
 
 
-def test_setup_reports_pending_until_runtime_uses_saved_preferences(tmp_path, monkeypatch):
+async def test_setup_reports_pending_until_runtime_uses_saved_preferences(tmp_path, monkeypatch):
     monkeypatch.setattr(tls, "tls_ready", lambda *_: True)
     initial = save_server_config(tmp_path, {**config(), "linked_instances": False})
     off = LinkedInstances(tmp_path, initial)
-    assert off.setup({"enabled": True, "lan": False, "tailscale": False})["status"] == "pending"
+    assert (await off.save_setup({"enabled": True, "lan": False, "tailscale": False,
+                                  "expectedRevision": off.setup()["revision"]}))["status"] == "pending"
     ready = LinkedInstances(tmp_path, load_server_config(tmp_path))
     assert ready.setup()["status"] == "active" and ready.enabled
     assert ready.list()["discovery"] == {"lan": False, "tailscale": False}
-    assert ready.setup({"enabled": False, "lan": False, "tailscale": False})["status"] == "pending"
+    assert (await ready.save_setup({"enabled": False, "lan": False, "tailscale": False,
+                                    "expectedRevision": ready.setup()["revision"]}))["status"] == "pending"
     assert ready.enabled
 
 
@@ -262,18 +267,22 @@ async def test_owner_setup_over_real_loopback_and_only_narrow_body(tmp_path):
                                        json=args) as response:
                     return response.status, await response.json()
 
-            choice = {"enabled": True, "lan": True, "tailscale": False}
+            snapshot = (await send("setup", {}))[1]["result"]
+            choice = {"enabled": True, "lan": True, "tailscale": False, "expectedRevision": snapshot["revision"]}
             assert (await send("setup", {}, auth=False))[0] == 401
             assert (await send("setup-save", choice, origin=None))[0] == 403
             assert (await send("setup-save", choice, origin="http://127.0.0.1:1234"))[0] == 403
             assert (await send("setup-save", {**choice, "bind": ["0.0.0.0"]}))[0] == 400
             assert (await send("setup-save", {**choice, "enabled": 1}))[0] == 400
-            assert (await send("setup", {}))[1]["result"]["status"] == "off"
+            assert snapshot["status"] == "off"
             status, data = await send("setup-save", choice)
             assert status == 200 and data["result"] == {
                 "status": "unavailable", "enabled": True, "discovery": {"lan": True, "tailscale": False},
                 "origins": [], "blockers": ["https_origin_required", "app_tls_required"], "lanExpiresAt": None,
+                "peerListener": False, "listener": "none",
+                "revision": data["result"]["revision"],
             }
+            assert data["result"]["revision"] != snapshot["revision"]
             assert (await send("setup", {}))[1] == data
             assert (await send("list", {}))[0] == 403
             assert load_server_config(tmp_path)["note"] == "keep"
