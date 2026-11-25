@@ -8,7 +8,7 @@ from amplifier_core.message_models import ChatRequest, Message, ToolSpec
 from amplifier_core.models import ToolResult
 from amplifier_web.service import AppError, AppService
 from amplifier_web.surface_context import compact, revision
-from amplifier_web.surface_delivery import SurfaceDelivery, SurfaceProvider
+from amplifier_web.surface_delivery import READ_GUIDE, SurfaceDelivery, SurfaceProvider
 
 PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='
 
@@ -106,7 +106,8 @@ async def test_notice_never_acknowledges_content_and_compaction_resyncs(surface,
 async def test_selective_images_are_typed_and_never_leak_into_tool_outputs(surface, serialization):
     app, row, binding, _ = surface
     delivery = SurfaceDelivery(bridge_for(app, row, binding))
-    await delivery.prepare(request(), provider(), commit=True)
+    first = await delivery.prepare(request(), provider(), commit=True)
+    assert any(block.type == 'text' and block.text == READ_GUIDE for block in first.messages[-1].content)
     read = await delivery.read({'surfaceId': row['id'], 'representation': 'image'})
     assert PNG not in json.dumps(read)
     retained = request(Message(role='tool', name='app_control', tool_call_id='read', content=serialized_receipt(read, serialization)))
