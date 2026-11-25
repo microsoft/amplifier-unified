@@ -60,6 +60,30 @@ async def warm(manager, identity):
     return manager.workers[identity]['process']
 
 
+async def test_file_access_refresh_deadline_includes_transport_admission(
+        manager, monkeypatch):
+    import amplifier_web.runtime as runtime
+    await warm(manager, 'refresh-deadline')
+    row = manager.workers['refresh-deadline']
+    row['configurationStamp'] = []
+    row['sessionSettingsPath'] = '/tmp/settings.yaml'
+    entered, never = asyncio.Event(), asyncio.Event()
+    original = manager._write
+
+    async def blocked(owner, data):
+        if data['op'] == 'file_access.refresh':
+            entered.set()
+            await never.wait()
+        await original(owner, data)
+
+    monkeypatch.setattr(runtime, 'FILE_ACCESS_REFRESH_TIMEOUT', .05)
+    monkeypatch.setattr(manager, '_write', blocked)
+    assert not await asyncio.wait_for(
+        manager.refresh_file_access('refresh-deadline', 'revision'), 1)
+    assert entered.is_set()
+    assert not manager._locks['refresh-deadline'].locked()
+
+
 async def test_count_evicts_oldest_settled_worker_and_input_restarts_without_replay(manager):
     manager.retention.settings['max_warm_workers'] = 2
     first = await warm(manager, 'a')

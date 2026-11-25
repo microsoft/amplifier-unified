@@ -6,8 +6,12 @@ environment; navigation uses its native-history reader.
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import stat
 from pathlib import Path
+
+MAX_CONFIGURATION_DIGEST_BYTES = 8 * 1024 * 1024
 
 def shared_state_home() -> Path:
     """Resolve Foundation's state-root convention without importing its runtime."""
@@ -56,13 +60,60 @@ def configuration_stamp(workspace: Path, session_id: str, home: Path, stamp, *, 
     return tuple((str(path), stamp(path)) for path in paths)
 
 
+def configuration_path_stamp(path):
+    """Return one JSON-stable metadata witness used by mounted stamps."""
+    try:
+        value = Path(path).stat()
+    except FileNotFoundError:
+        return None
+    return [value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns]
+
+
+def configuration_path_digest(path):
+    """Hash one bounded regular file without following blocking stream semantics."""
+    flags = os.O_RDONLY
+    for name in ('O_NONBLOCK', 'O_CLOEXEC', 'O_BINARY'):
+        flags |= getattr(os, name, 0)
+    try:
+        handle = os.open(Path(path), flags)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise RuntimeError('The configuration file cannot be read safely.') from exc
+    try:
+        before = os.fstat(handle)
+        if not stat.S_ISREG(before.st_mode):
+            raise RuntimeError('The configuration path is not a regular file.')
+        if before.st_size > MAX_CONFIGURATION_DIGEST_BYTES:
+            raise RuntimeError('The configuration file is too large for live reconciliation.')
+        digest = hashlib.sha256()
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(handle, min(remaining, 64 * 1024))
+            if not chunk:
+                raise RuntimeError('The configuration file changed while it was read.')
+            digest.update(chunk)
+            remaining -= len(chunk)
+        if os.read(handle, 1):
+            raise RuntimeError('The configuration file changed while it was read.')
+        after = os.fstat(handle)
+        before_witness = (
+            before.st_dev, before.st_ino, before.st_size,
+            before.st_mtime_ns, before.st_ctime_ns)
+        after_witness = (
+            after.st_dev, after.st_ino, after.st_size,
+            after.st_mtime_ns, after.st_ctime_ns)
+        if after_witness != before_witness:
+            raise RuntimeError('The configuration file changed while it was read.')
+        return digest.hexdigest()
+    except OSError as exc:
+        raise RuntimeError('The configuration file cannot be read safely.') from exc
+    finally:
+        os.close(handle)
+
+
 def mounted_configuration_stamp(workspace, session_id, home, *, extra_paths=()):
     """Runtime-free private mount comparison; JSON-stable metadata, not content."""
-    def stamp(path):
-        try:
-            value = path.stat()
-        except FileNotFoundError:
-            return None
-        return [value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns]
     return [[path, value] for path, value in configuration_stamp(
-        Path(workspace), session_id, Path(home), stamp, extra_paths=extra_paths, include_controls=False)]
+        Path(workspace), session_id, Path(home), configuration_path_stamp,
+        extra_paths=extra_paths, include_controls=False)]

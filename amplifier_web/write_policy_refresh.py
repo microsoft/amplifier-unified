@@ -47,6 +47,23 @@ def _without_writes(settings):
     return prune(result)
 
 
+def _without_write_defaults(settings):
+    """Remove only the live write defaults from complete canonical settings."""
+    result = copy.deepcopy(settings)
+    parents = [('overrides',), ('overrides', 'tool-filesystem'),
+               ('overrides', 'tool-filesystem', 'config')]
+    values = result.get('overrides', {}).get('tool-filesystem', {}).get('config', {})
+    for key in WRITE_KEYS:
+        values.pop(key, None)
+    for path in reversed(parents):
+        parent = result
+        for key in path[:-1]:
+            parent = parent.get(key, {})
+        if parent.get(path[-1]) == {}:
+            parent.pop(path[-1])
+    return result
+
+
 class WritePolicyRefreshRequired(ValueError):
     code = 'file_policy_refresh_required'
 
@@ -108,8 +125,10 @@ class LiveWritePolicy:
         self.source, self.coordinator = source, coordinator
         self.session_id, self.current = session_id, current
         self.cache = SettingsReadCache(limit=1)
-        self.initial = source.select(getattr(source.config, '_canonical_settings', source.config.settings))
+        canonical = getattr(source.config, '_canonical_settings', source.config.settings)
+        self.initial = source.select(canonical)
         self.mount_settings = _without_writes(self.initial)
+        self.mount_canonical_fingerprint = fingerprint(_without_write_defaults(canonical))
         self.settings = None
         self.revision = None
         self.signature = None
@@ -226,6 +245,36 @@ class LiveWritePolicy:
             if any(module not in seen or declared.count(module) != 1 for module in declared):
                 raise ValueError('The mounted writers do not support a complete live refresh.')
         return self.refresh(expected=revision)
+
+    def confirm_mount(self, revision):
+        """Confirm live writers and attest only the rewritten session settings."""
+        result = self.confirm(revision)
+        config = self.source.config
+        paths = settings_paths(config.workspace, shared_home=config.config_home,
+                               session_id=self.session_id, global_only=config.global_only)
+        signature = self.cache._signature(tuple(paths.values()))
+        from .shared_state import configuration_path_digest, configuration_path_stamp
+        session_path = paths['session']
+        digest = configuration_path_digest(session_path)
+        settings = read_settings(config.workspace, shared_home=config.config_home,
+                                 session_id=self.session_id, global_only=config.global_only,
+                                 cache=None)
+        if fingerprint(settings) != revision:
+            raise WritePolicyRefreshRequired('File settings changed before mount reconciliation.')
+        if fingerprint(_without_write_defaults(settings)) != self.mount_canonical_fingerprint:
+            raise WritePolicyRefreshRequired(
+                'Non-write settings changed; the runtime must refresh before new input.')
+        if fingerprint(self.source.select(settings)) != fingerprint(self.settings):
+            raise WritePolicyRefreshRequired(
+                'Writer settings changed during mount reconciliation.')
+        stamp = [str(session_path), configuration_path_stamp(session_path)]
+        if (configuration_path_digest(session_path) != digest
+                or self.cache._signature(tuple(paths.values())) != signature
+                or not self.current()):
+            raise WritePolicyRefreshRequired(
+                'File settings or runtime changed during mount reconciliation.')
+        return {**result, 'sessionSettingsStamp': stamp,
+                'sessionSettingsDigest': digest}
 
     def invocation(self, tool, module, coordinator):
         self.refresh()
