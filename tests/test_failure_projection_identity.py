@@ -5,6 +5,7 @@ import json
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -150,8 +151,39 @@ async def test_fresh_operator_input_does_not_replay_or_relabel_failed_input(app)
     assert 'generationId' not in target['failure']
 
 
+@pytest.fixture
+def suggestion_attempt(app, monkeypatch):
+    from amplifier_web.prompt_suggestions import BROWSER
+    target = app.state['sessions'][1]
+    app._message(target, 'user', 'Earlier human question.', inputOrigin='ui')
+    earlier = app._message(target, 'assistant', 'Earlier complete answer.')
+    host = app.prompt_suggestions
+    app._state['settings']['suggestedMessages'] = True
+    config = {'enabled': True, 'provider': 'saved', 'model': 'utility'}
+    monkeypatch.setattr(host, 'settings', lambda: (config, {'id': 'saved'}, 'crossing'))
+    complete = AsyncMock(return_value={'status': 'ready', 'suggestion': 'Check the new result.',
+                                      'usage': None, 'cost': None})
+    monkeypatch.setattr(host, 'complete', complete)
+    app.clients.attach('suggestion-browser', kind='web')
+    app.clients.records['suggestion-browser']['selectedSessionId'] = target['id']
+
+    async def request(identity, latest=earlier['id']):
+        token = BROWSER.set({'principal': 'cookie', 'valid': lambda: True})
+        try:
+            with app.clients.bind('suggestion-browser'):
+                args = {'sessionId': target['id'], 'requestId': identity}
+                await host.dispatch('session.suggestion.request',
+                                    {**args, 'expectedLastMessageId': latest}, 'ui')
+                await asyncio.gather(*tuple(host.jobs))
+                return await host.dispatch('session.suggestion.status', args, 'ui')
+        finally:
+            BROWSER.reset(token)
+    return request, complete
+
+
 @pytest.mark.parametrize('dismissed', [False, True])
-async def test_prior_failure_notice_survives_fresh_send_preparation_until_admission(app, dismissed):
+async def test_prior_failure_notice_survives_fresh_send_preparation_until_admission(app, dismissed, suggestion_attempt):
+    request, complete = suggestion_attempt
     target = app.state['sessions'][1]
     await observed(app, target, 'started')
     await observed(app, target, 'failed', error_type='CompactionError',
@@ -183,10 +215,18 @@ async def test_prior_failure_notice_survives_fresh_send_preparation_until_admiss
         assert target['failure'] == failure
         report = (await app.dispatch('session.inspect', {'id': target['id']}))['result']
         assert report['failure'] == failure
+        assert (await request('preparation-' + str(kind) + str(payload)))['status'] != 'ready'
+        complete.assert_not_awaited()
     await observed(app, target, 'started', gen='fresh-generation', inputs=['fresh-preparing-input'])
     assert notice() is None
     assert not target.get('failure') and not target.get('error')
     from amplifier_web.input_status import annotate
+    assert annotate(target, {'role': 'user', 'inputId': 'saved-input'})['inputStatus']['failure'] == failure
+    reply = app._message(target, 'assistant', 'Fresh completed reply.', inputId='fresh-preparing-input')
+    await observed(app, target, 'completed', gen='fresh-generation', inputs=['fresh-preparing-input'])
+    target['status'] = 'idle'
+    assert (await request('fresh-completed', reply['id']))['status'] == 'ready'
+    complete.assert_awaited_once()
     assert annotate(target, {'role': 'user', 'inputId': 'saved-input'})['inputStatus']['failure'] == failure
 
 
@@ -219,7 +259,8 @@ async def test_new_preparation_failure_is_unread_and_dismissible_after_prior_dis
 
 
 @pytest.mark.parametrize('status', [None, 'starting', 'ready'])
-async def test_new_send_interruption_does_not_inherit_dismissed_prior_failure(app, status):
+async def test_new_send_interruption_does_not_inherit_dismissed_prior_failure(app, status, suggestion_attempt):
+    request, complete = suggestion_attempt
     from amplifier_web.runtime import RuntimeHostClosingError
     from amplifier_web.input_status import annotate
     target = app.state['sessions'][1]
@@ -237,6 +278,7 @@ async def test_new_send_interruption_does_not_inherit_dismissed_prior_failure(ap
             await app.on_runtime_event('runtime.status', {'sessionId': target['id'], 'status': status})
         app.closed = True
         raise RuntimeHostClosingError()
+    send = app.runtime.send
     app.runtime.send = closing
     with pytest.raises(RuntimeHostClosingError):
         await app.dispatch('conversation.send', {'sessionId': target['id'], 'text': 'Fresh attempt'},
@@ -249,6 +291,18 @@ async def test_new_send_interruption_does_not_inherit_dismissed_prior_failure(ap
     assert annotate(target, {'role': 'user', 'inputId': 'old-input'})['inputStatus']['failure'] == failure
     assert target['messages'][-1]['delivery']['status'] == 'unknown'
     assert not app.runtime.inputs
+    assert (await request('unknown-input'))['status'] != 'ready'
+    complete.assert_not_awaited()
+    app.runtime.send = send
+    await app.dispatch('conversation.send', {'sessionId': target['id'], 'text': 'A distinct new human turn'},
+                       command_id='distinct-fresh-input')
+    await observed(app, target, 'started', gen='distinct-generation', inputs=['distinct-fresh-input'])
+    reply = app._message(target, 'assistant', 'Fresh completed reply.', inputId='distinct-fresh-input')
+    await observed(app, target, 'completed', gen='distinct-generation', inputs=['distinct-fresh-input'])
+    target['status'] = 'idle'
+    assert (await request('new-completed-input', reply['id']))['status'] == 'ready'
+    complete.assert_awaited_once()
+    assert annotate(target, {'role': 'user', 'inputId': 'old-input'})['inputStatus']['failure'] == failure
 
 
 @pytest.mark.parametrize('boundary', ['stopped', 'stopping', 'stop-revision',
