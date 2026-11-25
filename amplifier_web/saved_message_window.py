@@ -11,7 +11,7 @@ import json
 import os
 import stat
 
-from .transcript_window import _bounded_json, _OBJECT_LIMIT
+from .transcript_window import _bounded_json, _OBJECT_LIMIT, RAW_LIMIT
 
 MAX_BYTES = 8 * 1024 * 1024
 MAX_RECORD = 4 * 1024 * 1024
@@ -21,7 +21,7 @@ def _signature(info):
     return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
 
 
-def read_saved_window(source, signer, *, session_id, fence, before=None, limit=100):
+def read_saved_window(source, signer, *, session_id, fence, before=None, limit=100, contiguous=False):
     from .resource_files import _blob_index
     blob = _blob_index(source)
     if blob:
@@ -119,7 +119,7 @@ def read_saved_window(source, signer, *, session_id, fence, before=None, limit=1
                         state = {'depth': 0, 'quoted': False, 'quote': False, 'slashes': 0, 'skip': False}
                         next_end, next_state = absolute, dict(state)
                         record_end = absolute
-                        if len(items) >= limit or completed >= 512:
+                        if len(items) >= limit or completed >= RAW_LIMIT or contiguous and gaps:
                             break
             position -= 1
         if position < 0:
@@ -146,7 +146,7 @@ def read_saved_window(source, signer, *, session_id, fence, before=None, limit=1
             'unavailableRanges': gaps}
 
 
-def resident_rows(rows, end, limit):
+def resident_rows(rows, end, limit, *, contiguous=False):
     """Bound an already-resident page before copying or encoding any body."""
     accepted, gaps = [], []
     remaining, nodes, examined = MAX_BYTES, 100_000, 0
@@ -159,6 +159,8 @@ def resident_rows(rows, end, limit):
             position = index
             examined += 1
             gaps.append({'index': index, 'reason': 'object_limit'})
+            if contiguous:
+                break
             continue
         # Iterators avoid copying a large container merely to inspect its size.
         stack = [(iter((value,)), 0)]
@@ -205,7 +207,7 @@ def resident_rows(rows, end, limit):
         else:
             accepted.append(value)
             remaining -= cost
-        if nodes < 0:
+        if nodes < 0 or contiguous and gaps:
             break
     accepted.reverse()
     gaps.reverse()

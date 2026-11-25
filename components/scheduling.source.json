@@ -4,11 +4,11 @@
     "schema": 1,
     "component": "scheduling",
     "repository": "bkrabach/amplifier-platform-scheduling",
-    "revision": "4d261f6ff4e5c87fb6814feec485abd465b49ed2",
+    "revision": "04131e93ff72ea817970a73803fee15d2fe85750",
     "subdirectory": ".",
-    "tree": "390d0ce671a4a8b6d7dfe61a730e79e24039e375",
-    "version": "0.1.2",
-    "tag": "scheduling-v0.1.2",
+    "tree": "e9beecbf339faa9f5fcb08130fa4dfbe6ce8edf5",
+    "version": "0.1.3",
+    "tag": "scheduling-v0.1.3",
     "sourceFiles": {
       "CODE_OF_CONDUCT.md": "9d45a586fce701502d173a7c10c71c8bd4f23e23d5a4a06e9d00eb57a9c11205",
       "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
@@ -19,34 +19,34 @@
       "SUPPORT.md": "bc29be057576bc9576acb59335d95fe6dfef948c1c056e7ad5758cf97e9caa68",
       "amplifier_scheduling/__init__.py": "e6bb4a63a91e41ca20f3cff862a95d53eac72210f9f0b4ec9e36338517d2adeb",
       "amplifier_scheduling/policy.py": "42ff0fc1a90eed3bdc1c24faa10700b8b933ea99b5f011bb04a83176b7aaa0ff",
-      "amplifier_scheduling/store.py": "b9b166b94a79bcf6546ea4c441aafae4ad132e68dfb7712bc3610b3b3c1ff5bf",
-      "pyproject.toml": "8d50be045378a44bc48ca7f366975672b6fac67df00e2117b3ce40950371fb99",
-      "tests/test_policy_store.py": "bcfa892a05926a797b96721d1065b0e6c096d8240533ada8ef7b18b9aec954e1"
+      "amplifier_scheduling/store.py": "e275aaff9278c70b2ceeefca3be03a2f3bb4ab499658dedfa99152bc6a6c2ac1",
+      "pyproject.toml": "6d5c027b353443e637f21823bc639b198c8446dc2cc70ec7b51db12f259d9a0f",
+      "tests/test_policy_store.py": "7e117f5acd29aa9ed5fac20dc2f9aa5b21deaaa3ddc6bf3565b7459072a8915c"
     },
     "artifacts": {
-      "amplifier_scheduling-0.1.2-py3-none-any.whl": {
-        "sha256": "dfe94d3999120773c2e3e89ea012429c219a8f9456acda93bcbe2d10ae9bfede",
-        "bytes": 13412
+      "amplifier_scheduling-0.1.3-py3-none-any.whl": {
+        "sha256": "4096cee77bb74c1feaa742a6eb76f3a1e2c051b70682ecb1c45e1e13e07b8555",
+        "bytes": 13440
       },
-      "amplifier_scheduling-0.1.2.tar.gz": {
-        "sha256": "f77e22c251393e58bf76f8d0a716bb60a0f0e9c11329d823650d08c8389736e3",
-        "bytes": 22263
+      "amplifier_scheduling-0.1.3.tar.gz": {
+        "sha256": "46e6b5cd8ff68949fa38bb0bc67d95a04f96fdb248d3af0f5dd2a01a3bcbe0b6",
+        "bytes": 22495
       }
     }
   },
   "artifact": {
-    "url": "https://github.com/bkrabach/amplifier-platform-scheduling/releases/download/scheduling-v0.1.2/amplifier_scheduling-0.1.2-py3-none-any.whl",
-    "sha256": "dfe94d3999120773c2e3e89ea012429c219a8f9456acda93bcbe2d10ae9bfede",
-    "bytes": 13412
+    "url": "https://github.com/bkrabach/amplifier-platform-scheduling/releases/download/scheduling-v0.1.3/amplifier_scheduling-0.1.3-py3-none-any.whl",
+    "sha256": "4096cee77bb74c1feaa742a6eb76f3a1e2c051b70682ecb1c45e1e13e07b8555",
+    "bytes": 13440
   },
-  "sourceReceiptSha256": "e69977e86508a662bbf5a124799fa6f84b0d5b0265488cb4eeed82f0bc49742a",
+  "sourceReceiptSha256": "9574d928ce8a87c67ded6808677d3c8357a9b948fcaf348e11aab3f5d2e1cff1",
   "runtimeRequirements": [
     "tzdata; sys_platform == \"win32\""
   ],
   "files": {
     "amplifier_scheduling/__init__.py": "e6bb4a63a91e41ca20f3cff862a95d53eac72210f9f0b4ec9e36338517d2adeb",
     "amplifier_scheduling/policy.py": "42ff0fc1a90eed3bdc1c24faa10700b8b933ea99b5f011bb04a83176b7aaa0ff",
-    "amplifier_scheduling/store.py": "b9b166b94a79bcf6546ea4c441aafae4ad132e68dfb7712bc3610b3b3c1ff5bf",
+    "amplifier_scheduling/store.py": "e275aaff9278c70b2ceeefca3be03a2f3bb4ab499658dedfa99152bc6a6c2ac1",
     "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
   }
 }

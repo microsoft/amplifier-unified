@@ -237,14 +237,14 @@ class TranscriptWindowReader:
                 raise _Invalid()
         return rows, position, index
 
-    def read_window(self, directory, owner, *, before=None, limit=100, visible=None):
+    def read_window(self, directory, owner, *, before=None, limit=100, visible=None, utility=False):
         """Read newest visible rows; ``visible`` is a bounded, read-only predicate.
 
         The trusted caller resolves ``directory`` from canonical owner identity.
         Failed window validation may recover the backup; unread prefix validity
         is never asserted. Cursors fail closed after any source/intent change.
         """
-        if type(limit) is not int or not 1 <= limit <= 100:
+        if type(limit) is not int or not 1 <= limit <= (RAW_LIMIT if utility else 100):
             raise ValueError('Message window limit must be between 1 and 100.')
         if (not isinstance(owner, dict) or set(owner) != {'project', 'nativeId'}
                 or any(not isinstance(v, str) or not 0 < len(v) <= 512 for v in owner.values())):

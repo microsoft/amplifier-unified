@@ -9,9 +9,9 @@ import math
 import re
 
 from .errors import AppError
-from .suggestion_settings import digest, selected
+from .suggestion_settings import digest, input_budget, selected
 from .suggestion_source import Unavailable, capture, witness, eligible, changed_component, SOURCE_REASONS
-from .suggestion_provider import failure, FAILURE_REASONS, parse
+from .suggestion_provider import failure, FAILURE_REASONS, format_message, INSTRUCTION, parse
 
 MAX_RETAINED = 128
 TTL = 60
@@ -149,7 +149,7 @@ class PromptSuggestions:
             # it is never an action argument or a field of the published DTO.
             # Keep the peer reply's own future participation input identity.
             from .shared_conversation import is_shared
-            from .suggestion_source import MAX_ROWS, speaker
+            from .suggestion_source import speaker
             turn, delivery = shared_completion
             shared = self.service.external_conversations.shared
             if (not is_shared(session) or message.get('source') != 'external' or input_id is not None
@@ -163,7 +163,7 @@ class PromptSuggestions:
                 return
             # The canonical source must still be in the bounded resident suffix.
             # Do not hydrate/scan history or follow a peer reply back to a human.
-            tail = dict.get(session, 'messages', ())[-MAX_ROWS:]
+            tail = dict.get(session, 'messages', ())[-100:]
             sources = [row for row in tail if row.get('id') == delivery.get('sourceMessageId')
                        or row.get('inputId') == turn.input_id]
             if len(sources) != 1:
@@ -278,7 +278,7 @@ class PromptSuggestions:
     def current_failure(self, record):
         dimension = 'current_config'
         try:
-            config, _, revision = self.settings()
+            config, provider, revision = self.settings()
             dimension = 'current_audience'
             client = self.service.clients.records.get(record['client'], {})
             if self.closed or self.service.closed:
@@ -297,6 +297,10 @@ class PromptSuggestions:
                 return 'current_selected'
             if record['configRevision'] != revision:
                 return 'current_config'
+            if provider and provider.get('sharedCatalogKey') and input_budget(
+                    self.manager, provider, config['model'], config.get('prompt', INSTRUCTION)
+                    ) < record['_captureConfig']['_inputBudget']:
+                return 'current_config'
             if not self.enabled():
                 return 'current_preference'
             dimension = 'current_session'
@@ -312,7 +316,7 @@ class PromptSuggestions:
                 return 'current_busy'
             dimension = 'current_sourcewitness'
             components = {}
-            if witness(self.service, record['sessionId'], config, components=components) != record['sourceKey']:
+            if witness(self.service, record['sessionId'], record['_captureConfig'], components=components) != record['sourceKey']:
                 return changed_component(record.get('_sourceComponents'), components)
             return None
         except (ValueError, KeyError, OSError, AppError):
@@ -366,7 +370,7 @@ class PromptSuggestions:
             manager, workspace = self.manager, str(self.service.data_dir)
             with manager.read_snapshot(workspace):
                 settings = manager.config(workspace).settings.get('prompt_suggestions') or {}
-                selection = {key: value for key, value in config.items() if key != 'revision'}
+                selection = {key: value for key, value in config.items() if key not in {'revision', '_inputBudget'}}
                 binding = manager.catalog_key({'id': config['provider']}, workspace, binding=True)
             config_key = digest([settings, selection, binding])
         else:
@@ -374,8 +378,11 @@ class PromptSuggestions:
         # Paid identity is deliberately less strict than cache eligibility.
         # A Stop/owner/auth change invalidates saved assistance but cannot buy
         # another call for an already-attempted input after discovery restart.
-        record['_paidKey'] = digest(['suggestion-durable-automatic-v1', record['principal'],
-                                     record['sessionId'], config_key, rows])
+        # A cache refresh/expiry can change the model budget but is not new
+        # user intent and cannot pay for the same completion a second time.
+        last = rows[-1]
+        record['_paidKey'] = digest(['suggestion-plain-completion-v1', record['principal'],
+                                     record['sessionId'], config_key, last['id'], last['text']])
         owner = [session.get(key) for key in ('id', 'nativeProject', 'nativeIdentity', 'createdAt',
                                                'interruptionRevision')]
         return digest(['suggestion-success-v1', record['principal'], owner,
@@ -534,6 +541,11 @@ class PromptSuggestions:
                     self._finish(record, 'busy')
                 else:
                     try:
+                        config = dict(config)
+                        if provider.get('sharedCatalogKey'):
+                            config['_inputBudget'] = input_budget(self.manager, provider, config['model'],
+                                                                   config.get('prompt', INSTRUCTION))
+                        record['_captureConfig'] = config
                         record['epoch'] = self._epoch()
                         components = {}
                         record['sourceKey'] = witness(self.service, sid, config, components=components)
@@ -564,7 +576,8 @@ class PromptSuggestions:
 
     async def complete(self, record, config, transcript):
         return await self.manager.probe('suggestion.complete', {
-            'id': config['provider'], 'model': config['model'], 'transcript': transcript,
+            'id': config['provider'], 'model': config['model'],
+            'transcript': '\n\n'.join(format_message(row['role'], row['text']) for row in transcript),
             'effort': config.get('effort'),
             **({'prompt': config['prompt']} if 'prompt' in config else {}),
             # Revalidate after subprocess creation, immediately before writing
@@ -583,6 +596,9 @@ class PromptSuggestions:
                             or record['status'] != 'pending'):
                         if record['status'] == 'pending':
                             self._finish(record, 'stale')
+                        return
+                    if not rows:
+                        self._finish(record, 'empty')
                         return
                     # Paid identity is the exact bounded utility input, not the
                     # current resident/native/cold storage representation or a

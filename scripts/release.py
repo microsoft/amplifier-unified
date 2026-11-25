@@ -239,14 +239,18 @@ def verify_frontend(root, names, read, label):
     prefix = "amplifier_web/static/"
     files = {path.relative_to(root).as_posix(): path
              for path in (root / prefix).rglob("*") if path.is_file()}
-    packaged = {name for name in names if name.startswith(prefix) and not name.endswith("/")}
-    if prefix + "index.html" not in files or packaged != files.keys():
+    index_name = prefix + "index.html"
+    # Preserve archive order so the compressed sdist can be verified in one pass.
+    packaged = dict.fromkeys(name for name in names if name.startswith(prefix) and not name.endswith("/"))
+    if index_name not in files or packaged.keys() != files.keys():
         raise ValueError(label + " frontend file list differs from validated assets")
-    for name, path in files.items():
-        if read(name) != path.read_bytes():
+    for name in packaged:
+        content = read(name)
+        if content != files[name].read_bytes():
             raise ValueError(label + " does not contain the validated frontend bytes: " + name)
-    index = read(prefix + "index.html").decode()
-    for asset in re.findall(r'(?:src|href)=["\'](/assets/[^"\']+)["\']', index):
+        if name == index_name:
+            index = content
+    for asset in re.findall(r'(?:src|href)=["\'](/assets/[^"\']+)["\']', index.decode()):
         if prefix.rstrip("/") + asset not in packaged:
             raise ValueError(label + " frontend references a missing asset")
 
