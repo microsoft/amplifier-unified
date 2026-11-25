@@ -144,8 +144,8 @@ dev = [
     "amplifier-module-provider-openai[native] @ git+https://github.com/microsoft/amplifier-module-provider-openai@main",
     # Subscription handoff requires a confirmed response from this adapter.
     "amplifier-module-provider-openai-chatgpt @ git+https://github.com/microsoft/amplifier-module-provider-openai-chatgpt@b6473e56a3f73a297cc139fd5414baec1722bc8c",
-    # Cold selected-model budget and private overflow feedback integration.
-    "amplifier-module-provider-anthropic @ git+https://github.com/microsoft/amplifier-module-provider-anthropic@b4762db1ee14c07daad7f20dac6a9534ebaed1b6",
+    # Accepted cold-budget behavior and optional suggestion-model recommendations.
+    "amplifier-module-provider-anthropic @ git+https://github.com/microsoft/amplifier-module-provider-anthropic@1bb74ede28ce734363f93f0fe499c6dd62c03d84",
     # Same real QuickJS dispatcher used by the maintained native-check workflow.
     "amplifier-module-tool-exec @ git+https://github.com/microsoft/amplifier-module-tool-exec@f267548ccd1b38a236a46afb96252bb6dd474dcd",
     # Ordinary-root switch fixtures retain the real local capture hook offline.
