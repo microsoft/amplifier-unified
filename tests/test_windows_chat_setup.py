@@ -163,6 +163,7 @@ async def observed_probe(process, args, settings, row):
     project = Path(args[args.index('--project') + 1])
     row.update(before=provenance_files(project, ('pyproject.toml', 'uv.lock')), status='started',
                importOrigins=None)
+    facts = {}
     try:
         result = await process(*args, '--observe-import-origins', **settings)
     except BaseException as error:
@@ -175,30 +176,62 @@ async def observed_probe(process, args, settings, row):
         return result
     finally:
         row['after'] = provenance_files(project, ('pyproject.toml', 'uv.lock'))
-        # Exception/body output is never retained here.
-        probe = facts.get('probe', {}) if type(facts) is dict else {}
-        row['importOrigins'] = probe_origins(probe.get('importOrigins')) if type(probe) is dict else None
-        row['command'] = probe_command_facts(facts)
+        # Only observation errors are contained; never replace the original
+        # command return, exception or cancellation with malformed evidence.
+        try:
+            command = probe_command_facts(facts)
+            row['command'] = command
+            if command['status'] == 'observed':
+                probe = command['attempts'][-1].get('probe', {})
+                row['importOrigins'] = probe_origins(probe.get('importOrigins'))
+        except Exception:
+            row['importOrigins'] = None
+            row['command'] = {'status': 'unavailable', 'attempts': []}
 
 
 def probe_command_facts(facts):
     """Retain original physical attempts separately, without their local text."""
-    from amplifier_web.update_diagnostics import command_attempts, probe_record, PROBE_PREFIX
-    if type(facts) is not dict:
-        return {'status': 'unavailable', 'attempts': []}
+    from amplifier_web.update_diagnostics import command_attempts, probe_origins, PROBE_STAGES, ERROR_TYPES
+    unavailable = {'status': 'unavailable', 'attempts': []}
+    if type(facts) is not dict or len(facts) > 64:
+        return unavailable
     attempts = facts.get('commandAttempts', [facts])
     if type(attempts) is not list or not 1 <= len(attempts) <= 2:
-        return {'status': 'unavailable', 'attempts': []}
+        return unavailable
     result = []
     for attempt in attempts:
-        if type(attempt) is not dict:
-            return {'status': 'unavailable', 'attempts': []}
+        if type(attempt) is not dict or len(attempt) > 64:
+            return unavailable
         clean, = command_attempts([attempt]) or [{}]
         raw_probe = attempt.get('probe')
-        if type(raw_probe) is dict:
-            # Revalidate the existing closed producer facts, not stdout or
-            # local_command_details. Fixed frame bound still applies.
-            clean['probe'] = probe_record(PROBE_PREFIX + json.dumps(raw_probe))
+        if raw_probe is not None:
+            # Bound shape BEFORE examining values. Do not serialize arbitrary
+            # dictionaries just to feed the byte-bounded stdout parser.
+            known = {'ok', 'stage', 'errorType', 'importOrigins', 'repositoryAccessFailure',
+                'isolated', 'packageInEnvironment', 'frontendPresent', 'loginAvailable',
+                'standalone', 'providersPresent', 'cliAbsent', 'dependenciesPrepared',
+                'workerImportsAvailable', 'reason', 'package', 'failureLocation', 'osError',
+                'decisionCatalog', 'version', 'pythonVersion', 'elapsedMs', 'sources',
+                'packages', 'resolverTransactions', 'profileIndex'}
+            if type(raw_probe) is not dict or len(raw_probe) > len(known) or not set(raw_probe) <= known:
+                return unavailable
+            probe = {}
+            for key in ('ok', 'repositoryAccessFailure'):
+                if key in raw_probe:
+                    if type(raw_probe[key]) is not bool:
+                        return unavailable
+                    probe[key] = raw_probe[key]
+            for key, choices in (('stage', PROBE_STAGES), ('errorType', ERROR_TYPES)):
+                if key in raw_probe:
+                    if type(raw_probe[key]) is not str or raw_probe[key] not in choices:
+                        return unavailable
+                    probe[key] = raw_probe[key]
+            if 'importOrigins' in raw_probe:
+                origins = probe_origins(raw_probe['importOrigins'])
+                if origins is None:
+                    return unavailable
+                probe['importOrigins'] = origins
+            clean['probe'] = probe
         result.append(clean)
     return {'status': 'observed', 'anonymousRetry': facts.get('anonymousRetry') is True,
             'gitCacheRetry': facts.get('gitCacheRetry') is True, 'attempts': result}
@@ -305,7 +338,10 @@ async def test_observed_probe_keeps_original_anonymous_retry_and_two_attempts(tm
     else:
         value = await updates.process(*args, timeout=15)
     assert len(calls) == 2 and len(rows) == 1
-    assert all(call[0] == args + ('--observe-import-origins',) for call in calls)
+    expected = args + ('--observe-import-origins',)
+    if sys.platform == 'darwin':
+        expected = (sys.executable, '-I', '-S', str(Path(updates.__file__).with_name('mac_uv_exec.py')), *expected)
+    assert all(call[0] == expected for call in calls)
     assert value.diagnostic_facts['anonymousRetry'] is True
     result = rows[0]['command']
     assert result['anonymousRetry'] and not result['gitCacheRetry']
@@ -315,6 +351,46 @@ async def test_observed_probe_keeps_original_anonymous_retry_and_two_attempts(tm
     assert rows[0]['status'] == ('returned' if ending == 'success' else 'failed')
     assert rows[0]['importOrigins'] is None  # No synthetic origin proof invented.
     assert str(tmp_path) not in json.dumps(rows) and 'local_command_details' not in json.dumps(rows)
+
+
+@pytest.mark.parametrize('ending', ['failure', 'cancelled'])
+@pytest.mark.parametrize('fault', ['non-json', 'circular', 'oversized', 'nested', 'projection-error'])
+async def test_malformed_probe_facts_do_not_mask_original_failure_or_encode_private_payload(
+        tmp_path, monkeypatch, ending, fault):
+    root = tmp_path / 'prepare'
+    root.mkdir()
+    (root / 'pyproject.toml').write_text('declared')
+    (root / 'uv.lock').write_text('[[package]]\nname="example"\nversion="1"')
+    malformed = object()
+    if fault == 'circular':
+        malformed = {'schema': 1, 'phase': 'compatibility'}
+        malformed['samples'] = [malformed]
+    elif fault == 'nested':
+        malformed = []
+        for _ in range(100):
+            malformed = [malformed]
+    probe = {'ok': False, 'importOrigins': malformed}
+    if fault == 'oversized':
+        probe = {'ok': False, 'PRIVATE': 'PRIVATE' * 200000}
+    error = asyncio.CancelledError() if ending == 'cancelled' else RuntimeError('PRIVATE-ORIGINAL')
+    error.diagnostic_facts = {'probe': probe, 'exitCode': 1}
+    calls, row = [], {}
+    async def command(*args, **settings):
+        calls.append(args)
+        raise error
+    with monkeypatch.context() as scoped:
+        scoped.setattr(json, 'dumps', lambda *args, **kwargs: pytest.fail('Raw evidence was serialized'))
+        if fault == 'projection-error':
+            def bad_projection(value):
+                raise TypeError('PRIVATE-PROJECTION')
+            scoped.setitem(globals(), 'probe_command_facts', bad_projection)
+        with pytest.raises(type(error)) as caught:
+            await observed_probe(command, ('uv', '--project', str(root), 'update_probe.py'), {}, row)
+    assert caught.value is error and len(calls) == 1
+    assert row['status'] == ('cancelled' if ending == 'cancelled' else 'failed')
+    assert row['command'] == {'status': 'unavailable', 'attempts': []}
+    assert row['importOrigins'] is None
+    assert 'PRIVATE' not in json.dumps(row) and str(tmp_path) not in json.dumps(row)
 
 
 def test_native_provenance_keeps_original_path_cancel_and_private_output_boundaries():

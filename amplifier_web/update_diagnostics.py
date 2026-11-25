@@ -79,31 +79,31 @@ def probe_origin_snapshot(point):
 
 def probe_origins(value):
     """Closed optional receipt; malformed input is unavailable, never success."""
-    if type(value) is not dict or set(value) != {'schema', 'phase', 'samples'}:
+    if type(value) is not dict or len(value) != 3 or set(value) != {'schema', 'phase', 'samples'}:
         return None
-    if type(value['schema']) is not int or value['schema'] != 1 or value['phase'] not in (
+    if type(value['schema']) is not int or value['schema'] != 1 or type(value['phase']) is not str or value['phase'] not in (
             'dependency-prepare', 'compatibility'):
         return None
     samples = value['samples']
     if type(samples) is not list or not 1 <= len(samples) <= 2:
         return None
-    points = [row.get('point') if type(row) is dict else None for row in samples]
+    points = [row.get('point') if type(row) is dict and type(row.get('point')) is str else None for row in samples]
     if points not in (['before-cleanup'], ['before-install', 'before-cleanup']):
         return None
     if value['phase'] == 'compatibility' and points != ['before-cleanup']:
         return None
     result = {'schema': 1, 'phase': value['phase'], 'samples': []}
     for sample in samples:
-        if set(sample) != {'point', 'modules'} or type(sample['modules']) is not dict:
+        if len(sample) != 2 or set(sample) != {'point', 'modules'} or type(sample['modules']) is not dict:
             return None
-        if set(sample['modules']) != set(PROBE_ORIGIN_MODULES):
+        if len(sample['modules']) != len(PROBE_ORIGIN_MODULES) or set(sample['modules']) != set(PROBE_ORIGIN_MODULES):
             return None
         rows = {}
         for name, row in sample['modules'].items():
-            if type(row) is not dict or row.get('status') not in ('observed', 'not-loaded', 'unavailable'):
+            if type(row) is not dict or len(row) > 4 or type(row.get('status')) is not str or row['status'] not in ('observed', 'not-loaded', 'unavailable'):
                 return None
             keys = {'status', 'scope', 'bytes', 'sha256'} if row['status'] == 'observed' else {'status', 'scope'}
-            if set(row) != keys or row['scope'] not in ('runtime-prefix', 'app-bootstrap', 'outside', 'unknown'):
+            if set(row) != keys or type(row['scope']) is not str or row['scope'] not in ('runtime-prefix', 'app-bootstrap', 'outside', 'unknown'):
                 return None
             if row['status'] == 'not-loaded' and row['scope'] != 'unknown':
                 return None
