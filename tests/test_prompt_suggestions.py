@@ -223,12 +223,69 @@ class Requests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(Unavailable, 'input_not_settled'):
                     witness(self.app, 'chat', self.config)
                 self.assertNotIn('inputStatus', pending)  # Annotation remains a projection.
-                completed = {'id': 'completed-later', 'role': 'assistant', 'text': 'Later settled reply'}
+                completed = {'id': 'completed-later', 'role': 'assistant', 'text': 'Later settled reply',
+                             'sourceMessageId': 'human'}
                 rows.append(completed)
                 witness(self.app, 'chat', self.config)  # Old failed input is not a permanent hold.
                 projected = public_rows(display_inputs(self.app, self.app.session, rows))
                 self.assertEqual(projected[-1]['id'], 'completed-later')
                 self.assertFalse({'saved-input', 'partial', 'observation'} & {row['id'] for row in projected})
+
+    async def test_resident_unsettled_nonhuman_boundary_never_inherits_previous_human(self):
+        original = self.app.session['messages']
+        for phase in ('unknown', 'failed'):
+            for actor in ('agent', 'system'):
+                with self.subTest(phase=phase, actor=actor):
+                    unrelated = {'id': f'{phase}-{actor}', 'role': 'assistant', 'text': 'Not a human reply.'}
+                    self.app.session['messages'] = original + [
+                        {'id': 'control', 'role': 'user', 'inputActor': {'kind': actor},
+                         'text': 'Private coordination.', 'delivery': {'status': phase}}, unrelated]
+                    empty = await self.terminal_request(unrelated['id'], expectedLastMessageId=unrelated['id'])
+                    self.assertEqual((empty['status'], empty['reason'], empty['generationId']),
+                                     ('empty', None, None))
+        self.assertEqual(self.calls, [])
+        self.app.session['messages'].append(
+            {'id': 'linked', 'role': 'assistant', 'sourceMessageId': original[0]['id'],
+             'text': 'An exact reply to the earlier human input.'})
+        ready = await self.terminal_request('linked', expectedLastMessageId='linked')
+        self.assertEqual(ready['status'], 'ready')
+        self.assertEqual([row['id'] for row in self.calls[0]], ['human', 'assistant', 'linked'])
+        self.assertEqual(len(self.calls), 1)
+
+    async def test_native_unsettled_peer_boundary_never_inherits_previous_human(self):
+        root = Path(self.tmp.name)
+        path = root / 'transcript.jsonl'
+        def user(text, identity):
+            return {'role': 'user', 'content': text, 'metadata': {'amplifier_input': {
+                'version': 1, 'kind': 'user', 'id': identity, 'source': 'user'}}}
+        raw = [user('Real human question.', 'human-input'), {'role': 'assistant', 'content': 'Real answer.'},
+               user('Peer-only coordination.', 'peer-input'), {'role': 'assistant', 'content': 'Unlinked peer reply.'}]
+        path.write_text(''.join(json.dumps(row) + '\n' for row in raw))
+        self.app.db.execute('CREATE TABLE commands (id TEXT PRIMARY KEY, receipt TEXT)')
+        self.app.db.execute('INSERT INTO commands VALUES (?,?)', ('peer-input', json.dumps({
+            'commandAction': 'coordination.send', 'origin': 'agent'})))
+        self.app.session.update(historyManaged=True, nativeProject=str(root), nativeIdentity='chat')
+        with patch('amplifier_web.automatic_history.directory', return_value=root):
+            page = await self.app.history.windows.read('chat', limit=20)
+            last = page['items'][-1]['id']
+            for phase in ('unknown', 'failed'):
+                with self.subTest(phase=phase):
+                    self.app.session['messageAnnotations'] = {'input-status:peer-input': {
+                        'inputStatus': {'version': 1, 'inputId': 'peer-input', 'phase': phase,
+                                        'basis': 'execution_observed'}}}
+                    empty = await self.terminal_request(phase, expectedLastMessageId=last)
+                    self.assertEqual((empty['status'], empty['reason'], empty['generationId']),
+                                     ('empty', None, None))
+            self.assertEqual(self.calls, [])
+            with path.open('a') as stream:
+                for row in (user('A new human question.', 'next-human'),
+                            {'role': 'assistant', 'content': 'New genuine answer.'}):
+                    stream.write(json.dumps(row) + '\n')
+            page = await self.app.history.windows.read('chat', limit=20)
+            ready = await self.terminal_request('real-later-turn', expectedLastMessageId=page['items'][-1]['id'])
+            self.assertEqual(ready['status'], 'ready')
+        self.assertEqual([[row['text'] for row in call] for call in self.calls], [[
+            'Real human question.', 'Real answer.', 'A new human question.', 'New genuine answer.']])
 
     async def test_ready_retains_source_after_clock_expiry_and_reuses_new_audience_without_provider(self):
         async def reported(*args):
@@ -1912,6 +1969,63 @@ class Parsing(unittest.TestCase):
 
 
 class Integration(unittest.IsolatedAsyncioTestCase):
+    async def test_cold_unsettled_nonhuman_boundary_never_inherits_previous_human(self):
+        await self.app.dispatch('session.create', {}, include_state=False)
+        session = self.app._session()
+        sid = session['id']
+        host = self.app.prompt_suggestions
+        host.settings = lambda: ({'enabled': True, 'provider': 'fixture', 'model': 'fixture'},
+                                  {'id': 'fixture'}, 'revision')
+        host.complete = AsyncMock(return_value={'status': 'ready', 'suggestion': 'A follow-up.',
+                                               'usage': None, 'cost': None})
+        self.app.clients.attach('cold-provenance-browser', kind='web')
+        client = self.app.clients.records['cold-provenance-browser']
+        token = BROWSER.set({'principal': 'cookie', 'valid': lambda: True})
+        async def request(reply):
+            client['selectedSessionId'] = sid
+            args = {'sessionId': sid, 'requestId': reply}
+            await host.dispatch('session.suggestion.request', {**args, 'expectedLastMessageId': reply}, 'ui')
+            await asyncio.gather(*tuple(host.jobs))
+            return await host.dispatch('session.suggestion.status', args, 'ui')
+        try:
+            with self.app.clients.bind('cold-provenance-browser'):
+                for phase in ('unknown', 'failed'):
+                    with self.subTest(phase=phase):
+                        session.update(status='idle', historyManaged=False, messages=[
+                            {'id': 'noise', 'role': 'tool', 'text': 'Synthetic tool output. ' * 800},
+                            {'id': 'human', 'role': 'user', 'inputOrigin': 'ui', 'text': 'Real question.'},
+                            {'id': 'answer', 'role': 'assistant', 'text': 'Real answer.'},
+                            {'id': 'control', 'role': 'user', 'inputActor': {'kind': 'system'},
+                             'text': 'Private control input.', 'delivery': {'status': phase}},
+                            {'id': phase, 'role': 'assistant', 'text': 'Unlinked control-only reply.'}])
+                        self.app._publish_changes(sessions={sid})
+                        self.app._state['selectedSessionId'] = None
+                        client['selectedSessionId'] = None
+                        with patch.object(self.app.cold_display, 'RECENT_LIMIT', 0):
+                            self.assertIn(sid, self.app.cold_display.retire(force=True))
+                        self.assertFalse(dict.__contains__(session, 'messages'))
+                        empty = await request(phase)
+                        self.assertEqual((empty['status'], empty['reason'], empty['generationId']),
+                                         ('empty', None, None))
+                        self.assertFalse(dict.__contains__(session, 'messages'))
+                        self.app.cold_display.hydrate(session)
+                host.complete.assert_not_awaited()
+                session['messages'].extend([
+                    {'id': 'next-human', 'role': 'user', 'inputOrigin': 'ui', 'text': 'Next real question.'},
+                    {'id': 'next-answer', 'role': 'assistant', 'text': 'Next real answer.'}])
+                self.app._publish_changes(sessions={sid})
+                self.app._state['selectedSessionId'] = None
+                client['selectedSessionId'] = None
+                with patch.object(self.app.cold_display, 'RECENT_LIMIT', 0):
+                    self.assertIn(sid, self.app.cold_display.retire(force=True))
+                self.assertEqual((await request('next-answer'))['status'], 'ready')
+                host.complete.assert_awaited_once()
+                self.assertEqual([row['id'] for row in host.complete.call_args.args[2]],
+                                 ['human', 'answer', 'next-human', 'next-answer'])
+                self.assertFalse(dict.__contains__(session, 'messages'))
+        finally:
+            BROWSER.reset(token)
+
     async def test_existing_paid_claim_does_not_block_untouched_older_chat_after_explicit_consent(self):
         from amplifier_web.service import AppService
         from amplifier_web.suggestion_settings import digest

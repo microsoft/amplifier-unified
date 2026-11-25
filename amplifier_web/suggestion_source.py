@@ -172,10 +172,9 @@ def public_rows(rows):
         visible = public_text(row) and not unsettled(row)
         if role == 'user':
             human = visible and actor['kind'] == 'human'
-            if not unsettled(row):
-                # An unlinked reply inherits only the adjacent input's
-                # provenance, not a human label from farther back in history.
-                previous_human = human
+            # Even an excluded input breaks adjacency. Without an exact link,
+            # a reply must not inherit a human label from an older input.
+            previous_human = human
         else:
             source = row.get('sourceMessageId')
             exact_input = row.get('inputId')
