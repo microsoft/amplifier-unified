@@ -749,6 +749,7 @@ _CODE_PAGE = f"""<!doctype html>
 <input id="code" name="code" autocomplete="one-time-code" autocapitalize="characters" autocorrect="off" spellcheck="false" aria-describedby="code-help" autofocus required>
 <button type="submit">Sign in</button>
 </form>
+<p class="note">Or sign in with a key that you saved.</p>
 <form method="post" action="{KEY_REDEEM_PATH}">
 <input type="hidden" name="csrf" value="__CSRF__">
 <label for="key">Sign-in key</label>

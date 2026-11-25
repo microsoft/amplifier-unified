@@ -476,7 +476,8 @@ async def watch_sessions(app, streams, *, interval=2.0):
                 reported = True
                 try:
                     print("Sign-out of all browsers could not be checked: " + type(error).__name__
-                          + ". Until it can be checked, no browser can sign in with a ticket or a code.", flush=True)
+                          + ". Until it can be checked, no browser can sign in with a ticket, a code or a key.",
+                          flush=True)
                 except (OSError, ValueError):
                     pass
 

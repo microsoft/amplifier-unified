@@ -576,6 +576,8 @@ def _browser_key(args, data_dir):
           "Addresses for other devices:")
     for origin in remote:
         print("  " + origin)
+    print("Amplifier must be running. An address that you added after Amplifier started works after you "
+          "stop Amplifier and start it again.")
     print("The key works until you make a new key, remove it (amplifier-unified browsers key --remove) "
           "or sign out all browsers.")
     if replaced:
@@ -741,7 +743,7 @@ def main():
             return _browser_key(args, data_dir)
         from .auth import SignOutUncertain, sign_out_all
         try:
-            signed_out = sign_out_all(data_dir)
+            sign_out_all(data_dir)
         except SignOutUncertain:
             raise SystemExit("Amplifier could not confirm that every browser is signed out. "
                              "Run the command again.") from None
@@ -751,14 +753,15 @@ def main():
         print("All browsers on all devices are signed out. A running Amplifier applies this within a few seconds.")
         print("To use Amplifier in a browser again, open it from this computer.")
         try:
-            # The sign-out ended a saved key (auth.sign_in_key_is_current). Its record stays; nothing is written here.
-            from .auth import read_sign_in_key
-            key = read_sign_in_key(data_dir)
-            if key is not None and key[0] <= signed_out:
-                print("A sign-in key from before this sign-out no longer works. To make a new one, run this: "
+            # The saved second ends a key from before it (auth.sign_in_key_is_current). That rule reads the
+            # clock of this PC, so the record of the key is removed as well: a key must not come back when a
+            # clock that was set back reaches the second of the key again.
+            if browser_entry.remove_key(data_dir):
+                print("The saved sign-in key no longer works. To make a new one, run this: "
                       "amplifier-unified browsers key.")
         except (OSError, ValueError):
-            pass
+            print("Amplifier could not confirm that the saved sign-in key is removed. Run this: "
+                  "amplifier-unified browsers key --remove.")
         return
     if args.command == "doctor":
         from .installation_health import doctor, display

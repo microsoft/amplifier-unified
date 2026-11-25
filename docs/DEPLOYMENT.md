@@ -310,8 +310,9 @@ The obsolete Edge root-store policy is not a workaround.
 
 A Windows host has no password sign-in. On the PC, the launcher opens the
 browser. A browser on another device signs in with a one-use code that you make
-at the PC, or with a sign-in key that you made at the PC and saved. Remote access is off until you do the steps below, and you can turn
-it off again. Local use on the PC needs none of this.
+at the PC, or with a sign-in key that you made at the PC and saved. Remote
+access is off until you do the steps below, and you can turn it off again.
+Local use on the PC needs none of this.
 
 The steps use Tailscale. Amplifier listens only on this PC's own address,
 `127.0.0.1`, and a Tailscale forwarding rule sends connections from your other
@@ -336,7 +337,8 @@ device to it. For a LAN address without Tailscale, see
   Unified** in the Start menu.
 - With another kind of installation, pass the same `--data-dir` value to every
   Amplifier command if Amplifier uses a non-default data directory.
-- Sign-in with a code needs a version after 0.98.7.
+- Sign-in with a code needs a version after 0.98.7. Sign-in with a saved key
+  needs version 0.128.0 or a later one.
   `amplifier-unified --version` shows the version.
 - `<port>` is the port that Amplifier uses. `amplifier-unified config get port`
   shows it. Type the number in place of `<port>`, without the angle brackets.
@@ -437,9 +439,10 @@ at the PC, save it, and type it on any device, also when you are not at the PC.
    the field **Sign-in key**. Select **Sign in with key**.
 
 The key works at every address for other devices, as often as you need it. A
-typing mistake does not end it. It is a password for your Amplifier: everyone
-who has the key and can reach one of those addresses can sign in. Treat it as
-one.
+typing mistake does not end it. Amplifier must be running, and an address that
+you added after Amplifier started works after you stop Amplifier and start it
+again. The key is a password for your Amplifier: everyone who has the key and
+can reach one of those addresses can sign in. Treat it as one.
 
 - To replace the key, run the command again. The earlier key stops working.
   Browsers that are signed in stay signed in.
@@ -447,6 +450,9 @@ one.
   `amplifier-unified browsers key --remove`.
 - [Sign out all browsers from the PC](#sign-out-all-browsers-from-the-pc) also
   ends the key.
+- If another person may have the key, sign out all browsers first. Then make a
+  new key. A new key alone does not sign out a browser that signed in with the
+  earlier key.
 
 ### Sign out all browsers from the PC
 
@@ -456,14 +462,16 @@ one.
    amplifier-unified browsers sign-out
    ```
 
-2. Wait a few seconds. Until then, a new sign-in on the PC or a new code
-   opens nothing.
+2. Wait a few seconds. Until then, a new sign-in on the PC, a new code or a
+   new key opens nothing.
 3. To use Amplifier again, open it on the PC. For another device, make a new
    code or a new key.
 
 If the command says that it could not confirm the sign-out, run it again.
 The command also drops every code that is not used yet, and it ends a saved
-sign-in key. There is no sign-out for one device. More: [Sign out all browsers](#sign-out-all-browsers).
+sign-in key. If it says that it could not confirm that the key is removed, run
+`amplifier-unified browsers key --remove`. There is no sign-out for one
+device. More: [Sign out all browsers](#sign-out-all-browsers).
 
 ### Turn remote access off
 

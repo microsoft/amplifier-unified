@@ -4504,9 +4504,18 @@ addition; the code stays for a device that must not keep a secret.
   second (`auth.sign_in_key_is_current`). So `sign_out_all` and its record
   did not change, and a key cannot outlast a sign-out that a session does
   not outlast. The key command makes a key only in a second after the saved
-  sign-out; in the second of a sign-out it waits for the next one. The
-  sign-out writes nothing to the key's record: the ended record stays until
-  the owner makes a new key or removes it.
+  sign-out; in the second of a sign-out it waits for the next one. That rule
+  reads the clock of the PC. A key from a second that the clock has not
+  reached again (the clock was ahead when the key was made, or it was set
+  back later) opens nothing now, but a sign-out in that time has an earlier
+  second than the key. So the sign-out command also writes "no key" over the
+  record, after its sign-out is saved. With a clock that did not move back,
+  the rule alone ends the key, also when that write fails; the write ends
+  the key for every clock. When the write is not confirmed, the command
+  says so and names `browsers key --remove`.
+  A key that another command makes while a sign-out command runs can be
+  removed by that write; the sign-out command then says that the saved key
+  no longer works.
 - **The command's failures.** A save can fail after the record is in place.
   So the key command never says that nothing changed: it says that the save
   or the removal is not confirmed, and that an earlier key may no longer
@@ -4514,8 +4523,10 @@ addition; the code stays for a device that must not keep a secret.
 - **The page.** The page for another device has a second form after the code
   form: the field **Sign-in key**, a password field with
   `autocomplete="current-password"`, and **Sign in with key**. The code form
-  stays first and keeps the focus; all help follows both forms. The error
-  text is one of two fixed texts, chosen by the redirect (`?error=key`).
+  stays first and keeps the focus. One short line between the forms says
+  that the key is another way in, so that nobody looks for a second step.
+  All help follows both forms. The error text is one of two fixed texts,
+  chosen by the redirect (`?error=key`).
 - **The session.** As from a code: marked remote, with the configured
   lifetime. It is not renewed; after that lifetime the device signs in with
   the key again.
@@ -4526,9 +4537,11 @@ or signs out all browsers; there is no second factor. On a look-alike page a
 key is lost for longer than a code. There is no key for one device and no
 list of sign-ins beyond the host log. A clock that was set back is handled as
 for a session: a key from a later second opens nothing until the clock reaches
-that second, and a sign-out of all browsers in that time ends neither such a
-key nor such a session. `browsers key --remove` ends the key at any clock
-time. Not measured: a password manager that saves and fills the key, a
+that second. A sign-out of all browsers in that time does not end such a
+session, which then ends after its lifetime. It ends such a key through the
+"no key" write; only when that write also fails can the key come back, and
+the command has then named `browsers key --remove`, which ends the key at any
+clock time. Not measured: a password manager that saves and fills the key, a
 phone browser, and the journey on a real second device. Linux, macOS and WSL
 hosts refuse the key endpoint and the key command.
 
