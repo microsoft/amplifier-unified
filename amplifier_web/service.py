@@ -1144,6 +1144,11 @@ class AppService:
                 changed_global_keys = save_working(self.db, record_state, pending_references, admitted_ids, global_keys=global_keys,
                                                    deleted=deleted_ids, preserve_globals=preserve_globals)
             else:
+                if session_ids is None:
+                    # Full reconciliation retires recovery uncertainty in this
+                    # transaction, not in a later save. Keep the live marker
+                    # until commit succeeds so failed saves still fence GC.
+                    saved.pop('_viewRecoveryPending', None)
                 saved['runtimeControl'] = {identity: saved_cold(record)
                                            for identity, record in saved.get('runtimeControl', {}).items()}
                 changed_global_keys = save_working(self.db, saved, pending_references, admitted_ids,

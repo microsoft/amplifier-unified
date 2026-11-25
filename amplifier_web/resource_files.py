@@ -713,12 +713,14 @@ def collect(db, state):
     return prune_marked(db, marked)
 
 
-def prune_marked(db, marked, *, limit=None):
+def prune_marked(db, marked, *, limit=None, candidates=None):
     """Prune using a mark computed under the same caller-owned writer lock."""
     if not db.in_transaction:
         raise ValueError('Resource pruning requires writer exclusion.')
-    candidates = (row[0] for row in db.execute('SELECT id FROM state_resources') if row[0] not in marked)
-    stale = list(candidates if limit is None else islice(candidates, limit))
+    if candidates is None:
+        candidates = (row[0] for row in db.execute('SELECT id FROM state_resources'))
+    unmarked = (identity for identity in candidates if identity not in marked)
+    stale = list(unmarked if limit is None else islice(unmarked, limit))
     db.executemany('DELETE FROM state_resources WHERE id=?', ((identity,) for identity in stale))
     # Files are deleted only after the caller commits the pruned references.
     return stale
