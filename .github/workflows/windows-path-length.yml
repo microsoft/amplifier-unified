@@ -228,6 +228,7 @@ jobs:
           AMPLIFIER_REQUIRE_LONG_PATHS_OFF: '1'
           AMPLIFIER_REQUIRE_CHAT_SETUP: '1'
           AMPLIFIER_CHAT_SETUP_TREE: ${{ runner.temp }}\chat-setup-tree.txt
+          AMPLIFIER_CHAT_SETUP_PROVENANCE: ${{ runner.temp }}\chat-setup-provenance.json
         run: |
           # A fact for the times below: whether Windows Defender scans new files on this runner.
           try {
@@ -235,30 +236,48 @@ jobs:
             $scan = "real-time protection $($defender.RealTimeProtectionEnabled), antivirus $($defender.AntivirusEnabled)"
           } catch { $scan = 'its state could not be read' }
           Write-Host "Windows Defender on this runner: $scan"
-          .\.venv\Scripts\python.exe -B -m pytest -q -rA -p no:cacheprovider tests/test_windows_chat_setup.py | Tee-Object -Variable lines
+          # Failure output can contain private attempt/command data. Retain it
+          # on this disposable runner only; never stream or upload that body.
+          .\.venv\Scripts\python.exe -B -m pytest -q -rA -p no:cacheprovider tests/test_windows_chat_setup.py *> "$env:RUNNER_TEMP/private-chat-setup.log"
           $status = $LASTEXITCODE
           # The first start of the app's decision-catalog helper in each new worker environment, as the case
           # measured it, the creation of the process included. A start that took longer than the app's time
           # limit is a warning: it shows the runner's speed against that limit, and it does not fail the case.
           # A line of the case begins with these words. pytest's report of a failure shows source lines, indented.
-          $measured = @($lines | Where-Object { "$_" -match '^MEASURED the decision-catalog helper' })
-          Write-Host "This step found $($measured.Count) measured first starts of the decision-catalog helper."
-          if ($measured.Count -gt 0) {
-            $summary = @('### The first start of the decision-catalog helper in each new worker environment', '',
-                         "Windows Defender on this runner: $scan", '') + ($measured | ForEach-Object { "- $_" })
-            # The lines are in this log too. A page that cannot be written must not fail a case that passed.
-            try { $summary -join "`n" >> $env:GITHUB_STEP_SUMMARY } catch { Write-Host "The run's page did not get the times: $_" }
-          }
-          foreach ($line in ($measured | Where-Object { "$_" -match 'LONGER THAN THE TIME LIMIT OF THE APP' })) {
-            Write-Host "::warning title=The test's first start of the decision-catalog helper took longer than the app's time limit::$line"
-          }
           if ($status -ne 0) { throw 'The setup of a chat was not prepared and checked with long paths off, or a needed path passes the limit.' }
           # A skipped case ends with exit code 0. The case writes the list only after every preparation.
           if (-not (Test-Path -LiteralPath $env:AMPLIFIER_CHAT_SETUP_TREE)) { throw 'The case did not run: it wrote no list of paths.' }
           # A case that passed printed one line for each new worker environment, and -rA shows the output of
           # a passed case. With none found, this step no longer reads them (a changed line, or pytest without
           # -rA), and a first start over the app's limit would get no warning.
-          if ($measured.Count -eq 0) { throw 'The case passed, and this step found no measured first start of the decision-catalog helper.' }
+          $check = @'
+          import json, math, os, pathlib
+          path = pathlib.Path(os.environ['AMPLIFIER_CHAT_SETUP_PROVENANCE'])
+          with path.open('rb') as stream:
+              raw = stream.read(524289)
+          assert len(raw) <= 524288
+          receipt = json.loads(raw)
+          assert receipt['schema'] == 1 and receipt['status'] == 'PASS' and len(receipt['selected']) == 2
+          rows = receipt['helperTimings']
+          assert type(rows) is list and 0 < len(rows) <= 16
+          for row in rows:
+              assert set(row) == {'ordinal', 'firstSeconds', 'secondSeconds', 'bytecodeBefore', 'bytecodeAfter', 'limitSeconds'}
+              assert all(type(v) in (int, float) and math.isfinite(v) and 0 <= v <= 10**9 for v in row.values())
+              assert row['bytecodeAfter'] > row['bytecodeBefore']
+              print('MEASURED helper first/second seconds:', row['firstSeconds'], row['secondSeconds'])
+              if row['firstSeconds'] > row['limitSeconds']:
+                  print("::warning title=Slow first helper start::The measured first start exceeded the app limit.")
+          '@
+          .\.venv\Scripts\python.exe -I -B -c $check
+          if ($LASTEXITCODE -ne 0) { throw 'The closed actual-process provenance or helper measurements are unavailable.' }
+      - name: Keep only closed chat-setup provenance
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chat-setup-provenance
+          path: ${{ runner.temp }}\chat-setup-provenance.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Keep the list of every path
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

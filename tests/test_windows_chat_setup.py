@@ -80,6 +80,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -101,6 +102,7 @@ from test_windows_long_paths_off import base, chosen_folder, installation, long_
 windows = pytest.mark.skipif(os.name != 'nt', reason='Windows path limits need native Windows')
 REQUIRED = os.environ.get('AMPLIFIER_REQUIRE_CHAT_SETUP') == '1'
 TREE_FILE = os.environ.get('AMPLIFIER_CHAT_SETUP_TREE')
+PROVENANCE_FILE = os.environ.get('AMPLIFIER_CHAT_SETUP_PROVENANCE')
 # A dependency override that each folder declares: a module of the default bundle, from its own repository, at
 # a fixed revision. The two folders override different modules, so each has a setup of its own.
 OVERRIDES = {
@@ -111,6 +113,153 @@ OVERRIDES = {
             'git+https://github.com/microsoft/amplifier-module-tool-filesystem@663f26a878ae71e136f439fa73ded52b2eb24174'}}},
 }
 KEYS = 'AMPLIFIER_FIXTURE_VALUE=fixture-not-a-secret\n'
+
+
+def provenance_files(root, names):
+    """Only fixed generated graph inputs, before their owner removes them."""
+    import tomllib
+    from amplifier_web.test_origin_files import source_file
+    allowed = {'pyproject.toml', 'uv.lock', 'runtime.toml', 'runtime.lock',
+               'runtime-installed.json', 'runtime-sources.json'}
+    assert set(names) <= allowed
+    result = {}
+    for name in names:
+        try:
+            found = source_file(root, name, '', 1024 * 1024)
+            if found is None:
+                result[name] = {'status': 'missing'}
+                continue
+            mode, raw = found
+            assert mode in ('100644', '100755')
+            row = {'status': 'observed', 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+            if name in ('uv.lock', 'runtime.lock', 'runtime-installed.json'):
+                parsed = json.loads(raw) if name.endswith('.json') else tomllib.loads(raw.decode())['package']
+                assert type(parsed) is list and 0 < len(parsed) <= 512
+                packages = []
+                for package in parsed:
+                    assert type(package) is dict
+                    label, version = package.get('name'), package.get('version')
+                    assert type(label) is str and re.fullmatch('[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}', label)
+                    assert type(version) is str and re.fullmatch('[a-zA-Z0-9][a-zA-Z0-9_.+!-]{0,127}', version)
+                    # No source URLs, directories or arbitrary metadata survive.
+                    packages.append({'name': label, 'version': version})
+                row['packages'] = sorted(packages, key=lambda value: (value['name'], value['version']))
+            result[name] = row
+        except (OSError, ValueError, AssertionError, KeyError, TypeError):
+            result[name] = {'status': 'unavailable'}
+    return result
+
+
+async def observed_probe(process, args, settings, row):
+    """Opt in on this actual invocation, retaining its result/exception unchanged."""
+    from amplifier_web.update_diagnostics import probe_origins
+    assert '--project' in args and '--observe-import-origins' not in args
+    project = Path(args[args.index('--project') + 1])
+    row.update(before=provenance_files(project, ('pyproject.toml', 'uv.lock')), status='started',
+               importOrigins=None)
+    try:
+        result = await process(*args, '--observe-import-origins', **settings)
+    except BaseException as error:
+        row['status'] = 'cancelled' if isinstance(error, asyncio.CancelledError) else 'failed'
+        facts = getattr(error, 'diagnostic_facts', {})
+        raise
+    else:
+        row['status'] = 'returned'
+        facts = getattr(result, 'diagnostic_facts', {})
+        return result
+    finally:
+        row['after'] = provenance_files(project, ('pyproject.toml', 'uv.lock'))
+        # Exception/body output is never retained here.
+        probe = facts.get('probe', {}) if type(facts) is dict else {}
+        row['importOrigins'] = probe_origins(probe.get('importOrigins')) if type(probe) is dict else None
+
+
+@pytest.mark.parametrize('fault', [None, 'missing', 'oversize', 'link', 'private-package'])
+def test_provenance_files_are_bounded_and_never_export_source_locations(tmp_path, fault):
+    (tmp_path / 'pyproject.toml').write_text('[project]\nname=\"fixture\"\nversion=\"1\"\n')
+    lock = tmp_path / 'uv.lock'
+    lock.write_text('[[package]]\nname=\"example\"\nversion=\"1.2.3\"\nsource={git=\"https://PRIVATE/path\"}\n')
+    if fault == 'missing': lock.unlink()
+    elif fault == 'oversize': lock.write_bytes(b'x' * (1024 * 1024 + 1))
+    elif fault == 'link':
+        target = tmp_path / 'actual'
+        lock.rename(target)
+        lock.symlink_to(target)
+    elif fault == 'private-package': lock.write_text('[[package]]\nname=\"/PRIVATE/path\"\nversion=\"1\"\n')
+    report = provenance_files(tmp_path, ('pyproject.toml', 'uv.lock'))
+    assert report['pyproject.toml']['status'] == 'observed'
+    assert report['uv.lock']['status'] == ('observed' if fault is None else 'missing' if fault == 'missing' else 'unavailable')
+    if fault is None:
+        assert report['uv.lock']['packages'] == [{'name': 'example', 'version': '1.2.3'}]
+        assert report['uv.lock']['sha256'] == hashlib.sha256(lock.read_bytes()).hexdigest()
+    assert str(tmp_path) not in json.dumps(report) and 'PRIVATE' not in json.dumps(report)
+    with pytest.raises(AssertionError):
+        provenance_files(tmp_path, ('keys.env',))
+
+
+@pytest.mark.parametrize('mode', ['returned', 'failed', 'cancelled', 'missing-receipt'])
+async def test_observed_probe_preserves_actual_call_outcome_and_pre_teardown_files(tmp_path, mode):
+    from amplifier_web.update_diagnostics import CommandOutput, PROBE_ORIGIN_MODULES
+    root = tmp_path / 'prepare'
+    root.mkdir()
+    (root / 'pyproject.toml').write_text('declared')
+    (root / 'uv.lock').write_text('[[package]]\nname=\"example\"\nversion=\"1\"')
+    record = {'schema': 1, 'phase': 'compatibility', 'samples': [{
+        'point': 'before-cleanup', 'modules': {name: {'status': 'not-loaded', 'scope': 'unknown'}
+                                            for name in PROBE_ORIGIN_MODULES}}]}
+    facts = {} if mode == 'missing-receipt' else {'probe': {'importOrigins': record}}
+    output = CommandOutput('PRIVATE OUTPUT', facts)
+    error = asyncio.CancelledError() if mode == 'cancelled' else RuntimeError('PRIVATE ERROR')
+    error.diagnostic_facts = facts
+    seen, row = [], {}
+    async def command(*args, **settings):
+        assert row['before']['uv.lock']['status'] == 'observed'
+        seen.append((args, settings))
+        # Models the real owner removing the preparation only after this call
+        # returned: the wrapper must already have the declared/resolved facts.
+        if mode in ('failed', 'cancelled'):
+            raise error
+        return output
+    args, settings = ('uv', '--project', str(root), 'run', 'update_probe.py'), {'timeout': 1200}
+    if mode in ('failed', 'cancelled'):
+        with pytest.raises(type(error)) as caught:
+            await observed_probe(command, args, settings, row)
+        assert caught.value is error
+    else:
+        assert await observed_probe(command, args, settings, row) is output
+    assert seen == [(args + ('--observe-import-origins',), settings)]
+    assert row['status'] == ('returned' if mode == 'missing-receipt' else mode)
+    assert row['before'] == row['after']
+    assert row['importOrigins'] == (None if mode == 'missing-receipt' else record)
+    shutil.rmtree(root)
+    assert row['before']['pyproject.toml']['status'] == 'observed'
+    assert str(tmp_path) not in json.dumps(row) and 'PRIVATE' not in json.dumps(row)
+
+
+def test_native_provenance_keeps_original_path_cancel_and_private_output_boundaries():
+    import ast
+    source = Path(__file__).read_text()
+    tree_source = ast.parse(source)
+    case = next(n for n in tree_source.body if isinstance(n, ast.FunctionDef)
+                and n.name == 'test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_installation_folder')
+    text = ast.unparse(case)
+    for statement in ("with token_user_default_owner():", "asyncio.run(journey())",
+                      "task.cancel()", "await task", "not_admitted()", "complete_probe_origins(observed['importOrigins'])",
+                      "save_provenance()", "runtime-installed.json", "runtime-sources.json"):
+        assert statement in text
+    assert text.index("generated = provenance_files(") < text.index("assert not (home / 'runtime' /")
+    assert text.rindex("provenance['status'] = 'PASS'") > text.rindex("assert not [row for row in over")
+    assert "process-sampling-not-job-proof" in text
+    workflow = yaml.safe_load((Path(__file__).parents[1] / '.github/workflows/windows-path-length.yml').read_text())
+    steps = workflow['jobs']['windows-chat-setup']['steps']
+    run = next(s for s in steps if s.get('name', '').startswith("Prepare and check a chat's own setup"))
+    assert '*> "$env:RUNNER_TEMP/private-chat-setup.log"' in run['run']
+    assert 'Tee-Object' not in run['run']
+    artifact = next(s for s in steps if s.get('name') == 'Keep only closed chat-setup provenance')
+    assert artifact['with']['path'] == '${{ runner.temp }}\\chat-setup-provenance.json'
+    assert '*' not in artifact['with']['path'] and 'private' not in artifact['with']['path']
+    restore = next(s for s in steps if s.get('name') == "Restore the runner's long-path setting")
+    assert "always()" in restore['if'] and "steps.long_paths.outputs.original" in restore['if']
 
 
 def tree(root):
@@ -629,6 +778,21 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
 
     # What each command printed, for a failure here only. The app keeps none of it.
     commands, facts = [], update_diagnostics.command_facts
+    provenance = {'schema': 1, 'status': 'incomplete', 'probes': [], 'selected': [], 'helperTimings': [],
+                  'scope': 'declared-resolved-installed-observed-separate',
+                  'containment': 'process-sampling-not-job-proof'}
+    probe_rows = {}
+    def save_provenance():
+        try:
+            if PROVENANCE_FILE:
+                encoded = json.dumps(provenance, sort_keys=True)
+                assert len(encoded.encode()) <= 512 * 1024
+                Path(PROVENANCE_FILE).write_text(encoded, encoding='utf-8')
+            return True
+        except (OSError, ValueError, AssertionError):
+            # Evidence failure must not replace an original cancellation/error.
+            # The success boundary below still requires an actual saved receipt.
+            return False
 
     def observed(stdout, stderr, returncode, duration):
         commands.append((returncode, round(duration), stdout[-3000:].decode(errors='replace'),
@@ -669,6 +833,14 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
                     helper_failures[environment.name] = f'{type(error).__name__}: {error}'
                     raise
             app_commands.add(environment.name)   # from here on the app's own command runs in it
+            assert len(provenance['probes']) < 16
+            row = {'ordinal': len(provenance['probes']), 'role': 'qualified' if '--read-only' in args else 'preparation'}
+            provenance['probes'].append(row)
+            probe_rows[environment.name] = row
+            try:
+                return await observed_probe(app_process, args, settings, row)
+            finally:
+                save_provenance()
         return await app_process(*args, **settings)
 
     monkeypatch.setattr(updates, 'process', process_after_the_helper)
@@ -818,6 +990,11 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
             print(f'COMMAND exit {returncode} after {duration} s\nSTDOUT {stdout}\nSTDERR {stderr}')
         raise
     finally:
+        provenance['helperTimings'] = [
+            {'ordinal': probe_rows[name]['ordinal'], 'firstSeconds': first, 'secondSeconds': second,
+             'bytecodeBefore': before, 'bytecodeAfter': after, 'limitSeconds': helper_limit}
+            for name, (first, second, before, after) in helper_times.items() if name in probe_rows]
+        save_provenance()
         for name, (first, second, before, after) in helper_times.items():
             print(native.update_stage_probe.catalog_helper_line(name, first, second, before, after, helper_limit))
         for name, failure in helper_failures.items():
@@ -867,6 +1044,26 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
         # The worker environment that a chat with this setup starts in.
         worker = project_path(home, selected[label])
         assert worker.parent == home / 'runtime' and worker.name.startswith('q-') and (worker / '.venv').is_dir()
+        from amplifier_web.update_diagnostics import complete_probe_origins
+        preparation = probe_rows['prepare-' + selected[label]]
+        compatibility = probe_rows[worker.name]
+        generated = provenance_files(worker, ('pyproject.toml', 'uv.lock'))
+        recorded = provenance_files(stage, ('runtime.toml', 'runtime.lock', 'runtime-installed.json', 'runtime-sources.json'))
+        closed = {'case': 'default' if label == 'default workspace folder' else 'chosen',
+                  'preparationProbe': preparation['ordinal'], 'compatibilityProbe': compatibility['ordinal'],
+                  'generated': generated, 'recorded': recorded}
+        provenance['selected'].append(closed)
+        save_provenance()  # Before any failure or fixture-owned installation teardown.
+        assert all(row['status'] == 'observed' for row in (*generated.values(), *recorded.values()))
+        assert generated['pyproject.toml']['sha256'] == recorded['runtime.toml']['sha256']
+        assert generated['uv.lock']['sha256'] == recorded['runtime.lock']['sha256']
+        for observed in (preparation, compatibility):
+            assert observed['status'] == 'returned' and complete_probe_origins(observed['importOrigins'])
+            assert observed['importOrigins']['phase'] == (
+                'dependency-prepare' if observed is preparation else 'compatibility')
+            assert all(row['status'] == 'observed' for row in observed['before'].values())
+            assert all(row['status'] == 'observed' for row in observed['after'].values())
+        assert compatibility['after'] == generated
         # Nothing was written into the chat's folder, and the preparation folder is gone.
         assert native.update_stage_probe.created(folder) == kept[label], label
         assert not (home / 'runtime' / ('prepare-' + selected[label])).exists()
@@ -879,6 +1076,11 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
     checked = {'update-' + value[:12] for value in selected.values()}
     assert checked <= set(os.listdir(root / 'capture')) <= checked | {'update-' + value[:12] for value in stopped.values()}
     assert list(stopped) == ['folder that a person chose']
+    stopped_evidence = probe_rows['prepare-' + stopped['folder that a person chose']]
+    assert stopped_evidence['status'] == 'cancelled'
+    # A cancelled original probe can emit no receipt; do not launch another one
+    # or present its successor's imports as evidence for the cancelled process.
+    save_provenance()
 
     # Every path below the installation folder, as it now is.
     rows = tree(root)
@@ -944,3 +1146,5 @@ def test_a_chat_with_its_own_setup_is_prepared_and_checked_under_the_longest_ins
     # the build view of a module (42 characters shorter) and uv's own copy.
     for name in (budget.SOURCE_FOLDER + '\\builds', 'cache', 'app\\runtime', 'app\\updates', 'capture'):
         assert not [row for row in over if area(row[2]) == name], name
+    provenance['status'] = 'PASS'
+    assert save_provenance(), 'The closed chat-setup evidence could not be saved'
