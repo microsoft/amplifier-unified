@@ -4695,11 +4695,14 @@ from a second that the clock has not reached again counts again when the
 clock reaches it, and a sign-out in that time does not end it. Such a
 session can then set a password on the page, as it can do everything else,
 and that password has no lifetime; `browsers key --remove` ends it at any
-clock time. From the first check of a request's session on, a sign-out
-that is saved refuses that request's change, without a clock, also in that
-case; a request that begins after the clock reached that second again is
-a request of a session that counts. When the second test refuses in that
-case, only a failed removal of the change's own record leaves that record.
+clock time. From the first check of a request's session to the change's
+second test, a sign-out that is saved refuses that request's change,
+without a clock, also in that case; a request that begins after the clock
+reached that second again is a request of a session that counts. When the
+second test refuses in that case, only a failed removal of the change's
+own record leaves that record. A sign-out that is saved after the second
+test finds the record in place: the rule ends it, or, with a clock that
+was set back, the command's "no key" write, as for a key.
 On a host that is not a Windows host the swap of the record is two steps;
 only a Windows host has the page. Not measured: the page in a real browser
 on a Windows PC by a person, a password manager, a phone browser.
