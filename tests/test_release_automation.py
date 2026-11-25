@@ -555,6 +555,19 @@ def test_manual_plan_rejects_tag_and_tree_object_shas(repository):
             release.plan(repository, git(repository, 'rev-parse', ref))
 
 
+def test_frontend_verification_reads_each_member_once_in_archive_order(repository):
+    prefix = 'amplifier_web/static/'
+    names = [prefix + 'assets/app.js', prefix + 'index.html']
+    reads = []
+
+    def read(name):
+        reads.append(name)
+        return (repository / name).read_bytes()
+
+    release.verify_frontend(repository, names, read, 'Source archive')
+    assert reads == names
+
+
 def test_release_distribution_verification_checks_source_assets_and_references(repository):
     dist=distributions(repository)
     release.verify_dist(repository,dist,'1.2.3')

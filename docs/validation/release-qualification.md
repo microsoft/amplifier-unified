@@ -42,6 +42,8 @@ conflicts; rebuild once for the selected version rather than merging bundles by 
    Reuse independent feature review; add review only for risks not already covered.
 4. Pass required CI, including **Fast release checks**, and satisfy repository review
    requirements. Merge the exact reviewed head promptly through authorized controls.
+   When a release and an unrelated PR are both ready, merging the release first
+   preserves its tested tree and lets the publisher reuse matching frontend checks.
    Investigate relevant failures; do not bypass protections. Recheck unexpected main
    changes, but do not rebuild merely because unrelated files moved.
 5. Verify the automatic release, then return the concise receipt under
