@@ -102,7 +102,8 @@ def test_every_session_check_in_the_package_uses_the_one_shared_check():
     for name in ("device_pairing.py", "device_connections.py"):
         assert "valid_session(" in (ROOT / "amplifier_web" / name).read_text(encoding="utf-8")
     body = (ROOT / "amplifier_web/auth.py").read_text(encoding="utf-8")
-    assert body.count('"session")') == 1  # Only inside valid_session itself.
+    assert body.count('"session")') == 1  # Only inside the one check, which valid_session uses.
+    assert "    return session_issued(app, value) is not None\n" in body
 
 
 def test_sign_out_saves_a_time_that_never_moves_backward(home, monkeypatch):

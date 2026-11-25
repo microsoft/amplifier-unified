@@ -378,7 +378,10 @@ def _password_bytes(text):
     """The bytes of a typed password; None for a text that cannot be one."""
     if not isinstance(text, str) or not 0 < len(text) <= PASSWORD_MAX:
         return None
-    return unicodedata.normalize("NFKC", text).encode("utf-8")
+    try:
+        return unicodedata.normalize("NFKC", text).encode("utf-8")
+    except UnicodeError:
+        return None                                         # Half of a character pair: a form can send one.
 
 
 def _scrypt(password: bytes, salt: bytes) -> str:
@@ -397,10 +400,13 @@ class SavedKey:
     A key has 125 bits, so a wrong key is only counted: no lockout and no
     delay, as for a code. A person chooses a password, so wrong passwords are
     slowed down. One password is checked at a time, away from the event loop.
-    After `FREE` wrong passwords in a row, each further one doubles a wait,
-    from `FIRST_WAIT` to `LONGEST_WAIT` seconds, and during a wait no password
-    is checked, also not the right one. `QUIET` seconds without a wrong
-    password, or a right one, start the count again. The device cannot be
+    The wrong password number `FREE` in a row starts a wait of `FIRST_WAIT`
+    seconds, each further one doubles it, to `LONGEST_WAIT` seconds at most,
+    and during a wait no password is checked, also not the right one. `QUIET`
+    seconds without a wrong password, a right one, or a new record start the
+    count again.
+    So a sender has about 300 guesses in a day at most: one in each
+    `LONGEST_WAIT`, and a new count costs `QUIET`. The device cannot be
     told from the request (see remote_origin), so the wait is for everyone:
     a person who can reach the address can keep the owner from signing in
     with the password, and gets in no faster. A code still works then.
@@ -414,7 +420,7 @@ class SavedKey:
     """
 
     _UNREAD = object()
-    FREE, FIRST_WAIT, LONGEST_WAIT, QUIET = 5, 2.0, 300.0, 900.0
+    FREE, FIRST_WAIT, LONGEST_WAIT, QUIET = 5, 2.0, 300.0, 3600.0
 
     def __init__(self, *, clock=time.monotonic):
         self.failures = 0
@@ -438,6 +444,8 @@ class SavedKey:
                 record = None                               # Malformed: no key, until the file changes.
             except OSError:
                 return None                                 # Not kept: the record is read again next time.
+            if record != self._record:
+                self._streak, self._until = 0, 0.0          # A wait is for the password that it was counted for.
             self._hint, self._record = hint, record
         return self._record
 
@@ -486,9 +494,9 @@ class SavedKey:
             self.failures += 1
             self._streak += 1
             self._last = self.clock()
-            if self._streak > self.FREE:
+            if self._streak >= self.FREE:
                 self._until = self._last + min(self.LONGEST_WAIT,
-                                               self.FIRST_WAIT * 2 ** min(self._streak - self.FREE - 1, 16))
+                                               self.FIRST_WAIT * 2 ** min(self._streak - self.FREE, 16))
             return False
         key = _typed(text)
         if (record is None or not _KEY.fullmatch(key)
@@ -503,14 +511,29 @@ class PasswordRefused(ValueError):
     """The text cannot be the password; the message says why, in words for the owner."""
 
 
-def _save(data_dir: Path, value: str, again: str) -> bool:
+class OwnerSignedOut(RuntimeError):
+    """A sign-out of all browsers ended the session that asked for the change. Nothing of it counts."""
+
+
+def _save(data_dir: Path, value: str, again: str, issued=None) -> bool:
     """Save the record of a new key or password; True when it replaced one that worked.
 
     The record gets a second after the saved sign-out, so that this sign-out
     does not end it (see `auth.sign_in_key_is_current`).
+
+    `issued` is the second of the browser session that asks for the save; the
+    owner's command has none. A request can take as long as its sender likes,
+    and the record gets a second after every sign-out. So the saved sign-out
+    is read here, not the one that the host applied: a session that it ended
+    saves nothing. It is read again after the write. A sign-out that was
+    saved in between ended that session: the record is removed again. A
+    sign-out that is saved later has a second that is not before the
+    record's, so the rule ends the record.
     """
     from . import auth
     signed_out = auth.saved_sign_out(data_dir)
+    if issued is not None and issued <= signed_out:
+        raise OwnerSignedOut()
     try:
         earlier = auth.read_sign_in_key(data_dir)
         replaced = earlier is not None and earlier[0] > signed_out
@@ -528,6 +551,9 @@ def _save(data_dir: Path, value: str, again: str) -> bool:
     auth.write_sign_in_key(data_dir, record)
     if auth.read_sign_in_key(data_dir) != record:
         raise OSError("The record was not saved.")
+    if issued is not None and issued <= auth.saved_sign_out(data_dir):
+        auth.write_sign_in_key(data_dir, None)
+        raise OwnerSignedOut()
     return replaced
 
 
@@ -542,25 +568,34 @@ def make_key(data_dir: Path) -> tuple[str, bool]:
     return key, _save(data_dir, hashlib.sha256(key.encode("ascii")).hexdigest(), NEW_KEY)
 
 
-def set_password(data_dir: Path, text) -> bool:
+def set_password(data_dir: Path, text, issued=None) -> bool:
     """Save the record of the owner's new password; True when it replaced a working password or key.
 
-    The caller is the owner's page on this computer. The password is not kept
-    and must never be logged or shown. This call takes about a tenth of a
-    second: never on the event loop.
+    The caller is the owner's page on this computer, with the second of its
+    session (see `_save`). The password is not kept and must never be logged
+    or shown. This call takes about a tenth of a second: never on the event
+    loop.
     """
     if not isinstance(text, str) or len(text) < PASSWORD_MIN:
         raise PasswordRefused(f"Use at least {PASSWORD_MIN} characters.")
     if len(text) > PASSWORD_MAX:
         raise PasswordRefused(f"Use at most {PASSWORD_MAX} characters.")
+    password = _password_bytes(text)
+    if password is None:
+        raise PasswordRefused("This text has a character that cannot be saved. Use another password.")
     salt = secrets.token_bytes(16)
-    return _save(data_dir, _SCRYPT + salt.hex() + " " + _scrypt(_password_bytes(text), salt),
-                 "Then set the password again.")
+    return _save(data_dir, _SCRYPT + salt.hex() + " " + _scrypt(password, salt), "Then set the password again.", issued)
 
 
-def remove_key(data_dir: Path) -> bool:
-    """End the saved key or password; True when a record was there. Browsers that are signed in stay signed in."""
+def remove_key(data_dir: Path, issued=None) -> bool:
+    """End the saved key or password; True when a record was there. Browsers that are signed in stay signed in.
+
+    With `issued`, the second of the browser session that asks: a session that
+    the saved sign-out ended removes nothing (see `_save`).
+    """
     from . import auth
+    if issued is not None and issued <= auth.saved_sign_out(data_dir):
+        raise OwnerSignedOut()
     try:
         if auth.read_sign_in_key(data_dir) is None:
             return False
@@ -915,7 +950,7 @@ def remote_login_page(request):
         wait = saved.wait()
         error = (f"Too many wrong passwords were typed. No password is checked for {_duration(wait)}. "
                  "Then type the password again. A code from the PC works now."
-                 if wait else "Amplifier was busy with another sign-in. Type the password again.")
+                 if wait else "The password was not checked. Type it again.")
     elif kind in {"password", "wait"}:
         error = ("That password did not work. Check it and type it again. A password stops working when you "
                  "change it or remove it on the PC, or sign out all browsers there.")
@@ -947,14 +982,16 @@ _OWNER_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <h1>Password for other devices</h1>
 __BODY__</main></body></html>
 """
-_NOT_HERE = ("<p>Open this page in Amplifier on the PC that runs it. "
-             "The password for other devices can be set only there.</p>")
+_NOT_HERE = ("<p>Open this page in Amplifier on the PC that runs it, in a browser that signed in there. "
+             "A browser that signed in with a password, a key or a code cannot set the password.</p>")
 _NOT_WINDOWS = ("<p>On this computer, a browser on another device signs in with the password of the "
                 "host account. There is no other password to set.</p>")
+_SIGNED_OUT = ("<p>A sign-out of all browsers ended this sign-in, so nothing was changed. "
+               "Open Amplifier again on the PC.</p>")
 _NOT_NOW = "<p>This Amplifier cannot set a password for other devices now. Start Amplifier again on the PC.</p>"
 _UNCONFIRMED_SET = ("Amplifier could not confirm that the password is saved. A password or key that you had "
                     "before may no longer work. Set the password again.")
-_UNCONFIRMED_REMOVE = "Amplifier could not confirm that the password is removed. Remove it again."
+_UNCONFIRMED_REMOVE = "Amplifier could not confirm the removal. Remove it again."
 
 
 def _session_here(request):
@@ -1000,12 +1037,13 @@ def _owner_body(request, session, *, notice="", error=""):
     else:
         where = ("<p>This Amplifier has no address for other devices yet, so no other device can reach it. The "
                  f'<a href="{GUIDE}" target="_blank" rel="noopener noreferrer">deployment guide</a> has the steps.</p>')
+    name = "" if current is None else "password" if current[1] == "password" else "sign-in key"
     remove = "" if current is None else (
-        '<section class="card"><h2>Remove the password</h2>'
+        f'<section class="card"><h2>Remove the {name}</h2>'
         "<p>After that, a browser on another device needs a one-use code from this PC. "
         "Browsers that are signed in stay signed in.</p>"
         f'<form method="post"><input type="hidden" name="csrf" value="{csrf}">'
-        '<button name="action" value="remove">Remove password</button></form></section>\n')
+        f'<button name="action" value="remove">Remove {name}</button></form></section>\n')
     return (
         '<p class="lead">A browser on another device signs in to this Amplifier with this password. '
         "You can use it when you are not at this PC.</p>\n"
@@ -1031,8 +1069,11 @@ async def password_page(request):
     The authority is a browser that signed in on this computer: a session
     that a code, a key or a password opened is marked remote and gets no
     form. A POST also needs HTTPS, both socket ends local, the exact local
-    Origin (see local_origin) and the form's own token. The page has no
-    script and shows nothing from the request. The password is never logged.
+    Origin (see local_origin) and the form's own token. The session is
+    checked again after the form is read, and the save is bound to it (see
+    `_save`): a session that a sign-out of all browsers ended sets nothing.
+    The page has no script and shows nothing from the request. The password
+    is never logged.
     """
     from aiohttp import web
     headers = {"Cache-Control": "no-store", "Referrer-Policy": "same-origin"}
@@ -1049,11 +1090,19 @@ async def password_page(request):
     if session is None:
         return page(_NOT_HERE, 403)
     if request.method == "GET":
-        done = {"set": "The password is set.", "removed": "No password is set now."}.get(request.query.get("done"), "")
+        done = {"set": "The password is set.",
+                "removed": "No password or key is set now."}.get(request.query.get("done"), "")
         return page(_owner_body(request, session, notice=done))
     if not local_origin(request) or request.content_type != "application/x-www-form-urlencoded":
         return page(_NOT_HERE, 403)
     form = await request.clone(client_max_size=16384).post()
+    # Again, after the wait for the form: its sender decides how long that wait is, and a sign-out of all
+    # browsers can end the session meanwhile.
+    from .auth import session_issued
+    session = _session_here(request)
+    issued = session_issued(request.app, session)
+    if session is None or issued is None:
+        return page(_NOT_HERE, 403)
     if (not hmac.compare_digest(str(form.get("csrf", "")).encode(), _owner_csrf(request, session).encode())
             or any(len(form.getall(key)) != 1 for key in form)):
         return web.Response(text="This page expired. Open it again.", status=403, headers=headers)
@@ -1061,7 +1110,9 @@ async def password_page(request):
     action = form.get("action")
     if action == "remove" and set(form) == {"csrf", "action"}:
         try:
-            await asyncio.to_thread(remove_key, data_dir)
+            await asyncio.to_thread(remove_key, data_dir, issued)
+        except OwnerSignedOut:
+            return page(_SIGNED_OUT, 403)
         except (OSError, ValueError):
             return page(_owner_body(request, session, error=_UNCONFIRMED_REMOVE), 500)
         raise web.HTTPSeeOther(PASSWORD_PATH + "?done=removed", headers=headers)
@@ -1071,7 +1122,9 @@ async def password_page(request):
     if not isinstance(password, str) or password != form["confirm"]:
         return page(_owner_body(request, session, error="The two passwords are not the same. Type them again."), 400)
     try:
-        await asyncio.to_thread(set_password, data_dir, password)
+        await asyncio.to_thread(set_password, data_dir, password, issued)
+    except OwnerSignedOut:
+        return page(_SIGNED_OUT, 403)
     except PasswordRefused as refused:
         return page(_owner_body(request, session, error=str(refused)), 400)
     except BrowserEntryUnavailable as unavailable:

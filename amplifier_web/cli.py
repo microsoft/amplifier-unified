@@ -553,7 +553,7 @@ def _browser_key(args, data_dir):
         except (OSError, ValueError):
             # The record may or may not have changed: a save can fail after it is in place.
             raise SystemExit(f"Amplifier could not confirm that the sign-in key or password is removed (its record is in {data_dir}). "
-                             "Run the command again. To end the key another way, run this: "
+                             "Run the command again. To end it another way, run this: "
                              "amplifier-unified browsers sign-out.") from None
         print("The saved sign-in key or password is removed. Browsers that are signed in stay signed in." if removed
               else "No sign-in key or password was saved.")

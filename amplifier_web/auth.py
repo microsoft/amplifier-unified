@@ -184,15 +184,20 @@ def _verified(secret: str, value: str | None, ttl: int, kind: str) -> bool:
     return _issued(secret, value, ttl, kind) is not None
 
 
-def valid_session(app, value: str | None) -> bool:
-    """The one check for a browser session cookie.
+def session_issued(app, value: str | None) -> int | None:
+    """The one check for a browser session cookie: the second in which it was opened, or None.
 
     A session from before the owner's last "sign out all browsers" is refused,
     whatever its remaining lifetime. A session issued in the same second as
     that sign-out is refused as well.
     """
     issued = _issued(app["session_secret"], value, app["server_config"]["session_ttl_seconds"], "session")
-    return issued is not None and issued > getattr(app.get("sessions"), "epoch", 0)
+    return issued if issued is not None and issued > getattr(app.get("sessions"), "epoch", 0) else None
+
+
+def valid_session(app, value: str | None) -> bool:
+    """Does this browser session cookie count now? See `session_issued`."""
+    return session_issued(app, value) is not None
 
 
 class Sessions:

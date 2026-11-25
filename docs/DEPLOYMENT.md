@@ -450,8 +450,9 @@ for something else.
   Amplifier checks no password for a time: 2 seconds at first, and two times
   as long after each further wrong password, to 5 minutes at most. During
   that time it does not check the right password either; a code from the PC
-  still works. Fifteen minutes with no wrong password, or the right password,
-  start the count again. The wait is the same for every device. So a person
+  still works. One hour with no wrong password, the right password, or a
+  change of the password on the PC starts the count again. The wait is the
+  same for every device. So a person
   on your network who sends wrong passwords can keep you from signing in with
   the password. That person gets in no faster.
 - [Sign out all browsers from the PC](#sign-out-all-browsers-from-the-pc) also

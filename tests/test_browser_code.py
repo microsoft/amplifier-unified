@@ -136,8 +136,8 @@ def host(home, files):
 
 
 async def build(app, path, *, method="POST", at=LOCAL, origin=..., headers=None, body=None,
-                secure=True, peer="127.0.0.1", sock="127.0.0.1", connected=True):
-    """One real aiohttp request to the address `at`; no socket."""
+                secure=True, peer="127.0.0.1", sock="127.0.0.1", connected=True, held=False):
+    """One real aiohttp request to the address `at`; no socket. With `held`, the body is not there yet."""
     headers = {"Host": at.split("://", 1)[1], "Origin": at if origin is ... else origin, **(headers or {})}
     headers = {key: value for key, value in headers.items() if value is not None}
     if isinstance(body, dict):
@@ -147,8 +147,9 @@ async def build(app, path, *, method="POST", at=LOCAL, origin=..., headers=None,
         raw = (body or "").encode()
     headers["Content-Length"] = str(len(raw))
     content = aiohttp.StreamReader(Mock(_reading_paused=False), 8192)
-    content.feed_data(raw)
-    content.feed_eof()
+    if not held:
+        content.feed_data(raw)
+        content.feed_eof()
 
     def extra(name):
         if name in {"peername", "sockname"}:
@@ -1742,7 +1743,7 @@ def test_remote_page_has_the_password_form_only_while_a_password_or_key_is_saved
     assert ("That password did not work. Check it and type it again. A password stops working when you change it "
             "or remove it on the PC, or sign out all browsers there.") in again and "That code did not work" not in again
     # A password that was not checked has its own texts; nothing of the request is on the page.
-    assert "Amplifier was busy with another sign-in. Type the password again." in remote("/login?error=wait").text
+    assert "The password was not checked. Type it again." in remote("/login?error=wait").text
     host["browser_key"]._until = host["browser_key"].clock() + 119.5
     assert ("Too many wrong passwords were typed. No password is checked for 2 minutes. Then type the password "
             "again. A code from the PC works now.") in remote("/login?error=wait").text
@@ -2056,7 +2057,11 @@ def test_password_record_holds_a_salt_and_a_scrypt_hash_never_the_password(host)
                              (PASSWORD.encode(), "Use at least 12 characters.")):
         with pytest.raises(entry.PasswordRefused, match=re.escape(message)):
             entry.set_password(home, refused)
+    with pytest.raises(entry.PasswordRefused, match="a character that cannot be saved"):
+        entry.set_password(home, "half of a pair \ud800")
     assert auth.read_sign_in_key(home) == saved             # A refused text changes nothing.
+    # Twelve characters are enough, and 256 are not too many.
+    assert entry.set_password(home, "twelve chars") is True and signed_in(with_key(host, "twelve chars"))
     assert entry.set_password(home, "x" * 256) is True and signed_in(with_key(host, "x" * 256))
     # A record with other parameters is malformed: the host makes no hash at a cost that a file names.
     made = auth.read_sign_in_key(home)[0]
@@ -2096,13 +2101,38 @@ def test_password_is_exact_except_for_the_form_of_its_characters(host, capsys):
     """Unlike a key: case, spaces and hyphens count. Two forms of the same characters are one password."""
     home = host["service"].data_dir
     entry.set_password(home, "\ufb01sh and Chips-12")          # With the single character "fi".
-    for attempt in ("fish and chips-12", "fish and Chips 12", "fishandChips-12", " fish and Chips-12", ""):
+    for attempt in ("fish and chips-12", "fish and Chips 12", "fishandChips-12", " fish and Chips-12"):
         assert wrong_key(with_key(host, attempt)), attempt
+    # A form in another character set can send half of a character pair: a wrong password, with no hash.
+    csrf = auth.new_csrf(SECRET)
+    odd = with_key(host, "", csrf=csrf, headers={"Content-Type": FORM + "; charset=utf-7"},
+                   body=f"csrf={csrf}&password=%2B2AA-")
+    assert wrong_key(odd) and host["browser_key"].failures == 5 and host["browser_key"].wait() == 2
+    host["browser_key"]._streak, host["browser_key"]._until = 0, 0.0
     assert signed_in(with_key(host, "fish and Chips-12"))    # Typed as two letters on another keyboard.
     printed = capsys.readouterr()
     assert "Chips" not in printed.out + printed.err          # Neither the password nor a wrong one is logged.
     assert printed.out == ("Remote sign-in: 1 wrong passwords or keys since start.\n"
                            "Remote sign-in: a browser signed in with the saved password or key.\n")
+
+
+def test_wait_is_for_the_password_that_the_wrong_ones_were_sent_for(host):
+    """The owner changes the password on the PC during a wait: the new password is checked at once."""
+    home, saved = host["service"].data_dir, host["browser_key"]
+    entry.set_password(home, PASSWORD)
+    now = [1000.0]
+    saved.clock = lambda: now[0]
+    for _ in range(8):
+        now[0] += saved.wait()
+        assert wrong_key(with_key(host, "wrong horse battery"))
+    assert saved.wait() == 16 and waits(with_key(host, PASSWORD))
+    entry.set_password(home, "another horse battery")       # A new record.
+    assert signed_in(with_key(host, "another horse battery")) and saved.wait() == 0
+    # The same record keeps its wait: a look at an unchanged file changes nothing.
+    for _ in range(5):
+        assert wrong_key(with_key(host, PASSWORD))
+    assert saved.wait() == 2 and saved.current(host)[1] == "password" and saved.wait() == 2
+    assert waits(with_key(host, "another horse battery"))
 
 
 def test_wrong_passwords_are_slowed_down_and_during_a_wait_no_password_is_checked(host, monkeypatch):
@@ -2112,13 +2142,13 @@ def test_wrong_passwords_are_slowed_down_and_during_a_wait_no_password_is_checke
     saved.clock = lambda: now[0]
     monkeypatch.setattr(entry, "_scrypt", lambda password, salt: checks.append(1) or real(password, salt))
     wrong = "wrong horse battery"
-    # Five wrong passwords in a row have no wait. The sixth one starts it.
-    for _ in range(5):
+    # Four wrong passwords in a row have no wait. The fifth one starts it.
+    for _ in range(4):
         assert wrong_key(with_key(host, wrong)) and saved.wait() == 0
-    assert wrong_key(with_key(host, wrong)) and saved.wait() == 2 and len(checks) == 6
+    assert wrong_key(with_key(host, wrong)) and saved.wait() == 2 and len(checks) == 5
     # During the wait nothing is checked, also not the right password, and nothing is counted.
     assert waits(with_key(host, PASSWORD)) and waits(with_key(host, wrong))
-    assert len(checks) == 6 and saved.failures == 6
+    assert len(checks) == 5 and saved.failures == 5
     # A code is not slowed down, and a wait for passwords does not stop it.
     assert signed_in(redeem(host, make_code(host)))
     # Each further wrong password doubles the wait, to five minutes at most.
@@ -2130,11 +2160,13 @@ def test_wrong_passwords_are_slowed_down_and_during_a_wait_no_password_is_checke
     # After the wait the right password signs in, and the count starts again.
     now[0] += 1
     assert signed_in(with_key(host, PASSWORD)) and saved.wait() == 0
-    for _ in range(5):
+    for _ in range(4):
         assert wrong_key(with_key(host, wrong)) and saved.wait() == 0
-    # Fifteen minutes with no wrong password start the count again as well.
-    now[0] += 901
-    for _ in range(5):
+    # One hour with no wrong password starts the count again as well; less than that does not.
+    now[0] += 3600
+    assert wrong_key(with_key(host, wrong)) and saved.wait() == 2
+    now[0] += 3601
+    for _ in range(4):
         assert wrong_key(with_key(host, wrong)) and saved.wait() == 0
     assert wrong_key(with_key(host, wrong)) and saved.wait() == 2
     # A text that cannot be a password is a wrong password, and it needs no hash.
@@ -2146,6 +2178,32 @@ def test_wrong_passwords_are_slowed_down_and_during_a_wait_no_password_is_checke
     for _ in range(20):
         assert wrong_key(with_key(host, other_key(key)))
     assert signed_in(with_key(host, key))
+
+
+def test_a_sender_of_wrong_passwords_has_at_most_300_guesses_in_a_day(host, monkeypatch):
+    """The real count against the ways of sending: without a pause, and in bursts with the quiet hour between them."""
+    entry.set_password(host["service"].data_dir, PASSWORD)
+    saved = host["browser_key"]
+    monkeypatch.setattr(entry, "_scrypt", lambda password, salt: "0" * 64)      # A hash that costs the sender no time.
+
+    async def day(burst):
+        now = [0.0]
+        saved.clock = lambda: now[0]
+        saved._streak, saved._last, saved._until = 0, 0.0, 0.0
+        guesses = sent = 0
+        while now[0] < 86400:
+            answer = await saved.accepts(host, "wrong horse battery")
+            assert answer is False                          # The sender never sends during a wait.
+            guesses, sent = guesses + 1, sent + 1
+            if burst and sent == burst:
+                now[0] += saved.QUIET + 1                   # Start a new count.
+                sent = 0
+            else:
+                now[0] += saved.wait()
+        return guesses
+    counts = {burst: asyncio.run(day(burst)) for burst in (0, 4, 5, 13, 14, 20, 40, 100)}
+    assert counts[0] == 299 and max(counts.values()) <= 300, counts
+    assert counts[4] == 96                                  # Four free guesses in each hour.
 
 
 def test_one_password_is_checked_at_a_time(host, monkeypatch):
@@ -2276,11 +2334,14 @@ def test_owner_sets_changes_and_removes_the_password_on_the_page_of_the_pc(host,
     assert auth.read_sign_in_key(home) is None and wrong_key(with_key(host, "another horse battery"))
     assert auth.valid_session(host, signed) and auth.valid_session(host, session)
     text = owner_page(host, session=session, query="?done=removed")[0].text
-    assert '<div id="notice" role="status">No password is set now.</div>' in text and "Remove password" not in text
+    assert '<div id="notice" role="status">No password or key is set now.</div>' in text and "Remove password" not in text
     # A key from the command shows as one, and the page can replace or remove it.
     key = new_key(host)
     text = owner_page(host, session=session)[0].text
-    assert "<p>A sign-in key from a command is set. A password replaces it.</p>" in text and "Remove password" in text
+    assert "<p>A sign-in key from a command is set. A password replaces it.</p>" in text
+    # The page names the key as a key.
+    assert "<h2>Remove the sign-in key</h2>" in text and "Remove password" not in text
+    assert '<button name="action" value="remove">Remove sign-in key</button>' in text
     assert owner_page(host, method="POST", session=session, form=set_form())[0].status == 303
     assert wrong_key(with_key(host, key)) and signed_in(with_key(host, PASSWORD))
     # Nothing of the request is on the page, and no password is logged or shown.
@@ -2314,17 +2375,124 @@ def test_owner_page_says_what_is_wrong_and_never_shows_the_password(host, monkey
                                    "had before may no longer work. Set the password again.") in page.text
     assert "ABCDE" not in page.text and PASSWORD not in page.text
     page, _ = owner_page(host, method="POST", session=session, form={"action": "remove"})
-    assert page.status == 500 and "Amplifier could not confirm that the password is removed. Remove it again." in page.text
+    assert page.status == 500 and "Amplifier could not confirm the removal. Remove it again." in page.text
     monkeypatch.setattr(auth, "write_sign_in_key", write)
     # The clock of the PC is earlier than the last sign-out: nothing is saved, and the page says what to do.
-    now = clock(monkeypatch, 1_900_000_000)
-    auth.sign_out_all(home)
-    now[0] = 1_800_000_500                                  # The clock of the PC was set back.
-    session = auth._signed(SECRET, {"kind": "session", "issued": 1_800_000_400, "nonce": "n"})
-    monkeypatch.setattr(auth.time, "sleep", lambda seconds: None)
+    # A save that the clock stops (see `_save`) has its own text. A session cannot get there: it must be
+    # from a second after the saved sign-out, and the present second is not before the session's.
+    def stopped(*arguments):
+        raise entry.BrowserEntryUnavailable("The clock of this PC is earlier than the last sign-out of all browsers. "
+                                            "Set the clock. Then set the password again.")
+    monkeypatch.setattr(entry, "set_password", stopped)
     page, _ = owner_page(host, method="POST", session=session, form=set_form())
-    assert page.status == 409 and ("The clock of this PC is earlier than the last sign-out of all browsers. "
-                                   "Set the clock. Then set the password again.") in page.text
+    assert page.status == 409 and "Set the clock. Then set the password again." in page.text
+
+
+def held_form(app, session, form):
+    """The owner's form with its body held back; the request, and the bytes of the body."""
+    raw = urlencode({"csrf": entry._owner_csrf(SimpleNamespace(app=app), session), **form})
+
+    async def request():
+        built = await build(app, entry.PASSWORD_PATH, held=True, body=raw, headers={
+            "Content-Type": FORM, "Cookie": f"{auth.SESSION_COOKIE}={session}"})
+        match = await app.router.resolve(built)
+        match.add_app(app)
+        built._match_info = match
+        return built, match.handler
+    return request, raw.encode()
+
+
+@pytest.mark.parametrize("applied", [True, False], ids=["the-host-applied-the-sign-out", "the-host-did-not-apply-it-yet"])
+@pytest.mark.parametrize("form", [set_form(), {"action": "remove"}], ids=["set", "remove"])
+def test_session_that_a_sign_out_ended_during_its_request_changes_nothing(host, monkeypatch, applied, form):
+    """The sender of a form decides when its body arrives. The owner signs out all browsers meanwhile.
+
+    Two layers refuse it. The page looks at the session again after the form: a host that applied the
+    sign-out starts no save. The save reads the saved sign-out itself: that holds when the host did not
+    apply the sign-out yet.
+    """
+    home = host["service"].data_dir
+    entry.set_password(home, "the earlier password")
+    earlier = auth.read_sign_in_key(home)
+    session = auth.new_session(SECRET)
+    make, raw = held_form(host, session, form)
+    if applied:
+        monkeypatch.setattr(entry, "set_password", lambda *a: pytest.fail("A save was started"))
+        monkeypatch.setattr(entry, "remove_key", lambda *a: pytest.fail("A removal was started"))
+
+    async def late():
+        request, handler = await make()
+        answer = asyncio.create_task(auth.auth_required(request, handler))
+        await asyncio.sleep(0.05)                           # The page waits for the form: the session counted so far.
+        assert not answer.done()
+        auth.sign_out_all(home)                             # The owner's command, in another process.
+        if applied:
+            assert auth.refresh_sessions(host) is True and not auth.valid_session(host, session)
+        request.content.feed_data(raw)
+        request.content.feed_eof()
+        try:
+            return await answer
+        except web.HTTPException as response:
+            return response
+    page = asyncio.run(late())
+    assert page.status == 403 and "<form" not in page.text and PASSWORD not in page.text
+    assert auth.read_sign_in_key(home) == earlier           # Nothing was saved and nothing was removed.
+    if applied:
+        assert ("Open this page in Amplifier on the PC that runs it, in a browser that signed in there. A browser "
+                "that signed in with a password, a key or a code cannot set the password.") in page.text
+    else:
+        assert "A sign-out of all browsers ended this sign-in, so nothing was changed." in page.text
+        assert auth.refresh_sessions(host) is True
+    assert wrong_key(with_key(host, PASSWORD)) and wrong_key(with_key(host, "the earlier password"))
+
+
+def test_second_of_a_session_is_only_that_of_a_session_that_counts_now(host, monkeypatch):
+    monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_100)
+    host["sessions"].epoch = 1_900_000_050                  # The sign-out that this host applied.
+
+    def session(issued, **more):
+        return auth._signed(SECRET, {"kind": "session", "issued": issued, "nonce": "n", **more})
+    assert auth.session_issued(host, session(1_900_000_051)) == 1_900_000_051
+    assert auth.session_issued(host, session(1_900_000_100, via="remote")) == 1_900_000_100
+    for value in (session(1_900_000_050), session(1_900_000_049), session(1_900_000_101), session(1_899_999_000),
+                  auth._signed(SECRET, {"kind": "csrf", "issued": 1_900_000_060, "nonce": "n"}),
+                  auth._signed("t" * 64, {"kind": "session", "issued": 1_900_000_060, "nonce": "n"}),
+                  "not a session", "", None):
+        assert auth.session_issued(host, value) is None, value
+    # The mark of a session that a code, a key or a password opened; a value that cannot be read counts as remote.
+    assert auth.session_is_remote(session(1_900_000_060, via="remote")) is True
+    assert auth.session_is_remote(session(1_900_000_060)) is False
+    assert auth.session_is_remote(session(1_900_000_060, via="local")) is False
+    for value in ("not a session", "", None, "####.0", 7):
+        assert auth.session_is_remote(value) is True, value
+
+
+def test_sign_out_that_is_saved_during_the_save_of_a_password_ends_that_password(host, monkeypatch):
+    """After the first look at the saved sign-out, during the hash or the write."""
+    home = host["service"].data_dir
+    session = auth.new_session(SECRET)
+    write, during = auth.write_sign_in_key, []
+
+    def sign_out_meanwhile(data_dir, record):
+        write(data_dir, record)
+        if record is not None and not during:
+            during.append(auth.sign_out_all(data_dir))      # The owner's command, when the record is in place.
+    monkeypatch.setattr(auth, "write_sign_in_key", sign_out_meanwhile)
+    page, _ = owner_page(host, method="POST", session=session, form=set_form())
+    assert during and page.status == 403 and "A sign-out of all browsers ended this sign-in" in page.text
+    assert auth._sign_in_key_path(home).read_bytes() == b"none\n"
+    assert auth.refresh_sessions(host) is True and wrong_key(with_key(host, PASSWORD))
+    # A sign-out that is saved after the save is done ends the password by the rule, with the record in place.
+    monkeypatch.setattr(auth, "write_sign_in_key", write)
+    fresh = auth._signed(SECRET, {"kind": "session", "issued": int(auth.time.time()) + 1, "nonce": "n"})
+    monkeypatch.setattr(auth.time, "time", lambda now=auth.time.time() + 2: now)
+    assert owner_page(host, method="POST", session=fresh, form=set_form())[0].status == 303
+    made = auth.read_sign_in_key(home)[0]
+    assert auth.sign_out_all(home) >= made and auth.refresh_sessions(host) is True
+    assert auth.read_sign_in_key(home)[0] == made and wrong_key(with_key(host, PASSWORD))
+    # The owner's command has no session: it saves as before.
+    monkeypatch.setattr(auth.time, "time", lambda now=auth.time.time() + 2: now)
+    assert entry.set_password(home, PASSWORD) is False and signed_in(with_key(host, PASSWORD))
 
 
 OWNER_REFUSED = {
@@ -2352,7 +2520,24 @@ OWNER_POST_REFUSED = {
     "another action": lambda app, session: {"form": {**set_form(), "action": "show"}},
     "a removal with a password": lambda app, session: {"form": {**set_form(), "action": "remove"}},
     "JSON": lambda app, session: {"headers": {"Content-Type": "application/json"}},
+    "a multipart form": lambda app, session: {
+        "headers": {"Content-Type": "multipart/form-data; boundary=x"},
+        "body": "".join(f'--x\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n' for name, value in {
+            "csrf": entry._owner_csrf(SimpleNamespace(app=app), session), **set_form()}.items()) + "--x--\r\n"},
+    "half of a character pair": None,                      # Its own case below: the form is the page's own.
 }
+del OWNER_POST_REFUSED["half of a character pair"]
+
+
+def test_owner_page_refuses_a_text_that_cannot_be_saved(host):
+    home = host["service"].data_dir
+    session = auth.new_session(SECRET)
+    token = entry._owner_csrf(SimpleNamespace(app=host), session)
+    odd = "half%20of%20a%20pair%20%2B2AA-"                  # In UTF-7: a text of 15 characters; the last is half of a pair.
+    page, _ = owner_page(host, method="POST", session=session, headers={"Content-Type": FORM + "; charset=utf-7"},
+                         body=f"csrf={token}&action=set&password={odd}&confirm={odd}")
+    assert page.status == 400 and auth.read_sign_in_key(home) is None
+    assert "This text has a character that cannot be saved. Use another password." in page.text
 
 
 @pytest.mark.parametrize("options", OWNER_REFUSED.values(), ids=[name.replace(" ", "-") for name in OWNER_REFUSED])

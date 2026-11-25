@@ -4569,15 +4569,18 @@ has a terminal.
   NFKC, so that two keyboards that send the same characters in two forms
   give one password.
 - **Wrong passwords.** A person chooses a password, so the "no lockout and no
-  delay" of a code and a key is not enough. After five wrong passwords in a
-  row, the host checks no password for a time: 2 seconds at first, and two
-  times as long after each further wrong password, to 5 minutes at most.
-  During that time it checks nothing, also not the right password. The right
-  password, or 15 minutes with no wrong one, starts the count again. That
-  leaves a sender fewer than 500 guesses in a day. The count is in the
-  memory of the host; a restart of the host, which a sender cannot cause,
-  starts it again. A text that cannot be a password is a wrong password and
-  needs no hash. A key has no wait.
+  delay" of a code and a key is not enough. The fifth wrong password in a
+  row starts a time in which the host checks no password: 2 seconds at
+  first, and two times as long after each further wrong password, to 5
+  minutes at most. During that time it checks nothing, also not the right
+  password. The right password, a new record, or one hour with no wrong
+  one starts the count again. That leaves a sender about 300 guesses in a day at most: at
+  the longest wait, one in each 5 minutes is 288 in a day, and a new count
+  costs one hour for 13 guesses, which is fewer. A test runs both ways of
+  sending against the real count. The count is in the memory of the host; a
+  restart of the host, which a sender cannot cause, starts it again. A text
+  that cannot be a password is a wrong password and needs no hash. A key
+  has no wait.
 - **Why the wait is for everyone.** The request does not say which device
   sent it: a Tailscale forward connects from this computer for every device
   (see the code's "Where it works"). A wait for each address would be no
@@ -4606,6 +4609,16 @@ has a terminal.
   remote session, which has the whole app and can run a command through a
   chat; it keeps a stolen remote session from a silent change of the
   password through this page.
+- **A sign-out during a change.** The sender of a form decides how long its
+  request takes, and a new record always gets a second after the last
+  sign-out. So a session that a sign-out of all browsers ended must not
+  finish a change that it began before. The page checks the session again
+  after it read the form. The save and the removal then read the saved
+  sign-out themselves, not the one that the host applied, and do nothing
+  for a session from a second that is not after it. The save reads it once
+  more after its write and removes the record again when a sign-out came in
+  between. A sign-out that is saved after that has a second that is not
+  before the record's, so the rule for the end of a key ends the record.
 - **The page.** Server-rendered, with no script, and it shows nothing from
   the request. Its texts are fixed; a notice comes from a fixed list
   (`?done=`). It shows whether a password or a key is set and when the
@@ -4643,9 +4656,10 @@ keep the owner from signing in with the password, for as long as that person
 sends wrong passwords. The password is as good as the owner's choice; twelve
 characters and the wait are the floor, and there is no check against known
 passwords. Settings has no entry of its own for the page; the way goes
-through "Install app" and "Devices & apps". The page `/connect` is read with
-the default text encoding of the host, which this change did not touch. Not
-measured: the page in a real browser on a Windows PC by a person, a password
+through "Install app" and "Devices & apps". The page `/connect` and its
+script were read with the default text encoding of the host, which showed
+four of their characters wrong on a Windows host; they are read as UTF-8
+now. Not measured: the page in a real browser on a Windows PC by a person, a password
 manager, a phone browser.
 
 #### The next step for a browser on the PC that is not signed in

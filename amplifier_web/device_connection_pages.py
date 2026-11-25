@@ -35,7 +35,7 @@ def setup_routes(app):
         require_safe_transport(request)
         browser_cookie(request)
         from .browser_entry import password_card
-        content = (ASSETS / 'web/connect.html').read_text()
+        content = (ASSETS / 'web/connect.html').read_text(encoding='utf-8')
         # On a Windows host, on the PC itself: the way to the password for a browser on another device.
         return page('Devices & apps', content.replace('<section class="card">', password_card(request) + '<section class="card">', 1),
                     script='connect.js')
@@ -98,7 +98,7 @@ def setup_routes(app):
         types = {'connect.css': 'text/css', 'connect.js': 'text/javascript', 'sample.js': 'text/javascript'}
         if name not in types:
             raise web.HTTPNotFound()
-        return web.Response(text=(ASSETS / 'web' / name).read_text(), content_type=types[name])
+        return web.Response(text=(ASSETS / 'web' / name).read_text(encoding='utf-8'), content_type=types[name])
 
     async def download(request):
         require_safe_transport(request)
