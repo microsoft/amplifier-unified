@@ -19,8 +19,9 @@ import re
 import stat
 import sys
 import tomllib
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
+from .runtime_qualification import _file_url_path
 from .session_files import source_change_time
 
 _LIMIT = 4 * 1024 * 1024
@@ -221,7 +222,7 @@ class QualifiedToolSources:
                  and re.fullmatch('[a-f0-9]{40}', cached.get('revision', '')))
         selected = urlsplit(direct.get('url', ''))
         _require(selected.scheme == 'file' and selected.netloc in ('', 'localhost'))
-        build = Path(unquote(selected.path))
+        build = _file_url_path(selected)
         _require(build.is_absolute() and str(build) == row.get('path'))
         self._cache_root(build, cached, build=True)
         candidates = [path for path in (build / package, build / 'src' / package)

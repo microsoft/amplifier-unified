@@ -109,7 +109,8 @@ def test_source_store_build_wheel_and_distinct_mounted_object_share_exact_payloa
 
 
 @pytest.mark.parametrize('fault', ['prefix', 'missing-receipt', 'different-receipt',
-                                  'different-lock', 'editable', 'dirty', 'no-source', 'bad-record'])
+                                  'different-lock', 'editable', 'dirty', 'no-source', 'bad-record',
+                                  'foreign-authority', 'different-path'])
 def test_unqualified_or_changed_inputs_never_supply_source(package, monkeypatch, fault):
     if fault == 'prefix': monkeypatch.setattr(sys, 'prefix', '/different/runtime')
     elif fault == 'missing-receipt': (package.receipt / 'runtime-installed.json').unlink()
@@ -120,6 +121,11 @@ def test_unqualified_or_changed_inputs_never_supply_source(package, monkeypatch,
         if fault == 'editable':
             package.direct['dir_info']['editable'] = True
             (package.info / 'direct_url.json').write_text(json.dumps(package.direct))
+        elif fault == 'foreign-authority':
+            package.direct['url'] = package.source.as_uri().replace('file://', 'file://elsewhere.invalid', 1)
+            (package.info / 'direct_url.json').write_text(json.dumps(package.direct))
+        elif fault == 'different-path':
+            package.expected[0]['path'] = str(package.source.parent)
         elif fault == 'dirty': package.expected[0]['cacheSource']['dirty'] = True
         else: package.expected[0].pop('cacheSource')
         (package.receipt / 'runtime-installed.json').write_text(json.dumps(package.expected))
@@ -173,9 +179,9 @@ def test_other_selected_module_owns_its_python_tool(package):
 
 def test_same_selected_package_under_another_cache_path_has_same_semantics(package):
     before, _ = _source(package.load(), package.capture())
-    relocated = package.source.parent / 'relocated'
+    relocated = package.source.parent / 'relocated reference %23'
     shutil.copytree(package.source, relocated)
-    package.direct['url'] = relocated.as_uri()
+    package.direct['url'] = relocated.as_uri().replace('file://', 'file://localhost', 1)
     package.expected[0]['path'] = str(relocated)
     (package.info / 'direct_url.json').write_text(json.dumps(package.direct))
     (package.receipt / 'runtime-installed.json').write_text(json.dumps(package.expected))

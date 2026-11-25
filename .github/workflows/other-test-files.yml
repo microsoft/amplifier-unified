@@ -72,6 +72,7 @@ on:
       - tests/test_installation_health.py
       - tests/test_reset.py
       - tests/test_runtime_registry_updates.py
+      - tests/test_tool_source_proof.py
       - tests/test_update_core_lookup_failure.py
       - tests/test_update_health_first_install.py
       - tests/test_update_partial.py
@@ -160,6 +161,7 @@ jobs:
           tests/test_installation_health.py
           tests/test_reset.py
           tests/test_runtime_registry_updates.py
+          tests/test_tool_source_proof.py
           tests/test_update_core_lookup_failure.py
           tests/test_update_health_first_install.py
           tests/test_update_partial.py
