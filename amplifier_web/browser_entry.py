@@ -377,8 +377,10 @@ class SavedKey:
     key is counted, and nobody can keep the owner out by guessing.
 
     The host reads the record again only when the file changed. So a wrong
-    key costs one look at the file and no private read, and a new or removed
-    key counts from the next request.
+    key costs one look at the file and no private read, once the host has
+    read the record or found it malformed, and a new or removed key counts
+    from the next request. A read that failed for another reason is made
+    again at the next key, so that a passing fault does not end the key.
     """
 
     _UNREAD = object()
@@ -399,7 +401,9 @@ class SavedKey:
         if self._hint is self._UNREAD or hint != self._hint:
             try:
                 record = auth.read_sign_in_key(data_dir)
-            except (OSError, ValueError):
+            except ValueError:
+                record = None                               # Malformed: no key, until the file changes.
+            except OSError:
                 return None                                 # Not kept: the record is read again next time.
             self._hint, self._record = hint, record
         return self._record

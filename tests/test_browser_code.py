@@ -1578,23 +1578,28 @@ def test_key_counts_from_the_second_after_the_applied_sign_out_to_the_present_se
 def test_record_that_cannot_be_read_is_no_key_and_is_read_again(host, monkeypatch):
     home = host["service"].data_dir
     key = new_key(host)
-    read, look = auth.read_sign_in_key, auth.sign_in_key_hint
-    for fault in (OSError("in use"), ValueError("malformed")):
-        def fails(data_dir, fault=fault):
-            raise fault
-        monkeypatch.setattr(auth, "read_sign_in_key", fails)
-        assert wrong_key(with_key(host, key))
+    read, look, reads = auth.read_sign_in_key, auth.sign_in_key_hint, []
+
+    def fails(data_dir):
+        reads.append(1)
+        raise OSError("in use")
+    monkeypatch.setattr(auth, "read_sign_in_key", fails)
+    assert wrong_key(with_key(host, key)) and wrong_key(with_key(host, other_key(key))) and len(reads) == 2
     monkeypatch.setattr(auth, "read_sign_in_key", read)
     assert signed_in(with_key(host, key))                   # Nothing was kept from the reads that failed.
     monkeypatch.setattr(auth, "sign_in_key_hint", lambda data_dir: auth._UNSEEN)
     assert wrong_key(with_key(host, key))                   # A look that failed finds no key.
     monkeypatch.setattr(auth, "sign_in_key_hint", look)
     assert signed_in(with_key(host, key))
-    # A malformed record is an error for its reader, and it opens nothing.
+    # A malformed record is an error for its reader. For the host it is no key, and the host
+    # does not read it again until the file changes.
     auth.write_sign_in_key(home, ("soon", "0" * 64))
     with pytest.raises(ValueError):
         auth.read_sign_in_key(home)
-    assert wrong_key(with_key(host, key))
+    del reads[:]
+    monkeypatch.setattr(auth, "read_sign_in_key", lambda data_dir: reads.append(1) or read(data_dir))
+    assert wrong_key(with_key(host, key)) and wrong_key(with_key(host, other_key(key))) and len(reads) == 1
+    monkeypatch.setattr(auth, "read_sign_in_key", read)
     for content in (b"12 " + b"a" * 63 + b"\n", b"12 " + b"A" * 64 + b"\n", b"1" * 13 + b" " + b"a" * 64 + b"\n",
                     b"12 " + b"a" * 64 + b"\n\n", b"none", b""):
         assert not auth._SIGN_IN_KEY_RECORD.fullmatch(content), content
@@ -1795,7 +1800,7 @@ def test_key_command_shows_a_new_key_once_and_saves_only_its_record(key_command,
     assert auth.read_sign_in_key(home)[1] != digest
 
 
-def test_key_command_removes_the_key_and_the_sign_out_command_ends_it(key_command, home, capsys):
+def test_key_command_removes_the_key_and_the_sign_out_command_ends_it(key_command, home, monkeypatch, capsys):
     key_command("--remove")
     assert capsys.readouterr().out == "No sign-in key was saved.\n"
     key_command()
@@ -1805,14 +1810,23 @@ def test_key_command_removes_the_key_and_the_sign_out_command_ends_it(key_comman
     assert auth.read_sign_in_key(home) is None and auth.session_epoch(home) == 0       # No browser was signed out.
     key_command()
     capsys.readouterr()
+    ended = auth.read_sign_in_key(home)
     key_command(command="sign-out")
     assert capsys.readouterr().out == (
         "All browsers on all devices are signed out. A running Amplifier applies this within a few seconds.\n"
         "To use Amplifier in a browser again, open it from this computer.\n"
-        "The saved sign-in key no longer works. To make a new one, run this: amplifier-unified browsers key.\n")
-    assert auth.read_sign_in_key(home) is None and auth.session_epoch(home) > 0
+        "A sign-in key from before this sign-out no longer works. To make a new one, run this: "
+        "amplifier-unified browsers key.\n")
+    # The sign-out wrote nothing to the key's record; its saved second ends the key.
+    assert auth.read_sign_in_key(home) == ended and ended[0] <= auth.session_epoch(home)
+    key_command()                                           # In a second after the sign-out.
+    assert "The earlier key no longer works." not in capsys.readouterr().out
+    later = auth.read_sign_in_key(home)
+    assert later[0] > auth.session_epoch(home)
+    # A key from after a sign-out is not named by a sign-out command that did not end it.
+    monkeypatch.setattr(auth, "sign_out_all", lambda data_dir: later[0] - 1)
     key_command(command="sign-out")
-    assert "sign-in key" not in capsys.readouterr().out
+    assert "sign-in key" not in capsys.readouterr().out and auth.read_sign_in_key(home) == later
 
 
 def test_key_command_refusals_are_plain_and_change_nothing(key_command, home, monkeypatch, capsys):
@@ -1831,11 +1845,43 @@ def test_key_command_refusals_are_plain_and_change_nothing(key_command, home, mo
     record = auth.read_sign_in_key(home)
     capsys.readouterr()
 
+    write = auth.write_sign_in_key
+
     def fails(*arguments):
         raise OSError("ABCDE")
-    monkeypatch.setattr(auth, "write_sign_in_key", fails)
-    for arguments, phrase in (((), "Could not make a sign-in key"), (("--remove",), "The sign-in key was NOT removed")):
+
+    def fails_after_the_save(*arguments):
+        write(*arguments)                                   # As a save that fails when the record is in place.
+        raise OSError("ABCDE")
+    texts = {(): "Amplifier could not confirm that a new sign-in key is saved",
+             ("--remove",): "Amplifier could not confirm that the sign-in key is removed"}
+    for writer in (fails, fails_after_the_save):
+        monkeypatch.setattr(auth, "write_sign_in_key", writer)
+        for arguments, phrase in texts.items():
+            with pytest.raises(SystemExit) as stopped:
+                key_command(*arguments)
+            said = str(stopped.value)
+            assert said.startswith(phrase) and str(home) in said and "Run the command again." in said
+            # No sentence says that nothing changed, and none says what works: neither is known.
+            assert "ABCDE" not in said and "NOT" not in said and "Nothing was changed" not in said
+        assert capsys.readouterr().out == ""                # No key was shown.
+        changed = auth.read_sign_in_key(home) != record
+        assert changed is (writer is fails_after_the_save)
+    # A save that cannot be read back is not confirmed either.
+    monkeypatch.setattr(auth, "write_sign_in_key", write)
+    key_command()
+    capsys.readouterr()
+    read = auth.read_sign_in_key
+    for arguments, phrase in texts.items():
+        looks = []
+
+        def unread_after_the_save(data_dir):
+            looks.append(1)
+            if len(looks) > 1:
+                raise OSError("ABCDE")
+            return read(data_dir)
+        monkeypatch.setattr(auth, "read_sign_in_key", unread_after_the_save)
         with pytest.raises(SystemExit) as stopped:
             key_command(*arguments)
-        assert phrase in str(stopped.value) and str(home) in str(stopped.value) and "ABCDE" not in str(stopped.value)
-    assert auth.read_sign_in_key(home) == record and capsys.readouterr().out == ""
+        assert str(stopped.value).startswith(phrase) and capsys.readouterr().out == ""
+        monkeypatch.setattr(auth, "read_sign_in_key", read)

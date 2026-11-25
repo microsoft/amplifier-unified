@@ -4488,7 +4488,11 @@ addition; the code stays for a device that must not keep a secret.
   any device that reaches the address can send one: the host looks at the
   record's file time, size and identity, and reads the record through the
   private boundary only when those changed. So a new or a removed key counts
-  from the next request. The host counts wrong keys and logs only the count.
+  from the next request. A malformed record is kept as "no key" in the same
+  way. A read that failed for another reason is made again at the next key,
+  so that a passing fault does not end the key; while such a fault lasts,
+  each well-formed wrong key costs one failed private read. The host counts
+  wrong keys and logs only the count.
   It logs each sign-in with the key, without the key.
 - **Before a session opens.** A right key confirms the owner credential as a
   live code does, and it opens nothing while a saved sign-out waits for this
@@ -4500,9 +4504,13 @@ addition; the code stays for a device that must not keep a secret.
   second (`auth.sign_in_key_is_current`). So `sign_out_all` and its record
   did not change, and a key cannot outlast a sign-out that a session does
   not outlast. The key command makes a key only in a second after the saved
-  sign-out; in the second of a sign-out it waits for the next one. After a
-  sign-out, the sign-out command writes "no key" over the ended record; the
-  rule does not depend on that write.
+  sign-out; in the second of a sign-out it waits for the next one. The
+  sign-out writes nothing to the key's record: the ended record stays until
+  the owner makes a new key or removes it.
+- **The command's failures.** A save can fail after the record is in place.
+  So the key command never says that nothing changed: it says that the save
+  or the removal is not confirmed, and that an earlier key may no longer
+  work. A key that was saved and not shown is known to nobody.
 - **The page.** The page for another device has a second form after the code
   form: the field **Sign-in key**, a password field with
   `autocomplete="current-password"`, and **Sign in with key**. The code form
@@ -4518,7 +4526,9 @@ or signs out all browsers; there is no second factor. On a look-alike page a
 key is lost for longer than a code. There is no key for one device and no
 list of sign-ins beyond the host log. A clock that was set back is handled as
 for a session: a key from a later second opens nothing until the clock reaches
-that second. Not measured: a password manager that saves and fills the key, a
+that second, and a sign-out of all browsers in that time ends neither such a
+key nor such a session. `browsers key --remove` ends the key at any clock
+time. Not measured: a password manager that saves and fills the key, a
 phone browser, and the journey on a real second device. Linux, macOS and WSL
 hosts refuse the key endpoint and the key command.
 

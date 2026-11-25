@@ -549,8 +549,10 @@ def _browser_key(args, data_dir):
         try:
             removed = browser_entry.remove_key(data_dir)
         except (OSError, ValueError):
-            raise SystemExit(f"The sign-in key was NOT removed: its record in {data_dir} could not be changed. "
-                             "To end it another way, run this: amplifier-unified browsers sign-out.") from None
+            # The record may or may not have changed: a save can fail after it is in place.
+            raise SystemExit(f"Amplifier could not confirm that the sign-in key is removed (its record is in {data_dir}). "
+                             "Run the command again. To end the key another way, run this: "
+                             "amplifier-unified browsers sign-out.") from None
         print("The sign-in key is removed. Browsers that are signed in stay signed in." if removed
               else "No sign-in key was saved.")
         return
@@ -561,8 +563,11 @@ def _browser_key(args, data_dir):
     except browser_entry.BrowserEntryUnavailable as exc:
         raise SystemExit(str(exc)) from None
     except (OSError, ValueError):
-        raise SystemExit(f"Could not make a sign-in key: a private record in {data_dir} could not be read or saved. "
-                         "No new key works. If you had a key before, check whether it still works.") from None
+        # The record may or may not have changed: a save can fail after it is in place. A key that was
+        # saved and not shown is known to nobody.
+        raise SystemExit(f"Amplifier could not confirm that a new sign-in key is saved (its record is in {data_dir}). "
+                         "No key is shown. A key that you had before may no longer work. "
+                         "Run the command again.") from None
     print("Save this sign-in key now, for example in a password manager. Amplifier does not show it again.")
     print()
     print("    " + browser_entry.SavedKey.display(key))
@@ -736,7 +741,7 @@ def main():
             return _browser_key(args, data_dir)
         from .auth import SignOutUncertain, sign_out_all
         try:
-            sign_out_all(data_dir)
+            signed_out = sign_out_all(data_dir)
         except SignOutUncertain:
             raise SystemExit("Amplifier could not confirm that every browser is signed out. "
                              "Run the command again.") from None
@@ -746,9 +751,11 @@ def main():
         print("All browsers on all devices are signed out. A running Amplifier applies this within a few seconds.")
         print("To use Amplifier in a browser again, open it from this computer.")
         try:
-            # The sign-out ended a saved key (auth.sign_in_key_is_current). Its record is of no use now.
-            if browser_entry.remove_key(data_dir):
-                print("The saved sign-in key no longer works. To make a new one, run this: "
+            # The sign-out ended a saved key (auth.sign_in_key_is_current). Its record stays; nothing is written here.
+            from .auth import read_sign_in_key
+            key = read_sign_in_key(data_dir)
+            if key is not None and key[0] <= signed_out:
+                print("A sign-in key from before this sign-out no longer works. To make a new one, run this: "
                       "amplifier-unified browsers key.")
         except (OSError, ValueError):
             pass
