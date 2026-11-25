@@ -3395,8 +3395,9 @@ def test_native_prefix_route_uses_only_fixed_three_and_its_own_evidence():
     assert "'evidence/' + stem + '-native.json'" in body
     assert "target = base / (stem + '-tests')" in body
     assert "str(base / (stem + '-temp'))" in body
-    assert "origin = workflow if name == 'tests/test_runtime.py' else source" in body
-    # Prefix files contain no runtime fixture; every one remains candidate-bound.
+    assert "origin = workflow if name in ('tests/test_runtime.py', 'tests/test_host_config.py') else source" in body
+    # Only the reviewed junction fixture follows authoring; other prefix files
+    # and every installed product/lock input remain candidate-bound.
     files = next(n for n in ast.walk(tree) if isinstance(n, ast.If) and
                  isinstance(n.test, ast.Name) and n.test.id == "prefix" and
                  any(isinstance(c, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "files" for t in c.targets)
@@ -3412,7 +3413,7 @@ def test_native_prefix_route_uses_only_fixed_three_and_its_own_evidence():
     assert "assert selected.passed(code)" in body and "result['postTestAudit'] = 'passed'" in body
 
 
-@pytest.mark.parametrize("missing_helper", [False, True])
+@pytest.mark.parametrize("missing_helper", [False, True, "authoring-junction"])
 def test_native_prefix_staging_never_substitutes_authoring_or_product_tree(tmp_path, missing_helper):
     import shutil
     _, _, tree = remaining_ci_code(FIVE_STEP)
@@ -3429,7 +3430,8 @@ def test_native_prefix_staging_never_substitutes_authoring_or_product_tree(tmp_p
         for name in names:
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
-            if not (missing_helper and root == source and name == "tests/test_runtime_controls.py"):
+            if not ((missing_helper is True and root == source and name == "tests/test_runtime_controls.py")
+                    or (missing_helper == "authoring-junction" and root == workflow and name == "tests/test_host_config.py")):
                 path.write_text(label + name)
     candidate = {"head": "a" * 40, "tree": "b" * 40}
     namespace = {"source": source, "workflow": workflow, "base": base, "candidate": candidate,
@@ -3446,10 +3448,66 @@ def test_native_prefix_staging_never_substitutes_authoring_or_product_tree(tmp_p
     assert set(path.name for path in (base / "prefix-tests").iterdir()) == {"tests"}
     for name in names:
         copied = (base / "prefix-tests" / name).read_bytes()
-        assert copied == (source / name).read_bytes() != (workflow / name).read_bytes()
+        origin = workflow if name == "tests/test_host_config.py" else source
+        other = source if origin == workflow else workflow
+        assert copied == (origin / name).read_bytes() != (other / name).read_bytes()
         assert result["testFiles"][name] == hashlib.sha256(copied).hexdigest()
-        assert result["testAuthoring"][name] == candidate
+        assert result["testAuthoring"][name] == (result["workflow"] if origin == workflow else candidate)
     assert not (base / "prefix-tests/tests/test_runtime.py").exists()
+
+
+@pytest.mark.parametrize("profile", [r"C:\Users\runneradmin", r"C:\Users\Fixture User"])
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_native_junction_command_keeps_argv_unescaped_and_returncode_observable(profile, returncode):
+    from pathlib import PureWindowsPath
+    source = ast.parse((ROOT / "tests/test_host_config.py").read_text())
+    case = next(n for n in ast.walk(source) if isinstance(n, ast.FunctionDef)
+                and n.name == "test_app_home_through_read_config_rejects_junction_without_changing_target")
+    call, = [n for n in ast.walk(case) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and isinstance(n.func.value, ast.Name) and n.func.value.id == "subprocess" and n.func.attr == "run"]
+    alias = PureWindowsPath(profile) / ".unified-home-test-fixture" / "app-home"
+    unrelated = alias.parent / "unrelated"
+    seen = []
+    result = types.SimpleNamespace(returncode=returncode, stderr=b"PRIVATE simulated stderr")
+    def run(*args, **kwargs):
+        seen.append((args, kwargs))
+        return result
+    value = eval(compile(ast.Expression(call), "<authored-junction-command>", "eval"),
+                 {"subprocess": types.SimpleNamespace(run=run), "alias": alias, "unrelated": unrelated})
+    expected = ["cmd.exe", "/d", "/c", "mklink", "/J", str(alias), str(unrelated)]
+    assert seen == [((expected,), {"capture_output": True, "timeout": 10})]
+    assert value is result and value.returncode == returncode
+    # Python's Windows argv serialization must not insert C-runtime backslash
+    # escapes into a shell program containing already quoted path operands.
+    command_line = subprocess.list2cmdline(expected)
+    assert '\\"' not in command_line and command_line.startswith("cmd.exe /d /c mklink /J ")
+    if " " in profile:
+        assert command_line.endswith(f'"{alias}" "{unrelated}"')
+    old = subprocess.list2cmdline(["cmd.exe", "/d", "/c", f'mklink /J "{alias}" "{unrelated}"'])
+    assert '\\"' in old and old != command_line  # Source mechanism, not native execution proof.
+
+
+def test_native_junction_fixture_changes_only_command_arguments_and_keeps_postaudit_binding():
+    source = ast.parse((ROOT / "tests/test_host_config.py").read_text())
+    case = next(n for n in ast.walk(source) if isinstance(n, ast.FunctionDef)
+                and n.name == "test_app_home_through_read_config_rejects_junction_without_changing_target")
+    call, = [n for n in ast.walk(case) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and isinstance(n.func.value, ast.Name) and n.func.value.id == "subprocess" and n.func.attr == "run"]
+    assert ast.dump(call.args[0], include_attributes=False) == ast.dump(ast.parse(
+        '["cmd.exe", "/d", "/c", "mklink", "/J", str(alias), str(unrelated)]', mode="eval").body,
+        include_attributes=False)
+    call.args[0] = ast.Constant(None)
+    # Exact accepted583 case except that one argv: returncode assertion,
+    # native write-refusal/invariants/subtests and cleanup ordering all remain.
+    assert hashlib.sha256(ast.dump(case, include_attributes=False).encode()).hexdigest() == (
+        "f9c4a729d6ef6b366301ec692b22f7adac62ee58b11b58c9c9012a5eb59dd033")
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    body = ast.unparse(tree)
+    binding = "origin = workflow if name in ('tests/test_runtime.py', 'tests/test_host_config.py') else source"
+    assert body.count(binding) == 2
+    assert body.index(binding, body.index("result['postTestAudit'] = 'started'")) < body.index("result['postTestAudit'] = 'passed'")
+    assert "audit.candidate(workflow) == result['workflow']" in body
+    assert "result['testAuthoring'][name]" in body
 
 
 @pytest.mark.parametrize("fault", [None, "missing", "extra", "duplicate", "skip", "xfail", "failed", "exit"])

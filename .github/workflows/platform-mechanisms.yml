@@ -1003,10 +1003,10 @@ jobs:
                       result['testFiles'] = {}
                       result['testAuthoring'] = {}
                       for name in files:
-                          # Only the reviewed native runtime fixture is authored with
-                          # this workflow. Product, locks and other fixtures stay at
+                          # Only the reviewed runtime and junction fixtures are authored
+                          # with this workflow. Product, locks and other fixtures stay at
                           # candidate_ref; never label changed tests as product bytes.
-                          origin = workflow if name == 'tests/test_runtime.py' else source
+                          origin = workflow if name in ('tests/test_runtime.py', 'tests/test_host_config.py') else source
                           path = target / name; path.parent.mkdir(parents=True, exist_ok=True)
                           shutil.copyfile(origin / name, path)
                           assert path.read_bytes() == (origin / name).read_bytes()
@@ -1029,7 +1029,7 @@ jobs:
                       assert (source / 'uv.lock').read_bytes() == lock_bytes and audit.candidate(source) == candidate
                       assert audit.candidate(workflow) == result['workflow']
                       for name in files:
-                          origin = workflow if name == 'tests/test_runtime.py' else source
+                          origin = workflow if name in ('tests/test_runtime.py', 'tests/test_host_config.py') else source
                           assert (target / name).read_bytes() == (origin / name).read_bytes()
                       result['postTestAudit'] = 'passed'
                       result['stage'] = 'complete'
