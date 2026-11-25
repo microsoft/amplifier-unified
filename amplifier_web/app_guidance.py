@@ -90,10 +90,10 @@ async def install_app_access(coordinator, bridge, *, execution_role):
     await install_file_source_guard(coordinator)
     from amplifier_core import ToolResult
     from amplifier_core.models import HookResult
-    from .surface_delivery import SurfaceDelivery, POLICY
+    from .surface_delivery import SurfaceDelivery, ORIENTATION as surface_orientation
     from .voice_visual_delivery import VoiceVisualDelivery
     from .output_image_delivery import OutputImageDelivery
-    from .memory_delivery import MemoryDelivery, POLICY as MEMORY_POLICY
+    from .memory_delivery import MemoryDelivery, ORIENTATION as memory_orientation
     from .coordination_delivery import CoordinationDelivery
     from .reaction_delivery import ReactionDelivery
     from .preparation_context import PreparationContext
@@ -377,7 +377,7 @@ async def install_app_access(coordinator, bridge, *, execution_role):
                 return ToolResult(success=False, error={'message':message})
 
     async def guidance(event, data):
-        return HookResult(action='inject_context', context_injection=provider_guidance+'\n'+POLICY+'\n'+MEMORY_POLICY,
+        return HookResult(action='inject_context', context_injection=provider_guidance+'\n'+surface_orientation+'\n'+memory_orientation,
                           context_injection_role='system', ephemeral=True)
 
     async def bind_image_pair(event, data):
