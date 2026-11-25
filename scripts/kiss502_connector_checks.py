@@ -6,7 +6,7 @@ Parent guest:
 
 By default prepare keeps executable inputs in a private directory in the
 current working directory (the guest workspace). Run each stage from that
-workspace. Successful joined after check retires the prepared inputs. A partial
+workspace. Successful joined after the full check retires the inputs. A partial
 or failed run keeps its workspace for diagnosis until the guest is retired.
 An export that explicitly preserves that workspace can include those inputs.
 For a deliberately self-contained offline result, use prepare --keep-inputs.
@@ -344,10 +344,17 @@ def joined(output, python, test):
         "returncode": result, "fixtureSha256": digest(test),
         "scriptSha256": digest(__file__), "qualification": "Pass only if joined pytest exits zero",
         "limits": ["Two direct-backend cases, not an Instance/full Work/live platform campaign"]})
-    check_result = output / "result.json"
-    if result == 0 and inputs != output and check_result.exists() and json.loads(check_result.read_text())["passed"]:
-        shutil.rmtree(inputs)
+    retire_after_joined(output, inputs, result)
     return result
+
+
+def retire_after_joined(output, inputs, result):
+    check_result = output / "result.json"
+    if result or inputs == output or not check_result.is_file():
+        return
+    check = json.loads(check_result.read_text())
+    if check["passed"] and not check["minecraftOnly"]:
+        shutil.rmtree(inputs)
 
 
 def main():

@@ -101,6 +101,22 @@ class ConnectorRecipe(unittest.TestCase):
             self.assertNotEqual(inputs, output)
             self.assertNotEqual(inputs, recipe.workspace_inputs(Path(tmp) / "another-run"))
 
+    def test_only_a_complete_success_retires_split_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "results"
+            inputs = Path(tmp) / "workspace"
+            output.mkdir()
+            inputs.mkdir()
+            for passed, minecraft_only, joined_exit in [(True, True, 0), (False, False, 0), (True, False, 1)]:
+                with self.subTest(passed=passed, minecraft_only=minecraft_only, joined_exit=joined_exit):
+                    recipe.write(output / "result.json", {"passed": passed, "minecraftOnly": minecraft_only})
+                    recipe.retire_after_joined(output, inputs, joined_exit)
+                    self.assertTrue(inputs.is_dir())
+            recipe.retire_after_joined(output, output, 0)
+            self.assertTrue(output.is_dir())
+            recipe.retire_after_joined(output, inputs, 0)
+            self.assertFalse(inputs.exists())
+
     def test_extracted_package_drift_is_refused_before_fixture_execution(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)
