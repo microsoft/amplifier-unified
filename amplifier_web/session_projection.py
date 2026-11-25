@@ -341,15 +341,18 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
             else:
                 value['execution'] = tree
         messages = value.get('messages')
+        from .transcript_windows import INITIAL_MESSAGES
         if (db is not None and isinstance(messages, list)
-                and sum(len(message.get('text', '')) for message in messages
-                        if isinstance(message, dict) and isinstance(message.get('text'), str)) >= 16000):
+                and (len(messages) > 100 or sum(len(message.get('text', '')) for message in messages
+                        if isinstance(message, dict) and isinstance(message.get('text'), str)) >= 16000)):
             from .cold_display import notifications
             from .resource_files import put, put_prepared
             # Storage projection only: live lists and borrowed nested aliases
             # remain mutable. Only exact type-aware content equality against a
             # detached committed snapshot may reuse prepared bytes. Resource
             # adoption, file validation, cold readers and GC remain unchanged.
+            # Long small-message histories also need this content-checked
+            # committed snapshot: page length is not a provenance witness.
             from .media_saved_aliases import binding_hint
             message_reference = (put_prepared(db, message_preparation.prepare(session, messages, pending_messages))
                                  if message_preparation is not None else put(db, messages))
@@ -358,6 +361,13 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
             value['_coldMessageCount'] = len(messages)
             value['_coldNotifications'] = notifications(session)
             value.pop('messages')
+        elif (db is not None and message_preparation is not None and isinstance(messages, list)
+                and INITIAL_MESSAGES < len(messages) <= 100
+                and any(isinstance(row, dict) and (row.get('via') == 'peer' or row.get('inputOrigin') == 'peer')
+                        for row in messages)):
+            # Keep the short history inline. Its existing commit callback can
+            # still cache a detached snapshot for partial-page attribution.
+            message_preparation.prepare(session, messages, pending_messages)
         # The compatible view and immutable resource represent the same value.
         # Encode once in the existing resource format, including exact Unicode.
         text = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))

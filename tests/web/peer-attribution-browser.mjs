@@ -294,7 +294,7 @@ try{
  assert.deepEqual(receiving.messageWindow.unavailableRanges,[]);
  for(const id of [facts.agent,facts.notification]){
   const row=receiving.messages.find(row=>row.id===id);assert.ok(row);
-  assert.equal(row.attribution,undefined,'A partial recent window cannot prove global input uniqueness');
+  assert.equal(row.attribution?.caption,id===facts.agent?caption:'Amplifier update');
  }
  const headers={'X-Amplifier-Client':state.client.id};
  const olderResponse=await page.request.get(new URL(`/api/conversation/detail?sessionId=receiving&part=messages&before=${encodeURIComponent(receiving.messageWindow.before)}`,page.url()).href,{headers});
@@ -306,7 +306,7 @@ try{
  assert.deepEqual(older.unavailableRanges,[]);
  assert.equal(new Set([...older.items,...receiving.messages].map(row=>row.id)).size,109);
  assert.ok(older.items.some(row=>row.id===facts.older));
- assert.equal(older.items.find(row=>row.id===facts.older).attribution,undefined,'A partial page cannot prove global input uniqueness');
+ assert.equal(older.items.find(row=>row.id===facts.older).attribution?.caption,caption);
  console.log('PEER_EXTENDED_WINDOW '+JSON.stringify({savedCount:109,recentCount:receiving.messages.length,
   olderCount:older.items.length,olderHasEarlier:older.hasEarlier,gaps:older.unavailableRanges}));
  historyTransition.latest={messageIds:receiving.messages.map(row=>row.id),newerPeerCollapsed:await summary.getAttribute('aria-expanded')};

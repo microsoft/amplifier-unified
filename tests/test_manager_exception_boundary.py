@@ -334,12 +334,15 @@ async def test_cleanup_context_capture_cannot_cross_current_execution(monkeypatc
         assert published == []
 
 
+@pytest.mark.parametrize('provisional', [False, True])
 @pytest.mark.parametrize("change", ["stop", "new-generation", "wrong-generation", "wrong-input",
-                                   "wrong-type", "child", "old-failure", "already-captured"])
-def test_supplement_cannot_replace_or_cross_failure_identity(change):
+                                   "wrong-type", "child", "old-failure", "already-captured",
+                                   "active-input", "active-generation", "existing-input", "existing-type"])
+def test_supplement_cannot_replace_or_cross_failure_identity(change, provisional):
     from amplifier_web.session_health import generation_failure, terminal_exception_failure
     event = {"sessionId": "root", "rootSessionId": "root", "event": "generation.failed", "generation_id": "g",
-             "input_ids": ["i"], "error_type": "ValueError", "error_stage": "manager_turn", "error_category": "unknown"}
+             "input_ids": ["i"], "error_type": "ValueError", "error_stage": "manager_turn",
+             "error_category": "unknown", "at": 100}
     failure = {**generation_failure(event), "generationId": "g", "inputIds": ["i"], "recordedAt": 100}
     session = {"id": "root", "status": "error", "failure": failure, "generations": [event]}
     capture = {"generationId": "g", "inputIds": ["i"], "errorType": "ValueError",
@@ -347,6 +350,9 @@ def test_supplement_cannot_replace_or_cross_failure_identity(change):
     enriched = terminal_exception_failure(session, capture)
     assert enriched == {**failure, "exceptionChain": capture["exceptionChain"]}
     assert session["failure"] is failure and "exceptionChain" not in failure
+    if provisional:
+        failure.update(requestCallId='earlier-call', recordedAt=50,
+                       exceptionChain=[{'errorType': 'ValueError', 'frames': []}])
     if change == "stop":
         session["status"] = "stopped"
     elif change == "new-generation":
@@ -361,7 +367,17 @@ def test_supplement_cannot_replace_or_cross_failure_identity(change):
         event["sessionId"] = "child"
     elif change == "old-failure":
         failure["generationId"] = "old"
+    elif change == 'existing-input':
+        failure['inputIds'] = ['other']
+    elif change == 'existing-type':
+        failure['errorType'] = 'TypeError'
+    elif change in {"active-input", "active-generation"}:
+        session['collaborationGeneration'] = {
+            'id': 'g' if change == 'active-input' else 'new',
+            'inputIds': ['other'] if change == 'active-input' else ['i'],
+            'terminal': True, 'completed': False}
     else:
+        failure.pop('requestCallId', None)
         failure["exceptionChain"] = [{"errorType": "ValueError", "frames": [{"file": "original.py"}]}]
     before = copy.deepcopy(session)
     assert terminal_exception_failure(session, capture) is None

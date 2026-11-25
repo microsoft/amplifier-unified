@@ -184,6 +184,42 @@ async def test_worker_verification_clocks_follow_actual_policy_branches(policy_w
     state.prepare.assert_awaited_once()
 
 
+async def test_verified_tool_capture_clocks_are_nested_in_each_policy_check(policy_worker, monkeypatch):
+    state = policy_worker
+    incoming_policy(state, monkeypatch, 'absent')
+    wall_ms = cpu_ms = 0
+    clock = SimpleNamespace(monotonic_ns=lambda: wall_ms * 1_000_000,
+                            process_time_ns=lambda: cpu_ms * 1_000_000)
+    monkeypatch.setattr('amplifier_web.runtime_worker.time', clock)
+    monkeypatch.setattr('amplifier_web.worker_diagnostics.time', clock)
+    costs = iter([(11, 2), (7, 3)])
+
+    def capture(project, receipt, expected):
+        nonlocal wall_ms, cpu_ms
+        wall, cpu = next(costs)
+        wall_ms += wall
+        cpu_ms += cpu
+
+    def verify(*args, on_verified):
+        nonlocal wall_ms
+        wall_ms += 5  # Other work in the enclosing check.
+        on_verified(state.home, state.qualified.parent, [])
+        return state.qualified
+
+    monkeypatch.setattr('amplifier_web.tool_source_proof.QualifiedToolSources.capture', staticmethod(capture))
+    state.policy.side_effect = verify
+    with pytest.raises(PolicyBoundaryReached):
+        await state.worker.start(state.config, raise_errors=True, recover_bundle=False)
+
+    _, rows = verification_receipt(state)
+    assert [(row['phase'], row['elapsedMs'], row['cpuMs']) for row in rows] == [
+        ('worker.runtime.verify.before_prepare', 16, 2),
+        ('worker.runtime.verify.tool_sources', 11, 2),
+        ('worker.runtime.verify.after_prepare', 12, 3),
+        ('worker.runtime.verify.tool_sources', 7, 3),
+    ]
+
+
 @pytest.mark.parametrize('failed_call', [1, 2], ids=['before_prepare', 'after_prepare'])
 @pytest.mark.parametrize('cancel', [False, True], ids=['refusal', 'cancellation'])
 async def test_worker_verification_clocks_preserve_exact_refusal_and_cancellation(

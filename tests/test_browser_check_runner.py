@@ -1167,11 +1167,11 @@ def test_linked_instances_has_one_client_owner_and_preserves_prior_order():
     index = host['scenarioOrder'].index('linked-instances')
     assert host['scenarioOrder'][index - 1:index + 2] == [
         'device-pairing', 'linked-instances', 'standard-ux-keyboard-reflow']
-    previous = [name for name in host['scenarioOrder'] if name != 'linked-instances']
+    previous = [name for name in host['scenarioOrder'] if name not in {'linked-instances', 'session-health-retry-preparation', 'peer-rollup'}]
     assert len(previous) == len(set(previous)) == 179
     assert hashlib.sha256(json.dumps(previous).encode()).hexdigest() == (
         '162ea1e700375b94b7ef9123f738c5475451f8e93374b9d660dd2a425d1ad9c8')
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 180
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 182
     assert 'linked-instances' not in {row['id'] for row in coverage_plan()['scenarios']}
     assert proof['registrySha256'] == {'unified': runner.digest(host_path),
                                       'client': runner.digest(client_path)}
@@ -1251,7 +1251,16 @@ def browser_additions_after_update_configuration_hold(rows, readiness_scripts=()
     assert owners == [{'id': name, 'command': ['node', script],
                        'env': {'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python'}}]
     assert coverage_paths(script) not in readiness_scripts
-    return ({name} | model_change_history_browser_addition(rows, readiness_scripts)
+    extra = {
+        'peer-rollup': {'command': ['node', 'tests/web/peer-rollup-browser.mjs'],
+                        'env': {'PEER_PREVIEW_PARTIAL_RECEIVER': '1',
+                                'AMPLIFIER_PROOF_DIR': '{root}/output/browser-checks/peer-rollup'}},
+        'session-health-retry-preparation': {'command': ['node', 'tests/web/session-health-browser.mjs',
+                                                          '--retry-preparation']},
+    }
+    for identity, body in extra.items():
+        assert [row for row in rows if row['id'] == identity] == [{'id': identity, **body}]
+    return ({name, *extra} | model_change_history_browser_addition(rows, readiness_scripts)
             | grouped_work_browser_addition(rows, readiness_scripts)
             | transcript_suggestion_browser_addition(rows, readiness_scripts)
             | linked_instances_browser_addition(rows, readiness_scripts))
