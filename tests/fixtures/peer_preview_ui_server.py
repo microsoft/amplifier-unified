@@ -98,6 +98,11 @@ async def main():
             if row.get('path') == recipient['workspace']
         )
         service.state['view'].update(navPinned=False, navExpanded=False, draft=recipient['draft'])
+        # A bounded recent page must not depend on the whole receiving history
+        # fitting in that page. This opt-in retains ordinary fixture behavior.
+        if os.environ.get('PEER_PREVIEW_PARTIAL_RECEIVER') == '1':
+            for i in range(101):
+                service._message(recipient, 'assistant', f'Earlier synthetic recipient answer {i}')
         service._message(recipient,'user','Keep all original formatting and preview without leaving this chat.')
         for source in (a,b):
             await generation(service,source,'g-'+source['id'],['human-'+source['id']])

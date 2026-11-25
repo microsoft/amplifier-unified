@@ -56,10 +56,13 @@ def coverage_plan():
     context_ids = context_degradation_browser_addition(plan['scenarios'])
     later_ids = (update_configuration_hold_browser_addition(plan['scenarios'])
                       | browser_additions_after_update_configuration_hold(plan['scenarios']))
+    peer_rollup_addition(plan['scenarios'])
     rows = []
     for row in plan['scenarios']:
         if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | preview_ids | approval_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids | changelog_ids | activity_ids | context_ids | later_ids:
             continue
+        if row['id'] == 'peer-rollup':
+            continue  # Exact additive owner validated; frozen inventories stay frozen.
         row = {**row, 'command': [coverage_paths(part) for part in row['command']]}
         row.pop('cwd', None)
         if row['id'] == 'configuration-recovery-components':
@@ -71,6 +74,15 @@ def coverage_plan():
         rows.append(row)
     return {**plan, 'scenarios': rows}
 
+
+def peer_rollup_addition(rows):
+    expected = {'id': 'peer-rollup', 'command': ['node', 'tests/web/peer-rollup-browser.mjs'],
+                'env': {'PEER_PREVIEW_PARTIAL_RECEIVER': '1',
+                        'AMPLIFIER_PROOF_DIR': '{root}/output/browser-checks/peer-rollup'}}
+    selected = [row for row in rows if row['id'] == 'peer-rollup'
+                or any(part.endswith('/peer-rollup-browser.mjs') for part in row['command'])]
+    assert selected == [expected]
+    return {'peer-rollup'}
 
 def source_test(path):
     name = str(path).removeprefix('frontend/tests/').removeprefix('tests/')
@@ -4118,10 +4130,11 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     ]
     lifecycle_ids = {row['id'] for row in lifecycle_additions}
     assert [row for row in plan['scenarios'] if row['id'] in lifecycle_ids] == lifecycle_additions
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | lifecycle_ids | preview_ids | approval_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids | changelog_ids | activity_ids | context_ids | later_ids]
+    peer_ids = peer_rollup_addition(plan['scenarios'])
+    preceding = [row for row in plan['scenarios'] if row['id'] not in peer_ids | navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | lifecycle_ids | preview_ids | approval_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids | changelog_ids | activity_ids | context_ids | later_ids]
     assert len(preceding) == len({row['id'] for row in preceding}) == 147
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(preview_ids) + len(approval_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(later_ids)
-    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(preview_ids) + len(approval_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(later_ids)
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(peer_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(preview_ids) + len(approval_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(later_ids)
+    assert len(plan['scenarios']) == 147 + len(peer_ids) + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(preview_ids) + len(approval_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(later_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
     suggestion_ids = transcript_suggestion_browser_addition(plan['scenarios'])
     linked_ids = linked_instances_browser_addition(plan['scenarios'])
