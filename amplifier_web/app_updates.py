@@ -12,6 +12,7 @@ import time
 import uuid
 from importlib import metadata
 from . import __version__
+from .app_optional_features import OPTIONAL_EXTRAS, installed_extras
 from .host.config import write_private
 from .updates import process
 from . import app_component_graph as components
@@ -19,15 +20,7 @@ from . import app_release_artifacts as artifacts
 
 REPOSITORY='microsoft/amplifier-unified'
 SOURCE='https://github.com/'+REPOSITORY
-OPTIONAL_EXTRAS={
-    'native-desktop': ('amplifier-module-tool-computer-use',),
-    'tui': ('amplifier-app-tui',),
-    'managed-browser': ('playwright',),
-    'decisions-openai': ('amplifier-lib-decisions', 'amplifier-module-provider-openai'),
-    'decisions-azure': ('amplifier-lib-decisions', 'amplifier-module-provider-azure-openai'),
-    'decisions-jev': ('amplifier-lib-decisions', 'amplifier-module-provider-jev'),
-    'decisions-local': ('amplifier-lib-decisions', 'amplifier-module-provider-local-decisions'),
-}
+
 PROBE = r'''import json,os,sys
 facts={"ok":False,"stage":"imports","isolated":bool(sys.flags.isolated),"pythonVersion":"%s.%s.%s"%sys.version_info[:3]}
 try:
@@ -193,24 +186,6 @@ async def check_staged(manager):
 def git_environment():
     from .reset import repository_environment
     return repository_environment()
-
-def installed_extras():
-    """Retain known optional features without loading clients or desktop backends."""
-    extras=[]
-    present={}
-    for extra,distributions in sorted(OPTIONAL_EXTRAS.items()):
-        for distribution in distributions:
-            if distribution not in present:
-                try:present[distribution]=metadata.distribution(distribution)
-                except metadata.PackageNotFoundError:present[distribution]=None
-        if not all(present[name] is not None for name in distributions):continue
-        if extra.startswith('decisions-') and not any(
-                entry.group == 'amplifier.decision_backends'
-                for entry in getattr(present[distributions[-1]], 'entry_points', ())):
-            continue
-        extras.append(extra)
-    return extras
-
 
 def browser_process_options(manager, extras):
     if 'managed-browser' not in extras:

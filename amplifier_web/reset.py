@@ -27,7 +27,7 @@ import urllib.request
 import urllib.error
 
 if __package__:
-    from . import reset_retention
+    from . import reset_retention, app_optional_features
 else:
     # -I excludes the script directory from sys.path. Load only our inspected
     # sibling, not cwd/PYTHONPATH or the ordinary application package.
@@ -35,6 +35,9 @@ else:
     _spec = importlib.util.spec_from_file_location("reset_retention", Path(__file__).with_name("reset_retention.py"))
     reset_retention = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(reset_retention)
+    _spec = importlib.util.spec_from_file_location("app_optional_features", Path(__file__).with_name("app_optional_features.py"))
+    app_optional_features = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(app_optional_features)
 
 REPOSITORY = "microsoft/amplifier-unified"
 REGENERABLE = ("updates", "runtime", "foundation", "source-store")
@@ -512,9 +515,15 @@ def reset_update_state(home, backup):
             db.execute("DELETE FROM state_records WHERE kind='global' AND id='updates'")
 
 
-def verify(prefix, env):
+def installed_extras(prefix):
+    """Read the old tool metadata without importing its possibly damaged code."""
+    sites = sorted((prefix / "lib").glob("python*/site-packages"))
+    return app_optional_features.installed_extras(path=list(map(str, sites)))
+
+
+def verify(prefix, env, extras=()):
     python = prefix / "bin/python"
-    command(python, "-I", "-c", "from amplifier_web.app_updates import PROBE; exec(PROBE)",
+    command(python, "-I", "-c", "from amplifier_web.app_updates import PROBE; exec(PROBE)", *extras,
             env=env, timeout=120)
 
 
@@ -714,6 +723,23 @@ def _repair(home, uv, tool_root, bin_root, source, env, service, no_start, opera
             stopped = stop_service(service)
         wait_until_unused(locks, prefix, home, timeout=30 if service else 0)
         progress("Unified is stopped", done=True)
+        extras = installed_extras(prefix)
+        # Put extras on the source requirement itself. uv rejects --from SOURCE
+        # combined with a separate NAME[extras] install request. Local paths need
+        # file URIs in a named PEP 508 direct reference (also handles spaces).
+        requirement = source
+        named = re.fullmatch(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[([A-Za-z0-9._,\s-]*)\])?\s*@\s*(.+?)\s*", source)
+        name, origin = "amplifier-unified", source
+        if named:
+            name, requested, origin = named.groups()
+            # An explicit PEP 508 reference already has a name and may request
+            # additional features. Preserve those alongside discovered extras,
+            # in both the install requirement and post-install verification.
+            extras = sorted(set(extras) | {extra.strip() for extra in (requested or "").split(",") if extra.strip()})
+        if extras or named:
+            if "://" not in origin and Path(origin).exists():
+                origin = Path(origin).resolve().as_uri()
+            requirement = name + ("[" + ",".join(extras) + "]" if extras else "") + " @ " + origin
         if prefix.exists() or prefix.is_symlink():
             prefix.rename(tool_backup)
             moves.append((prefix, tool_backup))
@@ -722,11 +748,14 @@ def _repair(home, uv, tool_root, bin_root, source, env, service, no_start, opera
         progress("Recovery backup saved", done=True)
         installing = True
         progress("Installing a fresh copy")
-        download_command(uv, "tool", "install", "--force", "--python", "3.13", "--from", source, "amplifier-unified",
+        download_command(uv, "tool", "install", "--force", "--python", "3.13", requirement,
                 env=env, timeout=1800)
         progress("Fresh copy installed", done=True)
         progress("Checking installed components")
-        verify(prefix, env)
+        probe_env = env
+        if "managed-browser" in extras:
+            probe_env = {**env, "PLAYWRIGHT_BROWSERS_PATH": str(home / "browsers")}
+        verify(prefix, probe_env, extras)
         progress("Installed components checked", done=True)
         prepare_saved_configurations(prefix, home, backup, env, moves)
         for name in REGENERABLE:
