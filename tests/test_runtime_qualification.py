@@ -121,7 +121,7 @@ def test_installed_graph_file_uri_keeps_git_identity_and_dirty_refusal(tmp_path,
     assert all(env is child_env for env in reads)
 
 
-def test_installed_root_matches_git_for_detached_renamed_staged_and_untracked_files(tmp_path):
+def test_installed_root_matches_git_for_divergent_detached_and_changed_checkouts(tmp_path):
     import hashlib
     import subprocess
 
@@ -146,6 +146,13 @@ def test_installed_root_matches_git_for_detached_renamed_staged_and_untracked_fi
     (tmp_path / header_name).write_bytes(b'one\n')
     git('add', '--', header_name)
     git('commit', '-m', 'fixture')
+    git('checkout', '-b', 'upstream-peer')
+    git('commit', '--allow-empty', '-m', 'upstream ahead')
+    git('checkout', '-b', 'local-peer', 'HEAD~')
+    git('commit', '--allow-empty', '-m', 'local ahead')
+    git('branch', '--set-upstream-to=upstream-peer')
+    assert git('rev-list', '--left-right', '--count', 'HEAD...@{upstream}').split() == [b'1', b'1']
+    assert verify()['dirty'] is False
     git('checkout', '--detach', 'HEAD')
     (tmp_path / 'untracked').write_bytes(b'untracked')
     clean = verify()
