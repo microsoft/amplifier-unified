@@ -133,7 +133,7 @@ def browser_projects(archive, files):
     return projects
 
 
-def plan(archive, snapshot, profile_id):
+def plan(archive, snapshot, profile_id, *, backend='docker', resource_request=None):
     profile = profiles.get(profile_id)
     if not profile['preparationRequired']:
         raise ValueError('The small Python profile does not require dependency preparation.')
@@ -171,7 +171,8 @@ def plan(archive, snapshot, profile_id):
                 raise ValueError('The source snapshot identity is invalid.')
             source[target] = snapshot[key]
     value = {'version': 1, 'profileId': profile_id, 'sourceSha256': source_hash, 'pythonProject': python_project,
-             'executionContract': profiles.execution_contract(profile_id, source)}
+             'executionContract': profiles.execution_contract(profile_id, source, backend=backend,
+                                                              resource_request=resource_request)}
     if profile_id == 'browser-test':
         projects = browser_projects(archive, files)
         directory = projects[0]['directory']
@@ -382,7 +383,8 @@ def prepare(config, root, snapshot, profile_id, request_id, *, resource_request=
         raise ValueError('The dependency preparation directory cannot traverse symlinks.')
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     env = _environment(folder, config)
-    expected = plan(root / 'source.tar', snapshot, profile_id)
+    expected = plan(root / 'source.tar', snapshot, profile_id,
+                    backend=config.get('backend', 'docker'), resource_request=resource_request)
     expected.update(backend=config.get('backend', 'docker'), requestId=request_id)
     seconds = profiles.timing(profile_id, timing_request)['preparationTimeoutSeconds']
     if timing_request is not None:

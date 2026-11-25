@@ -149,6 +149,46 @@ pytest temporary fixture trees outside it. New disposable Docker copies export
 source archives, results and receipts remain. Existing owners retain both-root
 preservation; no historical archive or failed receipt is deleted or reclassified.
 
+New automatically prepared Docker `python-project` and `browser-test` environments
+also provide a private **executable runtime workdir** for installed harnesses,
+native-extension packages and executable test fixtures. Discover its exact path
+from `executionContract.runtimeWorkdir.path` or `AMPLIFIER_TEST_RUNTIME`, not a
+backend-private path or the source checkout. `/tmp` remains **noexec**; loading a
+native library from an installation there can fail before test collection.
+The workdir is a fixed tmpfs mount, owned by workload UID/GID 65534 with mode 0700,
+`exec,nosuid,nodev`; the image root remains read-only and supervisor records remain
+private. This intentionally permits **workload-owned code execution**, not host
+access. Initialization verifies the mount, ownership, mode, flags and size before
+publishing source readiness.
+
+This does not add temporary storage. The saved Docker `tmpMiB` budget must be at
+least 64 MiB: `floor(tmpMiB / 4)` remains at noexec `/tmp` (minimum 16 MiB), and
+the remainder goes to executable runtime scratch (minimum 48 MiB). For the default
+browser profile that is 256 + 768 MiB; Python project uses 128 + 384 MiB. Invalid
+or undersized values fail before dependency build/guest launch. Shared memory and
+the total memory limit are unchanged. The workdir is temporary for the container's
+running lifetime, may be cleared on stop/restart, and is **never exported** by
+source/artifact retention. Write only chosen reports/build outputs to `/artifacts`.
+HOME/cache defaults remain under `/tmp/unified-test`; source checks still default
+to `/workspace` with its existing `PYTHONPATH`.
+
+For installed checks, create the harness under the discovered workdir, change
+there before invoking it, unset `PYTHONPATH`, and verify actual installed import
+origins. Use an explicit pytest `--basetemp` there when fixtures must execute code.
+The runtime variable does not itself install packages or redirect caches, HOME,
+pytest fixtures or source imports. This contract applies only when present in the
+**owned prepared environment receipt**. Older environments, small Python,
+app-preview, custom Compose, Incus and registered remote runners do not gain this
+mount or variable. They keep their existing behavior; do not assume parity.
+Focused synthetic source checks do not qualify an actual installed/native load;
+that still needs a new owned Docker preparation and target-runtime check under
+the ordinary capacity and delivery boundaries.
+The ordinary manual `python-checks.yml` suite `prepared-runtime-native` exercises
+`test_native_default_prepared_preset_runtime` on both maintained profiles, checking
+native mapping of a copied existing CPython stdlib extension and refusal on noexec
+`/tmp`. It uses product operation receipts, not a separate registration handshake;
+it is not a substitute for the consumer's exact installed application campaign.
+
 Stop retains containers and volumes. Remove requires observed stopped work and
 successful bounded exports of the owner's selected roots; failed selected export
 blocks destruction. Archives are retained without extraction on the host. Local
