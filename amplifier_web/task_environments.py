@@ -424,6 +424,9 @@ def invoke(config, home, row, action, args, *, _qualification=False,
                 payload['incus'] = {**config['incus'], 'image': prepared['image']}
             else:
                 payload['image'] = prepared['image']
+                runtime = prepared.get('executionContract', {}).get('runtimeWorkdir')
+                if runtime is not None:
+                    payload['runtimeWorkdir'] = runtime
         environment = {'PATH': os.defpath, 'HOME': str(folder), 'LANG': 'C.UTF-8'}
         command = [config['python'], '-I', '-B', str(helper)]
         if cleanup:
