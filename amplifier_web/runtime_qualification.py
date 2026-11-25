@@ -9,6 +9,7 @@ import inspect
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -121,14 +122,42 @@ def _cache_subdirectory(path, root):
     return path.relative_to(root).as_posix()
 
 
+def _installed_checkout_status(root, env):
+    command = ['git', '--no-optional-locks', 'status', '--porcelain=v2', '-z',
+               '--branch', '--untracked-files=no']
+    options = {'cwd': root, 'env': env, 'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)}
+    try:
+        status = subprocess.check_output([*command, '--no-ahead-behind'], **options)
+    except subprocess.CalledProcessError as error:
+        if error.returncode != 129:
+            raise
+        # Git 2.15/2.16 support no-optional-locks and porcelain v2, but lack
+        # this switch. Their upstream count is irrelevant to the witness.
+        status = subprocess.check_output(command, **options)
+
+    # With -z, a rename's second pathname is an arbitrary standalone record.
+    # Only leading header records can supply the object ID.
+    revision = None
+    pos = 0
+    while status.startswith(b'# ', pos):
+        end = status.index(b'\0', pos)
+        if status.startswith(b'# branch.oid ', pos):
+            oid = status[pos + len(b'# branch.oid '):end]
+            if (revision is not None or not oid.strip(b'0')
+                    or not re.fullmatch(rb'[0-9a-f]{40}(?:[0-9a-f]{24})?', oid)):
+                raise ValueError('Installed checkout has no valid HEAD commit')
+            revision = oid.decode('ascii')
+        pos = end + 1
+    if revision is None:
+        raise ValueError('Installed checkout has no HEAD commit')
+    return revision, pos < len(status)
+
+
 def _installed_root(root, git_env):
     """Read one fresh checkout witness with the existing local Git policy."""
     data = json.loads((root / '.amplifier_cache_meta.json').read_text())
     checkout_env = _installed_checkout_environment(root, git_env)
-    revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, env=checkout_env, text=True,
-        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).strip()
-    dirty = subprocess.check_output(['git', '--no-optional-locks', 'status', '--porcelain', '--untracked-files=no'], cwd=root, env=checkout_env, text=True,
-        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).strip()
+    revision, dirty = _installed_checkout_status(root, checkout_env)
     if dirty and checkout_env is not git_env:
         dirty = _installed_checkout_dirty(root, checkout_env)
     tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=root, env=checkout_env,
