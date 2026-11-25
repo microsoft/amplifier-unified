@@ -467,6 +467,79 @@ async def test_real_host_applies_sign_out_all_browsers_to_requests_and_open_stre
     assert (await client.get("/api/state", headers=opened)).status == 200
 
 
+async def test_real_host_serves_the_password_page_and_refuses_it_where_the_owner_is_not_proven(
+        aiohttp_client, tmp_path, monkeypatch):
+    """The real routes and the real middleware. This client speaks plain HTTP, so no form may show."""
+    from amplifier_web import browser_entry
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    assert app["browser_key"] is None                       # Not a Windows host.
+    app["browser_key"] = browser_entry.SavedKey()           # As a Windows host has it, for the second half.
+    client = await aiohttp_client(app)
+    cookie = {"Cookie": f"amplifier_unified_session={new_session(app['session_secret'])}"}
+    # Not signed in: the sign-in page, as for every page of the app.
+    anonymous = await client.get(browser_entry.PASSWORD_PATH, allow_redirects=False)
+    assert anonymous.status == 307 and anonymous.headers["Location"].startswith("/login")
+    # A host that is not a Windows host has no such password.
+    page = await client.get(browser_entry.PASSWORD_PATH, headers=cookie)
+    assert page.status == 200 and "<form" not in await page.text()
+    assert "the password of the host account" in await page.text()
+    assert page.headers["Cache-Control"] == "no-store" and page.headers["Referrer-Policy"] == "same-origin"
+    assert (await client.post(browser_entry.PASSWORD_PATH, headers=cookie, data={"action": "remove"})).status == 403
+    connect = await client.get("/connect", headers=cookie)
+    assert connect.status == 200 and browser_entry.PASSWORD_PATH not in await connect.text()
+    # A Windows host over plain HTTP: the owner is not proven, so there is no form and no card.
+    monkeypatch.setattr(browser_entry, "is_windows", lambda: True)
+    monkeypatch.setattr(browser_entry, "set_password", lambda *a: pytest.fail("A password was set"))
+    refused = await client.get(browser_entry.PASSWORD_PATH, headers=cookie)
+    assert refused.status == 403 and "<form" not in await refused.text()
+    posted = await client.post(browser_entry.PASSWORD_PATH, headers={**cookie, "Origin": str(client.make_url("")).rstrip("/")},
+                               data={"action": "set", "password": "correct horse battery", "confirm": "correct horse battery"})
+    assert posted.status == 403
+    assert browser_entry.PASSWORD_PATH not in await (await client.get("/connect", headers=cookie)).text()
+
+
+async def test_page_devices_and_apps_has_the_password_card_first_on_the_pc_and_reads_as_utf_8(tmp_path, monkeypatch):
+    """The real handler of the real app, for a browser of the PC over HTTPS, on a host whose text encoding is cp1252."""
+    import ssl
+    from pathlib import Path
+    from types import SimpleNamespace
+    from aiohttp.test_utils import make_mocked_request
+    from amplifier_web import auth, browser_entry
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    app["browser_key"] = browser_entry.SavedKey()
+    monkeypatch.setattr(browser_entry, "is_windows", lambda: True)
+    read = Path.read_text
+    monkeypatch.setattr(Path, "read_text", lambda self, encoding=None, errors=None, newline=None: (
+        read(self, encoding or "cp1252", errors, newline)))                 # As a Windows host reads a file.
+
+    async def page(path, session, host="127.0.0.1:8941", peer="127.0.0.1"):
+        request = make_mocked_request(
+            "GET", path, headers={"Host": host, "Cookie": f"amplifier_unified_session={session}"}, app=app,
+            transport=SimpleNamespace(get_extra_info=lambda name: (
+                (peer if name == "peername" else "127.0.0.1", 8941) if name in {"peername", "sockname"} else None)),
+            sslcontext=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER))
+        match = await app.router.resolve(request)
+        match.add_app(app)
+        request._match_info = match
+        return await auth.auth_required(request, match.handler)
+    local = new_session(app["session_secret"])
+    text = (await page("/connect", local)).text
+    card = text.index("<h2>Sign in from a browser on another device</h2>")
+    assert card < text.index("<h2>Use a browser on this computer</h2>") and text.count(browser_entry.PASSWORD_PATH) == 1
+    assert f'<a class="button" href="{browser_entry.PASSWORD_PATH}">Set a password</a>' in text
+    # The characters of the page are the page's own, not a second reading of their bytes.
+    assert "extension\u2019s" in text and "Loading connections\u2026" in text and "\u00e2\u20ac" not in text
+    script = (await page("/connect/assets/connect.js", local)).text
+    assert "\u00e2\u20ac" not in script and "\u00c2\u00b7" not in script and "\u2026" in script
+    # A browser that signed in with a password, and a browser at another address of the PC, get the page with no card.
+    remote = auth.new_session(app["session_secret"], remote=True)
+    for other in (await page("/connect", remote), await page("/connect", local, peer="192.168.1.9")):
+        assert other.status == 200 and browser_entry.PASSWORD_PATH not in other.text
+        assert "<h2>Use a browser on this computer</h2>" in other.text
+
+
 @pytest.mark.parametrize("method,path", [
     ("GET", "/login"), ("POST", "/api/browser-entry/code"), ("POST", "/api/browser-entry/code/redeem"),
     ("POST", "/api/browser-entry/key/redeem")])

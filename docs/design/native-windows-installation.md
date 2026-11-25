@@ -4521,13 +4521,9 @@ addition; the code stays for a device that must not keep a secret.
   So the key command never says that nothing changed: it says that the save
   or the removal is not confirmed, and that an earlier key may no longer
   work. A key that was saved and not shown is known to nobody.
-- **The page.** The page for another device has a second form after the code
-  form: the field **Sign-in key**, a password field with
-  `autocomplete="current-password"`, and **Sign in with key**. The code form
-  stays first and keeps the focus. One short line between the forms says
-  that the key is another way in, so that nobody looks for a second step.
-  All help follows both forms. The error text is one of two fixed texts,
-  chosen by the redirect (`?error=key`).
+- **The page.** The key is typed in the field **Password** of the page for
+  another device. The next section describes that form: a key and a password
+  share it.
 - **The session.** As from a code: marked remote, with the configured
   lifetime. It is not renewed; after that lifetime the device signs in with
   the key again.
@@ -4545,6 +4541,171 @@ the command has then named `browsers key --remove`, which ends the key at any
 clock time. Not measured: a password manager that saves and fills the key, a
 phone browser, and the journey on a real second device. Linux, macOS and WSL
 hosts refuse the key endpoint and the key command.
+
+#### A password that the owner sets in the app on the PC
+
+The key needs a terminal, and a person cannot choose it. The owner who met the
+gap asked for the other thing: a password of his own, set in the app on the PC.
+The password is that. The key stays for an owner who wants a random secret and
+has a terminal.
+
+- **One record, two kinds.** The file of the key, `config/auth/sign-in-key`,
+  holds a key or a password, never both. A new password replaces a key, and a
+  new key replaces a password. So a person has one secret to know, and the
+  rules for the end of a key (a new one, `--remove`, the sign-out of all
+  browsers and its "no key" write, the rule for the clock) are the rules of
+  the password, unchanged. A password's record is a second, then
+  `scrypt 15 8 1`, a random salt of 16 bytes and the hash of 32 bytes: 125
+  bytes at most, and a reader accepts only these parameters. The second is
+  that of the session that set the password on the owner's page, not that
+  of the making (see "A sign-out during a change" below); a record that a
+  command makes has the second of its making. A version
+  before this one reads such a record as malformed, which is "no key".
+- **The hash.** scrypt with N = 2^15, r = 8, p = 1, from the standard
+  library: about a tenth of a second and 32 MiB for each check. The hash
+  protects the password itself, which a person may use elsewhere against
+  this text's advice. It does not protect the installation from a reader of
+  that folder, who can already read the session secret.
+- **The text.** At least 12 and at most 256 characters, with no rule for the
+  kinds of characters. The password is exact: case, spaces and hyphens
+  count, unlike for a key. Before the hash, the text gets the Unicode form
+  NFKC, so that two keyboards that send the same characters in two forms
+  give one password.
+- **Wrong passwords.** A person chooses a password, so the "no lockout and no
+  delay" of a code and a key is not enough. The fifth wrong password in a
+  row starts a time in which the host checks no password: 2 seconds at
+  first, and two times as long after each further wrong password, to 5
+  minutes at most. During that time it checks nothing, also not the right
+  password. The right password, a new record, or one hour with no wrong
+  one starts the count again. That leaves a sender about 300 guesses in a
+  day at most: at the longest wait, one in each 5 minutes is 288 in a day,
+  and a new count costs one hour for 13 guesses, which is fewer. A test runs
+  both ways of sending against the real count. The count is in the memory
+  of the host; a restart of the host, which a sender cannot cause, starts
+  it again. A text that cannot be a password is a wrong password and needs
+  no hash. A key has no wait.
+- **Why the wait is for everyone.** The request does not say which device
+  sent it: a Tailscale forward connects from this computer for every device
+  (see the code's "Where it works"). A wait for each address would be no
+  wait behind the forward. So a person who reaches the address can keep the
+  owner from signing in with the password, and gets in no faster. A code is
+  not slowed down and still works, and so does the PC itself. The owner who
+  wants no such wait uses a key.
+- **One check at a time.** The hash runs in a thread, away from the event
+  loop, and only one runs. A second password that arrives meanwhile is not
+  checked and not counted; its page says that the password was not checked
+  and asks for it again. So a flood of wrong passwords costs one thread and
+  32 MiB, not more.
+- **A change during a check.** After the hash, the host looks at the record
+  again. A password that the owner changed or removed during its check opens
+  nothing.
+- **Who can set it.** A browser that signed in on this PC, on the owner's
+  page (`/connect/sign-in`). The page and its form need all of these: a
+  valid browser session that is not marked remote; HTTPS; both socket ends
+  and the name in use are this computer's; for the form also the exact local
+  `Origin` and a token that is made from the session. A session that a code,
+  a key or a password opened is marked remote since the code (`"via":
+  "remote"`); this is the rule for remote sessions that the mark was made
+  for. Behind a Tailscale forward a device of the tailnet has local sockets
+  and can send a local name. It has no session that is not remote: such a
+  session comes only from the launcher's ticket. The control credential and
+  a device credential do not open the page. This is not a wall against a
+  remote session, which has the whole app and can run a command through a
+  chat; it keeps a stolen remote session from a silent change of the
+  password through this page.
+- **A sign-out during a change.** The sender of a form decides how long its
+  request takes, the hash takes time, and the owner can sign out all
+  browsers at any moment of it. A session that such a sign-out ended must
+  not finish a change that it began before, and it must not undo what the
+  owner did after the sign-out. At its first check of the request's
+  session, before it waits for the form, the page takes the look at the
+  sign-out record that the host has applied, which that session was checked
+  against. After it read the form, it checks the session again and takes
+  its second (`browser_entry.password_page`). The change is bound to both
+  (`browser_entry._swap`).
+  - The sign-out record must still be that one. A sign-out that was saved
+    after that first check refuses the change, whatever its second, and
+    whether the host applied it meanwhile or not. No clock is read for
+    this; it is the test that keeps a ticket or a code from a session while
+    a saved sign-out waits (`auth.sign_in`). The change makes this test
+    before its record goes in place and again after it. When the second
+    test refuses, it removes its own record, by its exact bytes, and no
+    other.
+  - A record that the page saves gets the second of its session, not the
+    present second. So the rule that ends a session ends its record, and
+    between the two tests there is no moment with a record that opens a
+    session for a session that the rule ended. A cleanup after the write alone
+    could not give that: the record would count until the cleanup. The
+    owner's commands keep the present second; their authority is the
+    private folder, not a session.
+  - The record goes in place only where the file still holds the bytes that
+    the change read first of all, before its first test. On Windows the
+    private store removes only those exact bytes and then publishes without
+    replacement; a writer in between wins. So a change of an ended session
+    never replaces or removes a record that came later, for example the
+    owner's new password after the sign-out. The page then says that
+    another change came first.
+  A look at the sign-out record that fails is not a sign-out. Before the
+  record goes in place, the change is then not made. After it, a new record
+  is removed again, and a removal stays. In both cases the page says that
+  it could not confirm the change.
+- **The page.** Server-rendered, with no script, and it shows nothing from
+  the request. Its texts are fixed; a notice comes from a fixed list
+  (`?done=`) and shows only while the saved record agrees with it. The page
+  shows whether a password or a key is set, never the password and not when
+  it was saved (the record of the page has the second of a session). It
+  lists the addresses for other devices, or says that there is none. The
+  form answers with a redirect, so that a reload sends no password again. A
+  save or a removal that is not confirmed is said as such, as for the key
+  command. Setting takes the hash and the private write in a thread.
+- **The way to the page.** The web client's Settings has the page "Install
+  app" with the link "Devices & apps", which opens the host's own page
+  `/connect`. On a Windows host, for a browser that the owner's page would
+  accept, that page gets one more card, the first one: "Sign in from a
+  browser on another device", with **Set a password**. So the app has a way
+  to the page with no change of the web client. The texts of the sign-in
+  page and of the key command name this way (`browser_entry.SETTINGS_PATH`).
+  The two names are the web client's: when it renames them, that text must
+  change with it. No check connects the two.
+- **The page for another device.** While a password or a key is saved, the
+  page has the form **Password** first, with the focus; then one short line
+  and the code form, with **Sign in with code**. The password field is a
+  password field with `autocomplete="current-password"`. With nothing saved,
+  the page has the code form only, and one line that says where a password
+  is set. So the page says whether a password or a key is saved; a sender
+  sees the same from an attempt. All help follows the forms. The error text
+  is one of four fixed texts, chosen by the redirect (`?error=password`,
+  `?error=wait`, another value for a code); the text for a wait names the
+  time that is left, from the host's own state.
+- **The command line.** No command sets a password: a password on a command
+  line stays in the history of the shell. `browsers key --remove` removes a
+  password as it removes a key, and the texts of the key command and of the
+  sign-out command name both.
+
+Limits: the limits of the key, and these. A person on the same network can
+keep the owner from signing in with the password, for as long as that person
+sends wrong passwords. The password is as good as the owner's choice; twelve
+characters and the wait are the floor, and there is no check against known
+passwords. Settings has no entry of its own for the page; the way goes
+through "Install app" and "Devices & apps". The page `/connect` and its
+script were read with the default text encoding of the host, which showed
+four of their characters wrong on a Windows host; they are read as UTF-8
+now. A clock that was set back keeps its limit for sessions: a session
+from a second that the clock has not reached again counts again when the
+clock reaches it, and a sign-out in that time does not end it. Such a
+session can then set a password on the page, as it can do everything else,
+and that password has no lifetime; `browsers key --remove` ends it at any
+clock time. From the first check of a request's session to the change's
+second test, a sign-out that is saved refuses that request's change,
+without a clock, also in that case; a request that begins after the clock
+reached that second again is a request of a session that counts. When the
+second test refuses in that case, only a failed removal of the change's
+own record leaves that record. A sign-out that is saved after the second
+test finds the record in place: the rule ends it, or, with a clock that
+was set back, the command's "no key" write, as for a key.
+On a host that is not a Windows host the swap of the record is two steps;
+only a Windows host has the page. Not measured: the page in a real browser
+on a Windows PC by a person, a password manager, a phone browser.
 
 #### The next step for a browser on the PC that is not signed in
 

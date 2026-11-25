@@ -3,8 +3,8 @@
 The foreground owner launcher reads existing private credentials only.
 Listener authentication and grant exchange remain separate from that local read.
 A browser on another device signs in with a one-use code that the owner makes
-on this computer and types on that device, or with the sign-in key that the
-owner made on this computer and saved.
+on this computer and types on that device, or with the password that the owner
+set in the app on this computer (or the sign-in key that a command made there).
 """
 from __future__ import annotations
 
@@ -13,12 +13,14 @@ from dataclasses import dataclass, replace
 import hashlib
 import hmac
 import ipaddress
+import math
 from pathlib import Path
 import re
 import secrets
 import sys
 import threading
 import time
+import unicodedata
 from urllib.parse import urlsplit
 
 ISSUE_PATH = "/api/browser-entry/issue"
@@ -31,6 +33,11 @@ _CODE = re.compile(f"[{CODE_ALPHABET}]{{{CODE_LENGTH}}}")
 KEY_REDEEM_PATH = "/api/browser-entry/key/redeem"
 KEY_LENGTH = 25  # 125 bits, in the symbols of a code.
 _KEY = re.compile(f"[{CODE_ALPHABET}]{{{KEY_LENGTH}}}")
+PASSWORD_PATH = "/connect/sign-in"   # The owner's page on this computer.
+# The way to that page in the app. The Settings pages are the web client's: when it renames them, change this text.
+SETTINGS_PATH = 'Open Settings, then "Install app", then "Devices & apps". There, select "Set a password".'
+PASSWORD_MIN, PASSWORD_MAX = 12, 256
+_SCRYPT = "scrypt 15 8 1 "           # The start of a password's record: N = 2**15, r = 8, p = 1.
 # What a person does when the browser on this computer is not signed in
 # (`next_step`). A text says only what this host knows. On Windows no text names
 # a command: `amplifier-unified` is on the PATH only of an installation by hand,
@@ -62,7 +69,7 @@ OPENED = "Amplifier opened in your browser."
 HOST_WAIT = 60.0
 NEW_CODE = "Make sure that Amplifier is running on this PC. Then run this again: amplifier-unified browsers code."
 RELOAD = "Could not sign in. Open the sign-in page again and type the code."
-RELOAD_KEY = "Could not sign in. Open the sign-in page again and type the key."
+RELOAD_KEY = "Could not sign in. Open the sign-in page again and type the password."
 NEW_KEY = "Then run this again: amplifier-unified browsers key."
 GUIDE = ("https://github.com/microsoft/amplifier-unified/blob/main/docs/DEPLOYMENT.md"
          "#windows-host-reach-unified-from-another-device")
@@ -367,27 +374,59 @@ def _typed(text) -> str:
     return text.upper().replace(" ", "").replace("-", "") if isinstance(text, str) and text.isascii() else ""
 
 
-class SavedKey:
-    """The running host's view of the sign-in key that the owner saved.
+def _password_bytes(text):
+    """The bytes of a typed password; None for a text that cannot be one."""
+    if not isinstance(text, str) or not 0 < len(text) <= PASSWORD_MAX:
+        return None
+    try:
+        return unicodedata.normalize("NFKC", text).encode("utf-8")
+    except UnicodeError:
+        return None                                         # Half of a character pair: a form can send one.
 
-    The owner's command saves one private record: the second in which the key
-    was made and the SHA-256 of the key. The key itself is shown once, to the
-    owner, and is kept nowhere. A hundred and twenty-five bits carry the guess
-    resistance, so there is no lockout and no delay, as for a code: a wrong
-    key is counted, and nobody can keep the owner out by guessing.
+
+def _scrypt(password: bytes, salt: bytes) -> str:
+    # About a tenth of a second and 32 MiB for each call: never on the event loop.
+    return hashlib.scrypt(password, salt=salt, n=2 ** 15, r=8, p=1, maxmem=64 * 1024 * 1024, dklen=32).hex()
+
+
+class SavedKey:
+    """The running host's view of the password or sign-in key that the owner saved.
+
+    One private record holds either. A key comes from the owner's command: 25
+    random symbols, shown once; the record has its SHA-256. A password is the
+    owner's own text, set on the owner's page on this computer; the record
+    has a salt and its scrypt hash. Neither is kept anywhere.
+
+    A key has 125 bits, so a wrong key is only counted: no lockout and no
+    delay, as for a code. A person chooses a password, so wrong passwords are
+    slowed down. One password is checked at a time, away from the event loop.
+    The wrong password number `FREE` in a row starts a wait of `FIRST_WAIT`
+    seconds, each further one doubles it, to `LONGEST_WAIT` seconds at most,
+    and during a wait no password is checked, also not the right one. `QUIET`
+    seconds without a wrong password, a right one, or a new record start the
+    count again.
+    So a sender has about 300 guesses in a day at most: one in each
+    `LONGEST_WAIT`, and a new count costs `QUIET`. The device cannot be
+    told from the request (see remote_origin), so the wait is for everyone:
+    a person who can reach the address can keep the owner from signing in
+    with the password, and gets in no faster. A code still works then.
 
     The host reads the record again only when the file changed. So a wrong
     key costs one look at the file and no private read, once the host has
-    read the record or found it malformed, and a new or removed key counts
-    from the next request. A read that failed for another reason is made
-    again at the next key, so that a passing fault does not end the key.
+    read the record or found it malformed, and a new or removed key or
+    password counts from the next request. A read that failed for another
+    reason is made again at the next attempt, so that a passing fault does
+    not end the key or password.
     """
 
     _UNREAD = object()
+    FREE, FIRST_WAIT, LONGEST_WAIT, QUIET = 5, 2.0, 300.0, 3600.0
 
-    def __init__(self):
+    def __init__(self, *, clock=time.monotonic):
         self.failures = 0
+        self.clock = clock
         self._hint, self._record = self._UNREAD, None
+        self._streak, self._last, self._until, self._checking = 0, 0.0, 0.0, False
 
     @staticmethod
     def display(key: str) -> str:
@@ -405,15 +444,62 @@ class SavedKey:
                 record = None                               # Malformed: no key, until the file changes.
             except OSError:
                 return None                                 # Not kept: the record is read again next time.
+            if record != self._record:
+                self._streak, self._until = 0, 0.0          # A wait is for the password that it was counted for.
             self._hint, self._record = hint, record
         return self._record
 
-    def accepts(self, app, text) -> bool:
-        """The typed text is the saved key, and no sign-out of all browsers ended that key."""
+    def current(self, app):
+        """The saved record that no sign-out of all browsers ended, or None: (second, "password" or "key")."""
         from .auth import sign_in_key_is_current
+        record = self._saved(app["service"].data_dir)
+        if record is None or not sign_in_key_is_current(app, record[0]):
+            return None
+        return record[0], "password" if record[1].startswith(_SCRYPT) else "key"
+
+    def wait(self) -> int:
+        """Whole seconds until a password is checked again; 0 when one is checked now."""
+        return max(0, math.ceil(self._until - self.clock()))
+
+    async def accepts(self, app, text):
+        """Is the typed text the saved password or key, and did no sign-out of all browsers end it?
+
+        True or False; a False is counted. None for a password that was not
+        checked, because of a wait or of another check that runs: that is not
+        counted, and it says nothing about the text.
+        """
+        from .auth import sign_in_key_is_current
+        data_dir = app["service"].data_dir
+        record = self._saved(data_dir)
+        if record is not None and record[1].startswith(_SCRYPT):
+            now = self.clock()
+            if self._streak and now - self._last > self.QUIET:
+                self._streak = 0
+            if self._checking or now < self._until:
+                return None
+            password, right = _password_bytes(text), False
+            if password is not None:
+                salt, digest = record[1][len(_SCRYPT):].split(" ")
+                self._checking = True
+                try:
+                    right = hmac.compare_digest(await asyncio.to_thread(_scrypt, password, bytes.fromhex(salt)), digest)
+                except (ValueError, MemoryError, OSError, AttributeError):
+                    right = False                           # A hash that cannot be made opens nothing.
+                finally:
+                    self._checking = False
+            # The record is looked at again: a password that was changed or removed during the check opens nothing.
+            if right and self._saved(data_dir) == record and sign_in_key_is_current(app, record[0]):
+                self._streak = 0
+                return True
+            self.failures += 1
+            self._streak += 1
+            self._last = self.clock()
+            if self._streak >= self.FREE:
+                self._until = self._last + min(self.LONGEST_WAIT,
+                                               self.FIRST_WAIT * 2 ** min(self._streak - self.FREE, 16))
+            return False
         key = _typed(text)
-        record = self._saved(app["service"].data_dir) if _KEY.fullmatch(key) else None
-        if (record is None
+        if (record is None or not _KEY.fullmatch(key)
                 or not hmac.compare_digest(hashlib.sha256(key.encode("ascii")).hexdigest(), record[1])
                 or not sign_in_key_is_current(app, record[0])):
             self.failures += 1
@@ -421,15 +507,23 @@ class SavedKey:
         return True
 
 
-def make_key(data_dir: Path) -> tuple[str, bool]:
-    """Save the record of a new sign-in key; return the key, and whether it replaced a working one.
+class PasswordRefused(ValueError):
+    """The text cannot be the password; the message says why, in words for the owner."""
 
-    Authority is the owner's own private folder, as for the sign-out of all
-    browsers: no network request and no credential are involved. Only the
-    caller shows the key, once, and only to the owner; never log it.
 
-    The key is made in a second after the saved sign-out, so that this
-    sign-out does not end it (see `auth.sign_in_key_is_current`).
+class OwnerSignedOut(RuntimeError):
+    """A sign-out of all browsers ended the session that asked for the change. Nothing of it counts."""
+
+
+class ChangedMeanwhile(RuntimeError):
+    """Another change of the record came first. This change was not made."""
+
+
+def _save(data_dir: Path, value: str, again: str) -> bool:
+    """The owner's command saves the record of a new key or password; True when it replaced one that worked.
+
+    The record gets a second after the saved sign-out, so that this sign-out
+    does not end it (see `auth.sign_in_key_is_current`).
     """
     from . import auth
     signed_out = auth.saved_sign_out(data_dir)
@@ -445,18 +539,111 @@ def make_key(data_dir: Path) -> tuple[str, bool]:
         time.sleep(0.25)                                    # The second of a sign-out that was just saved.
     else:
         raise BrowserEntryUnavailable("The clock of this PC is earlier than the last sign-out of all browsers. "
-                                      "Set the clock. " + NEW_KEY)
-    key = "".join(secrets.choice(CODE_ALPHABET) for _ in range(KEY_LENGTH))
-    record = (made, hashlib.sha256(key.encode("ascii")).hexdigest())
+                                      "Set the clock. " + again)
+    record = (made, value)
     auth.write_sign_in_key(data_dir, record)
     if auth.read_sign_in_key(data_dir) != record:
-        raise OSError("The sign-in key was not saved.")
-    return key, replaced
+        raise OSError("The record was not saved.")
+    return replaced
 
 
-def remove_key(data_dir: Path) -> bool:
-    """End the saved sign-in key; True when a record was there. Browsers that are signed in stay signed in."""
+def _swap(data_dir: Path, owner, value) -> bool:
+    """The owner's page puts a record in place, or none for `value` None; True when a record was there before.
+
+    `owner` is what the page knows of its session: the second of that
+    session, and the look at the sign-out record that the host had applied
+    (`Sessions.hint`) when the page first checked the request's session,
+    before it waited for the form. The sender of a form decides how long its
+    request takes, a hash takes time, and the owner can sign out all
+    browsers at any moment of it. Three things keep a session that such a
+    sign-out ended from a change that counts, and from undoing what the
+    owner did after the sign-out.
+
+    The sign-out record must still be the one that the host had applied
+    then. A sign-out that was saved after it, whatever its second and whether
+    the host applied it meanwhile or not, refuses the change. No clock is
+    read for this: it is the test of `auth.sign_in`. It is made before the
+    record goes in place and again after it. When the second test refuses,
+    this call removes its own record, by its exact bytes, and no other.
+
+    The record gets the second of that session, not the present second. So
+    the rule that ends a session ends its record (`auth.sign_in_key_is_current`):
+    between the two tests there is no moment with a record that opens a
+    session for a session that the rule ended.
+
+    The record goes in place only where the file still holds the bytes that
+    this call read first of all (`auth.swap_sign_in_key`). A record that came
+    later, for example the owner's new password after that sign-out, is
+    never replaced or removed.
+    """
     from . import auth
+    issued, applied = owner
+    before = auth.sign_in_key_bytes(data_dir)               # First of all: the record that this change is for.
+    saved = auth._epoch_hint(data_dir)                      # Then the sign-out record, after that read.
+    if applied is auth._UNSEEN or saved is auth._UNSEEN:
+        raise OSError("The sign-out record could not be looked at.")     # Not a sign-out; nothing was changed.
+    if saved != applied:
+        raise OwnerSignedOut()
+    there = before not in (None, auth._NO_SIGN_IN_KEY)
+    if value is None and not there:
+        return False
+    record = None if value is None else (issued, value)
+    if not auth.swap_sign_in_key(data_dir, before, record):
+        raise ChangedMeanwhile()
+    saved = auth._epoch_hint(data_dir)
+    if saved != applied:
+        # A sign-out was saved meanwhile, or it is not known that none was: this change's own record goes.
+        if record is not None:
+            auth.swap_sign_in_key(data_dir, f"{record[0]} {record[1]}\n".encode("ascii"), None)
+        if saved is auth._UNSEEN:
+            raise OSError("The sign-out record could not be looked at.")
+        raise OwnerSignedOut()
+    if auth.read_sign_in_key(data_dir) != record:
+        raise OSError("The record was not saved.")
+    return there
+
+
+def make_key(data_dir: Path) -> tuple[str, bool]:
+    """Save the record of a new sign-in key; return the key, and whether it replaced a working key or password.
+
+    Authority is the owner's own private folder, as for the sign-out of all
+    browsers: no network request and no credential are involved. Only the
+    caller shows the key, once, and only to the owner; never log it.
+    """
+    key = "".join(secrets.choice(CODE_ALPHABET) for _ in range(KEY_LENGTH))
+    return key, _save(data_dir, hashlib.sha256(key.encode("ascii")).hexdigest(), NEW_KEY)
+
+
+def set_password(data_dir: Path, text, owner=None) -> bool:
+    """Save the record of the owner's new password; True when a password or key was there before.
+
+    The caller is the owner's page on this computer, with what it knew of
+    its session (see `_swap`). Without that, the record is saved as a
+    command saves a key (see `_save`). The password is not kept and must never
+    be logged or shown. This call takes about a tenth of a second: never on
+    the event loop.
+    """
+    if not isinstance(text, str) or len(text) < PASSWORD_MIN:
+        raise PasswordRefused(f"Use at least {PASSWORD_MIN} characters.")
+    if len(text) > PASSWORD_MAX:
+        raise PasswordRefused(f"Use at most {PASSWORD_MAX} characters.")
+    password = _password_bytes(text)
+    if password is None:
+        raise PasswordRefused("This text has a character that cannot be saved. Use another password.")
+    salt = secrets.token_bytes(16)
+    value = _SCRYPT + salt.hex() + " " + _scrypt(password, salt)
+    return _save(data_dir, value, "Then set the password again.") if owner is None else _swap(data_dir, owner, value)
+
+
+def remove_key(data_dir: Path, owner=None) -> bool:
+    """End the saved key or password; True when a record was there. Browsers that are signed in stay signed in.
+
+    With `owner`, what the page knew of its session, the removal is the
+    page's (see `_swap`).
+    """
+    from . import auth
+    if owner is not None:
+        return _swap(data_dir, owner, None)
     try:
         if auth.read_sign_in_key(data_dir) is None:
             return False
@@ -464,7 +651,7 @@ def remove_key(data_dir: Path) -> bool:
         pass                                                # A record that cannot be read is replaced as well.
     auth.write_sign_in_key(data_dir, None)
     if auth.read_sign_in_key(data_dir) is not None:
-        raise OSError("The sign-in key was not removed.")
+        raise OSError("The record was not removed.")
     return True
 
 
@@ -697,10 +884,10 @@ def _said(text) -> None:
 
 
 async def key_redeem(request):
-    """Public: the typed key is the proof. No lockout and no delay (see SavedKey).
+    """Public: the typed password or key is the proof. A key has no lockout and no delay; a password waits (see SavedKey).
 
     The address check is the one of a typed code (see remote_origin), and the
-    session is marked remote as well. The key is not used up.
+    session is marked remote as well. The password or key is not used up.
     """
     from aiohttp import web
     from .auth import CSRF_COOKIE, SESSION_COOKIE, sign_in
@@ -708,13 +895,17 @@ async def key_redeem(request):
     saved = request.app["browser_key"]
     if not origin or not is_windows() or saved is None or request.content_type != "application/x-www-form-urlencoded":
         return web.Response(text=RELOAD_KEY, status=403)
-    key = await _signed_form(request, "key")
-    if key is None:
+    text = await _signed_form(request, "password")
+    if text is None:
         return web.Response(text=RELOAD_KEY, status=403)
-    if not saved.accepts(request.app, key):
+    answer = await saved.accepts(request.app, text)
+    if answer is None:
+        raise web.HTTPSeeOther("/login?error=wait", headers=_PRIVATE)
+    if not answer:
         if saved.failures == 1 or saved.failures % 100 == 0:
-            _said(f"Remote sign-in: {saved.failures} wrong keys since start.")   # The count only; never the typed text.
-        raise web.HTTPSeeOther("/login?error=key", headers=_PRIVATE)
+            # The count only; never the typed text.
+            _said(f"Remote sign-in: {saved.failures} wrong passwords or keys since start.")
+        raise web.HTTPSeeOther("/login?error=password", headers=_PRIVATE)
     try:
         # As for a live code: the owner credential and the host identity are confirmed before a session opens.
         _binding(request, origin)
@@ -723,9 +914,9 @@ async def key_redeem(request):
         session = None
     if session is None:
         # The host cannot be confirmed now, or a saved sign-out waits for this host.
-        # Nothing opens; this is not counted as a wrong key.
-        raise web.HTTPSeeOther("/login?error=key", headers=_PRIVATE)
-    _said("Remote sign-in: a browser signed in with the saved key.")
+        # Nothing opens; this is not counted as a wrong password.
+        raise web.HTTPSeeOther("/login?error=password", headers=_PRIVATE)
+    _said("Remote sign-in: a browser signed in with the saved password or key.")
     response = web.HTTPSeeOther("/", headers=_PRIVATE)
     response.set_cookie(SESSION_COOKIE, session,
                         max_age=request.app["server_config"]["session_ttl_seconds"],
@@ -734,7 +925,27 @@ async def key_redeem(request):
     raise response
 
 
-_CODE_PAGE = f"""<!doctype html>
+_ON_THE_PC = "In Amplifier on the PC, " + SETTINGS_PATH[0].lower() + SETTINGS_PATH[1:].replace("&", "&amp;")
+_PASSWORD_FORM = f"""<form method="post" action="{KEY_REDEEM_PATH}">
+<input type="hidden" name="csrf" value="__CSRF__">
+<label for="password">Password</label>
+<input id="password" name="password" type="password" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" aria-describedby="password-help" __FOCUS__required>
+<button type="submit">Sign in</button>
+</form>
+"""
+_CODE_FORM = f"""<form method="post" action="{CODE_REDEEM_PATH}">
+<input type="hidden" name="csrf" value="__CSRF__">
+<label for="code">Code</label>
+<input id="code" name="code" autocomplete="one-time-code" autocapitalize="characters" autocorrect="off" spellcheck="false" aria-describedby="code-help" __FOCUS__required>
+<button type="submit">__BUTTON__</button>
+</form>
+"""
+_CODE_HELP = f"""<p id="code-help">To get a code, run this on the Windows PC that runs Amplifier: <code>amplifier-unified browsers code</code>.
+Type the code here within two minutes.</p>
+<p>If Windows does not find that command, use the full command from the
+<a href="{GUIDE}" target="_blank" rel="noopener noreferrer">Windows steps of the deployment guide</a>.</p>
+"""
+_REMOTE_PAGE = """<!doctype html>
 <html lang="en"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -743,31 +954,32 @@ _CODE_PAGE = f"""<!doctype html>
 </head><body><main>
 <h1>Sign in to Amplifier</h1>
 <p class="error" role="alert">__ERROR__</p>
-<form method="post" action="{CODE_REDEEM_PATH}">
-<input type="hidden" name="csrf" value="__CSRF__">
-<label for="code">Code</label>
-<input id="code" name="code" autocomplete="one-time-code" autocapitalize="characters" autocorrect="off" spellcheck="false" aria-describedby="code-help" autofocus required>
-<button type="submit">Sign in</button>
-</form>
-<p class="note">Or sign in with a key that you saved.</p>
-<form method="post" action="{KEY_REDEEM_PATH}">
-<input type="hidden" name="csrf" value="__CSRF__">
-<label for="key">Sign-in key</label>
-<input id="key" name="key" type="password" autocomplete="current-password" autocapitalize="characters" autocorrect="off" spellcheck="false" aria-describedby="key-help" required>
-<button type="submit">Sign in with key</button>
-</form>
-<p id="code-help">To get a code, run this on the Windows PC that runs Amplifier: <code>amplifier-unified browsers code</code>.
-Type the code here within two minutes.</p>
-<p id="key-help">To make a key that you can save, for example in a password manager, run this on that PC:
-<code>amplifier-unified browsers key</code>. The key works until you make a new one, remove it or sign out all browsers.</p>
-<p>If Windows does not find a command, use the full command from the
-<a href="{GUIDE}" target="_blank" rel="noopener noreferrer">Windows steps of the deployment guide</a>.</p>
-</main></body></html>
+__FORMS__</main></body></html>
 """
+_WITH_PASSWORD = (_PASSWORD_FORM.replace("__FOCUS__", "autofocus ")
+                  + '<p class="note">Or sign in with a one-use code from the PC.</p>\n'
+                  + _CODE_FORM.replace("__FOCUS__", "").replace("__BUTTON__", "Sign in with code")
+                  + '<p id="password-help">Type the password that you set in Amplifier on the PC, '
+                  'or the sign-in key that a command on the PC showed. To change the password: '
+                  + _ON_THE_PC + "</p>\n" + _CODE_HELP)
+_WITHOUT_PASSWORD = (_CODE_FORM.replace("__FOCUS__", "autofocus ").replace("__BUTTON__", "Sign in")
+                     + _CODE_HELP
+                     + '<p id="password-help">To sign in with a password when you are not at the PC, '
+                     "set the password on the PC first. " + _ON_THE_PC + "</p>\n")
+
+
+def _duration(seconds: int) -> str:
+    if seconds < 60:
+        return "1 second" if seconds == 1 else f"{seconds} seconds"
+    minutes = math.ceil(seconds / 60)
+    return "1 minute" if minutes == 1 else f"{minutes} minutes"
 
 
 def remote_login_page(request):
-    """Code form and key form for a browser on another device: no script, nothing reflected.
+    """Sign-in page for a browser on another device: no script, nothing reflected.
+
+    The password form shows only while a password or key is saved; it is then
+    the first form. The code form always shows.
 
     Referrer-Policy is same-origin, not no-referrer: from a no-referrer page a
     browser sends "Origin: null" with the form, and the redeem check refuses it.
@@ -779,18 +991,207 @@ def remote_login_page(request):
     # Preserve valid issuance for favicon redirects and concurrent login forms.
     if not _verified(secret, csrf, 900, "csrf"):
         csrf = new_csrf(secret)
+    saved = request.app.get("browser_key")
+    with_password = saved is not None and saved.current(request.app) is not None
     kind = request.query.get("error")
-    error = ("That key did not work. Check it and type it again. A key stops working when you make a new key, "
-             "remove it or sign out all browsers on the PC.") if kind == "key" else (
-             "That code did not work. Check it and type it again. A code works for two minutes "
-             "and only once. After that, make a new code on the PC.") if kind else ""
-    page = _CODE_PAGE.replace("__ERROR__", error).replace("__CSRF__", csrf)
+    if kind == "wait" and with_password:
+        wait = saved.wait()
+        error = (f"Too many wrong passwords were typed. No password is checked for {_duration(wait)}. "
+                 "Then type the password again. A code from the PC works now."
+                 if wait else "The password was not checked. Type it again.")
+    elif kind in {"password", "wait"}:
+        error = ("That password did not work. Check it and type it again. A password stops working when you "
+                 "change it or remove it on the PC, or sign out all browsers there.")
+    else:
+        error = ("That code did not work. Check it and type it again. A code works for two minutes "
+                 "and only once. After that, make a new code on the PC.") if kind else ""
+    page = (_REMOTE_PAGE.replace("__FORMS__", _WITH_PASSWORD if with_password else _WITHOUT_PASSWORD)
+            .replace("__ERROR__", error).replace("__CSRF__", csrf))
     page = request.app['service'].instance_branding.document(page, login=True)
     response = web.Response(text=page,
                             content_type="text/html",
                             headers={"Cache-Control": "no-store", "Referrer-Policy": "same-origin"})
     response.set_cookie(CSRF_COOKIE, csrf, httponly=True, samesite="Strict", secure=request.secure, path="/")
     return response
+
+
+# The owner's page on this computer: set, change or remove the password for other devices.
+
+PASSWORD_CARD = (f'<section class="card"><h2>Sign in from a browser on another device</h2>'
+                 "<p>Set a password on this PC. A browser on another device then signs in with it, "
+                 "also when you are not at the PC.</p>"
+                 f'<div class="actions"><a class="button" href="{PASSWORD_PATH}">Set a password</a></div></section>\n')
+_OWNER_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Password for other devices \u00b7 Amplifier</title>
+<link rel="stylesheet" href="/connect/assets/connect.css"></head><body>
+<main><a class="back" href="/connect">\u2190 Devices &amp; apps</a>
+<p class="eyebrow">SIGN IN FROM ANOTHER DEVICE</p>
+<h1>Password for other devices</h1>
+__BODY__</main></body></html>
+"""
+_NOT_HERE = ("<p>Open this page in Amplifier on the PC that runs it, in a browser that signed in there. "
+             "A browser that signed in with a password, a key or a code cannot set the password.</p>")
+_NOT_WINDOWS = ("<p>On this computer, a browser on another device signs in with the password of the "
+                "host account. There is no other password to set.</p>")
+_SIGNED_OUT = ("<p>A sign-out of all browsers ended this sign-in. This change does not count. "
+               "Open Amplifier again on the PC.</p>")
+_CHANGED = ("<p>Another change of the password or key came first, so this change was not made. "
+            f'<a href="{PASSWORD_PATH}">Open this page again</a>.</p>')
+_NOT_NOW = "<p>This Amplifier cannot set a password for other devices now. Start Amplifier again on the PC.</p>"
+_UNCONFIRMED_SET = ("Amplifier could not confirm that the password is saved. A password or key that you had "
+                    "before may no longer work. Set the password again.")
+_UNCONFIRMED_REMOVE = "Amplifier could not confirm the removal. Remove it again."
+
+
+def _session_here(request):
+    """The session of a browser that signed in on this computer, at an address of this computer; else None."""
+    from .auth import SESSION_COOKIE, session_is_remote, valid_session
+    session = request.cookies.get(SESSION_COOKIE)
+    if (not valid_session(request.app, session) or session_is_remote(session)
+            or not request.secure or not _on_this_computer(request)):
+        return None
+    return session
+
+
+def password_card(request) -> str:
+    """The card for the page "Devices & apps": only where the owner's page works."""
+    here = is_windows() and request.app.get("browser_key") is not None and _session_here(request) is not None
+    return PASSWORD_CARD if here else ""
+
+
+def _owner_csrf(request, session) -> str:
+    return hmac.new(request.app["session_secret"].encode(), ("sign-in-password:" + session).encode(),
+                    hashlib.sha256).hexdigest()
+
+
+def _owner_body(request, session, *, notice="", error=""):
+    import html
+    app = request.app
+    current = app["browser_key"].current(app)
+    csrf = _owner_csrf(request, session)
+    if current is None:
+        state, title, button = "No password is set.", "Set a password", "Set password"
+    elif current[1] == "password":
+        state, title, button = "A password is set.", "Change the password", "Change password"
+    else:
+        state, title, button = ("A sign-in key from a command is set. A password replaces it.",
+                                "Set a password", "Set password")
+    remote = [origin for origin in app["server_config"].get("public_origins", ()) if _remote_address(app, origin)]
+    if remote:
+        where = ("<p>On the other device, open one of these addresses and type the password:</p><ul>"
+                 + "".join("<li><code>" + html.escape(origin) + "</code></li>" for origin in remote) + "</ul>"
+                 '<p class="muted">The other device must trust the certificate of this Amplifier. '
+                 'See <a href="/setup" target="_blank" rel="noopener">HTTPS setup</a>.</p>')
+    else:
+        where = ("<p>This Amplifier has no address for other devices yet, so no other device can reach it. The "
+                 f'<a href="{GUIDE}" target="_blank" rel="noopener noreferrer">deployment guide</a> has the steps.</p>')
+    name = "" if current is None else "password" if current[1] == "password" else "sign-in key"
+    remove = "" if current is None else (
+        f'<section class="card"><h2>Remove the {name}</h2>'
+        "<p>After that, a browser on another device needs a one-use code from this PC. "
+        "Browsers that are signed in stay signed in.</p>"
+        f'<form method="post"><input type="hidden" name="csrf" value="{csrf}">'
+        f'<button name="action" value="remove">Remove {name}</button></form></section>\n')
+    return (
+        '<p class="lead">A browser on another device signs in to this Amplifier with this password. '
+        "You can use it when you are not at this PC.</p>\n"
+        f'<div id="notice" role="{"alert" if error else "status"}">{html.escape(error or notice)}</div>\n'
+        f'<section class="card"><h2>{title}</h2><p>{state}</p>'
+        f'<form method="post"><input type="hidden" name="csrf" value="{csrf}">'
+        '<label for="password">New password</label>'
+        f'<input id="password" name="password" type="password" autocomplete="new-password" minlength="{PASSWORD_MIN}" '
+        f'maxlength="{PASSWORD_MAX}" aria-describedby="password-help" required>'
+        '<label for="confirm">New password again</label>'
+        f'<input id="confirm" name="confirm" type="password" autocomplete="new-password" minlength="{PASSWORD_MIN}" '
+        f'maxlength="{PASSWORD_MAX}" required>'
+        f'<button class="primary" name="action" value="set">{button}</button></form>'
+        f'<p id="password-help" class="muted">Use at least {PASSWORD_MIN} characters. Everyone who has this password '
+        "and can reach an address for other devices can sign in to this Amplifier. Do not use a password that you "
+        "use for something else. A sign-out of all browsers also removes the password.</p></section>\n"
+        f'<section class="card"><h2>Where the password works</h2>{where}</section>\n' + remove)
+
+
+async def password_page(request):
+    """The owner sets, changes or removes the password for other devices. Only on this computer.
+
+    The authority is a browser that signed in on this computer: a session
+    that a code, a key or a password opened is marked remote and gets no
+    form. A POST also needs HTTPS, both socket ends local, the exact local
+    Origin (see local_origin) and the form's own token. The session is
+    checked again after the form is read, and the change is bound to it (see
+    `_swap`): a session that a sign-out of all browsers ended sets nothing
+    that counts and removes nothing that came after it.
+    The page has no script and shows nothing from the request. The password
+    is never logged.
+    """
+    from aiohttp import web
+    headers = {"Cache-Control": "no-store", "Referrer-Policy": "same-origin"}
+
+    def page(body, status=200):
+        return web.Response(text=_OWNER_PAGE.replace("__BODY__", body), status=status, content_type="text/html",
+                            headers=headers)
+    saved = request.app.get("browser_key")
+    if not is_windows():
+        return page(_NOT_WINDOWS, 200 if request.method == "GET" else 403)
+    if saved is None:
+        return page(_NOT_NOW, 503)                          # The host could not confirm its owner credential at its start.
+    from .auth import _UNSEEN, session_issued
+    session = _session_here(request)
+    # With this first check, before any wait: the look at the sign-out record that the host has applied,
+    # which the session was checked against. A change of this request is bound to it (see `_swap`).
+    applied = getattr(request.app.get("sessions"), "hint", _UNSEEN)
+    if session is None:
+        return page(_NOT_HERE, 403)
+    if request.method == "GET":
+        current = saved.current(request.app)
+        done = {("set", "password"): "The password is set.",
+                ("removed", None): "No password or key is set now."}.get(
+                    (request.query.get("done"), current[1] if current else None), "")
+        return page(_owner_body(request, session, notice=done))
+    if not local_origin(request) or request.content_type != "application/x-www-form-urlencoded":
+        return page(_NOT_HERE, 403)
+    form = await request.clone(client_max_size=16384).post()
+    # Again, after the wait for the form: its sender decides how long that wait is, and a sign-out of all
+    # browsers can end the session meanwhile. The look from before that wait stays: a sign-out that the
+    # host applied during the wait must not become the starting state of this change.
+    session = _session_here(request)
+    owner = (session_issued(request.app, session), applied)
+    if session is None or owner[0] is None:
+        return page(_NOT_HERE, 403)
+    if (not hmac.compare_digest(str(form.get("csrf", "")).encode(), _owner_csrf(request, session).encode())
+            or any(len(form.getall(key)) != 1 for key in form)):
+        return web.Response(text="This page expired. Open it again.", status=403, headers=headers)
+    data_dir = request.app["service"].data_dir
+    action = form.get("action")
+    if action == "remove" and set(form) == {"csrf", "action"}:
+        try:
+            await asyncio.to_thread(remove_key, data_dir, owner)
+        except OwnerSignedOut:
+            return page(_SIGNED_OUT, 403)
+        except ChangedMeanwhile:
+            return page(_CHANGED, 409)
+        except (OSError, ValueError):
+            return page(_owner_body(request, session, error=_UNCONFIRMED_REMOVE), 500)
+        raise web.HTTPSeeOther(PASSWORD_PATH + "?done=removed", headers=headers)
+    if action != "set" or set(form) != {"csrf", "action", "password", "confirm"}:
+        return web.Response(text="This page expired. Open it again.", status=403, headers=headers)
+    password = form["password"]
+    if not isinstance(password, str) or password != form["confirm"]:
+        return page(_owner_body(request, session, error="The two passwords are not the same. Type them again."), 400)
+    try:
+        await asyncio.to_thread(set_password, data_dir, password, owner)
+    except OwnerSignedOut:
+        return page(_SIGNED_OUT, 403)
+    except ChangedMeanwhile:
+        return page(_CHANGED, 409)
+    except PasswordRefused as refused:
+        return page(_owner_body(request, session, error=str(refused)), 400)
+    except BrowserEntryUnavailable as unavailable:
+        return page(_owner_body(request, session, error=str(unavailable)), 409)
+    except (OSError, ValueError):
+        return page(_owner_body(request, session, error=_UNCONFIRMED_SET), 500)
+    raise web.HTTPSeeOther(PASSWORD_PATH + "?done=set", headers=headers)
 
 
 async def owner_browser_url(data_dir: Path, config: dict, *, wait=0.0, pause=1.0, waiting=None) -> str:
