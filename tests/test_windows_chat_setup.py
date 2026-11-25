@@ -282,11 +282,11 @@ async def test_observed_probe_keeps_original_anonymous_retry_and_two_attempts(tm
         calls.append((args, kwargs.get('env')))
         assert args.count('--observe-import-origins') == 1
         if len(calls) == 1:
-            code = 'print(\\'AMPLIFIER_UPDATE_PROBE={"ok":false,"repositoryAccessFailure":true}\\');raise SystemExit(128)'
+            code = """print('AMPLIFIER_UPDATE_PROBE={"ok":false,"repositoryAccessFailure":true}');raise SystemExit(128)"""
         elif ending == 'success':
-            code = 'print(\\'AMPLIFIER_UPDATE_PROBE={"ok":true,"stage":"complete"}\\')'
+            code = """print('AMPLIFIER_UPDATE_PROBE={"ok":true,"stage":"complete"}')"""
         else:
-            code = 'print(\\'AMPLIFIER_UPDATE_PROBE={"ok":false,"stage":"prepare"}\\');raise SystemExit(9)'
+            code = """print('AMPLIFIER_UPDATE_PROBE={"ok":false,"stage":"prepare"}');raise SystemExit(9)"""
         return await create(sys.executable, '-I', '-S', '-c', code, **kwargs)
     async def wrapper(*args, **settings):
         if '--observe-import-origins' in args:
