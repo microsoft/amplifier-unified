@@ -46,6 +46,10 @@ from that same content hash; `coverage.provenance` reports
 and `liveHistoryChecked: false`. This is not a claim that unpublished mutable
 aliases are unchanged. A changed visible page or append stays visible as a
 neutral live frame; partial streaming responses keep their separate surface.
+The opening window stays at 20 messages. Explicit reads return up to 100.
+Short inline histories with peer messages reuse the same commit snapshot without
+changing their storage format. On first opening an older inline history, the
+observed page supplies display provenance until a new snapshot is available.
 Snapshot cursors read that same committed revision or refuse after replacement.
 Failed saves suppress snapshot attribution. Explicit current reads and preview
 actions validate fresh canonical originals, including off-page duplicates and

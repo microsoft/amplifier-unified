@@ -120,6 +120,8 @@ class TranscriptWindows:
 
     def peer_save_failed(self, identities):
         entries = getattr(getattr(self.service, '_message_preparation', None), 'entries', {})
+        for identity in identities:
+            self.initial.pop(identity, None)
         self._peer_failed.intersection_update(entries)
         self._peer_failed.update(set(identities).intersection(entries))
 
@@ -135,7 +137,7 @@ class TranscriptWindows:
     @staticmethod
     def _peer_wanted(rows):
         from .peer_attribution import input_identity
-        return [row for row in rows if row.get('role') == 'user'
+        return [row for row in rows if isinstance(row, dict) and row.get('role') == 'user'
                 and row.get('source') != 'native' and input_identity(row)
                 and (row.get('via') == 'peer' or row.get('inputOrigin') == 'peer')]
 
@@ -148,8 +150,8 @@ class TranscriptWindows:
     def _resident_proof(self, rows, wanted, revision=None):
         if not wanted:
             return None
-        key = (revision, tuple((row['id'], row.get('inputId'), row.get('nativeInputId'))
-                               for row in wanted)) if revision is not None else None
+        from .peer_originals import requested_identities
+        key = (revision, requested_identities(wanted)) if revision is not None else None
         if key in self._peer_resident:
             self._peer_resident.move_to_end(key)
             return self._peer_resident[key][0]
@@ -669,7 +671,8 @@ class TranscriptWindows:
                     if retained and retained[0]['windowKey'] == raw_page['windowKey']:
                         from .message_preparation import _same
                         if _same(raw_page['items'], retained[0]['items'], [100_000]):
-                            raw_page = retained[0]
+                            raw_page = {**retained[0], 'coverage': {**raw_page['coverage'],
+                                'provenance': {'basis': 'observed-page', 'liveHistoryChecked': False}}}
                 if wanted and committed is not None:
                     raw_page['_peerChecked'] = True
                     try:

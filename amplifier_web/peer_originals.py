@@ -67,7 +67,7 @@ def _metadata(row):
     return result
 
 
-def _wanted(rows):
+def requested_identities(rows):
     ids, inputs = set(), set()
     for index, row in enumerate(rows):
         if index >= MAX_WANTED:
@@ -276,7 +276,7 @@ class PeerOriginals:
         return selection, bodies
 
     def cold(self, source, wanted_rows):
-        wanted = _wanted(wanted_rows)
+        wanted = requested_identities(wanted_rows)
         with self.lock:
             signature = detached_signature(source)
             if len(source.indexed) > self.max_scan_bytes:
@@ -335,7 +335,7 @@ class PeerOriginals:
         requires a content revision managed by the canonical owner, not this
         helper's object identity, collection length or last returned Proof.
         """
-        wanted = _wanted(wanted_rows)
+        wanted = requested_identities(wanted_rows)
         if type(rows) not in (list, tuple) or len(rows) > self.max_rows:
             raise ValueError('Peer original scan exceeds the row budget.')
         selection = _Selection(wanted)
