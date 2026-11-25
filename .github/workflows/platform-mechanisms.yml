@@ -846,8 +846,17 @@ jobs:
                       'failure': failure, 'observerError': value['observerError'], 'restored': value['restored']}
           class Results:
               def __init__(self, paths=None):
+                  from _pytest.reports import TestReport
+                  from _pytest.subtests import SubtestReport
                   self.paths = paths or {}
+                  self.report_types = {TestReport: 'parent', SubtestReport: 'subtest'}
+                  # The maintained junction case has exactly two subTest iterations.
+                  # No other selected case may acquire extra call reports.
+                  junction = 'tests/test_host_config.py::NativeHomeBoundaryTests::test_app_home_through_read_config_rejects_junction_without_changing_target'
+                  self.expected_subtests = {junction: 2} if junction in nodes else {}
                   self.collected, self.phases, self.failures = [], [], []
+                  self.report_kinds, self.report_xfails, self.seen_reports = [], [], []
+                  self.duplicate_reports = 0
                   self.invalid, self.collection_seen = False, False
                   self.collected_count = self.phase_count = self.failure_count = 0
                   self.unavailable_failures = 0
@@ -911,33 +920,70 @@ jobs:
                   # No force_result/force_exception: preserve pytest's outcome.
               def pytest_runtest_logreport(self, report):
                   self.phase_count += 1
+                  # Class identity is supplied by the selected pytest. Do not inspect
+                  # SubtestReport.context, params, descriptions or longrepr.
+                  kind = self.report_types.get(type(report), 'other')
+                  duplicate = any(report is seen for seen in self.seen_reports)
+                  self.duplicate_reports += int(duplicate)
                   xfail = hasattr(report, 'wasxfail')
                   self.xfailed += int(xfail)
                   self.unexpected_phases += int(report.nodeid not in nodes)
-                  if (report.nodeid not in nodes or xfail or
+                  if (report.nodeid not in nodes or xfail or duplicate or kind == 'other' or
                           report.when not in ('setup', 'call', 'teardown') or
                           report.outcome not in ('passed', 'failed', 'skipped')):
                       self.invalid = True
                   if len(self.phases) < 96:
+                      # Keep references only within the bounded collector lifetime:
+                      # object identity, not a reusable numeric id, detects replay.
+                      self.seen_reports.append(report)
+                      self.report_kinds.append(kind)
+                      self.report_xfails.append(xfail)
                       self.phases.append((self.node(report.nodeid),
                           report.when if report.when in ('setup', 'call', 'teardown') else 'other',
                           report.outcome if report.outcome in ('passed', 'failed', 'skipped') else 'other'))
                   else:
                       self.invalid = True
+              def final_reports(self):
+                  # Later pytest status hooks can change an outcome. Keep callback
+                  # facts and final facts separately; no change can turn a red green.
+                  final = []
+                  for index, report in enumerate(self.seen_reports):
+                      kind = self.report_types.get(type(report), 'other')
+                      row = (self.node(report.nodeid),
+                          report.when if report.when in ('setup', 'call', 'teardown') else 'other',
+                          report.outcome if report.outcome in ('passed', 'failed', 'skipped') else 'other',
+                          kind, hasattr(report, 'wasxfail'))
+                      self.invalid |= row != (*self.phases[index], self.report_kinds[index], self.report_xfails[index])
+                      final.append(row)
+                  return final
               def passed(self, code):
+                  self.final_reports()
+                  expected = []
+                  for node in nodes:
+                      expected.append((node, 'setup', 'passed', 'parent'))
+                      expected.extend((node, 'call', 'passed', 'subtest')
+                                      for _ in range(self.expected_subtests.get(node, 0)))
+                      expected.extend((node, phase, 'passed', 'parent') for phase in ('call', 'teardown'))
                   return (code == 0 and not self.invalid and self.collection_seen and
-                      self.collected_count == len(nodes) and self.phase_count == len(nodes) * 3 and
-                      not self.failure_count and self.collected == list(nodes) and self.phases == [
-                      (node, phase, 'passed') for node in nodes for phase in ('setup', 'call', 'teardown')])
+                      self.collected_count == len(nodes) and self.phase_count == len(expected) and
+                      not self.failure_count and self.collected == list(nodes) and
+                      [(*row, kind) for row, kind in zip(self.phases, self.report_kinds)] == expected)
               def snapshot(self, code):
                   # Retain extras/duplicates instead of expected-only filtering.
                   # Private unexpected IDs stay redacted, with exact event counts.
+                  final = self.final_reports()
                   return {'collected': self.collected, 'collectedCount': self.collected_count,
                       'collectionObserved': self.collection_seen, 'collectionExact': self.collected == list(nodes)
                           and self.collected_count == len(nodes) and self.collection_seen,
                       'collectionFailures': self.collect_failed, 'collectionSkips': self.collect_skipped,
                       'unexpectedCollected': self.unexpected_collected, 'unexpectedPhases': self.unexpected_phases,
                       'phases': [list(row) for row in self.phases], 'phaseCount': self.phase_count,
+                      'reportKinds': self.report_kinds,
+                      'parentPhaseCount': self.report_kinds.count('parent'),
+                      'subtestCount': self.report_kinds.count('subtest'),
+                      'expectedSubtests': self.expected_subtests,
+                      'duplicateReports': self.duplicate_reports,
+                      'finalReports': [list(row) for row in final],
                       'wasxfailCount': self.xfailed, 'invalid': self.invalid,
                       'exitCode': int(code) if isinstance(code, int) and 0 <= code <= 255 else None,
                       'failures': self.failures, 'failureCount': self.failure_count,
