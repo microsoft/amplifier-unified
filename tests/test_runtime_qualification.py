@@ -117,8 +117,86 @@ def test_installed_graph_file_uri_keeps_git_identity_and_dirty_refusal(tmp_path,
     assert dirty[0]['cacheSource']['dirty'] is True
     assert runtime_environment.installed_sources(project, graph=dirty)['amplifier-fixture']['override'] is True
     assert dirty[0]['directUrl']['url'] == reference
-    assert len(reads) == 6
+    assert len(reads) == 4
     assert all(env is child_env for env in reads)
+
+
+def test_installed_root_matches_git_for_divergent_detached_and_changed_checkouts(tmp_path):
+    import hashlib
+    import subprocess
+
+    def git(*args):
+        return subprocess.check_output(['git', '-c', 'user.name=Fixture',
+            '-c', 'user.email=test@example.invalid', *args], cwd=tmp_path)
+
+    def verify():
+        index = tmp_path / '.git/index'
+        before = (index.stat().st_mtime_ns, index.read_bytes())
+        old_revision = git('rev-parse', 'HEAD').decode().strip()
+        old_dirty = bool(git('--no-optional-locks', 'status', '--porcelain', '--untracked-files=no'))
+        witness = runtime_qualification._installed_root(tmp_path, None)
+        assert witness['revision'] == old_revision
+        assert witness['dirty'] == old_dirty
+        assert (index.stat().st_mtime_ns, index.read_bytes()) == before
+        return witness
+
+    git('init')
+    (tmp_path / '.amplifier_cache_meta.json').write_text(json.dumps({'git_url': 'test'}))
+    header_name = '# branch.oid ' + 'a' * 40
+    (tmp_path / header_name).write_bytes(b'one\n')
+    git('add', '--', header_name)
+    git('commit', '-m', 'fixture')
+    git('checkout', '-b', 'upstream-peer')
+    git('commit', '--allow-empty', '-m', 'upstream ahead')
+    git('checkout', '-b', 'local-peer', 'HEAD~')
+    git('commit', '--allow-empty', '-m', 'local ahead')
+    git('branch', '--set-upstream-to=upstream-peer')
+    assert git('rev-list', '--left-right', '--count', 'HEAD...@{upstream}').split() == [b'1', b'1']
+    assert verify()['dirty'] is False
+    git('checkout', '--detach', 'HEAD')
+    (tmp_path / 'untracked').write_bytes(b'untracked')
+    clean = verify()
+    assert clean['dirty'] is False
+    assert clean['trackedContentSha256'] == hashlib.sha256(header_name.encode() + b'\0one\n').hexdigest()
+
+    git('mv', '--', header_name, 'renamed')
+    renamed = verify()
+    assert renamed['revision'] == clean['revision'] and renamed['dirty'] is True
+    assert renamed['trackedContentSha256'] == hashlib.sha256(b'renamed\0one\n').hexdigest()
+    (tmp_path / 'renamed').write_bytes(b'two\n')
+    git('add', '--', 'renamed')
+    updated = verify()
+    assert updated['dirty'] is True
+    assert updated['trackedContentSha256'] == hashlib.sha256(b'renamed\0two\n').hexdigest()
+
+
+def test_installed_root_refuses_unborn_head(tmp_path):
+    import subprocess
+    subprocess.run(['git', 'init'], cwd=tmp_path, check=True)
+    (tmp_path / '.amplifier_cache_meta.json').write_text(json.dumps({'git_url': 'test'}))
+    with pytest.raises(ValueError, match='HEAD commit'):
+        runtime_qualification._installed_root(tmp_path, None)
+
+
+@pytest.mark.parametrize('oid', [b'a' * 39, b'a' * 41, b'g' * 40, b'0' * 40, b'a' * 65])
+def test_installed_status_refuses_malformed_object_id(monkeypatch, oid):
+    monkeypatch.setattr(runtime_qualification.subprocess, 'check_output',
+                        lambda *a, **kw: b'# branch.oid ' + oid + b'\0')
+    with pytest.raises(ValueError, match='HEAD commit'):
+        runtime_qualification._installed_checkout_status(Path('.'), None)
+
+
+def test_installed_status_accepts_sha256_without_optional_upstream_count_on_old_git(monkeypatch):
+    import subprocess
+    commands = []
+    def output(command, **kwargs):
+        commands.append(command)
+        if '--no-ahead-behind' in command:
+            raise subprocess.CalledProcessError(129, command)
+        return b'# branch.oid ' + b'b' * 64 + b'\0# branch.head main\0'
+    monkeypatch.setattr(runtime_qualification.subprocess, 'check_output', output)
+    assert runtime_qualification._installed_checkout_status(Path('.'), None) == ('b' * 64, False)
+    assert commands[0] == [*commands[1], '--no-ahead-behind']
 
 
 def _root_distribution(project, name, source=None):
