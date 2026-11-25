@@ -1082,7 +1082,8 @@ class Worker:
             source_captures = []
             from amplifier_web.tool_source_proof import QualifiedToolSources
             def capture_tool_sources(project, receipt, expected):
-                source_captures.append(QualifiedToolSources.capture(project, receipt, expected))
+                with startup_timing.phase('worker.runtime.verify.tool_sources'):
+                    source_captures.append(QualifiedToolSources.capture(project, receipt, expected))
             if not os.environ.get("UV_OVERRIDE"):
                 with startup_timing.phase('worker.runtime.verify.before_prepare'):
                     qualified_overrides = active_install_overrides(self.home, on_verified=capture_tool_sources)

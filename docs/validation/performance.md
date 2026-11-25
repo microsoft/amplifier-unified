@@ -266,7 +266,11 @@ only when the worker calls the existing runtime verification at those boundaries
 These fixed labels preserve caller overrides, source checks and mutation refusal;
 they record no paths or configuration. A row proves that call ran; a missing row
 alone cannot distinguish a skipped branch from startup failing before the call.
-They do not retrospectively attribute gaps in earlier receipts.
+Each verification that invokes the selected-tool source check includes a nested
+`worker.runtime.verify.tool_sources` row for that call, even if the check returns
+no proof. Pair each nested row with its enclosing verification by order and
+offset. Subtract its elapsed time from that verification to measure the remaining
+work. Earlier receipts contain only the enclosing verification times.
 
 `AMPLIFIER_RUNTIME_TIMING=1` is a startup-only, explicit opt-in for content-free
 worker preparation and checkpoint phases in the existing bounded timing ring.

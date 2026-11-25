@@ -30,6 +30,7 @@ class StartupTimings:
     """
     PHASES = frozenset({'worker.bootstrap', 'worker.imports', 'worker.ownership',
         'worker.runtime.verify.before_prepare', 'worker.runtime.verify.after_prepare',
+        'worker.runtime.verify.tool_sources',
         'worker.recovery', 'manager.prepare', 'manager.config', 'manager.history.load',
         'manager.bundle.load', 'manager.plan', 'manager.bundle.prepare',
         'manager.providers', 'manager.history.repair', 'manager.session.create',
