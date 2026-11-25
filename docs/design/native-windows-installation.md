@@ -4445,7 +4445,8 @@ reused for this; they carry broader authority.
   (`"via": "remote"`), so that a rule for remote sessions only is possible
   later. Local cookies do not change. The lifetime is the configured one.
 - **The control.** `amplifier-unified browsers sign-out` signs out every
-  browser and drops every pending ticket and code.
+  browser and drops every pending ticket and code. It also ends a saved
+  sign-in key (see the next section).
 
 Limits: there is no sign-out for one device. A person on the same network who
 gets the owner to type the code into a look-alike page within 120 seconds can
@@ -4455,6 +4456,95 @@ code. Not measured yet: a phone browser, and the whole journey on a real second
 device. Linux, macOS and WSL hosts keep the password form and refuse both code
 endpoints. The steps for the owner are in the
 [deployment guide](../DEPLOYMENT.md#windows-host-reach-unified-from-another-device).
+
+#### A saved sign-in key for a browser on another device
+
+A code needs the owner at the PC at the moment of the sign-in. An owner who is
+away from the PC, with no device that is signed in, has no way in. A sign-in
+key closes that gap: the owner makes it once at the PC, saves it (a password
+manager is the expected place), and types it on any device later. It is an
+addition; the code stays for a device that must not keep a secret.
+
+- **The key.** Twenty-five symbols of the code's alphabet: 125 bits. The
+  command shows it once, in five groups of five. Input is treated as for a
+  code: upper-cased, spaces and hyphens removed, no look-alike mapped.
+- **The record.** `amplifier-unified browsers key` writes one private file,
+  `config/auth/sign-in-key`: the second in which the key was made and the
+  SHA-256 of the key. The key itself is kept nowhere. A plain hash is enough:
+  the key is random and long, and a reader of that folder can already read
+  the session secret. `browsers key --remove` writes "no key" in the same
+  file. A record that cannot be read or is malformed is never a key that
+  works. The host keeps a malformed record as "no key" until the file
+  changes, and it makes a read that failed again at the next attempt.
+- **Who can make one.** The authority is the owner's private folder, as for
+  the sign-out of all browsers: no running host, no credential and no network
+  request. The command refuses when no address for other devices is
+  configured.
+- **Where it works.** At every exact configured HTTPS address that is not
+  this computer, with the redeem check of a code: HTTPS and an explicit
+  `Origin` equal to the address in use. The peer address is not read, for the
+  same reason. A key is not bound to one address: the owner saves one secret.
+- **Wrong keys.** No lockout and no delay, for the reason given for a code;
+  125 bits carry the guess resistance. A wrong key must stay cheap, because
+  any device that reaches the address can send one: the host looks at the
+  record's file time, size and identity, and reads the record through the
+  private boundary only when those changed. So a new or a removed key counts
+  from the next request. A malformed record is kept as "no key" in the same
+  way. A read that failed for another reason is made again at the next key,
+  so that a passing fault does not end the key; while such a fault lasts,
+  each well-formed wrong key costs one failed private read. The host counts
+  wrong keys and logs only the count.
+  It logs each sign-in with the key, without the key.
+- **Before a session opens.** A right key confirms the owner credential as a
+  live code does, and it opens nothing while a saved sign-out waits for this
+  host. Both refusals are not counted as wrong keys.
+- **The end of a key.** A new key replaces the record. `--remove` ends the
+  key and leaves every browser signed in. The sign-out of all browsers ends
+  the key by the rule of a session: the key counts only while the second of
+  its making is after the applied sign-out second and not after the present
+  second (`auth.sign_in_key_is_current`). So `sign_out_all` and its record
+  did not change, and a key cannot outlast a sign-out that a session does
+  not outlast. The key command makes a key only in a second after the saved
+  sign-out; in the second of a sign-out it waits for the next one. That rule
+  reads the clock of the PC. A key from a second that the clock has not
+  reached again (the clock was ahead when the key was made, or it was set
+  back later) opens nothing now, but a sign-out in that time has an earlier
+  second than the key. So the sign-out command also writes "no key" over the
+  record, after its sign-out is saved. With a clock that did not move back,
+  the rule alone ends the key, also when that write fails; the write ends
+  the key for every clock. When the write is not confirmed, the command
+  says so and names `browsers key --remove`.
+  A key that another command makes while a sign-out command runs can be
+  removed by that write; the sign-out command then says that the saved key
+  no longer works.
+- **The command's failures.** A save can fail after the record is in place.
+  So the key command never says that nothing changed: it says that the save
+  or the removal is not confirmed, and that an earlier key may no longer
+  work. A key that was saved and not shown is known to nobody.
+- **The page.** The page for another device has a second form after the code
+  form: the field **Sign-in key**, a password field with
+  `autocomplete="current-password"`, and **Sign in with key**. The code form
+  stays first and keeps the focus. One short line between the forms says
+  that the key is another way in, so that nobody looks for a second step.
+  All help follows both forms. The error text is one of two fixed texts,
+  chosen by the redirect (`?error=key`).
+- **The session.** As from a code: marked remote, with the configured
+  lifetime. It is not renewed; after that lifetime the device signs in with
+  the key again.
+
+Limits: the key is a long-lived secret. Everyone who has it and can reach an
+address for other devices can sign in until the owner replaces it, removes it
+or signs out all browsers; there is no second factor. On a look-alike page a
+key is lost for longer than a code. There is no key for one device and no
+list of sign-ins beyond the host log. A clock that was set back is handled as
+for a session: a key from a later second opens nothing until the clock reaches
+that second. A sign-out of all browsers in that time does not end such a
+session, which then ends after its lifetime. It ends such a key through the
+"no key" write; only when that write also fails can the key come back, and
+the command has then named `browsers key --remove`, which ends the key at any
+clock time. Not measured: a password manager that saves and fills the key, a
+phone browser, and the journey on a real second device. Linux, macOS and WSL
+hosts refuse the key endpoint and the key command.
 
 #### The next step for a browser on the PC that is not signed in
 

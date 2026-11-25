@@ -718,6 +718,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_post(browser_entry.REDEEM_PATH, browser_entry.redeem)
     app.router.add_post(browser_entry.CODE_PATH, browser_entry.code_issue)
     app.router.add_post(browser_entry.CODE_REDEEM_PATH, browser_entry.code_redeem)
+    app.router.add_post(browser_entry.KEY_REDEEM_PATH, browser_entry.key_redeem)
     app.router.add_get("/setup", setup)
     app.router.add_get("/api/ca", certificate)
     app.router.add_get("/ca.crt", certificate)

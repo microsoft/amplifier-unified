@@ -100,10 +100,12 @@ def _parse() -> argparse.Namespace:
     runtime.add_argument("runtime_command", choices=["prepare", "status"])
     runtime.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
     browsers = subcommands.add_parser("browsers", help="Manage signed-in browsers")
-    browsers.add_argument("browsers_command", choices=["sign-out", "code"],
+    browsers.add_argument("browsers_command", choices=["sign-out", "code", "key"],
                           help="sign-out: sign out every browser on every device; "
-                               "code: make a one-use code that signs in a browser on another device (Windows host)")
+                               "code: make a one-use code that signs in a browser on another device (Windows host); "
+                               "key: make a sign-in key to save, for a browser on another device (Windows host)")
     browsers.add_argument("--origin", metavar="URL", help="code: the address that the other device opens")
+    browsers.add_argument("--remove", action="store_true", help="key: remove the saved sign-in key and make no new one")
     setup_tls = subcommands.add_parser("setup-tls", help="Create or inspect the app-owned local CA")
     setup_tls.add_argument("mode", nargs="?", choices=["status", "default", "force", "export"], default="default")
     reset = subcommands.add_parser("reset", help="Reinstall a clean app and runtime while preserving user data")
@@ -491,15 +493,21 @@ def _open_browser(args, data_dir, config, *, wait=0.0):
         raise browser_entry.BrowserEntryUnavailable("The browser did not accept the open request." + _open_again())
 
 
-def _code_origin(config, given):
-    """The address a code is for: the given one, or the only one for other devices."""
+def _remote_origins(config):
+    """Amplifier's addresses for other devices; none is a plain refusal."""
     from urllib.parse import urlsplit
-    from .deployment import validate_origin
     remote = [origin for origin in config["public_origins"] if origin.startswith("https://")
               and not browser_entry.loopback_host(urlsplit(origin).hostname)]
     if not remote:
         raise SystemExit("Amplifier has no address for other devices yet; add one with "
                          "amplifier-unified config set public_origins (the deployment guide has the steps).")
+    return remote
+
+
+def _code_origin(config, given):
+    """The address a code is for: the given one, or the only one for other devices."""
+    from .deployment import validate_origin
+    remote = _remote_origins(config)
     if given is None and len(remote) == 1:
         return remote[0]
     try:
@@ -531,6 +539,50 @@ def _browser_code(args, data_dir):
     print("    " + browser_entry.CodeStore.display(code))
     print()
     print("The code works once.")
+
+
+def _browser_key(args, data_dir):
+    """Show the owner a new sign-in key once, or remove the saved one. No credential is read."""
+    if not browser_entry.is_windows():
+        raise SystemExit("On this computer, sign in with the host account password on the sign-in page.")
+    if args.remove:
+        try:
+            removed = browser_entry.remove_key(data_dir)
+        except (OSError, ValueError):
+            # The record may or may not have changed: a save can fail after it is in place.
+            raise SystemExit(f"Amplifier could not confirm that the sign-in key is removed (its record is in {data_dir}). "
+                             "Run the command again. To end the key another way, run this: "
+                             "amplifier-unified browsers sign-out.") from None
+        print("The sign-in key is removed. Browsers that are signed in stay signed in." if removed
+              else "No sign-in key was saved.")
+        return
+    from .deployment import load_server_config
+    try:
+        remote = _remote_origins(load_server_config(data_dir, overrides=_server_overrides(args)))
+        key, replaced = browser_entry.make_key(data_dir)
+    except browser_entry.BrowserEntryUnavailable as exc:
+        raise SystemExit(str(exc)) from None
+    except (OSError, ValueError):
+        # The record may or may not have changed: a save can fail after it is in place. A key that was
+        # saved and not shown is known to nobody.
+        raise SystemExit(f"Amplifier could not confirm that a new sign-in key is saved (its record is in {data_dir}). "
+                         "No key is shown. A key that you had before may no longer work. "
+                         "Run the command again. If it fails again, run amplifier-unified browsers sign-out, "
+                         "then this command.") from None
+    print("Save this sign-in key now, for example in a password manager. Amplifier does not show it again.")
+    print()
+    print("    " + browser_entry.SavedKey.display(key))
+    print()
+    print('On the other device, open Amplifier and type the key in the field "Sign-in key". '
+          "Addresses for other devices:")
+    for origin in remote:
+        print("  " + origin)
+    print('Amplifier must be running. It uses a new address only after the steps "Turn remote access on" '
+          "of the deployment guide.")
+    print("The key works until you make a new key, remove it (amplifier-unified browsers key --remove) "
+          "or sign out all browsers.")
+    if replaced:
+        print("The earlier key no longer works.")
 
 
 def _open_browser_safely(args, data_dir, config):
@@ -684,8 +736,12 @@ def main():
         _config(args, data_dir)
         return
     if args.command == "browsers":
+        if args.remove and args.browsers_command != "key":
+            raise SystemExit("--remove is only valid with browsers key.")
         if args.browsers_command == "code":
             return _browser_code(args, data_dir)
+        if args.browsers_command == "key":
+            return _browser_key(args, data_dir)
         from .auth import SignOutUncertain, sign_out_all
         try:
             sign_out_all(data_dir)
@@ -697,6 +753,18 @@ def main():
                              f"{data_dir}. Nothing was changed.") from None
         print("All browsers on all devices are signed out. A running Amplifier applies this within a few seconds.")
         print("To use Amplifier in a browser again, open it from this computer.")
+        if not browser_entry.is_windows():
+            return                                          # Only a Windows host has a sign-in key.
+        try:
+            # The saved second ends a key from before it (auth.sign_in_key_is_current). That rule reads the
+            # clock of this PC, so the record of the key is removed as well: a key must not come back when a
+            # clock that was set back reaches the second of the key again.
+            if browser_entry.remove_key(data_dir):
+                print("The saved sign-in key no longer works. To make a new one, run this: "
+                      "amplifier-unified browsers key.")
+        except (OSError, ValueError):
+            print("Amplifier could not confirm that the saved sign-in key is removed. Run this: "
+                  "amplifier-unified browsers key --remove.")
         return
     if args.command == "doctor":
         from .installation_health import doctor, display

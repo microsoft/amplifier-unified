@@ -468,7 +468,8 @@ async def test_real_host_applies_sign_out_all_browsers_to_requests_and_open_stre
 
 
 @pytest.mark.parametrize("method,path", [
-    ("GET", "/login"), ("POST", "/api/browser-entry/code"), ("POST", "/api/browser-entry/code/redeem")])
+    ("GET", "/login"), ("POST", "/api/browser-entry/code"), ("POST", "/api/browser-entry/code/redeem"),
+    ("POST", "/api/browser-entry/key/redeem")])
 async def test_default_host_serves_no_sign_in_by_code_at_an_address_for_other_devices(aiohttp_client, tmp_path, method, path):
     """Remote access is off by default: the host answers only at this computer's own names."""
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
