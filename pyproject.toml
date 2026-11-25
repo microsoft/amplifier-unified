@@ -140,10 +140,10 @@ dev = [
     "amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@main",
     # Accepted ordinary-turn continuation source; provider stays on the existing locked
     # source shared with the optional decisions extra.
-    "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@4ce7bed1adec937760da10502e8c641b6810e3cd#subdirectory=modules/context-managed",
+    "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@b058c408bb2138129fec4e95c7ed73e6ff2dff12#subdirectory=modules/context-managed",
     "amplifier-module-provider-openai[native] @ git+https://github.com/microsoft/amplifier-module-provider-openai@main",
     # Subscription handoff requires a confirmed response from this adapter.
-    "amplifier-module-provider-openai-chatgpt @ git+https://github.com/microsoft/amplifier-module-provider-openai-chatgpt@5bdd616cf937b9f51dca6b442023d4ea44c4316e",
+    "amplifier-module-provider-openai-chatgpt @ git+https://github.com/microsoft/amplifier-module-provider-openai-chatgpt@b6473e56a3f73a297cc139fd5414baec1722bc8c",
     # Cold selected-model budget and private overflow feedback integration.
     "amplifier-module-provider-anthropic @ git+https://github.com/microsoft/amplifier-module-provider-anthropic@b4762db1ee14c07daad7f20dac6a9534ebaed1b6",
     # Same real QuickJS dispatcher used by the maintained native-check workflow.
@@ -162,7 +162,7 @@ dev = [
 work-media = [
     # Opt-in, offline ordinary-Work composition tests mount every declared
     # module. Keep these out of the host's production dependency set.
-    "amplifier-module-tool-transcript @ git+https://github.com/microsoft/amplifier-bundle-context-managed@4ce7bed1adec937760da10502e8c641b6810e3cd#subdirectory=modules/tool-transcript",
+    "amplifier-module-tool-transcript @ git+https://github.com/microsoft/amplifier-bundle-context-managed@b058c408bb2138129fec4e95c7ed73e6ff2dff12#subdirectory=modules/tool-transcript",
     "amplifier-module-tool-bash @ git+https://github.com/microsoft/amplifier-module-tool-bash@d5bb46d24dcae8e260211bf8fb5c22de3a67f406",
     "amplifier-module-tool-web @ git+https://github.com/microsoft/amplifier-module-tool-web@2a58cf71f6f941f5b5ef28d59564f5d47af5f294",
     "amplifier-module-tool-search @ git+https://github.com/microsoft/amplifier-module-tool-search@ccd11795f6bb47853cfd1761b126f3b40d95a517",
