@@ -467,6 +467,38 @@ async def test_real_host_applies_sign_out_all_browsers_to_requests_and_open_stre
     assert (await client.get("/api/state", headers=opened)).status == 200
 
 
+async def test_real_host_serves_the_password_page_and_refuses_it_where_the_owner_is_not_proven(
+        aiohttp_client, tmp_path, monkeypatch):
+    """The real routes and the real middleware. This client speaks plain HTTP, so no form may show."""
+    from amplifier_web import browser_entry
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    assert app["browser_key"] is None                       # Not a Windows host.
+    app["browser_key"] = browser_entry.SavedKey()           # As a Windows host has it, for the second half.
+    client = await aiohttp_client(app)
+    cookie = {"Cookie": f"amplifier_unified_session={new_session(app['session_secret'])}"}
+    # Not signed in: the sign-in page, as for every page of the app.
+    anonymous = await client.get(browser_entry.PASSWORD_PATH, allow_redirects=False)
+    assert anonymous.status == 307 and anonymous.headers["Location"].startswith("/login")
+    # A host that is not a Windows host has no such password.
+    page = await client.get(browser_entry.PASSWORD_PATH, headers=cookie)
+    assert page.status == 200 and "<form" not in await page.text()
+    assert "the password of the host account" in await page.text()
+    assert page.headers["Cache-Control"] == "no-store" and page.headers["Referrer-Policy"] == "same-origin"
+    assert (await client.post(browser_entry.PASSWORD_PATH, headers=cookie, data={"action": "remove"})).status == 403
+    connect = await client.get("/connect", headers=cookie)
+    assert connect.status == 200 and browser_entry.PASSWORD_PATH not in await connect.text()
+    # A Windows host over plain HTTP: the owner is not proven, so there is no form and no card.
+    monkeypatch.setattr(browser_entry, "is_windows", lambda: True)
+    monkeypatch.setattr(browser_entry, "set_password", lambda *a: pytest.fail("A password was set"))
+    refused = await client.get(browser_entry.PASSWORD_PATH, headers=cookie)
+    assert refused.status == 403 and "<form" not in await refused.text()
+    posted = await client.post(browser_entry.PASSWORD_PATH, headers={**cookie, "Origin": str(client.make_url("")).rstrip("/")},
+                               data={"action": "set", "password": "correct horse battery", "confirm": "correct horse battery"})
+    assert posted.status == 403
+    assert browser_entry.PASSWORD_PATH not in await (await client.get("/connect", headers=cookie)).text()
+
+
 @pytest.mark.parametrize("method,path", [
     ("GET", "/login"), ("POST", "/api/browser-entry/code"), ("POST", "/api/browser-entry/code/redeem"),
     ("POST", "/api/browser-entry/key/redeem")])

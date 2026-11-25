@@ -359,7 +359,9 @@ def _new_record(first, second) -> bool:
 
 _SIGN_IN_KEY = "sign-in-key"
 _NO_SIGN_IN_KEY = b"none\n"
-_SIGN_IN_KEY_RECORD = re.compile(rb"([0-9]{1,12}) ([0-9a-f]{64})\n?")
+# The second of the making, then the SHA-256 of a key, or the scrypt parameters, salt and hash of a password.
+_SIGN_IN_KEY_RECORD = re.compile(rb"([0-9]{1,12}) ([0-9a-f]{64}|scrypt 15 8 1 [0-9a-f]{32} [0-9a-f]{64})\n?")
+_SIGN_IN_KEY_LIMIT = 125  # The longest record: a password's, with a second of twelve digits.
 
 
 def _sign_in_key_path(data_dir: Path) -> Path:
@@ -370,20 +372,21 @@ def _sign_in_key_path(data_dir: Path) -> Path:
 
 
 def read_sign_in_key(data_dir: Path):
-    """The record of the owner's saved sign-in key, or None when no key is saved.
+    """The record of the owner's saved sign-in key or password, or None when none is saved.
 
-    The record is the second in which the key was made and the SHA-256 of the
-    key, never the key. A record that cannot be read or is malformed is an
-    error: it is not "no key", and it is not a key that works.
+    The record is the second of the making, and the SHA-256 of the key or the
+    scrypt parameters, salt and hash of the password; never the key or the
+    password. A record that cannot be read or is malformed is an error: it is
+    not "none", and it is not a key or password that works.
     """
     try:
         if _WINDOWS:
             from . import windows_files
             root = windows_files.address(data_dir)
             with windows_files.directory(root / "config" / "auth", owned_root=root) as pinned:
-                content = pinned.read_private(_SIGN_IN_KEY, limit=78)
+                content = pinned.read_private(_SIGN_IN_KEY, limit=_SIGN_IN_KEY_LIMIT)
         else:
-            content = _sign_in_key_path(data_dir).read_bytes()[:79]
+            content = _sign_in_key_path(data_dir).read_bytes()[:_SIGN_IN_KEY_LIMIT + 1]
     except FileNotFoundError:
         return None
     if content == _NO_SIGN_IN_KEY:
@@ -395,7 +398,7 @@ def read_sign_in_key(data_dir: Path):
 
 
 def write_sign_in_key(data_dir: Path, record) -> None:
-    """Save the record of a new key, or None for no key, in the owner's private folder."""
+    """Save the record of a new key or password, or None for none, in the owner's private folder."""
     content = _NO_SIGN_IN_KEY if record is None else f"{record[0]} {record[1]}\n".encode("ascii")
     if _WINDOWS:
         write_private(_sign_in_key_path(data_dir), content, owned_root=validated_data_dir(data_dir, create=True))
@@ -417,6 +420,19 @@ def sign_in_key_is_current(app, made: int) -> bool:
     `valid_session` for the session's own second.
     """
     return getattr(app.get("sessions"), "epoch", 0) < made <= int(time.time())
+
+
+def session_is_remote(value) -> bool:
+    """A valid session's own mark: a code, a key or a password opened it at an address for other devices.
+
+    Call it only for a session that `valid_session` accepted. A value that
+    cannot be read counts as remote.
+    """
+    try:
+        encoded = value.rsplit(".", 1)[0]
+        return json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))).get("via") == "remote"
+    except (AttributeError, ValueError, TypeError):
+        return True
 
 
 def saved_sign_out(data_dir: Path) -> int:
@@ -476,7 +492,8 @@ async def watch_sessions(app, streams, *, interval=2.0):
                 reported = True
                 try:
                     print("Sign-out of all browsers could not be checked: " + type(error).__name__
-                          + ". Until it can be checked, no browser can sign in with a ticket, a code or a key.",
+                          + ". Until it can be checked, no browser can sign in with a ticket, a code, "
+                          "a key or a password.",
                           flush=True)
                 except (OSError, ValueError):
                     pass

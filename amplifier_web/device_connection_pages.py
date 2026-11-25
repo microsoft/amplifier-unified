@@ -34,7 +34,11 @@ def setup_routes(app):
     async def connect(request):
         require_safe_transport(request)
         browser_cookie(request)
-        return page('Devices & apps', (ASSETS / 'web/connect.html').read_text(), script='connect.js')
+        from .browser_entry import password_card
+        content = (ASSETS / 'web/connect.html').read_text()
+        # On a Windows host, on the PC itself: the way to the password for a browser on another device.
+        return page('Devices & apps', content.replace('<section class="card">', password_card(request) + '<section class="card">', 1),
+                    script='connect.js')
 
     async def verify(request):
         require_safe_transport(request)

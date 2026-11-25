@@ -103,9 +103,11 @@ def _parse() -> argparse.Namespace:
     browsers.add_argument("browsers_command", choices=["sign-out", "code", "key"],
                           help="sign-out: sign out every browser on every device; "
                                "code: make a one-use code that signs in a browser on another device (Windows host); "
-                               "key: make a sign-in key to save, for a browser on another device (Windows host)")
+                               "key: make a random sign-in key to save, for a browser on another device (Windows host; "
+                               "to set your own password, use the app on the PC)")
     browsers.add_argument("--origin", metavar="URL", help="code: the address that the other device opens")
-    browsers.add_argument("--remove", action="store_true", help="key: remove the saved sign-in key and make no new one")
+    browsers.add_argument("--remove", action="store_true",
+                          help="key: remove the saved sign-in key or password and make no new key")
     setup_tls = subcommands.add_parser("setup-tls", help="Create or inspect the app-owned local CA")
     setup_tls.add_argument("mode", nargs="?", choices=["status", "default", "force", "export"], default="default")
     reset = subcommands.add_parser("reset", help="Reinstall a clean app and runtime while preserving user data")
@@ -550,11 +552,11 @@ def _browser_key(args, data_dir):
             removed = browser_entry.remove_key(data_dir)
         except (OSError, ValueError):
             # The record may or may not have changed: a save can fail after it is in place.
-            raise SystemExit(f"Amplifier could not confirm that the sign-in key is removed (its record is in {data_dir}). "
+            raise SystemExit(f"Amplifier could not confirm that the sign-in key or password is removed (its record is in {data_dir}). "
                              "Run the command again. To end the key another way, run this: "
                              "amplifier-unified browsers sign-out.") from None
-        print("The sign-in key is removed. Browsers that are signed in stay signed in." if removed
-              else "No sign-in key was saved.")
+        print("The saved sign-in key or password is removed. Browsers that are signed in stay signed in." if removed
+              else "No sign-in key or password was saved.")
         return
     from .deployment import load_server_config
     try:
@@ -579,10 +581,11 @@ def _browser_key(args, data_dir):
         print("  " + origin)
     print('Amplifier must be running. It uses a new address only after the steps "Turn remote access on" '
           "of the deployment guide.")
-    print("The key works until you make a new key, remove it (amplifier-unified browsers key --remove) "
+    print("To set a password of your own instead, use the app on the PC: " + browser_entry.SETTINGS_PATH)
+    print("The key works until you make a new key, set a password, remove it (amplifier-unified browsers key --remove) "
           "or sign out all browsers.")
     if replaced:
-        print("The earlier key no longer works.")
+        print("The earlier key or password no longer works.")
 
 
 def _open_browser_safely(args, data_dir, config):
@@ -754,16 +757,16 @@ def main():
         print("All browsers on all devices are signed out. A running Amplifier applies this within a few seconds.")
         print("To use Amplifier in a browser again, open it from this computer.")
         if not browser_entry.is_windows():
-            return                                          # Only a Windows host has a sign-in key.
+            return                                          # Only a Windows host has a sign-in key or password.
         try:
             # The saved second ends a key from before it (auth.sign_in_key_is_current). That rule reads the
             # clock of this PC, so the record of the key is removed as well: a key must not come back when a
             # clock that was set back reaches the second of the key again.
             if browser_entry.remove_key(data_dir):
-                print("The saved sign-in key no longer works. To make a new one, run this: "
-                      "amplifier-unified browsers key.")
+                print("The saved sign-in key or password no longer works. Set a new password in the app on the PC "
+                      "when you need one.")
         except (OSError, ValueError):
-            print("Amplifier could not confirm that the saved sign-in key is removed. Run this: "
+            print("Amplifier could not confirm that the saved sign-in key or password is removed. Run this: "
                   "amplifier-unified browsers key --remove.")
         return
     if args.command == "doctor":

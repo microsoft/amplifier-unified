@@ -4521,13 +4521,9 @@ addition; the code stays for a device that must not keep a secret.
   So the key command never says that nothing changed: it says that the save
   or the removal is not confirmed, and that an earlier key may no longer
   work. A key that was saved and not shown is known to nobody.
-- **The page.** The page for another device has a second form after the code
-  form: the field **Sign-in key**, a password field with
-  `autocomplete="current-password"`, and **Sign in with key**. The code form
-  stays first and keeps the focus. One short line between the forms says
-  that the key is another way in, so that nobody looks for a second step.
-  All help follows both forms. The error text is one of two fixed texts,
-  chosen by the redirect (`?error=key`).
+- **The page.** The key is typed in the field **Password** of the page for
+  another device. The next section describes that form: a key and a password
+  share it.
 - **The session.** As from a code: marked remote, with the configured
   lifetime. It is not renewed; after that lifetime the device signs in with
   the key again.
@@ -4545,6 +4541,112 @@ the command has then named `browsers key --remove`, which ends the key at any
 clock time. Not measured: a password manager that saves and fills the key, a
 phone browser, and the journey on a real second device. Linux, macOS and WSL
 hosts refuse the key endpoint and the key command.
+
+#### A password that the owner sets in the app on the PC
+
+The key needs a terminal, and a person cannot choose it. The owner who met the
+gap asked for the other thing: a password of his own, set in the app on the PC.
+The password is that. The key stays for an owner who wants a random secret and
+has a terminal.
+
+- **One record, two kinds.** The file of the key, `config/auth/sign-in-key`,
+  holds a key or a password, never both. A new password replaces a key, and a
+  new key replaces a password. So a person has one secret to know, and the
+  rules for the end of a key (a new one, `--remove`, the sign-out of all
+  browsers and its "no key" write, the rule for the clock) are the rules of
+  the password, unchanged. A password's record is the second of its making,
+  then `scrypt 15 8 1`, a random salt of 16 bytes and the hash of 32 bytes:
+  125 bytes at most, and a reader accepts only these parameters. A version
+  before this one reads such a record as malformed, which is "no key".
+- **The hash.** scrypt with N = 2^15, r = 8, p = 1, from the standard
+  library: about a tenth of a second and 32 MiB for each check. The hash
+  protects the password itself, which a person may use elsewhere against
+  this text's advice. It does not protect the installation from a reader of
+  that folder, who can already read the session secret.
+- **The text.** At least 12 and at most 256 characters, with no rule for the
+  kinds of characters. The password is exact: case, spaces and hyphens
+  count, unlike for a key. Before the hash, the text gets the Unicode form
+  NFKC, so that two keyboards that send the same characters in two forms
+  give one password.
+- **Wrong passwords.** A person chooses a password, so the "no lockout and no
+  delay" of a code and a key is not enough. After five wrong passwords in a
+  row, the host checks no password for a time: 2 seconds at first, and two
+  times as long after each further wrong password, to 5 minutes at most.
+  During that time it checks nothing, also not the right password. The right
+  password, or 15 minutes with no wrong one, starts the count again. That
+  leaves a sender fewer than 500 guesses in a day. The count is in the
+  memory of the host; a restart of the host, which a sender cannot cause,
+  starts it again. A text that cannot be a password is a wrong password and
+  needs no hash. A key has no wait.
+- **Why the wait is for everyone.** The request does not say which device
+  sent it: a Tailscale forward connects from this computer for every device
+  (see the code's "Where it works"). A wait for each address would be no
+  wait behind the forward. So a person who reaches the address can keep the
+  owner from signing in with the password, and gets in no faster. A code is
+  not slowed down and still works, and so does the PC itself. The owner who
+  wants no such wait uses a key.
+- **One check at a time.** The hash runs in a thread, away from the event
+  loop, and only one runs. A second password that arrives meanwhile is not
+  checked and not counted; its page says that Amplifier was busy. So a flood
+  of wrong passwords costs one thread and 32 MiB, not more.
+- **A change during a check.** After the hash, the host looks at the record
+  again. A password that the owner changed or removed during its check opens
+  nothing.
+- **Who can set it.** A browser that signed in on this PC, on the owner's
+  page (`/connect/sign-in`). The page and its form need all of these: a
+  valid browser session that is not marked remote; HTTPS; both socket ends
+  and the name in use are this computer's; for the form also the exact local
+  `Origin` and a token that is made from the session. A session that a code,
+  a key or a password opened is marked remote since the code (`"via":
+  "remote"`); this is the rule for remote sessions that the mark was made
+  for. Behind a Tailscale forward a device of the tailnet has local sockets
+  and can send a local name. It has no session that is not remote: such a
+  session comes only from the launcher's ticket. The control credential and
+  a device credential do not open the page. This is not a wall against a
+  remote session, which has the whole app and can run a command through a
+  chat; it keeps a stolen remote session from a silent change of the
+  password through this page.
+- **The page.** Server-rendered, with no script, and it shows nothing from
+  the request. Its texts are fixed; a notice comes from a fixed list
+  (`?done=`). It shows whether a password or a key is set and when the
+  password was saved, never the password. It lists the addresses for other
+  devices, or says that there is none. The form answers with a redirect, so
+  that a reload sends no password again. A save or a removal that is not
+  confirmed is said as such, as for the key command. Setting takes the hash
+  and the private write in a thread.
+- **The way to the page.** The web client's Settings has the page "Install
+  app" with the link "Devices & apps", which opens the host's own page
+  `/connect`. On a Windows host, for a browser that the owner's page would
+  accept, that page gets one more card, the first one: "Sign in from a
+  browser on another device", with **Set a password**. So the app has a way
+  to the page with no change of the web client. The texts of the sign-in
+  page and of the key command name this way (`browser_entry.SETTINGS_PATH`).
+  The two names are the web client's: when it renames them, that text must
+  change with it. No check connects the two.
+- **The page for another device.** While a password or a key is saved, the
+  page has the form **Password** first, with the focus; then one short line
+  and the code form, with **Sign in with code**. The password field is a
+  password field with `autocomplete="current-password"`. With nothing saved,
+  the page has the code form only, and one line that says where a password
+  is set. So the page says whether a password or a key is saved; a sender
+  sees the same from an attempt. All help follows the forms. The error text
+  is one of four fixed texts, chosen by the redirect (`?error=password`,
+  `?error=wait`, another value for a code); the text for a wait names the
+  time that is left, from the host's own state.
+- **The command line.** No command sets a password: a password on a command
+  line stays in the history of the shell. `browsers key --remove` removes a
+  password as it removes a key, and the texts of the key command and of the
+  sign-out command name both.
+
+Limits: the limits of the key, and these. A person on the same network can
+keep the owner from signing in with the password, for as long as that person
+sends wrong passwords. The password is as good as the owner's choice; twelve
+characters and the wait are the floor, and there is no check against known
+passwords. Settings has no entry of its own for the page; the way goes
+through "Install app" and "Devices & apps". The page `/connect` is read with
+the default text encoding of the host, which this change did not touch. Not
+measured: the page in a real browser on a Windows PC by a person, a password
+manager, a phone browser.
 
 #### The next step for a browser on the PC that is not signed in
 
