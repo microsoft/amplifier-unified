@@ -19,8 +19,12 @@ on:
         description: Five locked-host Windows cases then one unchanged cold declared-worker case, on one runner
         type: boolean
         default: false
+      cold_only:
+        description: Only the unchanged cold declared-worker case with a fresh locked host; no five-case rerun or receipt reuse
+        type: boolean
+        default: false
       candidate_ref:
-        description: Full immutable application SHA required only for remaining_runtime_only; workflow and product sources stay distinct
+        description: Full immutable application SHA required for remaining_runtime_only or cold_only; workflow and product sources stay distinct
         type: string
         default: ''
   pull_request:
@@ -145,7 +149,7 @@ permissions:
   contents: read
 jobs:
   instance-branding-storage:
-    if: ${{ !inputs.remaining_runtime_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -179,7 +183,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   passive-process-check:
-    if: ${{ !inputs.remaining_runtime_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -232,7 +236,7 @@ jobs:
           print('native replaced-while-read cases:', count, 'run:', result.testsRun, 'skipped:', len(result.skipped));
           sys.exit(not (result.wasSuccessful() and count and count == result.testsRun and not result.skipped))"
   windows-private-config-tls:
-    if: ${{ !inputs.remaining_runtime_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
     runs-on: windows-latest
     timeout-minutes: 5
     env:
@@ -308,7 +312,7 @@ jobs:
     # disposable runner's MACHINE store, because a hosted runner cannot answer
     # the question Windows asks for a person's own store. The product never uses
     # the machine store. The test removes the root in every case.
-    if: ${{ !inputs.remaining_runtime_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
     runs-on: windows-latest
     timeout-minutes: 12
     env:
@@ -492,7 +496,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows uninstall delete-choice checks failed.' }
           if (($log -join "`n") -match '\d+ skipped') { throw 'A native uninstall case was skipped on this lane.' }
   windows-user-trial:
-    if: ${{ !inputs.remaining_runtime_only && !inputs.candidate_ref && (inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only)) }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && (inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only)) }}
     # Candidate-only combined boundary, not a universal suite/release gate.
     # The existing 5-minute stdlib/PowerShell and private-config lanes are unchanged.
     runs-on: windows-latest
@@ -591,7 +595,7 @@ jobs:
     # Public dependency setup is intentional ONLY here. Do not relax the
     # separate offline qualifier or supply a preinstalled replacement command.
     needs: windows-user-trial
-    if: ${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && (inputs.remaining_runtime_only || inputs.candidate_ref != '')) || (!inputs.remaining_runtime_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.storage_only && (inputs.foreground_only || needs.windows-user-trial.result == 'success'))) }}
+    if: ${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && (inputs.remaining_runtime_only || inputs.cold_only || inputs.candidate_ref != '')) || (!inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.storage_only && (inputs.foreground_only || needs.windows-user-trial.result == 'success'))) }}
     runs-on: windows-latest
     # 6-minute setup + 2-minute metadata check + unchanged 21-minute cold check
     # + 4-minute CLI cell + overhead. The step budgets stay below this budget.
@@ -603,6 +607,7 @@ jobs:
       UV_PYTHON_DOWNLOADS: never
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
       REMAINING_RUNTIME_ONLY: ${{ inputs.remaining_runtime_only && 'true' || 'false' }}
+      COLD_ONLY: ${{ inputs.cold_only && 'true' || 'false' }}
     steps:
       - name: Validate the isolated remaining-runtime selection before setup
         env:
@@ -616,13 +621,15 @@ jobs:
           import os, re
           def validate_selection(env):
               selected = env['REMAINING_RUNTIME_ONLY'] == 'true'
+              cold = env['COLD_ONLY'] == 'true'
               candidate = env['CANDIDATE_REF']
-              if selected:
+              assert not (selected and cold), 'native scopes are mutually exclusive'
+              if selected or cold:
                   assert env['GITHUB_EVENT_NAME'] == 'workflow_dispatch'
                   assert re.fullmatch('[a-f0-9]{40}', candidate)
                   assert all(env[key] == 'false' for key in ('BOOTSTRAP_ONLY', 'FOREGROUND_ONLY', 'STORAGE_ONLY'))
               else:
-                  assert candidate == '', 'candidate_ref belongs only to remaining_runtime_only'
+                  assert candidate == '', 'candidate_ref belongs only to an explicit native scope'
           validate_selection(os.environ)
           '@
           python -I -S -B -c $check
@@ -631,7 +638,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Read the exact remaining-runtime application candidate
-        if: ${{ inputs.remaining_runtime_only }}
+        if: ${{ inputs.remaining_runtime_only || inputs.cold_only }}
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.candidate_ref }}
@@ -643,7 +650,7 @@ jobs:
           architecture: x64
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - name: Build and install candidate host for cold default-command setup
-        if: ${{ !inputs.remaining_runtime_only }}
+        if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only }}
         timeout-minutes: 6
         shell: pwsh
         run: |
@@ -667,7 +674,7 @@ jobs:
           uv pip install --python "$base/env/Scripts/python.exe" --only-binary amplifier-core $wheel[0].FullName "pytest>=8,<10" "pytest-asyncio>=1.4,<2" "pytest-aiohttp>=1.1,<2" @modules
           if ($LASTEXITCODE -ne 0) { throw 'Default-command candidate host installation failed.' }
       - name: Build and install the locked host for the remaining native cases
-        if: ${{ inputs.remaining_runtime_only }}
+        if: ${{ inputs.remaining_runtime_only || inputs.cold_only }}
         timeout-minutes: 6
         shell: pwsh
         env:
@@ -1003,7 +1010,7 @@ jobs:
           & "$env:DEFAULT_TRIAL_BASE/env/Scripts/python.exe" -I -B -c $check $env:DEFAULT_CANDIDATE_SOURCE $env:DEFAULT_TRIAL_BASE $env:GITHUB_WORKSPACE
           if ($LASTEXITCODE -ne 0) { throw 'Five locked-host native cases failed; cold work was not started.' }
       - name: Check closed metadata observation and original-outcome preservation
-        if: ${{ !inputs.remaining_runtime_only }}
+        if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only }}
         timeout-minutes: 2
         shell: pwsh
         run: |
@@ -1073,6 +1080,27 @@ jobs:
           source, base = map(pathlib.Path, sys.argv[1:])
           node = "tests/test_runtime.py::test_native_windows_default_runtime_command_cold_prepare_turn_and_stop"
           focused = os.environ.get('REMAINING_RUNTIME_ONLY') == 'true'
+          cold_only = os.environ.get('COLD_ONLY') == 'true'
+          assert not (focused and cold_only)
+          def prepare_cold_parent(base):
+              import tempfile, uuid
+              from amplifier_web.windows_files import address, directory
+              # Refuse an earlier cached/fallback TEMP; never reset the cache.
+              assert tempfile.tempdir is None
+              parent = address(pathlib.Path.home() / ('.drt-' + uuid.uuid4().hex[:12]))
+              assert not parent.exists()
+              # Private custody before creation, not part of the public upload.
+              with (base / 'private-cold-parent.json').open('x', encoding='utf-8') as record:
+                  json.dump({'root': str(parent), 'custody': 'retained-for-runner-owner'}, record)
+              with directory(parent, owned_root=parent, create=True):
+                  pass
+              os.environ.update(TEMP=str(parent), TMP=str(parent), TMPDIR=str(parent))
+              assert pathlib.Path(tempfile.gettempdir()) == parent
+              return parent  # No dr-* root/worker project is prepared here.
+          def cold_root(parent):
+              roots = list(parent.glob('dr-*'))
+              assert len(roots) == 1 and re.fullmatch('dr-[a-f0-9]{12}', roots[0].name)
+              return roots[0]
           def host_graph():
               rows = []
               for dist in metadata.distributions():
@@ -1083,6 +1111,23 @@ jobs:
                   rows.append({'name': name, 'version': dist.version, 'direct': direct})
               assert len({row['name'] for row in rows}) == len(rows)
               return sorted(rows, key=lambda row: row['name'])
+          def verify_locked_graph(rows, lock):
+              for row in rows:
+                  choices = [p for p in lock['package'] if p['name'] == row['name'] and p['version'] == row['version']]
+                  assert len(choices) == 1
+                  selected, direct = choices[0]['source'], row['direct']
+                  if 'git' in selected:
+                      url = urlsplit(selected['git'])
+                      assert direct == {'url': urlunsplit((url.scheme, url.netloc, url.path, '', '')),
+                          'vcs_info': {'vcs': 'git', 'commit_id': url.fragment,
+                                       'requested_revision': parse_qs(url.query)['rev'][0]},
+                          **({'subdirectory': parse_qs(url.query)['subdirectory'][0]}
+                             if 'subdirectory' in parse_qs(url.query) else {})}
+                  else:
+                      assert set(selected) == {'registry'} and not direct
+              required = {'amplifier-core', 'amplifier-foundation', 'amplifier-module-loop-live',
+                          'pytest', 'pytest-asyncio', 'pytest-aiohttp', 'filelock', 'pyyaml'}
+              assert required <= {row['name'] for row in rows}
           def worker_lock_graph(raw):
               rows = []
               for package in tomllib.loads(raw.decode())['package']:
@@ -1143,13 +1188,32 @@ jobs:
           result = {"schema": 1, "status": "FAIL", "publicAcceptance": False,
                     "qualification": "cold-default-command-scripted-provider",
                     "selection": {"collected": 0, "callPassed": False, "noSkips": False}}
+          if cold_only:
+              result.update(qualification='cold-only-declared-worker-with-locked-host',
+                  workerGraphScope='fresh-shipped-manifest-not-host-lock',
+                  fiveCaseScope='not-selected-not-requalified')
           try:
               with (base / "private-check.log").open("x", encoding="utf-8") as logs:
                   with contextlib.redirect_stdout(logs), contextlib.redirect_stderr(logs):
+                      if cold_only:
+                          cold_parent = prepare_cold_parent(base)
                       audit = load("installed_candidate_audit", source / "tests/fixtures/windows_user_trial_probe.py")
                       wheel = pathlib.Path(os.environ["AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_WHEEL"])
                       assert pathlib.Path(sys.executable).samefile(os.environ["AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_PYTHON"])
                       before = audit.installed(wheel, result)
+                      if cold_only:
+                          # This invocation proves its own host. Never consume or
+                          # manufacture a five-case receipt from this or an old run.
+                          graph = host_graph()
+                          lock_bytes = (source / 'uv.lock').read_bytes()
+                          verify_locked_graph(graph, tomllib.loads(lock_bytes.decode()))
+                          workflow_identity = audit.candidate(pathlib.Path(os.environ['GITHUB_WORKSPACE']))
+                          result.update(qualification='cold-only-declared-worker-with-locked-host',
+                              workerGraphScope='fresh-shipped-manifest-not-host-lock',
+                              hostGraphSha256=hashlib.sha256(json.dumps(graph, sort_keys=True).encode()).hexdigest(),
+                              hostLockSha256=hashlib.sha256(lock_bytes).hexdigest(),
+                              workflow=workflow_identity,
+                              fiveCaseScope='not-selected-not-requalified')
                       if focused:
                           five = json.loads((base / 'evidence/five-native.json').read_text(encoding='utf-8'))
                           assert five['status'] == 'PASS' and five['installed'] == before
@@ -1164,6 +1228,8 @@ jobs:
                       assert set(candidate) == {"head", "tree"} and all(
                           audit.re.fullmatch(r"[0-9a-f]{40,64}", value) for value in candidate.values())
                       result["candidate"] = candidate
+                      if cold_only:
+                          assert candidate == audit.candidate(source)
                       if focused:
                           assert candidate == five['candidate'] == audit.candidate(source)
                           assert hashlib.sha256((source / 'uv.lock').read_bytes()).hexdigest() == five['lockSha256']
@@ -1185,6 +1251,12 @@ jobs:
                           "callPassed": selected.phases.count(("call", "passed")) == 1,
                           "noSkips": not any(outcome == "skipped" for _, outcome in selected.phases)}
                       assert audit.installed(wheel, result) == before
+                      if cold_only:
+                          assert host_graph() == graph and (source / 'uv.lock').read_bytes() == lock_bytes
+                          assert candidate == audit.candidate(source)
+                          assert audit.candidate(pathlib.Path(os.environ['GITHUB_WORKSPACE'])) == workflow_identity
+                          for name in files:
+                              assert (target / name).read_bytes() == (source / name).read_bytes()
                       if focused:
                           assert host_graph() == graph
                       probe = load("default_command_report", target / "tests/fixtures/windows_default_runtime_probe.py")
@@ -1193,13 +1265,12 @@ jobs:
                       result["probe"] = report
                       assert report["wheelSha256"] == hashlib.sha256(wheel.read_bytes()).hexdigest()
                       assert selected.passed(code) and report["status"] == "PASS"
-                      if focused:
+                      if focused or cold_only:
                           # Read ONLY the one new private root in this invocation's
                           # TEMP, after the unchanged probe proved both owned Jobs
                           # settled. Never delete scratch or inspect another run.
-                          roots = list((base / 'cold-temp').glob('dr-*'))
-                          assert len(roots) == 1 and re.fullmatch('dr-[a-f0-9]{12}', roots[0].name)
-                          raw = read_worker_lock(roots[0], report['manifestSha256'], report['lockSha256'])
+                          root = cold_root(cold_parent if cold_only else base / 'cold-temp')
+                          raw = read_worker_lock(root, report['manifestSha256'], report['lockSha256'])
                           result['workerLockPackages'] = worker_lock_graph(raw)
                           result['workerImportsScope'] = 'probe-observed-imports-only-not-every-locked-package'
                       result["status"] = "PASS"
@@ -1211,7 +1282,7 @@ jobs:
           & "$base/env/Scripts/python.exe" -I -B -c $check $env:DEFAULT_CANDIDATE_SOURCE $base
           if ($LASTEXITCODE -ne 0) { throw 'Native default-command check failed; inspect bounded publicresult.json.' }
       - name: Require installed foreground CLI TLS, public open and graceful cleanup
-        if: ${{ success() && !inputs.remaining_runtime_only }}
+        if: ${{ success() && !inputs.remaining_runtime_only && !inputs.cold_only }}
         # Preserve success sequencing explicitly: never run after cold failure.
         timeout-minutes: 4
         shell: pwsh
@@ -1234,7 +1305,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Upload only bounded foreground CLI facts
-        if: ${{ always() && !inputs.remaining_runtime_only }}
+        if: ${{ always() && !inputs.remaining_runtime_only && !inputs.cold_only }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-foreground-cli
@@ -1250,7 +1321,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
   windows-bootstrap-offline:
-    if: ${{ !inputs.remaining_runtime_only && !inputs.candidate_ref && github.event_name == 'workflow_dispatch' && inputs.bootstrap_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && github.event_name == 'workflow_dispatch' && inputs.bootstrap_only }}
     runs-on: windows-latest
     timeout-minutes: 12
     env:

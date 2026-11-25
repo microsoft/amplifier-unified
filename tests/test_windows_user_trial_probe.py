@@ -2252,7 +2252,7 @@ def test_workflow_keeps_old_lane_commands_and_bounded_installed_candidate_job():
     left_out = " and not stop_reads_the_receipt_while_the_host_writes_its_phases"
     for name, expected in golden.items():
         job = copy.deepcopy(workflow["jobs"][name])
-        assert job.pop("if") == "${{ !inputs.remaining_runtime_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}"
+        assert job.pop("if") == "${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}"
         accepted = [step for step in job["steps"] if step.get("name") in added[name]]
         assert [step["name"] for step in accepted] == list(added[name])
         for step in accepted:
@@ -2298,14 +2298,14 @@ def test_default_command_job_is_separate_finite_and_requires_real_native_node():
     assert job["timeout-minutes"] == 34
     # Setup/metadata/CLI and locked setup/five are mutually exclusive paths.
     for focused in (False, True):
-        excluded = ({"${{ !inputs.remaining_runtime_only }}",
-                     "${{ success() && !inputs.remaining_runtime_only }}"} if focused else
-                    {"${{ inputs.remaining_runtime_only }}"})
+        excluded = ({"${{ !inputs.remaining_runtime_only && !inputs.cold_only }}",
+                     "${{ success() && !inputs.remaining_runtime_only && !inputs.cold_only }}"} if focused else
+                    {"${{ inputs.remaining_runtime_only }}", "${{ inputs.remaining_runtime_only || inputs.cold_only }}"})
         selected_steps = [step for step in job["steps"] if step.get("if") not in excluded]
         assert sum(step.get("timeout-minutes", 0) for step in selected_steps) < job["timeout-minutes"]
     offline = workflow["jobs"]["windows-user-trial"]
     preserved_offline = copy.deepcopy(offline)
-    assert preserved_offline.pop("if") == "${{ !inputs.remaining_runtime_only && !inputs.candidate_ref && (inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only)) }}"
+    assert preserved_offline.pop("if") == "${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && (inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only)) }}"
     # Remove only the new opt-in diagnostic steps/conditions before comparing
     # every default-path byte to the frozen accepted candidate.
     added = {
@@ -2762,7 +2762,7 @@ def test_foreground_cli_source_and_workflow_preserve_entry_cleanup_budget_and_co
     assert foreground == cold + 1
     # Adding a scoped lane must not let the normal CLI cell run after cold
     # failure/cancellation, or run at all in remaining-runtime-only work.
-    assert step["if"] == "${{ success() && !inputs.remaining_runtime_only }}"
+    assert step["if"] == "${{ success() && !inputs.remaining_runtime_only && !inputs.cold_only }}"
     assert step["timeout-minutes"] == 4 and "--cli-run" in step["run"]
     assert '"$base/env/Scripts/python.exe" -I -B $probe' in step["run"]
     assert "--candidate-receipt" in step["run"] and "uv " not in step["run"]
@@ -2770,7 +2770,7 @@ def test_foreground_cli_source_and_workflow_preserve_entry_cleanup_budget_and_co
     assert upload["uses"] == "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
     # Failure evidence still uploads for the normal/foreground-only lane, not
     # for the separate five-case lane. Its position is not its identity.
-    assert upload["if"] == "${{ always() && !inputs.remaining_runtime_only }}"
+    assert upload["if"] == "${{ always() && !inputs.remaining_runtime_only && !inputs.cold_only }}"
     assert upload["with"]["name"] == "windows-foreground-cli"
     assert upload["with"]["path"] == "${{ runner.temp }}/dr-ci/evidence/foreground.json"
     source = Path(SPEC.origin).read_text(encoding="utf-8")
@@ -2824,12 +2824,13 @@ def test_foreground_boundary_guard_rejects_unsafe_conditions_and_wrong_upload(mo
         test_foreground_cli_source_and_workflow_preserve_entry_cleanup_budget_and_cold_boundary()
 
 
-@pytest.mark.parametrize("mode", ["default", "foreground-only", "remaining-runtime"])
+@pytest.mark.parametrize("mode", ["default", "foreground-only", "remaining-runtime", "cold-only"])
 @pytest.mark.parametrize("prior", ["success", "failure", "cancelled"])
 def test_foreground_run_and_evidence_conditions_cover_scope_and_prior_outcome(mode, prior):
     """Finite expression model, not evidence that a hosted step executed."""
     _, job, _ = cold_ci_runner()
     focused = mode == "remaining-runtime"
+    cold_only = mode == "cold-only"
     cold = next(s for s in job["steps"] if s.get("name", "").startswith("Require one native cold"))
     assert cold["if"] == "${{ !inputs.foreground_only }}"
     # foreground-only intentionally skips cold; that is not a failed job.
@@ -2837,14 +2838,15 @@ def test_foreground_run_and_evidence_conditions_cover_scope_and_prior_outcome(mo
     foreground = next(s for s in job["steps"] if s.get("name", "").startswith("Require installed foreground"))
     upload = next(s for s in job["steps"] if s.get("name") == "Upload only bounded foreground CLI facts")
     for step, function, permitted in (
-        (foreground, "success()", prior == "success" and not focused),
-        (upload, "always()", not focused),
+        (foreground, "success()", prior == "success" and not focused and not cold_only),
+        (upload, "always()", not focused and not cold_only),
     ):
         # Assert the complete expression before translating only these fixed
         # boolean tokens. A missing status/scope guard cannot enter this model.
-        assert step["if"] == "${{ " + function + " && !inputs.remaining_runtime_only }}"
+        assert step["if"] == "${{ " + function + " && !inputs.remaining_runtime_only && !inputs.cold_only }}"
         expression = step["if"][4:-3].replace(function, str(function == "always()" or prior == "success"))
-        expression = expression.replace("!inputs.remaining_runtime_only", str(not focused)).replace("&&", "and")
+        expression = expression.replace("!inputs.remaining_runtime_only", str(not focused))
+        expression = expression.replace("!inputs.cold_only", str(not cold_only)).replace("&&", "and")
         assert eval(expression, {"__builtins__": {}}, {}) is permitted
 
 
@@ -2855,14 +2857,14 @@ def test_foreground_cli_only_dispatch_preserves_accepted_cells_and_normal_admiss
         "description": "Run only installed foreground CLI diagnosis; reuses accepted public/cold evidence, does not requalify it",
         "type": "boolean", "default": False}
     for name in ("passive-process-check", "windows-private-config-tls"):
-        assert workflow["jobs"][name]["if"] == "${{ !inputs.remaining_runtime_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}"
-    assert workflow["jobs"]["windows-user-trial"]["if"] == "${{ !inputs.remaining_runtime_only && !inputs.candidate_ref && (inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only)) }}"
+        assert workflow["jobs"][name]["if"] == "${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}"
+    assert workflow["jobs"]["windows-user-trial"]["if"] == "${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && (inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only)) }}"
     assert job["needs"] == "windows-user-trial"
-    assert job["if"] == "${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && (inputs.remaining_runtime_only || inputs.candidate_ref != '')) || (!inputs.remaining_runtime_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.storage_only && (inputs.foreground_only || needs.windows-user-trial.result == 'success'))) }}"
+    assert job["if"] == "${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && (inputs.remaining_runtime_only || inputs.cold_only || inputs.candidate_ref != '')) || (!inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.storage_only && (inputs.foreground_only || needs.windows-user-trial.result == 'success'))) }}"
     cold = next(s for s in job["steps"] if s.get("name", "").startswith("Require one native cold"))
     assert cold["if"] == "${{ !inputs.foreground_only }}" and cold["timeout-minutes"] == 21
     cli = next(s for s in job["steps"] if s.get("name", "").startswith("Require installed foreground"))
-    assert cli["if"] == "${{ success() && !inputs.remaining_runtime_only }}" and cli["timeout-minutes"] == 4
+    assert cli["if"] == "${{ success() && !inputs.remaining_runtime_only && !inputs.cold_only }}" and cli["timeout-minutes"] == 4
     # Ordinary PR/manual-default behavior is unchanged; isolated diagnosis never
     # treats skipped accepted cells as newly passing checks.
     for requested, public_result, cancelled, expected in (
@@ -3152,7 +3154,7 @@ def test_remaining_selector_is_explicit_immutable_and_conflict_checked(focused, 
     import re
     _, _, tree = remaining_ci_code(VALIDATE_STEP)
     function = inline_definitions(tree, ["validate_selection"], {"re": re})["validate_selection"]
-    env = {"REMAINING_RUNTIME_ONLY": str(focused).lower(), "CANDIDATE_REF": candidate,
+    env = {"REMAINING_RUNTIME_ONLY": str(focused).lower(), "COLD_ONLY": "false", "CANDIDATE_REF": candidate,
            "GITHUB_EVENT_NAME": event, **dict(zip(
                ("BOOTSTRAP_ONLY", "FOREGROUND_ONLY", "STORAGE_ONLY"), map(lambda v: str(v).lower(), old_flags)))}
     if passes:
@@ -3173,20 +3175,21 @@ def test_remaining_route_uses_one_existing_job_and_no_unrelated_cells():
         "windows-local-connection", "windows-user-trial", "windows-default-runtime", "windows-bootstrap-offline"}
     for name, other in workflow["jobs"].items():
         if name != "windows-default-runtime":
-            assert other["if"].startswith("${{ !inputs.remaining_runtime_only && !inputs.candidate_ref && ")
+            assert other["if"].startswith("${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && ")
     assert job["needs"] == "windows-user-trial" and "!cancelled()" in job["if"]
-    assert "github.event_name == 'workflow_dispatch' && (inputs.remaining_runtime_only || inputs.candidate_ref != '')" in job["if"]
+    assert "github.event_name == 'workflow_dispatch' && (inputs.remaining_runtime_only || inputs.cold_only || inputs.candidate_ref != '')" in job["if"]
     assert job["steps"][0]["name"] == VALIDATE_STEP  # Before checkout/build/install.
     setups = {s["name"]: s for s in job["steps"] if "name" in s}
     assert setups["Read the exact remaining-runtime application candidate"]["with"] == {
         "ref": "${{ inputs.candidate_ref }}", "path": ".ci/remaining-candidate", "persist-credentials": False}
     for name in ("Build and install candidate host for cold default-command setup",
                  "Check closed metadata observation and original-outcome preservation"):
-        assert setups[name]["if"] == "${{ !inputs.remaining_runtime_only }}"
+        assert setups[name]["if"] == "${{ !inputs.remaining_runtime_only && !inputs.cold_only }}"
     assert setups["Require installed foreground CLI TLS, public open and graceful cleanup"]["if"] == (
-        "${{ success() && !inputs.remaining_runtime_only }}")
+        "${{ success() && !inputs.remaining_runtime_only && !inputs.cold_only }}")
     locked = setups["Build and install the locked host for the remaining native cases"]
-    assert locked["if"] == setups[FIVE_STEP]["if"] == "${{ inputs.remaining_runtime_only }}"
+    assert locked["if"] == "${{ inputs.remaining_runtime_only || inputs.cold_only }}"
+    assert setups[FIVE_STEP]["if"] == "${{ inputs.remaining_runtime_only }}"
     assert 'uv sync --project $source --locked --group dev --no-install-project --python' in locked["run"]
     assert 'uv pip install --python "$base/env/Scripts/python.exe" --no-deps $wheel[0].FullName' in locked["run"]
     assert 'uv pip check --python "$base/env/Scripts/python.exe"' in locked["run"]
@@ -3201,6 +3204,143 @@ def test_remaining_route_uses_one_existing_job_and_no_unrelated_cells():
     assert upload["with"]["path"] == "${{ runner.temp }}/dr-ci/evidence/five-native.json"
     assert upload["if"] == "${{ always() && inputs.remaining_runtime_only }}"
     assert "*" not in upload["with"]["path"]
+
+
+@pytest.mark.parametrize("fault", [
+    None, "combined", "no-ref", "branch", "uppercase", "pull-request",
+    "bootstrap", "foreground", "storage",
+])
+def test_cold_only_admission_is_distinct_immutable_and_exclusive(fault):
+    import re
+    _, _, tree = remaining_ci_code(VALIDATE_STEP)
+    validate = inline_definitions(tree, ["validate_selection"], {"re": re})["validate_selection"]
+    env = {"COLD_ONLY": "true", "REMAINING_RUNTIME_ONLY": "false", "CANDIDATE_REF": "a" * 40,
+           "GITHUB_EVENT_NAME": "workflow_dispatch",
+           "BOOTSTRAP_ONLY": "false", "FOREGROUND_ONLY": "false", "STORAGE_ONLY": "false"}
+    if fault == "combined": env["REMAINING_RUNTIME_ONLY"] = "true"
+    elif fault == "no-ref": env["CANDIDATE_REF"] = ""
+    elif fault == "branch": env["CANDIDATE_REF"] = "main"
+    elif fault == "uppercase": env["CANDIDATE_REF"] = "A" * 40
+    elif fault == "pull-request": env["GITHUB_EVENT_NAME"] = "pull_request"
+    elif fault: env[fault.upper() + "_ONLY"] = "true"
+    if fault:
+        with pytest.raises(AssertionError):
+            validate(env)
+    else:
+        validate(env)
+
+
+@pytest.mark.parametrize("fault", [None, "cached", "exists", "custody-write", "unsafe-parent", "temp-mismatch"])
+def test_cold_only_private_parent_keeps_probe_root_absent_and_refuses_fallback(tmp_path, monkeypatch, fault):
+    import tempfile
+    import uuid
+    from contextlib import contextmanager
+    from amplifier_web import windows_files
+    _, _, tree = cold_ci_runner()
+    env = {}
+    function = inline_definitions(tree, ["prepare_cold_parent"], {
+        "pathlib": types.SimpleNamespace(Path=Path), "json": json,
+        "os": types.SimpleNamespace(environ=env)})["prepare_cold_parent"]
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    parent = profile / (".drt-" + "a" * 12)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: profile))
+    monkeypatch.setattr(uuid, "uuid4", lambda: types.SimpleNamespace(hex="a" * 32))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path) if fault == "cached" else None)
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path if fault == "temp-mismatch" else parent))
+    monkeypatch.setattr(windows_files, "address", lambda value: value)
+    calls = []
+    refusal = PermissionError("synthetic private-parent refusal")
+    record = tmp_path / "private-cold-parent.json"
+    if fault == "exists": parent.mkdir()
+    if fault == "custody-write": record.write_text("older custody")
+
+    @contextmanager
+    def directory(path, *, owned_root, create):
+        assert json.loads(record.read_text()) == {"root": str(parent), "custody": "retained-for-runner-owner"}
+        assert not path.exists() and path == owned_root == parent and create is True
+        calls.append(path)
+        if fault == "unsafe-parent":
+            raise refusal
+        path.mkdir()  # Portable stand-in only; no native API.
+        yield
+
+    monkeypatch.setattr(windows_files, "directory", directory)
+    if fault:
+        with pytest.raises((AssertionError, FileExistsError, PermissionError)) as caught:
+            function(tmp_path)
+        if fault == "unsafe-parent": assert caught.value is refusal
+    else:
+        assert function(tmp_path) == parent
+    assert len(calls) == (0 if fault in {"cached", "exists", "custody-write"} else 1)
+    assert env == (dict(TEMP=str(parent), TMP=str(parent), TMPDIR=str(parent))
+                   if fault in {None, "temp-mismatch"} else {})
+    if fault in {None, "temp-mismatch"}:
+        assert list(parent.iterdir()) == []  # No dr-root, manifest, lock or worker preseed.
+    if fault == "custody-write":
+        assert record.read_text() == "older custody"
+
+
+@pytest.mark.parametrize("names, accepted", [
+    ([], False), (["dr-" + "a" * 12], True),
+    (["dr-" + "a" * 12, "dr-" + "b" * 12], False), (["dr-wrong"], False),
+])
+def test_cold_only_readback_is_bound_to_one_exact_parent(names, accepted):
+    import re
+    _, _, tree = cold_ci_runner()
+    locate = inline_definitions(tree, ["cold_root"], {"re": re})["cold_root"]
+    calls = []
+    rows = [Path("/fixture-parent") / name for name in names]
+    parent = types.SimpleNamespace(glob=lambda pattern: calls.append(pattern) or rows)
+    if accepted:
+        assert locate(parent) is rows[0]
+    else:
+        with pytest.raises(AssertionError):
+            locate(parent)
+    assert calls == ["dr-*"]
+
+
+def test_cold_only_scope_keeps_combined_receipts_out_of_its_fresh_host_proof():
+    workflow, job, tree = cold_ci_runner()
+    inputs = workflow.get("on", workflow.get(True))["workflow_dispatch"]["inputs"]
+    assert inputs["cold_only"]["default"] is False
+    steps = {s["name"]: s for s in job["steps"] if "name" in s}
+    assert steps[FIVE_STEP]["if"] == "${{ inputs.remaining_runtime_only }}"
+    assert steps["Build and install the locked host for the remaining native cases"]["if"] == (
+        "${{ inputs.remaining_runtime_only || inputs.cold_only }}")
+    assert steps["Read the exact remaining-runtime application candidate"]["if"] == (
+        "${{ inputs.remaining_runtime_only || inputs.cold_only }}")
+    assert job["env"]["COLD_ONLY"] == "${{ inputs.cold_only && 'true' || 'false' }}"
+    for name, other in workflow["jobs"].items():
+        if name != "windows-default-runtime":
+            assert "!inputs.cold_only" in other["if"]
+    body = ast.unparse(tree)
+    assert "cold-only-declared-worker-with-locked-host" in body
+    assert "fiveCaseScope='not-selected-not-requalified'" in body
+    assert body.index("cold_parent = prepare_cold_parent(base)") < body.index("audit = load(")
+    assert body.index("root = cold_root(") > body.index("assert selected.passed(code)")
+    assert "cold_root(cold_parent if cold_only else base / 'cold-temp')" in body
+    # The exact old same-run receipt checks remain reachable only in combined mode.
+    combined = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+                and isinstance(n.test, ast.Name) and n.test.id == "focused"]
+    assert any("five-native.json" in ast.unparse(n) and "five['installed'] == before" in ast.unparse(n)
+               for n in combined)
+    private = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "prepare_cold_parent")
+    assert not any(isinstance(n, ast.ExceptHandler) for n in ast.walk(private))
+    assert not any(isinstance(n, ast.Attribute) and n.attr in {
+        "rmtree", "unlink", "chmod", "resolve"} for n in ast.walk(private))
+    assert not any(isinstance(n, ast.Assign) and any(
+        isinstance(t, ast.Attribute) and t.attr == "tempdir" for t in n.targets) for n in ast.walk(private))
+    # Both scopes use the same strict lock/PEP610 oracle, not a weaker cold clone.
+    _, _, five = remaining_ci_code(FIVE_STEP)
+    definition = lambda code: next(n for n in code.body if isinstance(n, ast.FunctionDef) and n.name == "verify_locked_graph")
+    assert ast.dump(definition(tree)) == ast.dump(definition(five))
+    assert body.count("verify_locked_graph(graph, tomllib.loads(lock_bytes.decode()))") == 1
+    assert "assert host_graph() == graph and (source / 'uv.lock').read_bytes() == lock_bytes" in body
+    assert "audit.candidate(pathlib.Path(os.environ['GITHUB_WORKSPACE'])) == workflow_identity" in body
+    assert "shutil.copyfile(source / name, path)" in body  # No authored cold fixture substitution.
+    upload = steps["Upload only the bounded default-runtime result"]["with"]["path"]
+    assert "private-cold-parent" not in upload and "*" not in upload
 
 
 @pytest.mark.parametrize("fault", [None, "missing", "extra", "duplicate", "reordered", "wrong-node",
@@ -3416,9 +3556,10 @@ def test_remaining_workflow_keeps_full_selection_and_first_result_failure_hook()
 
 @pytest.mark.parametrize("fault", [None, "version", "commit", "url", "ref", "subdirectory",
                                   "editable", "registry-direct", "unknown", "missing", "duplicate-lock"])
-def test_remaining_locked_host_verifier_checks_actual_pep610(fault):
+@pytest.mark.parametrize("scope", ["five", "cold"])
+def test_remaining_locked_host_verifier_checks_actual_pep610(fault, scope):
     from urllib.parse import parse_qs, urlsplit, urlunsplit
-    _, _, tree = remaining_ci_code(FIVE_STEP)
+    _, _, tree = remaining_ci_code(FIVE_STEP) if scope == "five" else cold_ci_runner()
     verify = inline_definitions(tree, ["verify_locked_graph"], {
         "parse_qs": parse_qs, "urlsplit": urlsplit, "urlunsplit": urlunsplit})["verify_locked_graph"]
     names = ["amplifier-core", "amplifier-foundation", "amplifier-module-loop-live",
@@ -3499,11 +3640,11 @@ def test_remaining_cold_keeps_original_journey_and_separate_graph_evidence():
     assert "cold-declared-worker-with-locked-host" in body
     assert "fresh-shipped-manifest-not-host-lock" in body
     assert "probe-observed-imports-only-not-every-locked-package" in body
-    assert body.count("host_graph() == graph") == 2
+    assert body.count("host_graph() == graph") == 3
     assert "five['status'] == 'PASS'" in body and "five['installed'] == before" in body
     assert "report['lockSha256']" in body and "worker_lock_graph(raw)" in body
-    assert body.index("selected.passed(code)") < body.index("roots = list(")
-    assert "read_worker_lock(roots[0], report['manifestSha256'], report['lockSha256'])" in body
+    assert body.index("selected.passed(code)") < body.index("root = cold_root(")
+    assert "read_worker_lock(root, report['manifestSha256'], report['lockSha256'])" in body
     assert "source_file(root," in body and "'', 1024 * 1024)" in body
     assert "read_private(" not in body
     assert all(word not in body for word in ("rmtree(", "prepare_project(", "runtime.command =", "UV_CONSTRAINT"))
