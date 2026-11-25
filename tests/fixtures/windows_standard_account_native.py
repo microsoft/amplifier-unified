@@ -1163,10 +1163,17 @@ def synthetic_summary(value, identity):
          and value["source"] == identity, "Synthetic result identity or types differ")
     phases = value["phases"]
     need(type(phases) is list and len(phases) <= 3, "Invalid phase list")
-    for number, row in enumerate(phases):
+    for row in phases:
         need(type(row) is dict and set(row) == {"phase", "outcome"}
-             and row["phase"] == ("setup", "call", "teardown")[number]
+             and row["phase"] in {"setup", "call", "teardown"}
              and row["outcome"] in {"passed", "failed", "skipped"}, "Invalid phase outcome")
+    names = [row["phase"] for row in phases]
+    sequences = [[], ["setup"]]
+    if phases and phases[0]["outcome"] == "passed":
+        sequences += [["setup", "call"], ["setup", "call", "teardown"]]
+    else:
+        sequences += [["setup", "teardown"]]
+    need(names in sequences, "Invalid phase sequence")
     good = synthetic_outcome(0, [SYNTHETIC_NODE] if value["selected"] == 1 else [],
                              phases, value["schedulerComplete"]) and value["subjectAbsent"]
     need(value["status"] != "PASS" or good, "False passing subject summary")
@@ -1183,9 +1190,10 @@ def synthetic_private_source(stage, prepared):
 def subject_handoff(exchange, intent, sid):
     """Readable by the controller through exchange's admin/SYSTEM/own-SID ACL.
 
-    This is an immutable copy of the already-flushed private intent, not authority
+    This is a create-once copy of the already-flushed private intent, not authority
     to remove a task. The controller uses it only to query the exact subject.
-    The original remains exclusively owned through windows_files.
+    The original remains exclusively owned through windows_files. The trusted
+    subject SID can modify its exchange; this is not hostile same-SID attestation.
     """
     raw = json.dumps(intent, sort_keys=True).encode("utf-8")
     need(len(raw) <= 60000, "Subject handoff is too large")

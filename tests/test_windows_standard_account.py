@@ -4047,6 +4047,32 @@ def test_synthetic_controller_retains_valid_failed_phase_before_rejecting_pass(c
             case.synthetic_summary({**changed, "status": "PASS"}, identity)
 
 
+@pytest.mark.parametrize("setup,teardown", [("failed", "passed"), ("skipped", "passed"),
+                                          ("failed", "failed"), ("skipped", "failed")])
+def test_synthetic_setup_failure_retains_the_two_real_pytest_phases(case, setup, teardown):
+    identity, summary = good_synthetic_summary(case)
+    phases = [{"phase": "setup", "outcome": setup}, {"phase": "teardown", "outcome": teardown}]
+    failed = {**summary, "status": "FAIL", "phases": phases, "schedulerComplete": False}
+    result = case.synthetic_summary(failed, identity)
+    assert result["status"] == "FAIL" and result["phases"] == phases and result["source"] == identity
+    with pytest.raises(AssertionError):
+        case.synthetic_summary({**failed, "status": "PASS"}, identity)
+
+
+@pytest.mark.parametrize("phases", [
+    [("setup", "passed"), ("setup", "passed")],
+    [("teardown", "passed"), ("setup", "failed")],
+    [("setup", "passed"), ("teardown", "passed")],
+    [("setup", "failed"), ("call", "passed"), ("teardown", "passed")],
+    [("call", "failed")],
+])
+def test_synthetic_failure_evidence_still_refuses_impossible_phase_sequences(case, phases):
+    identity, summary = good_synthetic_summary(case)
+    rows = [{"phase": name, "outcome": result} for name, result in phases]
+    with pytest.raises(AssertionError):
+        case.synthetic_summary({**summary, "status": "FAIL", "phases": rows}, identity)
+
+
 def test_synthetic_cleanup_uses_admin_readable_handoff_without_impersonation(case, tmp_path, monkeypatch):
     stage, exchange = tmp_path / "stage", tmp_path / "exchange"
     identity, _ = good_synthetic_summary(case)
