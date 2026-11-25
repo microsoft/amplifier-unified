@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import closing, nullcontext
 import json
+from itertools import islice
 import os
 from pathlib import Path
 import re
@@ -129,7 +130,7 @@ def local_configuration(app):
         return None, 'unavailable', 'The managed Linux test host needs setup, or its approved backend configuration changed.'
 
 
-def validate_configuration_value(app, value, *, _qualification=False):
+def validate_configuration_value(app, value, *, _qualification=False, _witness_read=False):
     """Qualify operator-owned fields independently of the currently selected file."""
     if not isinstance(value, dict):
         raise ValueError('The operator configuration must be an object.')
@@ -147,7 +148,12 @@ def validate_configuration_value(app, value, *, _qualification=False):
         raise ValueError('The managed backend has no exact revision.')
     manager = getattr(app, 'smart_tools', None)
     backend = value.get('backend', 'docker')
-    installation = next((row for row in manager.state['installations'] if row['id'] == value.get('installationId')), None) if manager else None
+    installations = manager.state['installations'] if manager else ()
+    if _witness_read:
+        # Optional evidence must not turn an exact result read into an
+        # unbounded installation search. Older unavailable routes stay unknown.
+        installations = islice(reversed(installations), 64)
+    installation = next((row for row in installations if row['id'] == value.get('installationId')), None)
     if not installation or installation.get('status') != 'installed' or installation.get('commit') != commit or installation.get('repository', '').removesuffix('.git') != REPOSITORY or (backend == 'incus' and installation.get('extras')):
         raise ValueError('Install the qualified DTU core without provider extras before enabling it.')
     dynamic = backend == 'incus' and installation.get('runnerCandidate') is True
@@ -228,8 +234,17 @@ def public(home, row):
     }.items() if value is not None}
 
 
-def get(home, sid, identity):
-    with closing(storage.connect(home)) as db:
+def get(home, sid, identity, *, read_only=False):
+    if read_only:
+        # Inspection must not initialize or chmod the owner's ledger.
+        folder = home / 'workspace-resources'
+        target = folder / 'reservations.sqlite3'
+        if folder.is_symlink() or not stat.S_ISREG(target.lstat().st_mode):
+            raise ValueError('The retained resource ledger is unavailable.')
+        db = sqlite3.connect(target.as_uri() + '?mode=ro', uri=True, timeout=0)
+    else:
+        db = storage.connect(home)
+    with closing(db):
         row = storage.get(db, sid, identity)
     if row['kind'] != KIND:
         raise ValueError('This resource is not an owned test environment.')
@@ -420,6 +435,10 @@ class LaunchDiagnostics:
 def invoke(config, home, row, action, args, *, _qualification=False,
            _cleanup_gate=None, _cleanup_permit=None):
     """Bound helper output and lifetime; killing a helper is not command cancellation."""
+    witness_read = action == 'launch_witness'
+    if witness_read and (config.get('remoteRunner') or config.get('originSnapshotVersion')
+                         or config.get('backend', 'docker') != 'docker'):
+        return {'ok': False}
     try:
         if not _qualification and action not in {'capacity', 'read', 'reconcile', 'job_read'}:
             from .managed_runner_updates import validate_execution
@@ -462,6 +481,10 @@ def invoke(config, home, row, action, args, *, _qualification=False,
                **({'preparedRuntime': bool(row.get('preparedDependencies'))} if 'composeFile' in row else {}),
                'timeoutSeconds': args.get('timeoutSeconds', 60),
                **{key: config[key] for key in ('maxRunning', 'maxInstances', 'minFreeBytes', 'admissionRoot') if key in config}}
+    if witness_read:
+        payload = {key: payload[key] for key in (
+            'action', 'root', 'operationId', 'universeId', 'dockerHost', 'rootOwner', 'expectedBackendIdentity')}
+        payload['directoryIdentity'] = row['directoryIdentity']
     if config.get('remoteRunner'):
         return registered_runners.invoke(config, folder, payload)
     try:
@@ -469,7 +492,7 @@ def invoke(config, home, row, action, args, *, _qualification=False,
         if config.get('backend') == 'incus':
             helper = Path(__file__).with_name('incus_environment_worker.py')
             payload['incus'] = config['incus']
-        if row.get('preparedDependencies'):
+        if row.get('preparedDependencies') and not witness_read:
             prepared = dependencies.validate_receipt(row['preparedDependencies'], row['snapshot'], row['profileId'])
             if prepared['backend'] != config.get('backend', 'docker'):
                 raise ValueError('The prepared dependencies belong to a different backend.')
@@ -497,7 +520,7 @@ def invoke(config, home, row, action, args, *, _qualification=False,
                 'launchDiagnostics': launch.receipt(transport, process.returncode)}
 
     drained = False
-    deadline = time.monotonic() + (450 if action == 'exportArtifacts' else 650 if action == 'start' else 750 if action == 'finishCleanup' else 750 if action == 'remove' and row.get('preparedDependencies', {}).get('executionContract') else 650 if action == 'remove' and config.get('backend') == 'incus' else 300 if action == 'prepare' else 30 if action in {'read', 'capacity', 'reconcile', 'job_start', 'job_read', 'job_cancel'} else args.get('timeoutSeconds', 60) + 150)
+    deadline = time.monotonic() + (5 if witness_read else 450 if action == 'exportArtifacts' else 650 if action == 'start' else 750 if action == 'finishCleanup' else 750 if action == 'remove' and row.get('preparedDependencies', {}).get('executionContract') else 650 if action == 'remove' and config.get('backend') == 'incus' else 300 if action == 'prepare' else 30 if action in {'read', 'capacity', 'reconcile', 'job_start', 'job_read', 'job_cancel'} else args.get('timeoutSeconds', 60) + 150)
     try:
         if cleanup:
             try:
@@ -546,7 +569,7 @@ def invoke(config, home, row, action, args, *, _qualification=False,
                         output.extend(chunk)
                         if launch:
                             launch.take_frames(output)
-                        if len(output) >= OUTPUT_LIMIT:
+                        if len(output) >= (1024 if witness_read else OUTPUT_LIMIT):
                             if launch:
                                 return unknown_launch('response-too-large')
                             raise ValueError('The backend response exceeded its bound; the outcome is unknown.')
@@ -592,6 +615,24 @@ def invoke(config, home, row, action, args, *, _qualification=False,
             process.stdin.close()
         process.stdout.close()
         process.stderr.close()
+
+
+def launch_witness(app, row):
+    """Read this already-authorized allocation once, using only its retained route."""
+    try:
+        home = app.data_dir
+        if not SUPPORTED_HOST or storage.observe(home, row)['observation'] != 'present':
+            return None
+        config = backend_configs.resolve(app, row, None, witness_read=True)
+        result = invoke(config, home, row, 'launch_witness', {})
+        if (isinstance(result, dict) and result.get('ok') is True and set(result) == {'ok', 'postDispatchFailed'}
+                and type(result['postDispatchFailed']) is bool
+                and storage.observe(home, row)['observation'] == 'present'
+                and get(home, row['sessionId'], row['id'], read_only=True) == row):
+            return result['postDispatchFailed']
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, sqlite3.Error, subprocess.SubprocessError):
+        pass
+    return None
 
 
 def invoke_cleanup(app, config, row, action, args, permit):

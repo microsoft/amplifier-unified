@@ -82,6 +82,59 @@ def payload(tmp_path, action):
             'admissionRoot': str(tmp_path / 'admission')}
 
 
+@pytest.mark.parametrize(('change', 'expected'), [
+    ('normal', {'ok': True, 'postDispatchFailed': False}),
+    ('post-dispatch', {'ok': True, 'postDispatchFailed': True}),
+    *[(change, {'ok': False}) for change in (
+        'old', 'missing', 'raises', 'unavailable-state-root', 'engine_id', 'operation_id',
+        'project', 'docker_endpoint_sha256', 'stale-binding', 'stale-root', 'version',
+        'phase', 'completed', 'error_category', 'rollback', 'socket_inode', 'derived-id')],
+])
+def test_launch_witness_only_attributes_exact_foreground_return(library, tmp_path, monkeypatch, change, expected):
+    lib, calls = library
+    data = payload(tmp_path, 'launch_witness')
+    root = tmp_path / 'backend'
+    root.mkdir()
+    data['directoryIdentity'] = storage.identity(tmp_path.stat())
+    project = 'dtu-op-' + hashlib.sha256(f'{root}\0{data["operationId"]}'.encode()).hexdigest()[:32]
+    data['universeId'] = project
+    binding = worker.binding(data, project, data['expectedBackendIdentity'])
+    proof = tmp_path / 'backend-binding.json'
+    worker.write_private_record(proof, {**binding, 'operationId': 'previous-launch'}
+                                if change == 'stale-binding' else binding)
+    config = {'state_root': root, 'docker_host': data['dockerHost']}
+    def derive(operation, *, config):
+        return 'wrong' if change == 'derived-id' else 'dtu-op-' + hashlib.sha256(
+            f'{config["state_root"]}\0{operation}'.encode()).hexdigest()[:32]
+    lib.launch_id = derive
+    witness = dict(version=1, operation_id=data['operationId'], project=project, socket_device=3,
+        socket_inode=7, engine_id='fixture-daemon', phase='final-up',
+        completed=('bootstrap-up', 'buildx-bake', 'final-up'),
+        docker_endpoint_sha256=hashlib.sha256(data['dockerHost'].encode()).hexdigest(),
+        error_category='post-dispatch-failed' if change == 'post-dispatch' else None,
+        rollback='not-dispatched-by-dtu')
+    if change in witness:
+        witness[change] = True if change == 'version' else 'wrong'
+    def read(operation, **kwargs):
+        assert (operation, kwargs) == (data['operationId'], {'config': config})
+        if change == 'raises':
+            raise RuntimeError('private exception must not escape')
+        return None if change == 'missing' else Value(**witness, ignored='private future field')
+    if change != 'old':
+        lib.launch_terminal_witness = read
+    if change == 'stale-root':
+        data['directoryIdentity'][1] += 1
+    if change == 'unavailable-state-root':
+        root.rmdir()
+    before = sorted(tmp_path.iterdir()), proof.read_bytes()
+    def unexpected(*args, **kwargs):
+        pytest.fail('A witness read must not query or launch Docker')
+    monkeypatch.setattr(worker, 'docker_backend', unexpected)
+    assert worker.execute_call(data) == expected
+    assert (sorted(tmp_path.iterdir()), proof.read_bytes()) == before
+    assert not calls
+
+
 def test_fixed_profile_has_no_host_mount_ports_or_privilege_escalation():
     profile = worker.profile(owner.APPROVED_IMAGE)
     twin = profile['services']['twin']

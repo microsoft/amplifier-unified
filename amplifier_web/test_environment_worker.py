@@ -85,11 +85,14 @@ def read_private_record(path, *, max_bytes=4096):
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
         return None
-    with os.fdopen(fd) as stream:
+    with os.fdopen(fd, 'rb') as stream:
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o077 or info.st_size > max_bytes:
             raise ValueError('A retained backend proof is unsafe.')
-        return json.load(stream)
+        content = stream.read(max_bytes + 1)
+        if len(content) > max_bytes:
+            raise ValueError('A retained backend proof exceeds its bound.')
+        return json.loads(content)
 
 
 def write_private_record(path, value):
@@ -165,6 +168,46 @@ def docker_backend(payload):
     if not isinstance(daemon.get('ID'), str) or not daemon['ID']:
         raise ValueError('The actual Docker daemon is unavailable.')
     return {'backend': 'docker', 'daemon': daemon['ID']}
+
+
+def read_launch_witness(payload, lib, config, root):
+    """Attribute historical evidence without contacting the current Docker daemon."""
+    try:
+        read = getattr(lib, 'launch_terminal_witness', None)
+        operation, project = payload['operationId'], payload['universeId']
+        host, backend = payload['dockerHost'], payload['expectedBackendIdentity']
+        state_root = root / 'backend'
+        info = root.stat()
+        if (not callable(read) or not isinstance(operation, str) or not 1 <= len(operation) <= 512
+                or not isinstance(host, str) or not host.startswith('unix:///')
+                or not isinstance(project, str) or not re.fullmatch(r'dtu-op-[a-f0-9]{32}', project)
+                or not isinstance(backend, dict) or set(backend) != {'backend', 'daemon'}
+                or backend['backend'] != 'docker'
+                or not isinstance(backend['daemon'], str)
+                or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9:-]{0,127}', backend['daemon'])
+                or [info.st_dev, info.st_ino] != payload['directoryIdentity']
+                or state_root.resolve(strict=True) != state_root or not state_root.is_dir()
+                or lib.launch_id(operation, config=config) != project
+                or read_private_record(root / 'backend-binding.json') != binding(payload, project, backend)):
+            return {'ok': False}
+        witness = read(operation, config=config)
+        if (witness is None or type(witness.version) is not int or witness.version != 1
+                or witness.operation_id != operation or witness.project != project
+                or witness.docker_endpoint_sha256 != hashlib.sha256(host.encode()).hexdigest()
+                or witness.engine_id != backend['daemon']
+                or type(witness.socket_device) is not int or witness.socket_device < 0
+                or type(witness.socket_inode) is not int or witness.socket_inode <= 0
+                or witness.phase != 'final-up' or witness.rollback != 'not-dispatched-by-dtu'
+                or witness.error_category not in (None, 'post-dispatch-failed')
+                or type(witness.completed) is not tuple or witness.completed not in (
+                    ('final-up',), ('bootstrap-up', 'final-up'),
+                    ('bootstrap-up', 'buildx-bake', 'final-up'))):
+            return {'ok': False}
+        return {'ok': True, 'postDispatchFailed': witness.error_category == 'post-dispatch-failed'}
+    except Exception:
+        # Optional evidence must not introduce a new error surface or a reason
+        # to replay. Never forward the witness or backend exception itself.
+        return {'ok': False}
 
 
 def docker_reconcile(payload, universe, backend, source):
@@ -896,6 +939,8 @@ def execute_call(payload, *, launch_phase=lambda phase: None):
     action = payload['action']
     identity = payload.get('universeId')
     snapshot = payload.get('snapshot')
+    if action == 'launch_witness':
+        return read_launch_witness(payload, lib, config, root)
     try:
         if action == 'capacity':
             return {'ok': True, 'capacity': docker_capacity(payload)}

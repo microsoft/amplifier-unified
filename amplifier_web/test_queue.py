@@ -11,6 +11,7 @@ import copy
 from contextlib import closing
 import json
 import logging
+import sqlite3
 import time
 import uuid
 
@@ -20,7 +21,7 @@ from . import test_capacity_settings as capacity_settings
 from . import registered_test_runners as registered_runners
 from . import test_execution_settings as execution_settings
 from . import owned_history
-from .collaboration import PROTOCOL
+from .collaboration import PRINCIPAL, PROTOCOL
 from amplifier_operations.coordination import fingerprint
 
 ACTION = 'workspace.tests.submit'
@@ -319,6 +320,9 @@ class TestQueue:
         reading = action in {'workspace.tests.read', 'workspace.tests.result'}
         source = (owner.result_source(args, origin, caller) if reading
                   else owner.source(args, origin, caller, hydrate=False))
+        principal = source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']
+        same_root = source['id'] == args['sessionId'] and (
+            origin in {'ui', 'user'} or PRINCIPAL.get() == principal)
         if source['id'] != args['sessionId']:
             if not reading or not self.app.access_mode.full(source):
                 owner.error('A queued check belongs to its calling root conversation.')
@@ -333,6 +337,7 @@ class TestQueue:
                 'nextOffset': offset+size if len(rows)>size else None}}
         identity = self.identity(source['id'], args['requestId'])
         if action.endswith('.result'):
+            reader_binding = binding(source)
             receipt = self.get(identity)
             try:
                 request = self.app.operations.requests.read(source['id'], identity+':execute')
@@ -341,7 +346,12 @@ class TestQueue:
             output = request.get('result', {}).get('result', {})
             content = output.get('stdout', '') + ('\n'+output['stderr'] if output.get('stderr') else '')
             offset = args.get('offset', 0)
-            row = environments.get(self.app.data_dir, source['id'], receipt['job']['resourceId']) if receipt['job'].get('resourceId') else None
+            row = None
+            if rid := receipt['job'].get('resourceId'):
+                try:
+                    row = environments.get(self.app.data_dir, source['id'], rid, read_only=True)
+                except (OSError, ValueError, sqlite3.Error):
+                    pass  # Keep the original check output available without retention.
             # Budget the encoded text, including JSON escaping and surrogate
             # pairs, leaving room for the operation and app_control envelope.
             page = content[offset:offset+6000]
@@ -363,10 +373,51 @@ class TestQueue:
                 if (started.get('resourceId') == row['id']
                         and started.get('sessionId') == source['id']
                         and started.get('action') == 'workspace.environments.start'):
-                    diagnostics = (started.get('result') or {}).get('launchDiagnostics')
+                    original = started.get('result') or {}
+                    diagnostics = original.get('launchDiagnostics')
                     if diagnostics:
                         launch_details = {'operation': self.summary(started), 'diagnostics': diagnostics,
                                           'code': started['result'].get('code')}
+                    actor = {'sessionId': source['id'], 'principal': principal}
+                    if (same_root and offset == 0 and started.get('requestId') == launch_id
+                            and started.get('state') == 'outcome_unknown'
+                            and original.get('effectAdmitted') is not False
+                            and original.get('admissionDenied') is not True
+                            and row.get('backendAdmitted') is True
+                            and row.get('backendType') == 'docker' and not row.get('testMachine')
+                            and row.get('sessionId') == source['id']
+                            and row['id'] == receipt['job']['resourceId']
+                            and row.get('workspaceId') == workspace['id']
+                            and receipt.get('senderSessionId') == source['id']
+                            and receipt.get('workspace') == workspace['path']
+                            and row.get('owner') == receipt['job'].get('actor') == actor
+                            and row.get('backendKey') == receipt['job'].get('backendKey')):
+                        observed = await asyncio.to_thread(environments.launch_witness, self.app, row)
+                        # No result from a resource or reader binding that changed
+                        # while the bounded private read was in flight.
+                        current = owner.result_source(args, origin, caller)
+                        try:
+                            still_bound = (observed is not None
+                                and self.get(identity)['job'] == receipt['job']
+                                and self.app.operations.requests.read(source['id'], launch_id) == started)
+                        except ValueError:
+                            still_bound = False
+                        if (not still_bound or current['id'] != args['sessionId'] or binding(current) != reader_binding
+                                or (current.get('runtimeSessionId') or current.get('nativeIdentity')
+                                    or current['id']) != principal):
+                            observed = None
+                        launch_details = launch_details or {'operation': self.summary(started)}
+                        launch_details['terminalWitness'] = ({
+                            'status': 'unknown',
+                            'message': 'No matching record confirmed that the foreground launch finished. Keep the environment and inspect the original launch details before taking any recovery action. Do not retry this launch.',
+                        } if observed is None else {
+                            'version': 1, 'status': 'foreground-settled', 'postDispatchFailed': observed,
+                            'message': (
+                                'Docker Compose returned normally from the final launch step. '
+                                + ('DTU then recorded an error. ' if observed else '')
+                                + 'Inspect the check result and current environment separately. This record does not authorize retry or cleanup.'
+                            ),
+                        })
             return {'accepted': True, 'result': {'check': self.public(receipt), 'operation': self.summary(request),
                 'exitCode': output.get('exit_code'), 'text': page, 'offset': offset,
                 'nextOffset': offset+len(page) if offset+len(page)<len(content) else None,

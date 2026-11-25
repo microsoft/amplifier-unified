@@ -26,15 +26,16 @@ def key(config):
     return hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
 
 
-def directory(home):
+def directory(home, *, create=True):
     path = Path(home) / 'workspace-resources' / 'backend-configs'
     if any(item.is_symlink() for item in (path, *path.parents)):
         raise ValueError('The retained backend configuration directory was replaced.')
     if os.name == 'nt':
         from .test_origin_files import directory as pinned
-        with pinned(path, create=True, private=True):
+        with pinned(path, create=create, private=True):
             return path
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if create:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     info = os.fstat(descriptor)
     if info.st_uid != os.getuid() or info.st_mode & 0o077:
@@ -55,7 +56,10 @@ def read_at(descriptor, identity):
             info = os.fstat(stream.fileno())
             if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_nlink != 1 or info.st_size > MAX_BYTES:
                 raise ValueError('The retained backend configuration is not a private regular file.')
-            value = json.load(stream)
+            content = stream.read(MAX_BYTES + 1)
+            if len(content) > MAX_BYTES:
+                raise ValueError('The retained backend configuration exceeds its bound.')
+            value = json.loads(content)
     if not isinstance(value, dict) or set(value) != {'version', 'configuration'} or value['version'] != 1:
         raise ValueError('The retained backend configuration format is invalid.')
     config = value['configuration']
@@ -113,18 +117,23 @@ def retain(home, config):
         os.close(descriptor)
 
 
-def resolve(app, row, active):
+def resolve(app, row, active, *, witness_read=False):
     identity = row['backendKey']
+    if witness_read and not row.get('backendConfigRetained'):
+        raise ValueError('The original backend configuration was not retained.')
     if not row.get('backendConfigRetained'):
         if active and key(active) == identity:
             return active
         raise ValueError('This older environment has no retained backend configuration. Restore its exact original configuration to inspect or clean it up.')
-    descriptor = directory(app.data_dir)
+    descriptor = directory(app.data_dir, create=not witness_read)
     try:
         config = read_at(descriptor, identity)
     finally:
         if not isinstance(descriptor, Path):
             os.close(descriptor)
+    if witness_read and (config.get('remoteRunner') or config.get('originSnapshotVersion')
+                         or config.get('backend', 'docker') != 'docker'):
+        raise ValueError('This is not a retained local Docker route.')
     if config.get('remoteRunner'):
         from .registered_test_runners import qualify_retained
         return qualify_retained(app, config)
@@ -135,7 +144,8 @@ def resolve(app, row, active):
     if not SUPPORTED_HOST:
         raise ValueError('The retained test backend needs its qualified Linux host.')
     value = {k: v for k, v in config.items() if k not in {'python', 'admissionRoot'}}
-    qualified, _, _ = validate_configuration_value(app, value)
+    qualified, _, _ = (validate_configuration_value(app, value, _witness_read=True)
+                       if witness_read else validate_configuration_value(app, value))
     if qualified != config or key(qualified) != identity:
-        raise ValueError('The retained backend installation or configuration changed. Restore the exact qualified installation before cleanup.')
+        raise ValueError('The retained backend installation or configuration changed. Restore the exact qualified installation.')
     return qualified

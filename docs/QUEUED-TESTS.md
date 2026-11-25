@@ -59,6 +59,15 @@ The result does not satisfy a shared-task dependency or prove product acceptance
   diagnostics can survive loss of the helper response if the host records the
   operation result; they do not confirm that a guest started or is absent,
   release reservations, or authorize a retry.
+- On the first result page, the owning chat can also see
+  `launch.terminalWitness` for an unconfirmed local Docker launch with an exact
+  start receipt. If the original installed backend supports this read and the
+  retained evidence matches the original launch and Docker Engine, the result
+  says Compose finished the foreground launch. `postDispatchFailed` means DTU
+  observed an error after those foreground steps. The witness is historical:
+  it does not confirm the check result, current health, or cleanup. If evidence
+  is unavailable or does not match, foreground completion stays unknown.
+  Inspection never retries the launch or releases its reservation.
 - Full-access reviewers and their currently admitted native children can use
   these two read actions directly with the producer's `sessionId` and
   `workspaceId`. Same-workspace evidence is the default; another registered

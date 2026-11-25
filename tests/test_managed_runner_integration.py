@@ -1,18 +1,22 @@
 """Shared-action authority and preparation/guest cleanup commit boundaries."""
 # ruff: noqa: F401, F811
 import asyncio
+import json
 import sys
 import threading
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from amplifier_web import task_environments as owner
 from amplifier_web.service import AppError
+from test_access_mode import save as set_access_mode
 from test_configuration_authority import app, grant
 from test_coordination_generation import agent, until
 from test_task_environments import backend, scope, act
 from test_test_queue import queue, record, submit, drive
+from test_test_result_readers import read_as
 
 REAL_INVOKE = owner.invoke
 
@@ -409,6 +413,100 @@ async def test_lost_launch_receipt_keeps_diagnostics_and_only_its_own_queue_barr
     assert launches == [sid, peer]
 
     details = (await app.dispatch('workspace.tests.result', {**scope(app), 'requestId': 'held'}))['result']
+    assert details['launch'].pop('terminalWitness')['status'] == 'unknown'
     assert details['launch'] == {'operation': queue.summary(saved),
                                   'code': 'launch_result_unconfirmed', 'diagnostics': saved['result']['launchDiagnostics']}
     assert app.operations.requests.read(sid, row['commandId']) == saved
+
+
+async def test_exact_check_result_reads_only_its_original_launch_witness(
+        app, queue, backend, monkeypatch, tmp_path):
+    config = owner.configuration(app)[0]
+    installation_id = 'd' * 24
+    executable = app.data_dir / 'smart-tools' / 'installs' / installation_id / 'venv/bin/python'
+    executable.parent.mkdir(parents=True)
+    executable.symlink_to(sys.executable)
+    commit = '0d12d7d68ffdfa4096799a53570d4e0619fd1ef6'
+    monkeypatch.setattr(app, 'smart_tools', SimpleNamespace(state={'installations': [{
+        'id': installation_id, 'python': str(executable), 'commit': commit,
+        'repository': owner.REPOSITORY, 'status': 'installed',
+    }]}, close=AsyncMock()))
+    value = {'enabled': True, 'installationId': installation_id, 'commit': commit,
+             'dockerHost': 'unix:///original/docker.sock'}
+    original_config, _, _ = owner.validate_configuration_value(app, value)
+    config.update(original_config)
+    controlled_invoke = owner.invoke
+    monkeypatch.setattr(owner, '__file__', str(tmp_path / 'owner.py'))
+    script = tmp_path / 'test_environment_worker.py'
+    prefix = ("import json, pathlib, sys\np = json.load(sys.stdin)\n"
+              "assert p['action'] == 'launch_witness'\n"
+              "assert p['dockerHost'] == 'unix:///original/docker.sock'\n"
+              "assert p['root'] == str(pathlib.Path.cwd())\n"
+              "assert p['expectedBackendIdentity'] == {'backend': 'docker', 'daemon': 'owned-daemon'}\n"
+              "assert 'source' not in p and 'command' not in p\n")
+    seen = []
+    def invoke(config, home, row, action, args):
+        seen.append(action)
+        if action == 'start':
+            return {'ok': False, 'status': 'unknown', 'code': 'launch_result_unconfirmed'}
+        if action == 'launch_witness':
+            assert config == original_config
+            return REAL_INVOKE(config, home, row, action, args)
+        if action in {'read', 'reconcile', 'stop'}:
+            return {'ok': False, 'status': 'unknown'}
+        assert action == 'prepare'
+        return controlled_invoke(config, home, row, action, args)
+
+    monkeypatch.setattr(owner, 'invoke', invoke)
+    await submit(app, 'held')
+    await drive(queue)
+    args = {**scope(app), 'requestId': 'held'}
+    sid = args['sessionId']
+    held = record(queue, app, 'held')
+    row = owner.get(app.data_dir, sid, held['job']['resourceId'])
+    saved = app.operations.requests.read(sid, row['commandId'])
+    assert saved['state'] == 'outcome_unknown' and held['job']['status'] == 'unknown'
+    assert row['directoryIdentity'] and row['backendAdmitted']
+    # The configured default is now a different route. Inspection must not even
+    # look it up, much less qualify it or use it to infer an original engine.
+    def unexpected(*a):
+        pytest.fail('Private evidence inspection must not look up the active backend')
+    monkeypatch.setattr(owner, 'configuration', unexpected)
+    ledger = app.data_dir / 'workspace-resources' / 'reservations.sqlite3'
+    ledger_before = ledger.stat()
+    seen.clear()
+    for response, status in [
+        ("print(json.dumps({'ok': True, 'postDispatchFailed': True}))", 'foreground-settled'),
+        ("print(json.dumps({'ok': True, 'postDispatchFailed': True, 'secret': 'bad'}))", 'unknown'),
+        ("print('x' * 1024)", 'unknown'),
+        ("sys.exit(7)", 'unknown'),
+        ("import os, signal; os.kill(os.getpid(), signal.SIGTERM)", 'unknown'),
+    ]:
+        script.write_text(prefix + response)
+        details = (await app.dispatch('workspace.tests.result', args))['result']
+        witness = details['launch']['terminalWitness']
+        assert witness['status'] == status
+        assert set(witness) == ({'version', 'postDispatchFailed', 'status', 'message'}
+                                if status == 'foreground-settled' else {'status', 'message'})
+        assert details['check']['status'] == 'unknown' and details['exitCode'] is None
+        assert len(json.dumps(witness).encode()) < 512
+        assert 'owned-daemon' not in json.dumps(witness) and 'docker.sock' not in json.dumps(witness)
+    assert seen == ['launch_witness'] * 5
+    ledger_after = ledger.stat()
+    assert (ledger_after.st_mtime_ns, ledger_after.st_ctime_ns) == (
+        ledger_before.st_mtime_ns, ledger_before.st_ctime_ns)
+    assert (await app.dispatch('workspace.tests.result', {**args, 'offset': 1}))['result'].get('launch') is None
+    reviewer = app.state['sessions'][1]
+    await set_access_mode(app, reviewer)
+    peer = (await read_as(app, reviewer, 'workspace.tests.result', args))['result']
+    assert peer['check']['status'] == 'unknown' and 'launch' not in peer
+    assert seen == ['launch_witness'] * 5
+    assert app.operations.requests.read(sid, row['commandId']) == saved
+    assert owner.get(app.data_dir, sid, row['id']) == row and record(queue, app, 'held') == held
+
+    # Losing the resource binding in the original receipt must never fall back
+    # to another lookup by command id. The canceled/failed effect stays unknown.
+    unbound = {key: val for key, val in saved.items() if key != 'resourceId'}
+    app.operations.requests.finish(unbound, 'outcome_unknown')
+    assert (await app.dispatch('workspace.tests.result', args))['result'].get('launch') is None
+    assert seen == ['launch_witness'] * 5
