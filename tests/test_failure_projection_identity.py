@@ -223,7 +223,7 @@ async def test_prior_failure_notice_survives_fresh_send_preparation_until_admiss
     from amplifier_web.input_status import annotate
     assert annotate(target, {'role': 'user', 'inputId': 'saved-input'})['inputStatus']['failure'] == failure
     reply = app._message(target, 'assistant', 'Fresh completed reply.', inputId='fresh-preparing-input')
-    await observed(app, target, 'completed', gen='fresh-generation', inputs=['fresh-preparing-input'])
+    await observed(app, target, 'finished', gen='fresh-generation', inputs=['fresh-preparing-input'])
     target['status'] = 'idle'
     assert (await request('fresh-completed', reply['id']))['status'] == 'ready'
     complete.assert_awaited_once()
@@ -298,7 +298,7 @@ async def test_new_send_interruption_does_not_inherit_dismissed_prior_failure(ap
                        command_id='distinct-fresh-input')
     await observed(app, target, 'started', gen='distinct-generation', inputs=['distinct-fresh-input'])
     reply = app._message(target, 'assistant', 'Fresh completed reply.', inputId='distinct-fresh-input')
-    await observed(app, target, 'completed', gen='distinct-generation', inputs=['distinct-fresh-input'])
+    await observed(app, target, 'finished', gen='distinct-generation', inputs=['distinct-fresh-input'])
     target['status'] = 'idle'
     assert (await request('new-completed-input', reply['id']))['status'] == 'ready'
     complete.assert_awaited_once()

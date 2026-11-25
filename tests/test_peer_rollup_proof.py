@@ -201,6 +201,7 @@ async def test_suggestion_capture_preserves_peer_windows_across_cooling(app, cou
         {'id': 'assistant-tail', 'role': 'assistant', 'source': 'amplifier',
          'text': 'The complete answer.'},
     ])
+    del originals  # Retirement must not strand an issued mutable peer-row alias.
     service._publish_changes(sessions={sid})
     expected_ids = [row['id'] for row in receiving['messages']]
     host, windows = service.prompt_suggestions, service.history.windows
