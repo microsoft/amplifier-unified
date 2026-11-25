@@ -345,9 +345,10 @@ class Schedules:
     async def tick(self):
         now = self.clock()
         if not self.store.acquire(now): return
-        if self.store.recovered:
+        recovered = self.store.recovered
+        if recovered:
             async with self.app.lock:
-                for run in self.store.recovered:
+                for run in recovered:
                     self.decide_notification(self.app._session(run['sessionId']), run)
                 self.changed()
         from .updates import work_paused
