@@ -545,10 +545,21 @@ class LinkedInstances:
                 backend=self.discovery_backend,
             )
 
-    async def startup(self, _app):
-        if self.config.get("linked_instances_peer_listener") is True:
+    async def lifetime(self, app):
+        # aiohttp only registers the context's exit after it yields. Clean up
+        # partial activation here as well as on normal or failed host startup.
+        try:
+            if self.config.get("linked_instances_peer_listener") is True:
+                async with self.setup_lock:
+                    await self._apply_listener(self.config)
+            yield
+        finally:
+            self.listener_stopping = True
             async with self.setup_lock:
-                await self._apply_listener(self.config)
+                try:
+                    await self.listener.close()
+                finally:
+                    await self.discovery.close(app)
 
     async def save_setup(self, args):
         async with self.setup_lock:
@@ -562,13 +573,8 @@ class LinkedInstances:
                 self.listener.blocker = None
             return result
 
-    async def shutdown(self, app):
+    async def fence_shutdown(self, _app):
         self.listener_stopping = True
-        async with self.setup_lock:
-            try:
-                await self.listener.close()
-            finally:
-                await self.discovery.close(app)
 
     async def dedicated_peer(self, request):
         headers = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
@@ -576,7 +582,7 @@ class LinkedInstances:
             listener = self.listener
             # The accepted socket, not a claimed or forwarded host, selects
             # this listener. Reject alternate wire authorities and paths.
-            if (listener.origin is None or request.raw_path not in PEER_PATHS
+            if (self.listener_stopping or listener.origin is None or request.raw_path not in PEER_PATHS
                     or request.headers.getall("Host", []) != [listener.origin.removeprefix("https://")]
                     or not listener.binding.accepts(request.transport, listener.port)):
                 raise failure("link_unsupported")
@@ -608,9 +614,11 @@ class LinkedInstances:
         return self.enroll(args, origin)
 
     def list(self, *, outgoing_only=False):
-        self.require_enabled()
+        if outgoing_only:
+            self.require_enabled()
         with self.store.transaction() as state:
-            result = {"instanceId": state["instanceId"], "origins": [] if outgoing_only else list(self.origins),
+            result = {"instanceId": state["instanceId"],
+                      "origins": list(self.origins) if not outgoing_only and self.enabled else [],
                       "links": [_link(row) for row in state["links"].values()
                                 if not outgoing_only or row["direction"] == "outgoing"]}
             if not outgoing_only:
@@ -964,11 +972,12 @@ def install(app, service):
     async def owner(request):
         operation = request.match_info["operation"]
         setup = operation in {"setup", "setup-save"}
+        local_grants = operation in {"list", "revoke"}
         # Only the owner control credential and regular authenticated browser
         # sessions get a history scope. Restricted/legacy devices never do.
         # A default HTTP install only gets the owner linking controls on
         # actual loopback; the dedicated socket never acquires this principal.
-        local = (setup or links.listener.origin is not None) and _on_this_computer(request)
+        local = (setup or local_grants or links.listener.origin is not None) and _on_this_computer(request)
         if (not request.get("history_scope") or not (request.secure or local)
                 or len(request.headers.getall("Origin", [])) != 1 or not request.headers.get("Origin")
                 or not allowed_origin(request)):
@@ -990,7 +999,8 @@ def install(app, service):
             else:
                 raise failure("link_invalid")
             return web.json_response({"result": result})
-        links.require_enabled()
+        if not local_grants:
+            links.require_enabled()
         if operation == "list" and args == {}:
             result = links.list()
         elif operation == "offer":
@@ -1047,7 +1057,7 @@ def install(app, service):
         app["linked_instance_peer_paths"] = PEER_PATHS
         for path in sorted(PEER_PATHS):
             app.router.add_post(path, configured_peer)
-    app.on_startup.append(links.startup)
-    app.on_shutdown.append(links.shutdown)
-    # AppRunner skips on_shutdown if a later startup hook failed.
-    app.on_cleanup.append(links.shutdown)
+    app.cleanup_ctx.append(links.lifetime)
+    # Fence admissions promptly on normal shutdown. The cleanup context is
+    # also finalized by aiohttp after failed startup, which skips on_shutdown.
+    app.on_shutdown.append(links.fence_shutdown)

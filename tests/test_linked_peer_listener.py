@@ -12,8 +12,10 @@ from aiohttp import web
 
 from amplifier_web import linked_peer_listener as peer
 from amplifier_web.auth import SESSION_COOKIE, new_session
+from amplifier_web.cli import _serve_with_peer_cleanup
 from amplifier_web.deployment import load_server_config, save_server_config
-from amplifier_web.linked_instances import PEER_PREFIX, PREFIX, _encode_offer, _parse_offer
+from amplifier_web.errors import AppError
+from amplifier_web.linked_instances import PEER_PREFIX, PREFIX, _encode_offer, _parse_offer, agent_route
 from amplifier_web.server import create_app
 from test_service import Runtime
 
@@ -40,9 +42,7 @@ async def host(root):
         port = sock.getsockname()[1]
         config = save_server_config(root, {**load_server_config(root, create=False), "port": port,
                                            "unrelated": {"keep": True}})
-        app = await create_app(root, workspace=root, runtime=Runtime(), voice=False,
-                               background_updates=False, preload_providers=False, background_work=False,
-                               server_config=config)
+        app = await fixture_app(root, config)
         runner = web.AppRunner(app, access_log=None)
         try:
             await runner.setup()
@@ -50,6 +50,12 @@ async def host(root):
             yield f"http://127.0.0.1:{port}", app
         finally:
             await runner.cleanup()
+
+
+async def fixture_app(root, config):
+    return await create_app(root, workspace=root, runtime=Runtime(), voice=False,
+                            background_updates=False, preload_providers=False, background_work=False,
+                            server_config=config)
 
 
 async def send(client, host, operation, body, *, origin=True, auth=True, session=None):
@@ -85,7 +91,8 @@ async def test_fresh_two_local_installations_link_disable_restart_and_revoke(tmp
                 assert first["listener"] == "none" and first["status"] == "off" and first["peerListener"] is False
                 key = root / "config" / "linked-instances" / "peer-identity.pem"
                 assert not key.exists()
-                assert (await send(client, a, "list", {}))[0] == 403
+                status, packet = await send(client, a, "list", {})
+                assert status == 200 and packet["result"]["origins"] == [] and packet["result"]["links"] == []
                 original = load_server_config(root)
                 body = {**ENABLED, "expectedRevision": first["revision"]}
                 for origin, auth, expected in [(None, True, 403), (b[0], True, 403), (True, False, 401)]:
@@ -188,7 +195,9 @@ async def test_fresh_two_local_installations_link_disable_restart_and_revoke(tmp
                     state = await setup(client, blocked)
                     assert state["status"] == "unavailable" and state["listener"] == "none"
                     assert state["origins"] == [] and state["blockers"] == ["peer_port_unavailable"]
-                    assert (await send(client, blocked, "list", {}))[0] == 403
+                    status, packet = await send(client, blocked, "list", {})
+                    assert status == 200 and packet["result"]["origins"] == []
+                    assert packet["result"]["links"][0]["grantId"] == grant
             async with host(root) as recovered:
                 assert (await setup(client, recovered))["origins"] == [orig]
             assert key.read_bytes() == identity
@@ -301,3 +310,136 @@ async def test_partial_attach_does_not_leak_reserved_socket(tmp_path, loopback, 
         status, packet = await save(client, a, ENABLED)
         assert status == 200 and packet["result"]["status"] == "active"
         assert packet["result"]["origins"] == [f"https://{reserved[0]}:{reserved[1]}"]
+
+
+async def test_later_startup_failure_closes_attached_peer_with_event_loop_still_running(tmp_path, loopback):
+    config = save_server_config(tmp_path, {"linked_instances": True, "linked_instances_peer_listener": True})
+    app = await fixture_app(tmp_path, config)
+    links = app["service"].linked_instances
+    address = None
+
+    async def fail_after_peer_start(_app):
+        nonlocal address
+        assert links.listener.runner is not None
+        address = urlsplit(links.listener.origin)
+        raise RuntimeError("fixture later startup failed")
+
+    # Fail after the real peer cleanup context enters, while the browser
+    # AppRunner is still in setup and would skip ordinary shutdown hooks.
+    app.on_startup.insert(1, fail_after_peer_start)
+
+    async def assembled():
+        return app
+
+    def unexpected_ready(_):
+        pytest.fail("browser host was not started")
+
+    try:
+        with pytest.raises(RuntimeError, match="fixture later startup failed"):
+            await _serve_with_peer_cleanup(assembled(), (), None, unexpected_ready)
+        assert links.listener.origin is None and links.listener.runner is None
+        assert address is not None
+        with socket.socket() as check:
+            check.bind((address.hostname, address.port))
+    finally:
+        await app["service"].close()
+
+
+async def test_cancelled_activation_drains_partially_attached_peer(tmp_path, loopback, monkeypatch):
+    config = save_server_config(tmp_path, {"linked_instances": True, "linked_instances_peer_listener": True})
+    app = await fixture_app(tmp_path, config)
+    links = app["service"].linked_instances
+    runner = web.AppRunner(app)
+    original = web.SockSite.start
+    attached = asyncio.get_running_loop().create_future()
+    continue_attach = asyncio.Event()
+
+    async def pause_after_real_attach(site):
+        await original(site)
+        attached.set_result((site, site._sock.getsockname()))
+        await continue_attach.wait()
+
+    monkeypatch.setattr(web.SockSite, "start", pause_after_real_attach)
+    starting = asyncio.create_task(runner.setup())
+    try:
+        site, address = await asyncio.wait_for(attached, 5)
+        assert site._server.is_serving()
+        starting.cancel()
+        continue_attach.set()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+        # It was cancelled before yielding the cleanup context, so the
+        # startup path itself must already have closed it.
+        assert not site._server.is_serving()
+        assert links.listener.origin is None and links.listener.runner is None
+        with socket.socket() as check:
+            check.bind(address)
+    finally:
+        continue_attach.set()
+        if not starting.done():
+            starting.cancel()
+        await asyncio.gather(starting, return_exceptions=True)
+        await runner.cleanup()
+        await app["service"].close()
+
+
+@pytest.mark.parametrize("blocked", [False, True])
+async def test_local_owner_revokes_a_retained_grant_without_reopening_network(tmp_path, loopback, blocked):
+    root = tmp_path / "issuer"
+    async with host(tmp_path / "joiner") as b, aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar()) as client:
+        async with host(root) as a:
+            for instance in (a, b):
+                assert (await save(client, instance, ENABLED))[1]["result"]["status"] == "active"
+            origin, = (await setup(client, a))["origins"]
+            code = (await send(client, a, "offer", {"origin": origin, "commandId": "offer"}))[1]["result"]["code"]
+            status, packet = await send(client, b, "join", {"commandId": "join", "code": code})
+            assert status == 200
+            grant = packet["result"]["grantId"]
+            target = {"instanceId": _parse_offer(code)["instanceId"]}
+            assert (await send(client, b, "status", target))[0] == 200
+            if not blocked:
+                assert (await save(client, a, {**ENABLED, "enabled": False}))[1]["result"]["status"] == "off"
+
+        address = urlsplit(origin)
+        with socket.socket() as occupying:
+            if blocked:
+                occupying.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                occupying.bind((address.hostname, address.port))
+                occupying.listen()
+            async with host(root) as inactive:
+                settings = await setup(client, inactive)
+                assert settings["listener"] == "none" and settings["status"] == ("unavailable" if blocked else "off")
+                links = inactive[1]["service"].linked_instances
+                status, listing = await send(client, inactive, "list", {})
+                assert status == 200 and listing["result"]["origins"] == []
+                row, = listing["result"]["links"]
+                assert row["grantId"] == grant and not row["revoked"]
+                assert "credential" not in row and "credentialDigest" not in row
+                revoke = {"commandId": "revoke", "grantId": grant}
+                for operation, body in (("list", {}), ("revoke", revoke)):
+                    assert (await send(client, inactive, operation, body, auth=False))[0] == 401
+                    assert (await send(client, inactive, operation, body, origin=False))[0] == 403
+                    assert (await send(client, inactive, operation, body, origin=b[0]))[0] == 403
+                for operation, body in (("join", {"commandId": "denied", "code": code}), ("status", target),
+                                        ("offer", {"origin": origin, "commandId": "denied"}),
+                                        ("lan-browse", {}), ("lan-discoverable", {"enabled": True}),
+                                        ("tailscale-devices", {})):
+                    assert (await send(client, inactive, operation, body))[0] == 403
+                with pytest.raises(AppError) as refusal:
+                    await agent_route(links, "get_state", {"path": "/linkedInstances"})
+                assert refusal.value.code == "link_unsupported"
+                if not blocked:
+                    with pytest.raises(aiohttp.ClientConnectorError):
+                        await client.post(origin + PEER_PREFIX + "/identity", json=target)
+                status, packet = await send(client, inactive, "revoke", revoke)
+                assert status == 200 and packet["result"]["revoked"] is True
+                assert (await send(client, inactive, "revoke", revoke)) == (status, packet)
+                assert await setup(client, inactive) == settings
+                assert links.listener.runner is None and links.discovery.expires_at() is None
+                if not blocked:
+                    with pytest.raises(aiohttp.ClientConnectorError):
+                        await client.post(origin + PEER_PREFIX + "/status", json=target)
+        async with host(root) as again:
+            assert (await save(client, again, ENABLED))[1]["result"]["origins"] == [origin]
+            status, packet = await send(client, b, "status", target)
+            assert status == 403 and packet["code"] == "link_revoked"

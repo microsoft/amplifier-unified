@@ -1,6 +1,7 @@
 """Private HTTPS serving owned by linking, not by the browser app."""
 from __future__ import annotations
 
+import asyncio
 import errno
 import ipaddress
 import os
@@ -236,7 +237,16 @@ class Listener:
                                    handler_cancellation=True, auto_decompress=False, keepalive_timeout=5)
             await runner.setup()
             site = web.SockSite(runner, sock, ssl_context=context, backlog=32)
-            await site.start()
+            # SockSite registers before awaiting create_server, which can
+            # start accepting before returning the asyncio.Server handle.
+            # If activation is cancelled, let this bounded local attach
+            # settle so cleanup owns the real server rather than just its fd.
+            attach = asyncio.create_task(site.start())
+            try:
+                await asyncio.shield(attach)
+            except asyncio.CancelledError:
+                await asyncio.gather(attach, return_exceptions=True)
+                raise
             started = True
         except (Blocked, AppError, OSError) as exc:
             self.blocker = (str(exc) if isinstance(exc, Blocked) else

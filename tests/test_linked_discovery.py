@@ -284,7 +284,8 @@ async def test_owner_setup_over_real_loopback_and_only_narrow_body(tmp_path):
             }
             assert data["result"]["revision"] != snapshot["revision"]
             assert (await send("setup", {}))[1] == data
-            assert (await send("list", {}))[0] == 403
+            status, data = await send("list", {})
+            assert status == 200 and data["result"]["links"] == [] and data["result"]["origins"] == []
             assert load_server_config(tmp_path)["note"] == "keep"
             assert load_server_config(tmp_path)["bind"] == ["127.0.0.1"]
     finally:
