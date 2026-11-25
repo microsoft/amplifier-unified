@@ -1987,7 +1987,7 @@ def test_the_password_is_never_written_printed_or_put_on_a_command_line():
     source = FIXTURE.read_text(encoding="utf-8")
     run = source[source.index("def run():"):source.index("PROFILE = ")]
     # Made once, in the process that creates the user.
-    assert source.count("new_password(") == 2 and run.count("password = new_password(name)") == 1
+    assert source.count("new_password(") == 3 and run.count("password = new_password(name)") == 1
     # Every line of code that uses the name, in the order of the file. A new use fails here until it is read.
     lines, used = source.splitlines(), []
     for token in tokenize.generate_tokens(io.StringIO(source).readline):
@@ -2003,6 +2003,9 @@ def test_the_password_is_never_written_printed_or_put_on_a_command_line():
         "value = _Credential(0, 1, DESKTOP_TARGET, None, W.FILETIME(), len(password) * 2, C.cast(blob, C.c_void_p),",
         "def sign_in(name, password):",
         'remember(computer + "\\\\" + name, password)',
+        # Narrow mode uses the same APIs, one sign-in only, no serialization.
+        "password = new_password(name)", "sid = create_user(name, password, mark)",
+        "viewer, session = sign_in(name, password)", "del password",
         "password = new_password(name)", "sid = create_user(name, password, mark)",
         "viewer, session = sign_in(name, password)", "viewer, session = sign_in(name, password)", "del password"]
     sign_in = source[source.index("def sign_in(name, password):"):source.index("def sign_out(name, viewer):")]
@@ -2050,9 +2053,10 @@ def test_the_workflow_cannot_skip_and_always_removes_the_account():
     workflow = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
     assert set(workflow["on"]) == {"workflow_dispatch", "pull_request"}
     assert workflow["permissions"] == {"contents": "read"}
-    assert set(workflow["jobs"]) == {"windows-standard-account", "portable-checks"}
+    assert set(workflow["jobs"]) == {"windows-standard-account", "portable-checks", "synthetic-task-29411"}
     job = workflow["jobs"]["windows-standard-account"]
-    assert job["runs-on"] == "windows-latest" and "if" not in job and "continue-on-error" not in job and "needs" not in job
+    assert job["runs-on"] == "windows-latest" and "continue-on-error" not in job and "needs" not in job
+    assert job["if"] == "${{ github.event_name != 'workflow_dispatch' || inputs.case == 'consumer' }}"
     assert job["env"]["AMPLIFIER_CREATE_A_STANDARD_USER_ON_THIS_RUNNER"] == "1"
     steps = job["steps"]
     assert all("continue-on-error" not in step for step in steps)
@@ -2097,7 +2101,9 @@ def test_the_workflow_runs_every_case_of_this_file_and_a_case_that_did_not_run_f
     assert others == []  # When another workflow names the file, change the sentences here and in the workflow.
     job = workflow["jobs"]["portable-checks"]
     assert job["runs-on"] == "ubuntu-latest"
-    assert all(key not in part for part in (job, *job["steps"]) for key in ("if", "continue-on-error", "needs"))
+    assert job["if"] == "${{ github.event_name != 'workflow_dispatch' || inputs.case == 'consumer' }}"
+    assert all(key not in part for part in (job, *job["steps"]) for key in ("continue-on-error", "needs"))
+    assert all("if" not in step for step in job["steps"])
     checkout, python, _, install, run = job["steps"]
     # The candidate of a pull request, not its merge with main, as in the other job; the Python of CI.
     assert checkout["with"]["ref"] == "${{ github.event.pull_request.head.sha || github.sha }}"
@@ -3649,3 +3655,214 @@ def test_second_sign_in_log_snapshot_accepts_the_real_public_helpers_plain_text_
         {"tailLine": 0, "marker": "Started server process"},
         {"tailLine": 1, "marker": "Application startup complete."}]
     assert "PRIVATE-SENTINEL" not in json.dumps(facts)
+
+
+# The narrow scheduler selector: portable source/controller checks only. None of
+# these tests create a Windows account, invoke COM, start RDP or run native29411.
+def synthetic_xml(name, sid):
+    return ('<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">'
+            f'<RegistrationInfo><URI>\\{name}</URI></RegistrationInfo>'
+            f'<Principals><Principal><UserId>{sid}</UserId></Principal></Principals></Task>')
+
+
+@pytest.fixture
+def scheduler_fixture(case):
+    name, sid = "AmplifierUnified-Test-" + "a" * 32, USER["sid"]
+    xml = synthetic_xml(name, sid)
+    recorded, calls = {}, []
+    answers = []
+    def publish(filename, value):
+        assert filename not in recorded
+        recorded[filename] = value
+    def original(op, owner, **arguments):
+        calls.append((op, owner, arguments))
+        if op == "create":
+            assert recorded["intent.json"]["xml"] == arguments["xml"]
+        answer = answers.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+    guard = case.SchedulerWitness(original, sid, publish, {"fixture": "a" * 40, "product": case.SYNTHETIC_BASE})
+    return SimpleNamespace(name=name, sid=sid, xml=xml, guard=guard, answers=answers,
+                           recorded=recorded, calls=calls)
+
+
+def establish_creation(f):
+    absent = {"exists": False}
+    created = {"exists": True, "xml": f.xml, "state": 3, "instances": 0, "lastResult": 0}
+    f.answers.extend([absent, created])
+    assert f.guard("query", f.sid, name=f.name) is absent
+    assert f.guard("create", f.sid, name=f.name, xml=f.xml) is created
+    return created
+
+
+def test_synthetic_selector_is_closed_default_and_native_job_is_manual(case):
+    assert case.selected_case({}) == "consumer"
+    assert case.selected_case({"AMPLIFIER_STANDARD_ACCOUNT_CASE": case.SYNTHETIC_CASE}) == case.SYNTHETIC_CASE
+    for value in ("", "all", "SYNTHETIC-TASK-29411", "synthetic-task-29411;extra"):
+        with pytest.raises(ValueError):
+            case.selected_case({"AMPLIFIER_STANDARD_ACCOUNT_CASE": value})
+    workflow = yaml.load(WORKFLOW.read_text(), Loader=yaml.BaseLoader)
+    choice = workflow["on"]["workflow_dispatch"]["inputs"]["case"]
+    assert choice["default"] == "consumer" and choice["options"] == ["consumer", case.SYNTHETIC_CASE]
+    job = workflow["jobs"][case.SYNTHETIC_CASE]
+    assert job["if"] == "${{ github.event_name == 'workflow_dispatch' && inputs.case == 'synthetic-task-29411' }}"
+    assert job["timeout-minutes"] == "40"
+    assert all("continue-on-error" not in x for x in [job, *job["steps"]])
+    assert job["steps"][-2]["if"] == job["steps"][-1]["if"] == "always()"
+    assert job["steps"][-1]["with"]["path"] == "${{ runner.temp }}/standard-account-evidence/"
+    assert job["steps"][1]["with"]["ref"] == "${{ inputs.fixture_sha }}"
+    assert job["steps"][1]["with"]["persist-credentials"] == "false"
+    assert "pytest" not in job["steps"][-3]["run"]  # Native subject invoked only by protected helper.
+
+
+def test_synthetic_dependencies_are_minimal_exact_wheel_hashes(case):
+    import tomllib
+    selected = case.synthetic_requirements(tomllib.loads((ROOT / "uv.lock").read_text()))
+    lines = selected.splitlines()
+    assert len(lines) == 6 and {line.split("==")[0] for line in lines} == set(case.SYNTHETIC_DEPS)
+    assert all(" --hash=sha256:" in line for line in lines)
+    assert all("amplifier" not in line for line in lines)
+    with pytest.raises(AssertionError):
+        case.synthetic_requirements({"package": []})
+
+
+def test_synthetic_observer_preserves_results_and_records_real_sequence(case, scheduler_fixture):
+    f = scheduler_fixture
+    created = establish_creation(f)
+    started = {"exists": True, "xml": f.xml}
+    running = {"exists": True, "xml": f.xml, "state": 4, "instances": 1, "lastResult": 267009}
+    exited = {"exists": True, "xml": f.xml, "state": 3, "instances": 0, "lastResult": 0}
+    removed, absent = {"exists": False}, {"exists": False}
+    f.answers.extend([started, running, exited, removed, absent])
+    assert f.guard("start", f.sid, name=f.name, previous=f.xml) is started
+    assert f.guard("query", f.sid, name=f.name) is running
+    assert f.guard("query", f.sid, name=f.name) is exited
+    assert f.guard("remove", f.sid, name=f.name, previous=f.xml) is removed
+    assert not f.guard.complete()  # A mutation receipt is not the final absence query.
+    assert f.guard("query", f.sid, name=f.name) is absent and f.guard.complete()
+    assert f.recorded["registered.json"]["xml"] == created["xml"]
+    assert [op for op, _, _ in f.calls] == ["query", "create", "start", "query", "query", "remove", "query"]
+    assert f.calls[1][2] == {"name": f.name, "xml": f.xml}
+    assert not any(op in {"retire", "replace", "stop"} for op, _, _ in f.calls)
+
+
+@pytest.mark.parametrize("name,sid", [
+    (None, USER["sid"]), ("AmplifierUnified-" + USER["sid"], USER["sid"]),
+    ("AmplifierUnified-Test-other", USER["sid"]), ("AmplifierUnified-Test-" + "a"*32, "S-1-5-18"),
+])
+def test_synthetic_subject_rejects_foreign_or_missing_identity(scheduler_fixture, name, sid):
+    f = scheduler_fixture
+    with pytest.raises(AssertionError):
+        f.guard("create", sid, name=name, xml=f.xml)
+    assert f.calls == [] and f.recorded == {}
+
+
+@pytest.mark.parametrize("operation", ["replace", "retire", "stop"])
+def test_synthetic_observer_never_substitutes_another_operation(scheduler_fixture, operation):
+    f = scheduler_fixture
+    with pytest.raises(AssertionError):
+        f.guard(operation, f.sid, name=f.name)
+    assert f.calls == []
+
+
+def test_synthetic_unknown_creation_does_not_adopt_later_query(scheduler_fixture):
+    f = scheduler_fixture
+    unknown = TimeoutError("original transport uncertainty")
+    f.answers.extend([{"exists": False}, unknown, {"exists": True, "xml": f.xml}])
+    f.guard("query", f.sid, name=f.name)
+    with pytest.raises(TimeoutError) as caught:
+        f.guard("create", f.sid, name=f.name, xml=f.xml)
+    assert caught.value is unknown
+    f.guard("query", f.sid, name=f.name)
+    with pytest.raises(AssertionError):
+        f.guard("remove", f.sid, name=f.name, previous=f.xml)
+    with pytest.raises(AssertionError):
+        f.guard("create", f.sid, name=f.name, xml=f.xml)
+    assert f.guard.registered is None and not f.guard.complete()
+    assert [op for op, _, _ in f.calls] == ["query", "create", "query"]
+
+
+@pytest.mark.parametrize("bad_record", ["intent.json", "registered.json"])
+def test_synthetic_private_publication_failure_never_certifies_mutation(case, scheduler_fixture, bad_record):
+    f = scheduler_fixture
+    original = f.guard.publish
+    def fail(name, value):
+        if name == bad_record:
+            raise OSError("private persistence refused")
+        original(name, value)
+    f.guard.publish = fail
+    f.answers.extend([{"exists": False}, {"exists": True, "xml": f.xml}])
+    f.guard("query", f.sid, name=f.name)
+    with pytest.raises(OSError):
+        f.guard("create", f.sid, name=f.name, xml=f.xml)
+    assert sum(op == "create" for op, _, _ in f.calls) == (bad_record == "registered.json")
+    assert f.guard.registered is None and not f.guard.complete()
+
+
+def test_synthetic_changed_definition_and_second_uuid_are_retained(scheduler_fixture):
+    f = scheduler_fixture
+    establish_creation(f)
+    for changed in (f.xml + " ", f.xml.replace("Task", "Other", 1)):
+        with pytest.raises(AssertionError):
+            f.guard("remove", f.sid, name=f.name, previous=changed)
+    with pytest.raises(AssertionError):
+        f.guard("query", f.sid, name="AmplifierUnified-Test-" + "b" * 32)
+    assert len(f.calls) == 2
+
+
+def test_synthetic_product_refusal_propagates_without_cleanup_fallback(scheduler_fixture):
+    f = scheduler_fixture
+    establish_creation(f)
+    error = RuntimeError("task changed immediately before the product operation")
+    f.answers.append(error)
+    with pytest.raises(RuntimeError) as caught:
+        f.guard("remove", f.sid, name=f.name, previous=f.xml)
+    assert caught.value is error and len(f.calls) == 3
+    with pytest.raises(AssertionError):
+        f.guard("remove", f.sid, name=f.name, previous=f.xml)
+    assert not f.guard.complete()
+
+
+@pytest.mark.parametrize("code,ids,phases,complete", [
+    (1, [], [], False), (0, [], [], True), (0, ["another"], [], True),
+    (0, [SYNTHETIC_NODE := "tests/test_windows_service.py::test_native_synthetic_task_create_run_exit_remove"],
+     [{"phase": "setup", "outcome": "passed"}, {"phase": "call", "outcome": "skipped"},
+      {"phase": "teardown", "outcome": "passed"}], True),
+    (0, [SYNTHETIC_NODE], [{"phase": "setup", "outcome": "passed"}, {"phase": "call", "outcome": "passed"},
+                         {"phase": "teardown", "outcome": "failed"}], True),
+])
+def test_synthetic_wrong_collection_skip_failure_cannot_pass(case, code, ids, phases, complete):
+    assert not case.synthetic_outcome(code, ids, phases, complete)
+
+
+def test_synthetic_natural_exit_requires_running_then_successful_exit(scheduler_fixture):
+    f = scheduler_fixture
+    establish_creation(f)
+    f.answers.extend([{"exists": True, "xml": f.xml},
+                      {"exists": True, "xml": f.xml, "instances": 0, "state": 3, "lastResult": 0}])
+    f.guard("start", f.sid, name=f.name, previous=f.xml)
+    f.guard("query", f.sid, name=f.name)
+    assert not f.guard.exited  # A never-observed running task is not a proved natural completion.
+    f.answers.extend([{"exists": True, "xml": f.xml, "instances": 1, "state": 4, "lastResult": 267009},
+                      {"exists": True, "xml": f.xml, "instances": 0, "state": 3, "lastResult": 1}])
+    f.guard("query", f.sid, name=f.name)
+    f.guard("query", f.sid, name=f.name)
+    assert f.guard.running and not f.guard.exited
+
+
+def test_synthetic_controller_avoids_legacy_cleanup_and_helper_overwrite(case):
+    source = FIXTURE.read_text()
+    narrow = source[source.index("def cleanup_synthetic():"):source.index("def synthetic_standard(")]
+    assert 'task("state", intent["name"])' in narrow
+    assert 'task("remove"' not in narrow and "ask_to_end_programs" not in narrow
+    assert narrow.index('result["subjectTask"] = "absent"') < narrow.index('part("profile"')
+    assert "$f.RegisterTaskDefinition($p.name, $d, 2," in case.EXACT_HELPER
+    assert "$f.RegisterTaskDefinition($p.name, $d, 6," not in case.EXACT_HELPER
+    assert "$t.Xml -cne $p.previous" in case.EXACT_HELPER
+    assert "$t.Definition.Principal.UserId -cne $p.sid" in case.EXACT_HELPER
+    assert "$t.GetInstances(0).Count -ne 0" in case.EXACT_HELPER
+    assert "Stop(" not in case.EXACT_HELPER
+    assert "publish_private(name, raw)" in source and "read_private(name, limit=len(raw))" in source
+    assert "os.fsync(stream.fileno())" in source
+    assert "service._scheduler = original" in source
