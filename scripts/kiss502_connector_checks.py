@@ -4,6 +4,14 @@ Parent guest:
   python scripts/kiss502_connector_checks.py prepare --output /artifacts/connectors
   python scripts/kiss502_connector_checks.py check --output /artifacts/connectors
 
+By default prepare keeps executable inputs in a private directory in the
+current working directory (the guest workspace). Run each stage from that
+workspace. Successful joined after check retires the prepared inputs. A partial
+or failed run keeps its workspace for diagnosis until the guest is retired.
+An export that explicitly preserves that workspace can include those inputs.
+For a deliberately self-contained offline result, use prepare --keep-inputs.
+Results from the old combined layout also remain usable.
+
 Local preflight may prepare inputs and run check --minecraft-only. Full check
 requires the parent's prepared test contract and /artifacts output. It starts only
 the maintained disposable loopback fixtures, never an installed service.
@@ -74,14 +82,14 @@ def source_inventory(source, name):
     return {"url": url, "commit": commit, "tree": tree, "files": files}
 
 
-def fixture_env(output):
+def fixture_env(inputs):
     """No inherited tokens, user configuration or optional endpoint overrides."""
     env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL") if key in os.environ}
-    env.update(HOME=str(output / "home"), TMPDIR=str(output / "tmp"),
+    env.update(HOME=str(inputs / "home"), TMPDIR=str(inputs / "tmp"),
                PYTHONDONTWRITEBYTECODE="1", PYTHONUNBUFFERED="1",
-               XDG_CONFIG_HOME=str(output / "home/config"),
-               XDG_CACHE_HOME=str(output / "home/cache"),
-               WORKSHOP_TEST_PYTHON=str(output / "minecraft-venv/bin/python"))
+               XDG_CONFIG_HOME=str(inputs / "home/config"),
+               XDG_CACHE_HOME=str(inputs / "home/cache"),
+               WORKSHOP_TEST_PYTHON=str(inputs / "minecraft-venv/bin/python"))
     return env
 
 
@@ -138,18 +146,18 @@ def package_inventory(folder):
     return files
 
 
-def verify_package(output):
+def verify_package(output, inputs):
     saved = json.loads((output / "slack-artifact.json").read_text())
     require(digest(output / "slack-release-manifest.json") == MANIFEST_HASH,
             "Slack published manifest drift")
-    require(digest(output / "slack.tar.gz") == ARCHIVE_HASH, "Slack archive drift")
-    require(package_inventory(output / "slack-package") == saved["payload"],
+    require(digest(inputs / "slack.tar.gz") == ARCHIVE_HASH, "Slack archive drift")
+    require(package_inventory(inputs / "slack-package") == saved["payload"],
             "Slack extracted payload drift")
     require(saved["payload"]["acp-slack-adapter"] == BINARY_HASH, "Slack binary drift")
 
 
-def slack_package(output, archive=None):
-    target = output / "slack.tar.gz"
+def slack_package(output, inputs, archive=None):
+    target = inputs / "slack.tar.gz"
     if archive:
         shutil.copyfile(archive, target)
     else:
@@ -161,7 +169,7 @@ def slack_package(output, archive=None):
     published = json.loads(manifest.read_text())
     require(published["sha256"] == ARCHIVE_HASH and
             published["binary_sha256"] == BINARY_HASH, "Published identity mismatch")
-    folder = output / "slack-package"
+    folder = inputs / "slack-package"
     folder.mkdir()
     with tarfile.open(target) as source:
         validate_members(source.getmembers())
@@ -184,13 +192,34 @@ def slack_package(output, archive=None):
         "qualification": "Published artifact; not rebuilt at selected source commit"})
 
 
-def prepare(output, archive=None):
+def workspace_inputs(output):
+    # The source workspace is executable; the standard guest mounts /tmp noexec.
+    name = hashlib.sha256(os.fsencode(output.resolve())).hexdigest()[:16]
+    return Path.cwd() / (".kiss502-" + name)
+
+
+def prepare(output, archive=None, keep_inputs=False):
+    inputs = output if keep_inputs else workspace_inputs(output)
+    if not keep_inputs:
+        require(not inputs.is_relative_to(Path("/artifacts")) and not inputs.is_relative_to(output),
+                "Run prepare in the executable workspace")
     output.mkdir(parents=True, exist_ok=False)
+    if not keep_inputs:
+        inputs.mkdir(mode=0o700)
+    try:
+        prepare_inputs(output, inputs, archive)
+    except BaseException:
+        if not keep_inputs:
+            shutil.rmtree(inputs)
+        raise
+
+
+def prepare_inputs(output, inputs, archive):
     for folder in ("home", "tmp", "sources"):
-        (output / folder).mkdir(mode=0o700)
-    env = fixture_env(output)
+        (inputs / folder).mkdir(mode=0o700)
+    env = fixture_env(inputs)
     for name, (url, commit, _) in PINS.items():
-        source = output / "sources" / name
+        source = inputs / "sources" / name
         subprocess.run(["git", "init", str(source)], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(source), "remote", "add", "origin", url], check=True)
         require(command(output, name + "-fetch", ["git", "-C", source, "fetch",
@@ -198,7 +227,7 @@ def prepare(output, archive=None):
         subprocess.run(["git", "-C", str(source), "checkout", "--detach", "FETCH_HEAD"],
                        check=True, capture_output=True)
         write(output / (name + "-source.json"), source_inventory(source, name))
-    slack = output / "sources/slack"
+    slack = inputs / "sources/slack"
     require(command(output, "slack-release-fetch", ["git", "-C", slack, "fetch",
                     "--depth=1", "origin", SLACK_RELEASE]) == 0, "Release fetch failed")
     changed = git(slack, "diff", "--name-only", SLACK_RELEASE, PINS["slack"][1]).splitlines()
@@ -206,27 +235,33 @@ def prepare(output, archive=None):
     write(output / "slack-lineage.json", {
         "selected": PINS["slack"][1], "release": SLACK_RELEASE, "changedPaths": changed,
         "diff": git(slack, "diff", SLACK_RELEASE, PINS["slack"][1])})
-    slack_package(output, archive)
+    slack_package(output, inputs, archive)
     for name in PINS:
         require(command(output, name + "-venv", ["uv", "venv", "--python", sys.executable,
-                        output / (name + "-venv")], env=env) == 0, "Venv failed")
+                        inputs / (name + "-venv")], env=env) == 0, "Venv failed")
     require(command(output, "slack-dependencies", ["uv", "pip", "install", "--python",
-                    output / "slack-venv/bin/python", "aiohttp==3.14.5"], env=env) == 0,
+                    inputs / "slack-venv/bin/python", "aiohttp==3.14.5"], env=env) == 0,
             "Slack dependencies failed")
     require(command(output, "minecraft-dependencies", ["uv", "pip", "install", "--python",
-                    output / "minecraft-venv/bin/python", "-r",
-                    output / "sources/minecraft/requirements.txt"], env=env) == 0,
+                    inputs / "minecraft-venv/bin/python", "-r",
+                    inputs / "sources/minecraft/requirements.txt"], env=env) == 0,
             "Minecraft dependencies failed")
     for name in PINS:
         require(command(output, name + "-graph", ["uv", "pip", "freeze", "--python",
-                        output / (name + "-venv/bin/python")], env=env) == 0, "Graph read failed")
+                        inputs / (name + "-venv/bin/python")], env=env) == 0, "Graph read failed")
     require(command(output, "minecraft-npm-ci",
                     ["npm", "ci", "--ignore-scripts", "--omit=optional", "--no-audit", "--no-fund"],
-                    cwd=output / "sources/minecraft", env=env) == 0, "npm ci failed")
-    write(output / "prepared.json", {"scriptSha256": digest(__file__),
+                    cwd=inputs / "sources/minecraft", env=env) == 0, "npm ci failed")
+    write(output / "prepared.json", {"workspaceInputs": inputs != output,
+          "scriptSha256": digest(__file__),
           "python": sys.version, "node": subprocess.check_output(["node", "--version"], text=True).strip(),
           "limits": ["fake platforms", "scripted ACP", "no live accounts or paid provider",
                      "no joined Unified backend asserted by maintained fixture passes"]})
+
+
+def prepared_inputs(output):
+    saved = json.loads((output / "prepared.json").read_text())
+    return workspace_inputs(output) if saved.get("workspaceInputs") else output
 
 
 def check(output, minecraft_only=False):
@@ -237,13 +272,14 @@ def check(output, minecraft_only=False):
         require(output.is_relative_to(Path("/artifacts")) and
                 os.environ.get("AMPLIFIER_TEST_CONTRACT"),
                 "Full platform check belongs to parent's prepared guest under /artifacts")
+    inputs = prepared_inputs(output)
     for name in PINS:
-        actual = source_inventory(output / "sources" / name, name)
+        actual = source_inventory(inputs / "sources" / name, name)
         require(actual == json.loads((output / (name + "-source.json")).read_text()),
                 f"{name} input drift")
-    env = fixture_env(output)
-    mc = output / "sources/minecraft"
-    python = output / "minecraft-venv/bin/python"
+    env = fixture_env(inputs)
+    mc = inputs / "sources/minecraft"
+    python = inputs / "minecraft-venv/bin/python"
     # Verify the connector's separate old SDK, not Unified's independently versioned SDK.
     probe = ("import importlib.metadata as m,json; d=m.distribution('agent-client-protocol'); "
              "u=json.loads(d.read_text('direct_url.json')); "
@@ -259,25 +295,28 @@ def check(output, minecraft_only=False):
     statuses["body-chat"] = command(output, "body-chat",
                                    ["node", "--test", "tests/body-chat.test.cjs"], cwd=mc, env=env)
     if not minecraft_only:
-        binary = output / "slack-package/acp-slack-adapter"
-        verify_package(output)
+        binary = inputs / "slack-package/acp-slack-adapter"
+        verify_package(output, inputs)
         env["ACP_SLACK_TEST_BINARY"] = str(binary)
         env["SLACK_HUDDLE_RESULT_DIR"] = str(output / "slack-huddles")
         for name in SLACK_TESTS:
             statuses[name] = command(output, name.removesuffix(".py"),
-                                     [output / "slack-venv/bin/python", "-B", "tests/" + name],
-                                     cwd=output / "sources/slack", env=env)
-        verify_package(output)
+                                     [inputs / "slack-venv/bin/python", "-B", "tests/" + name],
+                                     cwd=inputs / "sources/slack", env=env)
+        verify_package(output, inputs)
     for name in PINS:
-        require(source_inventory(output / "sources" / name, name) ==
+        require(source_inventory(inputs / "sources" / name, name) ==
                 json.loads((output / (name + "-source.json")).read_text()),
                 f"{name} changed during fixtures")
-    write(output / "result.json", {"stages": statuses, "minecraftOnly": minecraft_only,
+    report = output / "result.json"
+    pending = report.with_suffix(".tmp")
+    write(pending, {"stages": statuses, "minecraftOnly": minecraft_only,
           "executionScriptSha256": digest(__file__),
           "passed": all(code == 0 for code in statuses.values()),
           "joinedUnifiedBackend": "not_run",
           "limits": ["No real Slack authorization/delivery, Mineflayer world, or model judgment",
                      "Maintained fixtures use scripted ACP peers and fake platform state"]})
+    pending.replace(report)
     return 0 if all(code == 0 for code in statuses.values()) else 1
 
 
@@ -287,23 +326,27 @@ def joined(output, python, test):
     require(test.is_file() and test.name == "kiss502_connector_native.py", "Select joined fixture")
     require((test.parent / "peer_return_worker_probe.py").is_file() and
             (test.parent / "acp_native_provider.py").is_file(), "Copy the two maintained native helpers")
-    verify_package(output)
+    inputs = prepared_inputs(output)
+    verify_package(output, inputs)
     for name in PINS:
-        require(source_inventory(output / "sources" / name, name) ==
+        require(source_inventory(inputs / "sources" / name, name) ==
                 json.loads((output / (name + "-source.json")).read_text()), f"{name} source drift")
-    env = fixture_env(output)
-    env.update(KISS502_CONNECTORS=str(output),
+    env = fixture_env(inputs)
+    env.update(KISS502_CONNECTORS=str(inputs), KISS502_CONNECTOR_RESULTS=str(output),
                AMPLIFIER_TEST_CONTRACT=os.environ["AMPLIFIER_TEST_CONTRACT"])
     result = command(output, "joined", [
         python, "-I", "-B", "-m", "pytest", "-q", "-c", "/dev/null", "--noconftest",
-        "-p", "aiohttp.pytest_plugin", "--asyncio-mode=auto",
-        "--basetemp=" + str(output / "joined"), "--junitxml=" + str(output / "joined.xml"), test],
+        "-p", "no:cacheprovider", "-p", "aiohttp.pytest_plugin", "--asyncio-mode=auto",
+        "--basetemp=" + str(inputs / "joined"), "--junitxml=" + str(output / "joined.xml"), test],
         cwd=output, env=env)
-    verify_package(output)
+    verify_package(output, inputs)
     write(output / "joined-result.json", {
         "returncode": result, "fixtureSha256": digest(test),
         "scriptSha256": digest(__file__), "qualification": "Pass only if joined pytest exits zero",
         "limits": ["Two direct-backend cases, not an Instance/full Work/live platform campaign"]})
+    check_result = output / "result.json"
+    if result == 0 and inputs != output and check_result.exists() and json.loads(check_result.read_text())["passed"]:
+        shutil.rmtree(inputs)
     return result
 
 
@@ -312,13 +355,15 @@ def main():
     parser.add_argument("action", choices=("prepare", "check", "joined"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--slack-archive", type=Path)
+    parser.add_argument("--keep-inputs", action="store_true",
+                        help="Prepare a self-contained offline result")
     parser.add_argument("--minecraft-only", action="store_true")
     parser.add_argument("--backend-python", type=Path)
     parser.add_argument("--joined-test", type=Path)
     args = parser.parse_args()
     output = args.output.resolve()
     if args.action == "prepare":
-        prepare(output, args.slack_archive)
+        prepare(output, args.slack_archive, args.keep_inputs)
         return 0
     if args.action == "joined":
         require(args.backend_python and args.joined_test, "Select installed backend Python and copied joined test")

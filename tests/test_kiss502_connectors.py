@@ -1,4 +1,5 @@
 """Offline checks for the pinned fixture recipe, not connector qualification."""
+from contextlib import chdir
 import importlib.util
 import os
 from pathlib import Path
@@ -70,16 +71,50 @@ class ConnectorRecipe(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "parent's prepared guest"):
                 recipe.check(Path("/not-artifacts"))
 
+    def test_partial_prepare_retires_only_this_runs_work_and_keeps_failure_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp, chdir(tmp):
+            output = Path(tmp) / "results"
+            neighbor = Path(tmp) / "other-run"
+            neighbor.mkdir()
+
+            def fail(results, inputs, archive):
+                self.assertEqual(results, output)
+                self.assertNotEqual(inputs, output)
+                (inputs / "partial-download").touch()
+                (results / "failed.log").write_text("source failure")
+                raise KeyboardInterrupt
+
+            with patch.object(recipe, "prepare_inputs", side_effect=fail), self.assertRaises(KeyboardInterrupt):
+                recipe.prepare(output)
+            self.assertEqual(set(Path(tmp).iterdir()), {output, neighbor})
+            self.assertEqual((output / "failed.log").read_text(), "source failure")
+
+    def test_existing_offline_layout_defaults_to_its_own_prepared_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp, chdir(tmp):
+            output = Path(tmp) / "results"
+            output.mkdir()
+            recipe.write(output / "prepared.json", {})
+            self.assertEqual(recipe.prepared_inputs(output), output)
+            recipe.write(output / "prepared.json", {"workspaceInputs": True})
+            inputs = recipe.prepared_inputs(output)
+            self.assertEqual(inputs.parent, Path(tmp))
+            self.assertNotEqual(inputs, output)
+            self.assertNotEqual(inputs, recipe.workspace_inputs(Path(tmp) / "another-run"))
+
     def test_extracted_package_drift_is_refused_before_fixture_execution(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)
+            inputs = output.parent / "scratch"
             recipe.write(output / "slack-artifact.json",
                          {"payload": {"acp-slack-adapter": recipe.BINARY_HASH}})
-            with patch.object(recipe, "digest", side_effect=lambda p:
-                              recipe.MANIFEST_HASH if p.name.endswith(".json") else recipe.ARCHIVE_HASH), \
-                 patch.object(recipe, "package_inventory", return_value={"acp-slack-adapter": "changed"}):
+            with patch.object(recipe, "digest", side_effect={
+                    output / "slack-release-manifest.json": recipe.MANIFEST_HASH,
+                    inputs / "slack.tar.gz": recipe.ARCHIVE_HASH,
+                 }.__getitem__), \
+                 patch.object(recipe, "package_inventory", return_value={"acp-slack-adapter": "changed"}) as inventory:
                 with self.assertRaisesRegex(ValueError, "extracted payload drift"):
-                    recipe.verify_package(output)
+                    recipe.verify_package(output, inputs)
+                inventory.assert_called_once_with(inputs / "slack-package")
 
 
 if __name__ == "__main__":

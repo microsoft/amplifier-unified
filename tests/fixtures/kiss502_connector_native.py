@@ -21,10 +21,10 @@ import sys
 import uuid
 
 
-async def minecraft_client(inputs, endpoint_file, result_file):
+async def minecraft_client(inputs, endpoint_file, result_file, inventory_dir=None):
     """Ordinary configurable production Client, not a protocol reimplementation."""
     source = inputs / "sources/minecraft"
-    inventory = json.loads((inputs / "minecraft-source.json").read_text())
+    inventory = json.loads(((inventory_dir or inputs) / "minecraft-source.json").read_text())
     for name, expected in inventory["files"].items():
         assert hashlib.sha256((source / name).read_bytes()).hexdigest() == expected, name
     import importlib.metadata as metadata
@@ -57,9 +57,9 @@ async def minecraft_client(inputs, endpoint_file, result_file):
                                      "sdk": direct}, indent=2) + "\n")
 
 
-async def slack_client(inputs, relay, workspace, home, env):
+async def slack_client(inputs, inventory_dir, relay, workspace, home, env, log_path):
     source = inputs / "sources/slack"
-    inventory = json.loads((inputs / "slack-source.json").read_text())
+    inventory = json.loads((inventory_dir / "slack-source.json").read_text())
     for name, expected in inventory["files"].items():
         assert hashlib.sha256((source / name).read_bytes()).hexdigest() == expected, name
     sys.path.insert(0, str(source / "tests"))
@@ -95,13 +95,13 @@ async def slack_client(inputs, relay, workspace, home, env):
     assert hashlib.sha256(binary.read_bytes()).hexdigest() == (
         "d837885756191f2f0a41daeabfa44e7c9d6b17d67dc92f7a86c8de32ea076f1e")
     process = None
-    with (home / "service.log").open("xb") as log:
+    with log_path.open("xb") as log:
         try:
             process = await asyncio.create_subprocess_exec(
                 str(binary), "serve", "--home", str(home), env=env, stdout=log, stderr=log)
             await until(lambda: "alpha" in fixture.sockets or process.returncode is not None,
                         "joined Slack socket", timeout=30)
-            assert process.returncode is None, (home / "service.log").read_text()
+            assert process.returncode is None, log_path.read_text()
             for turn in (1, 2):
                 await fixture.send("Dnative", f"Native input {turn}: 漢🙂")
                 await until(lambda: len(fixture.posts) == turn, "native Slack reply", timeout=90)
@@ -131,8 +131,13 @@ if __name__ != "__main__":
     @pytest.mark.parametrize("connector", ["minecraft", "slack"])
     async def test_actual_connector_native_execution(tmp_path, monkeypatch, aiohttp_client, connector):
         inputs = Path(os.environ["KISS502_CONNECTORS"]).resolve()
-        assert inputs.is_relative_to(Path("/artifacts"))
+        inventory_dir = Path(os.environ.get("KISS502_CONNECTOR_RESULTS", inputs)).resolve()
+        assert inventory_dir.is_relative_to(Path("/artifacts"))
         assert os.environ.get("AMPLIFIER_TEST_CONTRACT"), "Parent's prepared guest only"
+        diagnostics = tmp_path
+        if "KISS502_CONNECTOR_RESULTS" in os.environ:
+            diagnostics = inventory_dir / "joined-results" / connector
+            diagnostics.mkdir(parents=True)
         # These are the same maintained native-runtime prerequisites/provider
         # used by test_acp_native_execution; no fallback provider graph is installed.
         probe_spec = spec_from_file_location(
@@ -164,7 +169,7 @@ if __name__ != "__main__":
             "from importlib.util import spec_from_file_location,module_from_spec\n"
             f"s=spec_from_file_location('native_fixture',{str(provider_source)!r})\n"
             "m=module_from_spec(s)\ns.loader.exec_module(m)\nProvider=m.Provider\nmount=m.mount\n")
-        audit = tmp_path / "provider.jsonl"
+        audit = diagnostics / "provider.jsonl"
         bundle = tmp_path / "bundle.yaml"
         bundle.write_text(
             f"bundle:\n  name: connector-native-fixture\n  version: {SNAPSHOT_VERSION}\n"
@@ -211,11 +216,11 @@ if __name__ != "__main__":
             if connector == "minecraft":
                 endpoint = tmp_path / "endpoint.json"
                 endpoint.write_text(json.dumps({"command": relay, "cwd": str(workspace), "env": env}))
-                result_file = tmp_path / "minecraft-client.json"
-                with (tmp_path / "minecraft-client.log").open("xb") as log:
+                result_file = diagnostics / "minecraft-client.json"
+                with (diagnostics / "minecraft-client.log").open("xb") as log:
                     process = await asyncio.create_subprocess_exec(
                         str(inputs / "minecraft-venv/bin/python"), "-I", "-B", str(Path(__file__).resolve()),
-                        str(inputs), str(endpoint), str(result_file), env=env, stdout=log, stderr=log)
+                        str(inputs), str(endpoint), str(result_file), str(inventory_dir), env=env, stdout=log, stderr=log)
                     try:
                         assert await asyncio.wait_for(process.wait(), 180) == 0, (
                             tmp_path / "minecraft-client.log").read_text()
@@ -225,7 +230,8 @@ if __name__ != "__main__":
                             await process.wait()
                 connector_result = json.loads(result_file.read_text())
             else:
-                connector_result = await slack_client(inputs, relay, workspace, tmp_path / "slack", env)
+                connector_result = await slack_client(inputs, inventory_dir, relay, workspace, tmp_path / "slack", env,
+                                                      diagnostics / "service.log")
             sid = connector_result["session"]
             assert service._session(sid)["title"] == "Native ACP effect 2"
             rows = [json.loads(line) for line in audit.read_text().splitlines()]
@@ -247,7 +253,7 @@ if __name__ != "__main__":
                                 for identity in payload.get("input_ids", []))
             assert len(delivered) == 2 and set(delivered.values()) == {1}
             assert terminals == delivered
-            (tmp_path / "joined-evidence.json").write_text(json.dumps({
+            (diagnostics / "joined-evidence.json").write_text(json.dumps({
                 "connector": connector, "runtime": graph, "provider": providers, "effects": commands,
                 "nativeInputs": dict(delivered), "nativeTerminals": dict(terminals), "result": connector_result,
                 "limits": ["Scripted provider, loop-live/context-simple, not full Work",
