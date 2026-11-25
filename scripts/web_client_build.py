@@ -14,6 +14,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import web_client_source as delivery
+from browser_check_runner import compose_browser_plan
 
 command = delivery.command
 
@@ -86,6 +87,9 @@ def verify_inputs(source, *, node='node'):
 
 
 def prepare_inputs(root, source, *, node='node'):
+    # Validate the pair before replacing a prepared client or installing dependencies.
+    compose_browser_plan(read(root / 'tests/web/browser-checks.json'),
+                         read(source / 'tests/browser-checks.json'))
     lock_path = source / 'build-inputs.lock.json'
     lock = read(lock_path)
     # Copy only the selected shared files. The client owns lock validation and
