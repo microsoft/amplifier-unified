@@ -224,6 +224,188 @@ def test_chat_ci_closed_helper_reader_rejects_missing_or_invalid_evidence(tmp_pa
     assert capsys.readouterr().out == ''
 
 
+def closed_chat_runner():
+    import ast
+    import textwrap
+    import yaml
+    job = yaml.safe_load((probe.ROOT / '.github/workflows/windows-path-length.yml').read_text())['jobs']['windows-chat-setup']
+    run = next(s['run'] for s in job['steps']
+               if s.get('name', '').startswith("Prepare and check a chat's own setup"))
+    code = textwrap.dedent(run.split("$tests = @'\n", 1)[1].split("\n'@", 1)[0])
+    tree = ast.parse(code)
+    definitions = ast.unparse(ast.Module(body=[
+        n for n in tree.body if isinstance(n, (ast.ClassDef, ast.FunctionDef))], type_ignores=[]))
+    return job, run, tree, definitions
+
+
+@pytest.mark.parametrize('fault', [
+    'pass', 'no-async-plugin', 'setup', 'call', 'teardown', 'private-type',
+    'skip', 'xfail', 'missing', 'extra', 'duplicate', 'collection',
+    'late', 'nonzero-exit', 'projection', 'write',
+])
+def test_chat_closed_summary_preserves_real_pytest_outcomes(tmp_path, fault):
+    """A portable miniature, not the native chat, registry or its preparation."""
+    _, _, _, definitions = closed_chat_runner()
+    (tmp_path / 'collector.py').write_text(definitions)
+    test = tmp_path / 'test_synthetic.py'
+    test.write_text('''import os, pathlib, pytest
+FAULT = os.environ["CHAT_FAULT"]
+@pytest.fixture(autouse=True)
+def lifecycle(request):
+    if request.node.originalname == "test_async" and FAULT == "setup":
+        raise PermissionError("PRIVATE-SETUP")
+    yield
+    if request.node.originalname == "test_async" and FAULT == "teardown":
+        raise OSError("PRIVATE-TEARDOWN")
+@pytest.mark.parametrize("secret", [1], ids=["PRIVATE-PARAMETER"])
+async def test_async(secret):
+    local_private = "PRIVATE-LOCAL"
+    if FAULT in ("call", "projection", "write"): raise ValueError(local_private)
+    if FAULT == "private-type":
+        raise type("PRIVATE-TYPE", (Exception,), {"__module__": "PRIVATE"})("PRIVATE-MESSAGE")
+    if FAULT == "skip": pytest.skip("PRIVATE-SKIP")
+    if FAULT == "xfail": pytest.xfail("PRIVATE-XFAIL")
+def test_artifact():
+    pathlib.Path("provenance-marker").write_text("PASS")
+def test_extra(): pass
+''', encoding='utf-8')
+    if fault == 'collection':
+        (tmp_path / 'test_broken.py').write_text('raise ValueError("PRIVATE-COLLECTION")\n')
+    runner = '''
+import json, os, pathlib, sys
+import pytest
+root, fault = pathlib.Path(sys.argv[1]), sys.argv[2]
+os.chdir(root)
+os.environ["CHAT_FAULT"] = fault
+exec(compile((root / "collector.py").read_text(), "<closed-collector>", "exec"))
+path = root / "test_synthetic.py"
+selected = ChatResults(str(path), {"test_async": 1, "test_artifact": 1},
+    {os.path.normcase(str(path)): (1, len(path.read_bytes().splitlines()))})
+pytest.hookimpl(hookwrapper=True, tryfirst=True)(ChatResults.pytest_runtest_makereport)
+class Injection:
+    def pytest_collection_modifyitems(self, items):
+        if fault == "duplicate": items.append(items[0])
+    def pytest_sessionfinish(self, session, exitstatus):
+        if fault == "late" and selected.reports:
+            selected.reports[-1].outcome = "failed"
+        if fault == "nonzero-exit": session.exitstatus = 4
+args = ["-q", "-rA", "-p", "no:cacheprovider", "--rootdir", str(root),
+        "--confcutdir", str(root), "-o", "asyncio_mode=auto"]
+if fault != "no-async-plugin": args += ["-p", "pytest_asyncio.plugin"]
+args += (["test_synthetic.py::test_artifact"] if fault == "missing" else
+         ["test_synthetic.py::test_async", "test_synthetic.py::test_artifact"])
+if fault == "extra": args.append("test_synthetic.py::test_extra")
+if fault == "collection": args.append("test_broken.py")
+code = pytest.main(args, plugins=[selected, Injection()])
+if fault == "projection":
+    def unavailable(): raise RuntimeError("PRIVATE-PROJECTION")
+    selected.snapshot = lambda code: unavailable()
+if fault == "write":
+    def unsaved(*args): return False
+    save_summary = unsaved
+status = finish(selected, code, root / "summary.json")
+(root / "outer.json").write_text(json.dumps({
+    "code": int(code), "status": status,
+    "artifact": (root / "provenance-marker").read_text() if (root / "provenance-marker").exists() else None}))
+'''
+    child = subprocess.run([sys.executable, '-I', '-B', '-c', runner, str(tmp_path), fault],
+        env={**os.environ, 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1'},
+        capture_output=True, text=True, timeout=30)
+    assert child.returncode == 0, child.stdout + child.stderr
+    outer = json.loads((tmp_path / 'outer.json').read_text())
+    if outer['code']:
+        assert outer['status'] == outer['code']
+    assert (outer['status'] == 0) is (fault == 'pass')
+    if fault == 'write':
+        assert outer['code'] == 1 and not (tmp_path / 'summary.json').exists()
+        return
+    report = json.loads((tmp_path / 'summary.json').read_text())
+    assert report['pytestExitCode'] == outer['code']
+    assert report['passed'] is (fault == 'pass')
+    assert 'PRIVATE' not in json.dumps(report) and str(tmp_path) not in json.dumps(report)
+    if fault == 'projection':
+        assert report == {'schema': 1, 'pytestExitCode': 1, 'passed': False, 'observerError': True}
+        return
+    if fault == 'pass':
+        assert report['collectionCount'] == 2 and report['phaseCount'] == 6
+        assert report['phases'] == report['finalPhases']
+    elif fault in ('setup', 'call', 'teardown', 'private-type', 'no-async-plugin'):
+        assert outer['code'] == 1 and report['failureCount'] >= 1
+        failure = report['failures'][0]
+        assert failure['case'] == '1.1'
+        assert failure['phase'] == (fault if fault in ('setup', 'teardown') else 'call')
+        if fault in ('setup', 'call', 'teardown'):
+            assert failure['type'] == {'setup': 'PermissionError', 'call': 'ValueError', 'teardown': 'OSError'}[fault]
+            assert failure['frames'] and failure['frames'][-1][0] == 1
+        elif fault == 'private-type':
+            assert failure['type'] == 'other'
+    elif fault == 'collection':
+        assert report['collectionErrors'] > 0 and outer['code'] == 2
+    elif fault == 'nonzero-exit':
+        assert outer['code'] == 4
+    elif fault == 'late':
+        assert report['phases'] != report['finalPhases']
+    if fault != 'collection':
+        # An independently successful artifact never masks a companion's red.
+        assert outer['artifact'] == 'PASS'
+
+
+@pytest.mark.parametrize('code', [0, 1, 2, 4])
+@pytest.mark.parametrize('fault', ['snapshot', 'write'])
+def test_chat_summary_failure_never_replaces_original_exit(tmp_path, monkeypatch, code, fault):
+    _, _, _, definitions = closed_chat_runner()
+    namespace = {'json': json}
+    exec(compile(definitions, '<closed-definitions>', 'exec'), namespace)
+    class Results:
+        def snapshot(self, status):
+            if fault == 'snapshot':
+                raise ValueError('PRIVATE')
+            return {'schema': 1, 'pytestExitCode': status, 'passed': status == 0}
+    if fault == 'write':
+        namespace['save_summary'] = lambda *args: False
+    status = namespace['finish'](Results(), code, tmp_path / 'summary.json')
+    assert status == (code or 1)
+    if fault == 'snapshot':
+        assert json.loads((tmp_path / 'summary.json').read_text()) == {
+            'schema': 1, 'pytestExitCode': code, 'passed': False, 'observerError': True}
+
+
+def test_chat_summary_selection_and_privacy_preserve_whole_native_scope():
+    import ast
+    job, run, parsed, definitions = closed_chat_runner()
+    expected = ast.literal_eval(next(n.value for n in parsed.body if isinstance(n, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == 'expected' for t in n.targets)))
+    source = ast.parse((probe.ROOT / 'tests/test_windows_chat_setup.py').read_text())
+    counts = {}
+    for node in source.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test_'):
+            count = 1
+            for decorator in node.decorator_list:
+                if (isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Attribute)
+                        and decorator.func.attr == 'parametrize'):
+                    count *= len(ast.literal_eval(decorator.args[1]))
+            counts[node.name] = count
+    assert expected == counts and sum(expected.values()) == 40
+    assert job['env']['PYTEST_DISABLE_PLUGIN_AUTOLOAD'] == '1'
+    body = ast.unparse(parsed)
+    assert "'-p', 'pytest_asyncio.plugin'" in body and "'asyncio_mode=auto'" in body
+    assert "'tests/test_windows_chat_setup.py'], plugins=[selected]" in body
+    assert '-k' not in body and 'pytest.main(' in body and body.count('pytest.main(') == 1
+    safe = ast.parse(definitions)
+    assert not any(isinstance(n, ast.Attribute) and n.attr in {
+        'longrepr', 'f_locals', '__cause__', '__context__', 'args', 'params', 'context', '_to_json'
+    } for n in ast.walk(safe))
+    assert not any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                   and n.func.id in {'repr', 'vars', 'id'} for n in ast.walk(safe))
+    artifact = next(s for s in job['steps'] if s.get('name') == 'Keep only closed chat-setup test outcomes')
+    assert artifact['if'] == '${{ always() }}'
+    assert artifact['with']['path'] == '${{ runner.temp }}\\chat-setup-results.json'
+    assert '*> "$env:RUNNER_TEMP/private-chat-setup.log"' in run and 'Tee-Object' not in run
+    restore = next(s for s in job['steps'] if s.get('name') == "Restore the runner's long-path setting")
+    assert "always() && steps.long_paths.outputs.original != ''" in restore['if']
+    assert 'Get-ItemProperty' in restore['run'] and 'read back:' in restore['run']
+
+
 @pytest.mark.skipif(os.name == 'nt', reason='On Windows the switch is the subject: tests/test_windows_long_paths_off.py')
 def test_the_reproduction_switch_changes_only_the_project_name(layout):
     """Off Windows the name is the CLI name with and without the switch: the same probe passes."""
