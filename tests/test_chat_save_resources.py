@@ -362,7 +362,30 @@ async def test_failed_full_commit_keeps_recovery_marker_and_unknown_roots(app_fa
     if restore_view_fails:
         assert str(path) not in app._view_cache
     await close_without_checkpoint(app)
-    restored = app_factory(home=app.data_dir)
+    # AppService reconciles during construction. Observe the freshly reopened
+    # owner before that real save, rather than requiring uncertainty to survive
+    # a successful full reconciliation.
+    startup_reconciliations = []
+    real_save_full = type(app)._save_full
+
+    def reconcile(reopened, *, reason):
+        assert reopened is not app and reopened.db is not app.db
+        assert reason == 'Startup reconciles persisted stores and interrupted operations'
+        assert reopened._state.get('_viewRecoveryPending') is True
+        assert state_records.load(reopened.db).get('_viewRecoveryPending') is True
+        assert committed_restart_evidence(reopened)['state'].get('_viewRecoveryPending') is True
+        assert resource_files.marked_references(reopened.db, reopened._state) is None
+        result = real_save_full(reopened, reason=reason)
+        startup_reconciliations.append(True)
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(type(app), '_save_full', reconcile)
+        restored = app_factory(home=app.data_dir)
+    assert startup_reconciliations == [True]
+    assert '_viewRecoveryPending' not in restored._state
+    assert '_viewRecoveryPending' not in state_records.load(restored.db)
+    assert '_viewRecoveryPending' not in committed_restart_evidence(restored)['state']
     assert restored._session(row['id'])['messages'] == prior['bodies'][row['id']]['messages']
     assert restored.clients.records['0']['drafts'][row['id']] == 'private-0'
     assert not app.runtime.started and not restored.runtime.started
