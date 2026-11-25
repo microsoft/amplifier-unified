@@ -56,6 +56,14 @@ over, admission checks still prevent further effects. A startup rejection that
 leaves the schedule needing review qualifies for a failure notification.
 Ordinary missed occurrences skipped by their saved policy stay quiet.
 
+When the saved configuration for a new task changes, the due occurrence appears
+in run history as skipped before start. The schedule enters review. Its notice
+names the changed configuration categories when those are known and asks the
+owner to review the schedule. It retains the existing notification preferences.
+No worker is started and the blocked occurrence is never replayed. If the
+missed-run policy already skips that occurrence, it remains quiet. A recurring
+schedule still holds future work for review. A missed one-time schedule finishes.
+
 For `new_task`, preview also binds a hash of the source's effective configuration,
 provider/model/effort selection, budget settings, bundle, and execution workspace.
 The UI displays the workspace, bundle, model and turn cap before activation.

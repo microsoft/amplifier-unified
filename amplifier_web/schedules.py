@@ -283,6 +283,9 @@ class Schedules:
             return result
 
     def dependency_reason(self, session, task, schedule):
+        return self._task_reason(session, task, schedule) or self._configuration_reason(session, schedule)
+
+    def _task_reason(self, session, task, schedule):
         if reason := self.app.assignments.blocked(session):
             return reason
         if session.get('configurationBusy') or session.get('fileAccessPending'):
@@ -314,13 +317,6 @@ class Schedules:
             if source is not None and fingerprint(source.get('text', '')) != authorization.get('textDigest'):
                 return 'The original schedule request was edited. Review the saved authorization.'
         if schedule.get('destination') == 'new_task':
-            from .session_creation import template
-            try: current_configuration = template(self.app, session)[1]
-            except (ValueError, OSError): return 'The saved configuration is unavailable. Review it before creating another task.'
-            from .session_creation import configuration_matches, configuration_changes
-            if not configuration_matches(schedule['newTaskConfiguration'], current_configuration):
-                fields = configuration_changes(schedule['newTaskConfiguration'], current_configuration)
-                return 'The configuration for new tasks changed' + (': ' + ', '.join(fields) if fields else '') + '. Review the schedule before creating another task.'
             return None
         if task['id'] != schedule['taskId'] or task['revision'] != schedule['taskRevision']:
             return 'The saved task has a newer objective, correction, or lifecycle revision. Review the schedule against it.'
@@ -329,6 +325,21 @@ class Schedules:
             try: question = self.app.questions.store.get(session['id'], identity)
             except Exception: return 'A linked question is unavailable; inspect it before continuing.'
             if question['required'] and question['status'] != 'answered': return 'A required linked question remains unanswered. It is not schedule authorization.'
+        return None
+
+    def _configuration_reason(self, session, schedule):
+        if schedule.get('destination') != 'new_task':
+            return None
+        from .session_creation import configuration_changes, configuration_matches, template
+        try: current = template(self.app, session)[1]
+        except (ValueError, OSError): return 'The saved configuration is unavailable. Review it before creating another task.'
+        previous = schedule['newTaskConfiguration']
+        if not configuration_matches(previous, current):
+            # Old receipts may lack category hashes. Show only category names
+            # recognized by the current template, never values from either plan.
+            fields = [field for field in configuration_changes(previous, current)
+                      if field in current['configurationParts']]
+            return 'The configuration for new tasks changed' + (': ' + ', '.join(fields) if fields else '') + '. Review the schedule before creating another task.'
         return None
 
     async def tick(self):
@@ -387,9 +398,18 @@ class Schedules:
                 # Refresh authoritative schedule after asynchronous runtime reads.
                 current = self.store.get(sid, schedule['id'])
                 if current['revision'] != schedule['revision'] or current['status'] != 'active': continue
-                reason = self.dependency_reason(self.app._session(sid), task, current)
+                owner = self.app._session(sid)
+                reason = self._task_reason(owner, task, current)
                 if reason:
                     self.store.review(sid, current['id'], reason, self.clock()); self.changed(); continue
+                reason = self._configuration_reason(owner, current)
+                if reason:
+                    run = self.store.block_due(sid, current['id'], self.clock(),
+                        expected_revision=current['revision'], reason='Scheduled work did not start. ' + reason)
+                    if run and run.get('blockedBeforeStart'):
+                        self.decide_notification(owner, run)
+                    self.changed()
+                    continue
                 run = self.store.claim(sid, current['id'], self.clock())
                 if run is None: continue
                 if run['phase'] == 'skipped': self.changed(); continue
@@ -505,7 +525,7 @@ class Schedules:
             elif report.get('outcome'):
                 changed = report['outcome'] == 'changed'
                 source = report['source']
-            failure = run['phase'] in {'failed', 'unknown'} or (
+            failure = run.get('blockedBeforeStart') or run['phase'] in {'failed', 'unknown'} or (
                 run['phase'] == 'skipped' and schedule['status'] == 'needs_review')
             notify = failure or policy == 'always' or (policy == 'changes' and changed is True)
             run['notificationDecision'] = {'notify': notify, 'changed': changed, 'source': source, 'at': self.clock(), 'policy': policy}
@@ -518,6 +538,7 @@ class Schedules:
             notices = self.app.state.setdefault('scheduleNotifications', [])
             if not any(row['id'] == message['id'] for row in notices): notices.append(message)
             self.app.state['scheduleNotifications'] = notices[-100:]
+            self.app._save_changes(globals={'scheduleNotifications'})
             if self.app.management:
                 self.app._task(self.app.management.notifications.send(copy.deepcopy(session), {'generation_id': run['id'], 'text': message['text']}))
 
