@@ -23,8 +23,12 @@ on:
         description: Only the unchanged cold declared-worker case with a fresh locked host; no five-case rerun or receipt reuse
         type: boolean
         default: false
+      native_prefix_only:
+        description: Only native catalog console, app-home junction and optional AppService reload on the locked host
+        type: boolean
+        default: false
       candidate_ref:
-        description: Full immutable application SHA required for remaining_runtime_only or cold_only; workflow and product sources stay distinct
+        description: Full immutable application SHA required for an explicit native scope; workflow and product sources stay distinct
         type: string
         default: ''
   pull_request:
@@ -149,7 +153,7 @@ permissions:
   contents: read
 jobs:
   instance-branding-storage:
-    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -183,7 +187,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   passive-process-check:
-    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -236,7 +240,7 @@ jobs:
           print('native replaced-while-read cases:', count, 'run:', result.testsRun, 'skipped:', len(result.skipped));
           sys.exit(not (result.wasSuccessful() and count and count == result.testsRun and not result.skipped))"
   windows-private-config-tls:
-    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
     runs-on: windows-latest
     timeout-minutes: 5
     env:
@@ -312,7 +316,7 @@ jobs:
     # disposable runner's MACHINE store, because a hosted runner cannot answer
     # the question Windows asks for a person's own store. The product never uses
     # the machine store. The test removes the root in every case.
-    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
     runs-on: windows-latest
     timeout-minutes: 12
     env:
@@ -496,7 +500,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows uninstall delete-choice checks failed.' }
           if (($log -join "`n") -match '\d+ skipped') { throw 'A native uninstall case was skipped on this lane.' }
   windows-user-trial:
-    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && (inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only)) }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.candidate_ref && (inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only)) }}
     # Candidate-only combined boundary, not a universal suite/release gate.
     # The existing 5-minute stdlib/PowerShell and private-config lanes are unchanged.
     runs-on: windows-latest
@@ -595,7 +599,7 @@ jobs:
     # Public dependency setup is intentional ONLY here. Do not relax the
     # separate offline qualifier or supply a preinstalled replacement command.
     needs: windows-user-trial
-    if: ${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && (inputs.remaining_runtime_only || inputs.cold_only || inputs.candidate_ref != '')) || (!inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.storage_only && (inputs.foreground_only || needs.windows-user-trial.result == 'success'))) }}
+    if: ${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && (inputs.remaining_runtime_only || inputs.cold_only || inputs.native_prefix_only || inputs.candidate_ref != '')) || (!inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.storage_only && (inputs.foreground_only || needs.windows-user-trial.result == 'success'))) }}
     runs-on: windows-latest
     # 6-minute setup + 2-minute metadata check + unchanged 21-minute cold check
     # + 4-minute CLI cell + overhead. The step budgets stay below this budget.
@@ -608,6 +612,7 @@ jobs:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
       REMAINING_RUNTIME_ONLY: ${{ inputs.remaining_runtime_only && 'true' || 'false' }}
       COLD_ONLY: ${{ inputs.cold_only && 'true' || 'false' }}
+      NATIVE_PREFIX_ONLY: ${{ inputs.native_prefix_only && 'true' || 'false' }}
     steps:
       - name: Validate the isolated remaining-runtime selection before setup
         env:
@@ -622,9 +627,10 @@ jobs:
           def validate_selection(env):
               selected = env['REMAINING_RUNTIME_ONLY'] == 'true'
               cold = env['COLD_ONLY'] == 'true'
+              prefix = env['NATIVE_PREFIX_ONLY'] == 'true'
               candidate = env['CANDIDATE_REF']
-              assert not (selected and cold), 'native scopes are mutually exclusive'
-              if selected or cold:
+              assert sum((selected, cold, prefix)) <= 1, 'native scopes are mutually exclusive'
+              if selected or cold or prefix:
                   assert env['GITHUB_EVENT_NAME'] == 'workflow_dispatch'
                   assert re.fullmatch('[a-f0-9]{40}', candidate)
                   assert all(env[key] == 'false' for key in ('BOOTSTRAP_ONLY', 'FOREGROUND_ONLY', 'STORAGE_ONLY'))
@@ -638,7 +644,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Read the exact remaining-runtime application candidate
-        if: ${{ inputs.remaining_runtime_only || inputs.cold_only }}
+        if: ${{ inputs.remaining_runtime_only || inputs.cold_only || inputs.native_prefix_only }}
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.candidate_ref }}
@@ -650,7 +656,7 @@ jobs:
           architecture: x64
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - name: Build and install candidate host for cold default-command setup
-        if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only }}
+        if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only }}
         timeout-minutes: 6
         shell: pwsh
         run: |
@@ -674,7 +680,7 @@ jobs:
           uv pip install --python "$base/env/Scripts/python.exe" --only-binary amplifier-core $wheel[0].FullName "pytest>=8,<10" "pytest-asyncio>=1.4,<2" "pytest-aiohttp>=1.1,<2" @modules
           if ($LASTEXITCODE -ne 0) { throw 'Default-command candidate host installation failed.' }
       - name: Build and install the locked host for the remaining native cases
-        if: ${{ inputs.remaining_runtime_only || inputs.cold_only }}
+        if: ${{ inputs.remaining_runtime_only || inputs.cold_only || inputs.native_prefix_only }}
         timeout-minutes: 6
         shell: pwsh
         env:
@@ -714,8 +720,8 @@ jobs:
           uv pip check --python "$base/env/Scripts/python.exe"
           if ($LASTEXITCODE -ne 0) { throw 'Locked installed host dependency check failed.' }
           if ((Get-FileHash "$source/uv.lock" -Algorithm SHA256).Hash -ne $lockBefore) { throw 'Candidate lock changed during setup.' }
-      - name: Require the five exact locked-host native cases
-        if: ${{ inputs.remaining_runtime_only }}
+      - name: Require the exact locked-host native selection
+        if: ${{ inputs.remaining_runtime_only || inputs.native_prefix_only }}
         timeout-minutes: 3
         shell: pwsh
         run: |
@@ -724,6 +730,7 @@ jobs:
           import contextlib, hashlib, importlib, importlib.metadata as metadata, importlib.util, json, os, pathlib, re, shutil, sys, tomllib
           from urllib.parse import parse_qs, urlsplit, urlunsplit
           source, base, workflow = map(pathlib.Path, sys.argv[1:])
+          prefix = os.environ.get('NATIVE_PREFIX_ONLY') == 'true'
           nodes = (
               "tests/test_runtime.py::test_native_windows_runtime_worker_identity_pipes_and_job_cleanup[False]",
               "tests/test_runtime.py::test_native_windows_runtime_worker_identity_pipes_and_job_cleanup[True]",
@@ -731,6 +738,13 @@ jobs:
               "tests/test_remote_test_origins.py::test_windows_junction_parent_is_not_followed",
               "tests/test_remote_test_origins.py::test_windows_shared_write_acl_cannot_authorize_retained_records",
           )
+          if prefix:
+              nodes = (
+                  "tests/test_decision_accounts.py::test_real_catalog_child_does_not_allocate_console",
+                  "tests/test_host_config.py::NativeHomeBoundaryTests::test_app_home_through_read_config_rejects_junction_without_changing_target",
+                  "tests/test_optional_controller_availability.py::test_native_default_selection_full_app_chat_save_reload",
+              )
+          stem = 'prefix' if prefix else 'five'
           def host_graph():
               rows = []
               for dist in metadata.distributions():
@@ -920,11 +934,12 @@ jobs:
                       'omittedFailures': self.failure_count - len(self.failures),
                       'passed': self.passed(code)}
           result = {'schema': 1, 'status': 'FAIL', 'publicAcceptance': False,
-                    'qualification': 'five-locked-host-native-cases', 'nodes': list(nodes),
+                    'qualification': 'prefix-three-locked-host-native-cases' if prefix else 'five-locked-host-native-cases',
+                    'nodes': list(nodes),
                     'postTestAudit': 'not-run', 'stage': 'installed'}
           paths, selected, code = {}, None, None
           try:
-              with (base / 'private-five.log').open('x', encoding='utf-8') as logs:
+              with (base / ('private-' + stem + '.log')).open('x', encoding='utf-8') as logs:
                   with contextlib.redirect_stdout(logs), contextlib.redirect_stderr(logs):
                       spec = importlib.util.spec_from_file_location('installed_audit', source / 'tests/fixtures/windows_user_trial_probe.py')
                       audit = importlib.util.module_from_spec(spec); spec.loader.exec_module(audit)
@@ -943,14 +958,17 @@ jobs:
                       result['hostGraphSha256'] = hashlib.sha256(json.dumps(graph, sort_keys=True).encode()).hexdigest()
                       members = ('runtime', 'runtime_worker', 'windows_jobs', 'windows_launch_guard',
                                  'test_origin_files', 'test_origin_storage', 'test_origin_snapshot', 'windows_files')
+                      if prefix:
+                          members = ('decision_accounts', 'host.config', 'deployment', 'windows_files',
+                                     'service', 'publishing', 'portability')
                       result['sourceImports'] = {}
                       for name in members:
                           path = pathlib.Path(importlib.import_module('amplifier_web.' + name).__file__).resolve()
-                          expected = source / 'amplifier_web' / (name + '.py')
+                          expected = source / 'amplifier_web' / (name.replace('.', '/') + '.py')
                           assert path.is_relative_to(pathlib.Path(sys.prefix).resolve()) and path.read_bytes() == expected.read_bytes()
                           result['sourceImports'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
                           paths[os.path.normcase(os.path.abspath(path))] = (
-                              'amplifier_web/' + name + '.py', len(expected.read_bytes().splitlines()))
+                              'amplifier_web/' + name.replace('.', '/') + '.py', len(expected.read_bytes().splitlines()))
                       # Additional known startup frames, byte-bound without importing
                       # more product modules merely for diagnostics.
                       app_root = pathlib.Path(importlib.import_module('amplifier_web').__file__).resolve().parent
@@ -962,8 +980,12 @@ jobs:
                           result['diagnosticSources']['amplifier_web/' + name] = hashlib.sha256(actual.read_bytes()).hexdigest()
                           paths[os.path.normcase(os.path.abspath(actual))] = (
                               'amplifier_web/' + name, len(expected.read_bytes().splitlines()))
-                      target = base / 'five-tests'
+                      target = base / (stem + '-tests')
                       files = ('tests/conftest.py', 'tests/test_runtime.py', 'tests/test_remote_test_origins.py')
+                      if prefix:
+                          files = ('tests/conftest.py', 'tests/test_decision_accounts.py',
+                                   'tests/test_runtime_controls.py', 'tests/test_host_config.py',
+                                   'tests/test_optional_controller_availability.py', 'tests/test_service.py')
                       result['testFiles'] = {}
                       result['testAuthoring'] = {}
                       for name in files:
@@ -985,7 +1007,7 @@ jobs:
                       code = pytest.main(['-q', '-p', 'no:cacheprovider', '-p', 'pytest_asyncio.plugin',
                           '-p', 'aiohttp.pytest_plugin', '-o', 'asyncio_mode=auto',
                           '--rootdir', str(target), '--confcutdir', str(target),
-                          '--basetemp', str(base / 'five-temp'), *(str(target / node) for node in nodes)], plugins=[selected])
+                          '--basetemp', str(base / (stem + '-temp')), *(str(target / node) for node in nodes)], plugins=[selected])
                       assert selected.passed(code)
                       result['stage'] = 'post-test-audit'
                       result['postTestAudit'] = 'started'
@@ -1004,13 +1026,13 @@ jobs:
                   result['postTestAudit'] = 'failed'
           finally:
               result['selection'] = selected.snapshot(code) if selected is not None else None
-          (base / 'evidence/five-native.json').write_text(json.dumps(result, sort_keys=True), encoding='utf-8')
+          (base / ('evidence/' + stem + '-native.json')).write_text(json.dumps(result, sort_keys=True), encoding='utf-8')
           raise SystemExit(0 if result['status'] == 'PASS' else 1)
           '@
           & "$env:DEFAULT_TRIAL_BASE/env/Scripts/python.exe" -I -B -c $check $env:DEFAULT_CANDIDATE_SOURCE $env:DEFAULT_TRIAL_BASE $env:GITHUB_WORKSPACE
-          if ($LASTEXITCODE -ne 0) { throw 'Five locked-host native cases failed; cold work was not started.' }
+          if ($LASTEXITCODE -ne 0) { throw 'Selected locked-host native cases failed; later work was not started.' }
       - name: Check closed metadata observation and original-outcome preservation
-        if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only }}
+        if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only }}
         timeout-minutes: 2
         shell: pwsh
         run: |
@@ -1054,7 +1076,7 @@ jobs:
           & "$env:DEFAULT_TRIAL_BASE/env/Scripts/python.exe" -B -c $check $env:DEFAULT_TRIAL_BASE
           if ($LASTEXITCODE -ne 0) { throw 'Closed metadata observation tests failed; inspect bounded summary.' }
       - name: Require one native cold default-command call PASS with no skip
-        if: ${{ !inputs.foreground_only }}
+        if: ${{ !inputs.foreground_only && !inputs.native_prefix_only }}
         # The maintained node has a finite 1200-second subprocess deadline.
         # Leave one minute for collection, safe evidence and cleanup handling.
         timeout-minutes: 21
@@ -1282,7 +1304,7 @@ jobs:
           & "$base/env/Scripts/python.exe" -I -B -c $check $env:DEFAULT_CANDIDATE_SOURCE $base
           if ($LASTEXITCODE -ne 0) { throw 'Native default-command check failed; inspect bounded publicresult.json.' }
       - name: Require installed foreground CLI TLS, public open and graceful cleanup
-        if: ${{ success() && !inputs.remaining_runtime_only && !inputs.cold_only }}
+        if: ${{ success() && !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only }}
         # Preserve success sequencing explicitly: never run after cold failure.
         timeout-minutes: 4
         shell: pwsh
@@ -1295,7 +1317,7 @@ jobs:
           & "$base/env/Scripts/python.exe" -I -B $probe --cli-run $wheel[0].FullName --candidate-receipt "$base/candidate.json" --receipt "$base/evidence/foreground.json"
           if ($LASTEXITCODE -ne 0) { throw 'Native foreground CLI check failed; inspect bounded foreground.json.' }
       - name: Upload only the bounded default-runtime result
-        if: always()
+        if: ${{ always() && !inputs.native_prefix_only }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-default-runtime
@@ -1305,7 +1327,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Upload only bounded foreground CLI facts
-        if: ${{ always() && !inputs.remaining_runtime_only && !inputs.cold_only }}
+        if: ${{ always() && !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-foreground-cli
@@ -1320,8 +1342,16 @@ jobs:
           path: ${{ runner.temp }}/dr-ci/evidence/five-native.json
           if-no-files-found: warn
           retention-days: 7
+      - name: Upload only bounded three-case locked-host facts
+        if: ${{ always() && inputs.native_prefix_only }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-native-prefix
+          path: ${{ runner.temp }}/dr-ci/evidence/prefix-native.json
+          if-no-files-found: warn
+          retention-days: 7
   windows-bootstrap-offline:
-    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.candidate_ref && github.event_name == 'workflow_dispatch' && inputs.bootstrap_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.candidate_ref && github.event_name == 'workflow_dispatch' && inputs.bootstrap_only }}
     runs-on: windows-latest
     timeout-minutes: 12
     env:
