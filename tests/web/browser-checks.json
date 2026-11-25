@@ -1255,6 +1255,7 @@
     "automation-hub",
     "peer-attribution",
     "device-pairing",
+    "linked-instances",
     "standard-ux-keyboard-reflow",
     "approval-layout",
     "approval-lifecycle",

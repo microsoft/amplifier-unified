@@ -1129,6 +1129,119 @@ def context_degradation_browser_addition(rows, readiness_scripts=()):
     return {expected['id']}
 
 
+def linked_instances_browser_addition(rows, readiness_scripts=()):
+    """Validate the sole additive client owner before historical subtraction."""
+    script = 'tests/linked-instances-browser.mjs'
+    expected = {
+        'id': 'linked-instances', 'command': ['node', script],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/linked-instances'},
+        'cwd': '.build/web-client',
+    }
+    owners = [row for row in rows if row['id'] == expected['id']
+              or any(Path(part).name == Path(script).name for part in row['command'])]
+    assert owners == [expected], 'linked-instances: expected one exact selected-client owner'
+    assert not any(Path(part).name == Path(script).name for part in readiness_scripts), (
+        'linked-instances: duplicate readiness owner')
+    return {expected['id']}
+
+
+def test_linked_instances_has_one_client_owner_and_preserves_prior_order():
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    client_path = source_test('tests/linked-instances-browser.mjs').with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    expected = {
+        'id': 'linked-instances', 'command': ['node', 'tests/linked-instances-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/linked-instances'},
+    }
+    def owns(row):
+        return row['id'] == 'linked-instances' or any(
+            Path(part).name == 'linked-instances-browser.mjs' for part in row['command'])
+    assert not any(owns(row) for row in host['scenarios'])
+    assert [row for row in client['scenarios'] if owns(row)] == [expected]
+    plan, proof = runner.load_plan(ROOT, host_path)
+    assert linked_instances_browser_addition(plan['scenarios']) == {'linked-instances'}
+    assert [row for row in plan['scenarios'] if owns(row)] == [
+        {**expected, 'cwd': '.build/web-client'}]
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    index = host['scenarioOrder'].index('linked-instances')
+    assert host['scenarioOrder'][index - 1:index + 2] == [
+        'device-pairing', 'linked-instances', 'standard-ux-keyboard-reflow']
+    previous = [name for name in host['scenarioOrder'] if name != 'linked-instances']
+    assert len(previous) == len(set(previous)) == 179
+    assert hashlib.sha256(json.dumps(previous).encode()).hexdigest() == (
+        '162ea1e700375b94b7ef9123f738c5475451f8e93374b9d660dd2a425d1ad9c8')
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 180
+    assert 'linked-instances' not in {row['id'] for row in coverage_plan()['scenarios']}
+    assert proof['registrySha256'] == {'unified': runner.digest(host_path),
+                                      'client': runner.digest(client_path)}
+    assert (client_path.parent / 'linked-instances-browser.mjs').is_file()
+
+
+@pytest.mark.parametrize('fault', [
+    'missing', 'duplicate', 'renamed-duplicate', 'renamed', 'command', 'extra-argument',
+    'missing-env', 'wrong-artifacts', 'extra-env', 'cwd', 'missing-cwd',
+    'host-script-duplicate', 'readiness', 'host-readiness', 'prepared-readiness',
+])
+def test_linked_instances_rejects_mutated_owner_before_historical_exclusion(monkeypatch, fault):
+    # Independent literal fixture so malformed ownership cannot inherit a relaxed
+    # registry expectation. No browser or provider is executed by these guards.
+    owner = {
+        'id': 'linked-instances', 'command': ['node', 'tests/linked-instances-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/linked-instances'},
+        'cwd': '.build/web-client',
+    }
+    rows = [owner]
+    assert linked_instances_browser_addition(rows) == {'linked-instances'}
+    readiness = set()
+    if fault == 'missing': rows.remove(owner)
+    elif fault == 'duplicate': rows.append(json.loads(json.dumps(owner)))
+    elif fault == 'renamed-duplicate': rows.append({**owner, 'id': 'linked-copy'})
+    elif fault == 'renamed': owner['id'] += '-other'
+    elif fault == 'command': owner['command'] = ['node', 'tests/other.mjs']
+    elif fault == 'extra-argument': owner['command'].append('--skip')
+    elif fault == 'missing-env': owner.pop('env')
+    elif fault == 'wrong-artifacts': owner['env']['AMPLIFIER_TEST_ARTIFACTS'] += '-other'
+    elif fault == 'extra-env': owner['env']['UNEXPECTED'] = 'extra'
+    elif fault == 'cwd': owner['cwd'] = 'tests/web'
+    elif fault == 'missing-cwd': owner.pop('cwd')
+    elif fault == 'host-script-duplicate':
+        rows.append({'id': 'host-copy',
+                     'command': ['node', 'tests/web/linked-instances-browser.mjs']})
+    elif fault == 'readiness': readiness.add(owner['command'][1])
+    elif fault == 'host-readiness': readiness.add('tests/web/linked-instances-browser.mjs')
+    else: readiness.add('.build/web-client/tests/linked-instances-browser.mjs')
+    with pytest.raises(AssertionError, match='linked-instances'):
+        linked_instances_browser_addition(rows, readiness)
+    if not readiness:
+        plan = current_plan()
+        plan['scenarios'] = [row for row in plan['scenarios'] if row['id'] != 'linked-instances'] + rows
+        monkeypatch.setattr(sys.modules[__name__], 'current_plan', lambda: plan)
+        with pytest.raises(AssertionError, match='linked-instances'):
+            coverage_plan()
+
+
+@pytest.mark.parametrize('fault', ['omitted', 'duplicated'])
+def test_linked_instances_assembly_order_cannot_drop_or_repeat_owner(tmp_path, fault):
+    host, client, _ = owned_registry_fixture(tmp_path)
+    host_plan = json.loads(host.read_text())
+    client_plan = json.loads(client.read_text())
+    client_plan['scenarios'].append({
+        'id': 'linked-instances', 'command': ['node', 'tests/linked-instances-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/linked-instances'},
+    })
+    host_plan['scenarioOrder'].append('linked-instances')
+    client.write_text(json.dumps(client_plan))
+    host.write_text(json.dumps(host_plan))
+    plan, _ = runner.load_plan(tmp_path, host)
+    assert linked_instances_browser_addition(plan['scenarios']) == {'linked-instances'}
+    if fault == 'omitted': host_plan['scenarioOrder'].remove('linked-instances')
+    else: host_plan['scenarioOrder'].append('linked-instances')
+    host.write_text(json.dumps(host_plan))
+    with pytest.raises(ValueError, match='each owned scenario exactly once'):
+        runner.load_plan(tmp_path, host)
+
+
 def browser_additions_after_update_configuration_hold(rows, readiness_scripts=()):
     # Validate newer owners before subtracting them from the frozen inventories.
     name = 'last-reported-plan'
@@ -1140,7 +1253,8 @@ def browser_additions_after_update_configuration_hold(rows, readiness_scripts=()
     assert coverage_paths(script) not in readiness_scripts
     return ({name} | model_change_history_browser_addition(rows, readiness_scripts)
             | grouped_work_browser_addition(rows, readiness_scripts)
-            | transcript_suggestion_browser_addition(rows, readiness_scripts))
+            | transcript_suggestion_browser_addition(rows, readiness_scripts)
+            | linked_instances_browser_addition(rows, readiness_scripts))
 
 
 def grouped_work_browser_addition(rows, readiness_scripts=()):
@@ -4010,7 +4124,8 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(preview_ids) + len(approval_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(later_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
     suggestion_ids = transcript_suggestion_browser_addition(plan['scenarios'])
-    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(preview_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(shared_room_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(suggestion_ids)
+    linked_ids = linked_instances_browser_addition(plan['scenarios'])
+    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(preview_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(shared_room_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(suggestion_ids) + len(linked_ids)
     client_path = source_test('tests/input-status-browser.mjs').with_name('browser-checks.json')
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
@@ -4246,7 +4361,8 @@ def test_layout_pass2_assembly_retains_prior_order_and_binds_all_four_selected_o
     assert (ROOT / 'tests/fixtures/appearance-cases.json').is_file()
     # Keep the 25 preceding canonical registry rows in their original order.
     suggestion_ids = transcript_suggestion_browser_addition(plan['scenarios'])
-    preceding_client_ids = [row['id'] for row in client['scenarios'] if row['id'] not in identities | changelog_ids | activity_ids | context_ids | suggestion_ids | {'attachment-preview'}]
+    linked_ids = linked_instances_browser_addition(plan['scenarios'])
+    preceding_client_ids = [row['id'] for row in client['scenarios'] if row['id'] not in identities | changelog_ids | activity_ids | context_ids | suggestion_ids | linked_ids | {'attachment-preview'}]
     assert preceding_client_ids == [
         'shared-controls', 'composer-return-mounted', 'composer-return', 'conversation-error',
         'installation-repair', 'shared-room', 'shared-notices-motion', 'input-status',
@@ -4257,7 +4373,7 @@ def test_layout_pass2_assembly_retains_prior_order_and_binds_all_four_selected_o
         'history-refresh', 'appearance-lifecycle',
     ]
     assert len(preceding_client_ids) == 25
-    assert len(client['scenarios']) == 26 + len(identities) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(suggestion_ids)
+    assert len(client['scenarios']) == 26 + len(identities) + len(changelog_ids) + len(activity_ids) + len(context_ids) + len(suggestion_ids) + len(linked_ids)
     # Accepted f544781 host order includes worktree-move after assignment-adoption.
     # The other three guarded owners are additive to these exact 165 identities.
     new_ids = identities - {'worktree-move'}
