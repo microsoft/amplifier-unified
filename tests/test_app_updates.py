@@ -280,6 +280,40 @@ async def test_candidate_isolated_validated_and_busy_host_not_replaced(tmp_path,
     assert service.state['updates']['phase']=='app-staged'
     await service.close()
 
+@pytest.mark.parametrize('observed', ['2.0.0', '2.0.1'])
+async def test_safe_update_second_candidate_pins_and_verifies_required_host_versions(tmp_path, monkeypatch, observed):
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    manager = UpdateManager(service)
+    service.update_manager = manager
+    state = service.state['updates']
+    revision = 'a' * 40
+    state['drain'] = {'safeUpdate': True, 'phase': 'replacing', 'attemptId': 'first',
+                      'target': {'revision': revision}, 'requiredHost': {'amplifier-core': {'version': '2.0.0'}},
+                      'workers': {}, 'messages': []}
+    state['application'] = {'status': 'update', 'revision': revision, 'latest': 'v99.0.0',
+                            'safeUpdateAttempt': 'first'}
+    async def process(*args, **kwargs):
+        if 'install' in args:
+            assert Path(args[args.index('--overrides') + 1]).read_text() == 'amplifier-core==2.0.0\n'
+        synthetic_tool_install(args, kwargs)
+        return '99.0.0' if '-c' in args else ''
+    previous = app_updates.components.read_graph
+    async def graph(*args, **kwargs):
+        return await previous(*args, **kwargs) + [{'name': 'amplifier-core', 'version': observed}]
+    monkeypatch.setattr(app_updates, 'process', process)
+    monkeypatch.setattr(app_updates.components, 'read_graph', graph)
+    try:
+        if observed == '2.0.0':
+            await app_updates.stage(manager)
+            assert state['pendingApp']['safeUpdateAttempt'] == 'first'
+        else:
+            with pytest.raises(ValueError, match='requested component revision'):
+                await app_updates.stage(manager)
+            assert not state.get('pendingApp')
+    finally:
+        await service.close()
+
+
 @pytest.mark.skipif(__import__('os').name != 'posix', reason='POSIX conversation compatibility')
 @pytest.mark.parametrize('case', ['ready', 'bad-marker', 'changed-generation', 'missing-runtime', 'other-profile', 'incumbent-also-broken', 'candidate-only-broken'])
 async def test_app_stage_only_selects_a_candidate_that_can_reopen_its_retained_worker(tmp_path, monkeypatch, case):

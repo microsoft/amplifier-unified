@@ -73,6 +73,16 @@ observed at the adapter's local pretransport boundary may identify the request a
 unsent; a provider exception with the same type cannot make that claim.
 The recovery event is metadata only and does not prove provider admission.
 
+## A follow-up while an earlier summary is running
+
+Streaming may ask the host for a single-use view of the ordinary text request
+with its selected model, output allowance, tools and current host observations.
+When Context Managed can use that view while an earlier summary is running,
+dispatch rechecks the same request, selection and required Work. An unused view
+releases its provisional state and preserves other prepared requests. Images,
+an unavailable view or insufficient room use the existing fit and recovery path.
+The original summary retains ownership of its checkpoint.
+
 ## Current context and reasoning continuity
 
 Unified prepares current host observations before measurement, without saving a
@@ -118,6 +128,27 @@ The standalone OpenAI Responses window stays intact across qualified Astra
 and Sol switches; the direct Anthropic adapter preserves the signed block
 across qualified Claude switches. The source boundary, scope and target fit
 must validate before installation. Reuse consumes zero additional compactions.
+
+A completed plain-text summary can also travel with an explicit model change
+on the same verified connection when the destination lacks an exact request
+counter. Unified binds the saved summary to the connection that produced it.
+On a fresh ordinary Send, it checks that binding, the saved source prefix and
+configuration, and the selected destination. The source checkpoint stays on
+disk while the destination receives the verified note and its retained history.
+Only a successful foreground response to the request carrying that note permits
+the writer to save it for the new model. The input, selection, source and Stop
+state must still match at that point. A later worker can then reopen the new
+model's checkpoint without regenerating the covered history.
+
+A failed or interrupted request leaves the original checkpoint available.
+For an older complete text checkpoint without connection provenance, the target
+can rebuild from canonical originals on a fresh Send with an explicitly selected
+connection and model. It starts with no derived state and never uses the old
+note. Only the new note generated on that connection, covering at least the
+old prefix and carried in a confirmed target response's request, may replace
+the old checkpoint. A later worker can then restore the target's note.
+Partial notes, opaque provider state and invalid proofs retain their existing
+recovery paths. A reused account alias alone cannot establish shared provenance.
 
 When native reuse is unavailable, Managed Context uses original messages that
 fit, or a validated readable checkpoint and its recent suffix that fit. If

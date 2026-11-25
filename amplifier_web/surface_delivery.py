@@ -246,6 +246,10 @@ class SurfaceProvider:
             self._prepare = time_preparation(coordinator, 'surface.prepare', self._prepare)
             self.refit_request = time_preparation(coordinator, 'provider.refit', self.refit_request)
 
+    def prepared_foreground(self, request, *, request_options=None):
+        from .foreground_preparation import prepare
+        return prepare(self, request, request_options)
+
     def release_media_request(self, canonical, *, request_options=None):
         row = self._media.get(id(canonical))
         if row is None or row[0] is not canonical:
@@ -274,6 +278,15 @@ class SurfaceProvider:
     async def _prepare(self, request, commit=False, *, explicit_budget=False, refit_binding=None,
                        projection_out=None, request_options=None):
         entry = next((row for row in self.prepared if row[0] is request), None)
+        from .foreground_preparation import active
+        preparation = active()
+        if preparation is not None and (preparation.surface is not self or preparation.request is not request):
+            preparation = None
+        candidate = preparation if commit else None
+        if candidate is not None:
+            candidate.check_surface(entry, request_options or {})
+        elif commit and entry is not None and len(entry) > 5:
+            raise ValueError("Ordinary request belongs to another preparation task")
         media_row = self._media.get(id(request))
         if media_row is not None:
             from .host.media import effective_options
@@ -314,13 +327,25 @@ class SurfaceProvider:
                     # Stabilize revoked visual/context warnings BEFORE the new
                     # measurement. Never replace fitted bytes during transport.
                     cached = await self.delivery.revalidate(cached)
-                if registry is not None:
+                if preparation is not None:
+                    from .host.media import has_media
+                    # Projection is optional for plain text. Leave image ownership
+                    # and hydration to ordinary fitting, including host-added images.
+                    if (not preparation.available() or has_media(cached)
+                            or any(getattr(block, 'type', None) == 'image'
+                                   for message in cached.messages if isinstance(message.content, list)
+                                   for block in message.content)):
+                        return None
+                if registry is not None and preparation is None:
                     registry.bind(cached, issued)
             boundary = hasattr(self.delivery, "finalize_work")
             binding = self.delivery.work_request(cached) if boundary else None
             from .host.media import prepare_media
             try:
-                media = await prepare_media(self.coordinator, self.original, cached, request_options=request_options)
+                # Foreground projections reached here only for plain text. Keep
+                # the final availability check through publication free of awaits.
+                media = (None if preparation is not None else await prepare_media(
+                    self.coordinator, self.original, cached, request_options=request_options))
             except BaseException:
                 if registry is not None:
                     registry.release(cached)
@@ -336,11 +361,15 @@ class SurfaceProvider:
                     if previous_validate is not None:
                         previous_validate()
                     media.validate()
-            elif registry is not None:
+            elif registry is not None and preparation is None:
                 registry.release(cached)
             entry = (request, cached, cached.model_dump_json() if boundary or projection_validate is not None else None,
                      binding,
                      projection_validate)
+            if preparation is not None:
+                preparation.encoded = entry[2] or cached.model_dump_json()
+                entry += (preparation,)
+                preparation.entry = entry
             if refit_binding is not None:
                 from .request_refit import RequestFitChanged
                 self.delivery.check_execution_scope(refit_binding['executionScope'])
@@ -387,6 +416,10 @@ class SurfaceProvider:
                 from .request_refit import RequestFitChanged
                 if isinstance(error, RequestFitChanged):
                     error.local_refusal = True
+                if candidate is not None:
+                    # An ordinary projection has no counted refit to retain.
+                    # Its scope releases only its own row and provisional Work.
+                    raise
                 self.prepared = [row for row in self.prepared if row[0] is not request]
                 self._release_media(request)
                 # Revalidation can remove unavailable optional observations.
@@ -406,7 +439,15 @@ class SurfaceProvider:
                     self.refused.pop(0)
                     self.refusal_overflow = True
                 raise
+            if candidate is not None:
+                candidate.check_surface(next((row for row in self.prepared if row is entry), None), request_options or {})
+                if candidate.selection is not None:
+                    candidate.check_selection(candidate.selection._execution_provider(), candidate.original_options)
+                if cached.model_dump_json() != candidate.encoded:
+                    raise ValueError("Ordinary request contents changed before dispatch")
             self.delivery.commit(cached)
+            if candidate is not None:
+                candidate.consume()
             self.prepared = [row for row in self.prepared if row[0] is not request]
         return cached
 
@@ -581,6 +622,9 @@ class SurfaceProvider:
         return method
 
     async def complete(self, request, **kwargs):
+        return await self._complete(request, kwargs)
+
+    async def _complete(self, request, kwargs, observe_dispatch=None):
         original_request = request
         self._overflow_feedback.forget(request)
         from . import provider_capture as capture
@@ -607,6 +651,8 @@ class SurfaceProvider:
         try:
             from .request_projection import dispatch as projection_dispatch
             with projection_dispatch(self.original, request, *projection, kwargs), capture.dispatch(ticket, self.original, request, trace):
+                if observe_dispatch is not None:
+                    observe_dispatch(request)
                 response = await self.original.complete(request, **kwargs)
             if hasattr(self.delivery, 'finish_work'):
                 self.delivery.finish_work(attempt, response)

@@ -20,7 +20,7 @@ from jsonschema import validate, ValidationError
 from .errors import AppError
 from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background, interrupt_unfinished, restore_voice_usage
 from .execution_working_set import current as current_execution, exact as execution_record, turns_for_inputs
-from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, work_paused
+from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, new_work_paused, work_paused
 from .managed_chats import LOCATION
 from .attachments import MAX_ENCODED_BYTES
 from .performance_diagnostics import PerformanceDiagnostics, measure, measured, TimedLock
@@ -250,6 +250,7 @@ ACTION_DEFINITIONS = {
     "updates.check": ("Check published application releases and ecosystem sources for updates", schema()),
     "updates.failureDisposition": ("User-only: close one exact overflow or unknown-feature-scope failure as acknowledged uncertainty, not verified recovery. Use dispositionOccurrence from attention; reading alone never closes it.", schema({"id":string(300),"expectedOccurrence":{"type":"string","pattern":"^[a-f0-9]{64}$"},"disposition":{"enum":["acknowledged-uncertainty"]}},["id","expectedOccurrence","disposition"])),
     "updates.diagnostics": ("Collect a sanitized update support report, including source provenance, without credentials, chat content or private paths.", schema()),
+    "updates.safeResume": ("Queue new work, let active tasks save and yield, then resume after the prepared app and its included components are ready.", schema({"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(200)}, ["hostInstanceId","revision","generation","attemptId"])),
     "updates.forceRestart": ("Explicitly confirm interrupting active work to restart into one staged qualified app. Saved history and unresolved checkout fences remain; no work is replayed.", schema({"confirm":{"enum":[True]},"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(200)}, ["confirm","hostInstanceId","revision","generation","attemptId"])),
     "updates.install": ("Stage and validate available application or ecosystem updates; activate when idle. Application updates restart the host.", schema()),
     "updates.reconcileManualHandoff": ("Verify an already completed manual Windows app handoff against the exact retained pre-effect refusal and the actual installed official wheel, owner, launcher, dependencies and pinned listener. Does not install, restart or promote. Preserves existing whole-sequence Install intent. Read updates.manualHandoffResults for the durable result; never replay an unknown request.", schema({"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(32)}, ["hostInstanceId","revision","generation","attemptId"])),
@@ -265,11 +266,17 @@ ACTION_DEFINITIONS = {
 }
 
 
+def _register_actions(definitions):
+    """Register schemas once and retain their exact names for routing."""
+    ACTION_DEFINITIONS.update(definitions)
+    return frozenset(definitions)
+
+
 from .voice_settings import definitions as voice_settings_definitions
 ACTION_DEFINITIONS.update(voice_settings_definitions(schema, string))
 
 from .storage_cleanup import definitions as storage_cleanup_definitions
-ACTION_DEFINITIONS.update(storage_cleanup_definitions(schema, string))
+STORAGE_CLEANUP_ACTIONS = _register_actions(storage_cleanup_definitions(schema, string))
 
 from .storage_usage import definitions as storage_definitions
 ACTION_DEFINITIONS.update(storage_definitions(schema, string))
@@ -332,7 +339,7 @@ ACTION_DEFINITIONS.update(context_inspection_definitions(schema, string))
 from .coordination import definitions as coordination_definitions
 ACTION_DEFINITIONS.update(coordination_definitions())
 from .integration_evidence import definitions as integration_definitions
-ACTION_DEFINITIONS.update(integration_definitions(schema, string))
+INTEGRATION_EVIDENCE_ACTIONS = _register_actions(integration_definitions(schema, string))
 from .collaboration import definitions as collaboration_definitions
 ACTION_DEFINITIONS.update(collaboration_definitions(schema, string))
 from .assignments import definitions as assignment_definitions
@@ -359,12 +366,6 @@ from .computer_visual import ComputerVisuals, definitions as computer_visual_def
 ACTION_DEFINITIONS.update(computer_visual_definitions(schema, string))
 from .worktrees import definitions as worktree_definitions
 ACTION_DEFINITIONS.update(worktree_definitions(schema, string))
-
-
-def _register_actions(definitions):
-    """Register schemas once and retain their exact names for routing."""
-    ACTION_DEFINITIONS.update(definitions)
-    return frozenset(definitions)
 
 
 from .workspace_resources import definitions as workspace_resource_definitions
@@ -461,7 +462,7 @@ for _access, _actions in {
         *patch_placement_definitions(schema, string),
         "worktree.create", "worktree.attach", "worktree.handoff",
         "coordination.review",
-        *integration_definitions(schema, string),
+        *INTEGRATION_EVIDENCE_ACTIONS,
         "workspace.deleteFiles", "desktop.readiness", "configuration.inspect", "session.recover", "approval.respond",
         "canvas.show", "canvas.openFile", "canvas.openAttachment", "canvas.openGif", "canvas.select", "canvas.reference",
         *MESSAGE_INTERACTIONS,
@@ -544,6 +545,8 @@ class AppService:
         self.installed_build = capture()
         self.data_dir = Path(data_dir).expanduser()
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        from .linked_instances import LinkedInstances
+        self.linked_instances = LinkedInstances(self.data_dir, server_config or {"public_origins": []})
         self.db = sqlite3.connect(self.data_dir / "app.sqlite3")
         (self.data_dir / "app.sqlite3").chmod(0o600)
         self.db.execute("PRAGMA journal_mode=WAL")
@@ -2141,7 +2144,7 @@ class AppService:
         if action == 'runtime.control' and args.get('operation', '').startswith(('task.', 'capacity.')):
             action, args = args['operation'], {**args.get('args', {}), 'sessionId': args.get('sessionId')}
         defer_publish = action == 'smartTools.appCall' and not include_state
-        if action.startswith(("smartTools.","providers.")) or action in {'updates.featureInstall', 'updates.forceRestart', 'updates.reconcileManualHandoff'} or action.startswith('permissions.') and args.get('scope') == 'session':
+        if action.startswith(("smartTools.","providers.")) or action in {'updates.featureInstall', 'updates.safeResume', 'updates.forceRestart', 'updates.reconcileManualHandoff'} or action.startswith('permissions.') and args.get('scope') == 'session':
             command_id = command_id or str(uuid.uuid4())
         if action not in ACTION_DEFINITIONS:
             raise AppError("Unknown action: " + action, 404)
@@ -2437,7 +2440,7 @@ class AppService:
                 except (ValueError, OSError) as error:
                     raise AppError(str(error), 409) from None
             return {'accepted':True,'result':result,'effects':[]}
-        if action in storage_cleanup_definitions(schema, string):
+        if action in STORAGE_CLEANUP_ACTIONS:
             from .storage_cleanup import dispatch as cleanup_dispatch
             return await cleanup_dispatch(self, action, args, origin, command_id, caller_session_id)
         if action in {'storage.historyDeletePreview', 'storage.historyDelete'}:
@@ -2462,7 +2465,7 @@ class AppService:
         if action == 'desktop.readiness':
             from .desktop_readiness import dispatch as desktop_readiness
             return await desktop_readiness(self, args, origin, expected_revision, caller_session_id)
-        if action in integration_definitions(schema, string):
+        if action in INTEGRATION_EVIDENCE_ACTIONS:
             from .integration_evidence import dispatch as integration_dispatch
             return await integration_dispatch(self, action, args, origin, command_id, caller_session_id)
         if action == 'runtime.dependencies':
@@ -2663,7 +2666,9 @@ class AppService:
                     raise AppError('The app changed. Refresh its state and retry.', 409)
                 try:
                     selection(args.get('selection', {}))
-                    prepare(self, args, origin, caller_session_id)
+                    if managed_creation:
+                        prepared_identity = creation_identity(self.data_dir, args, command_id)
+                    prepare(self, args, origin, caller_session_id, prepared_identity=prepared_identity)
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
                 if args.get('select', True):
@@ -2675,10 +2680,6 @@ class AppService:
             # Opening/editing a draft never creates directories. First submit
             # creates only its explicit path, away from the event loop and lock.
             if managed_creation:
-                prepared_identity = creation_identity(self.data_dir, args, command_id)
-                from .managed_deletion import removed
-                if removed(self.db, prepared_identity):
-                    raise AppError("This conversation was permanently deleted. Start a new chat instead.", 409)
                 try:
                     prepared_workspace = await asyncio.to_thread(allocate, self.data_dir, prepared_identity, command_id or prepared_identity)
                 except (ValueError, OSError) as exc:
@@ -3276,7 +3277,7 @@ class AppService:
                     raise AppError('Choose a workspace folder before starting this chat.')
                 from .session_creation import prepare, apply
                 try:
-                    inherited = prepare(self, args, origin, caller_session_id)
+                    inherited = prepare(self, args, origin, caller_session_id, prepared_identity=prepared_identity)
                     session = self._new_session({**args, 'workspace': prepared_workspace} if prepared_workspace else args,
                                                 new_root=True)
                     if args.get('id') or prepared_identity: session['id'] = args.get('id') or prepared_identity
@@ -3325,6 +3326,11 @@ class AppService:
                 if reused is not None:
                     session = reused
                 else:
+                    from .attachments import compact_images_for_new_chat
+                    if (session.get('sessionKind') == 'root' and not session.get('externalAgent')
+                            and origin in {'ui', 'user'} and not args.get('inheritConfiguration')
+                            and not caller_session_id and compact_images_for_new_chat(self.data_dir, session['workspace'], session['id'])):
+                        session['composerImageReferences'] = True
                     if args.get('fromDraft') and command_id:
                         session['creationCommandId'] = command_id
                     from .naming import persist
@@ -3490,8 +3496,8 @@ class AppService:
                     raise AppError('Wait for configuration changes to finish.',409)
                 if not self.runtime:
                     raise AppError('The Amplifier runtime is unavailable.')
-                if work_paused(self.state):
-                    raise AppError('An update is activating. Please retry in a moment.',409)
+                if new_work_paused(self.state):
+                    raise AppError('An update is in progress. Edit this message after the update.',409)
                 if args.get('mode', 'fork') == 'current':
                     if source['status'] in {'working','running','starting','stopping','busy'} or any(
                             row.get('status') in {'working','running','starting','stopping','queued','pending'} or row.get('persistent') and row.get('status')=='idle'
@@ -4107,8 +4113,20 @@ class AppService:
                     diagnostic_result = self.update_manager.diagnostics.dispose(args['id'], args['expectedOccurrence'])
                 except ValueError as error:
                     raise AppError(str(error), 409) from None
+            elif action == 'updates.safeResume':
+                if not self.update_manager:
+                    raise AppError("Update service is unavailable.")
+                from .safe_update import start
+                start(self.update_manager, args, origin)
             elif action.startswith("updates."):
                 if not self.update_manager: raise AppError("Update service is unavailable.")
+                drain = self.state['updates'].get('drain') or {}
+                if drain.get('safeUpdate') and drain.get('phase') != 'released' and action not in {
+                        'updates.check', 'updates.install', 'updates.diagnostics', 'updates.reconcileManualHandoff'}:
+                    raise AppError('A safe update is in progress. Its selected release must settle first.', 409)
+                if (drain.get('safeUpdate') and drain.get('phase') in {'waiting', 'replacing'}
+                        and self.state['updates'].get('pendingApp') and action == 'updates.install'):
+                    raise AppError('The safe update already owns this prepared release.', 409)
                 if getattr(self.update_manager, '_manual_handoff_commit_unknown', False):
                     raise AppError('The update commit is unknown. Reload the host before changing update state.', 409)
                 if action == 'updates.reconcileManualHandoff':
@@ -4328,7 +4346,7 @@ class AppService:
             if action in {"feedback.submit", "feedback.get", "feedback.comment", "feedback.reconcile", "feedback.update", "feedback.close", "feedback.reopen",
                           "feedback.attachments.review", "feedback.attachments.add", "feedback.attachments.reconcile"}:
                 receipt["requestId"] = args['requestId']
-            if action in {'updates.featureInstall', 'updates.forceRestart', 'updates.reconcileManualHandoff'}:
+            if action in {'updates.featureInstall', 'updates.safeResume', 'updates.forceRestart', 'updates.reconcileManualHandoff'}:
                 receipt['requestId'] = command_id
             self.shell.stage_action_receipt()
             if command_id:
@@ -6151,6 +6169,11 @@ class AppService:
             return await self._app_bridge(operation, args, session_id, input_origin=origin)
 
     async def _app_bridge(self, operation, args, session_id, *, input_origin=None):
+        # Never fall back to a local call when the caller supplied a target.
+        if 'target' in args or (operation == 'get_state' and args.get('path') == '/linkedInstances'):
+            from .linked_instances import agent_route
+            self.collaboration.active_binding(self._session(session_id, hydrate=False))
+            return await agent_route(self.linked_instances, operation, args)
         if operation == 'ui.use':
             return await self.ui_use.call(session_id, args.get('operation'), args.get('args', {}))
         if operation == 'context.prepare':

@@ -568,6 +568,9 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
             row['nativeIndex'] = index_map[original_index]
     from .host.session import repair_interrupted_receipts
     messages = messages if recovery else repair_interrupted_receipts(messages)
+    if not prepare_only and source.get('composerImageReferences') is True:
+        from .composer_handoff import inline_composer_uploads
+        messages = inline_composer_uploads(store.directory(source_id), messages, saved=saved[0] if saved else [])
     references = visible_reference(messages, visible)
     messages.extend(references)
     through_turn = user_offset + sum(row.get('role') == 'user' for row in visible)

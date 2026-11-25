@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 
 from .config import HostConfig, expand_environment, load_config, merge, write_private, provider_mount_sources, provider_dropped
+from . import hook_config
 from .components import HostComponents, ComponentResolver, compose_bundles, imagegen_defaults, capability_defaults, explicit_context_forwarding, installed_package_source
 from .components import declarations, git_source
 from ..surface_delivery import _accepts_exact_count
@@ -92,6 +93,7 @@ class _SelectedRequest:
     refitted: bool = False
     execution: object = None
     release_options: object = None
+    foreground: object = None
 
 
 class SelectedProvider:
@@ -101,10 +103,15 @@ class SelectedProvider:
         self.execution_adapter = execution_adapter
         self._selected_requests = []
         self._refused_requests = []
+        self.portable_handoff = None
         from ..overflow_feedback import OverflowFeedback
         self._overflow_feedback = OverflowFeedback()
     def _execution_provider(self):
         return self.execution_adapter(self.original) if callable(self.execution_adapter) else self.original
+
+    def prepared_foreground(self, request, *, request_options=None):
+        from ..foreground_preparation import prepare
+        return prepare(self._execution_provider(), request, request_options, selection=self)
 
     def owns_budget_route(self, provider):
         """Recognize the loop's exact pre-transport wrapper around this selection."""
@@ -315,7 +322,7 @@ class SelectedProvider:
             return False
         entry = next((row for row in self._selected_requests
                       if row.original is request and row.selected is selected), None)
-        if entry is None or entry.refitted:
+        if entry is None or entry.refitted or entry.foreground is not None:
             return False
         self._refused_requests = ([row for row in self._refused_requests if row[0] is not request]
                                   + [(request, error, execution, selected)])[-4:]
@@ -350,6 +357,12 @@ class SelectedProvider:
         options = dict(kwargs)
         self._overflow_feedback.forget(request)
         execution = self._execution_provider()
+        from ..foreground_preparation import active
+        candidate = active()
+        if candidate is not None and candidate.selection is self and candidate.original is request:
+            candidate.check_selection(execution, kwargs)
+        elif any(row.original is request and row.foreground is not None for row in self._selected_requests):
+            raise ValueError("Ordinary request belongs to another preparation task")
         self._check_media_fit(request, execution)
         selected, kwargs = self._selected_request(request, kwargs)
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
@@ -357,6 +370,10 @@ class SelectedProvider:
                                                    execution, binding=self.selection)
         retained = False
         try:
+            if self.portable_handoff and not (getattr(selected, "metadata", None) or {}).get("purpose"):
+                from ..portable_handoff import complete
+                handoff, self.portable_handoff = self.portable_handoff, None
+                return await complete(self, execution, selected, kwargs, handoff)
             return await execution.complete(selected, **kwargs)
         except BaseException as error:
             retained = self._retain_refusal(request, selected, execution, error)
@@ -484,7 +501,10 @@ def _apply_settings(bundle, config):
                     row["source"] = expand_environment(row["source"])
                 values.append(row)
             else:
-                values.append(expand_environment(row))
+                expanded = expand_environment(row)
+                if kind == "hooks" and row.get("module") == hook_config.MODULE and "config" in row:
+                    hook_config.retain_references(row["config"], expanded["config"])
+                values.append(expanded)
         setattr(bundle, kind, values)
     # Foundation intentionally skips source-less rows during preparation and
     # will not let another account's prepared module stand in at mount time.
@@ -605,7 +625,9 @@ def _expand_module_configuration(node, in_provider=False):
     provider = in_provider or node.get("module", "").startswith("provider-")
     result = {}
     for key, value in node.items():
-        if key in {"config", "source"}:
+        if key == "config" and node.get("module") == hook_config.MODULE:
+            result[key] = hook_config.declared_config(value)
+        elif key in {"config", "source"}:
             result[key] = copy.deepcopy(value) if provider and key == "config" else expand_environment(value)
         elif key in {"instruction", "instructions", "system_prompt"}:
             result[key] = copy.deepcopy(value)
@@ -1374,7 +1396,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         initialization = initialization_hooks(isolation=isolation, decision_accounts=decision_accounts,
                                               routing=routing, retain=retain_session,
                                               ephemeral_servers=ephemeral_mcp_servers,
-                                              providers=prepared.mount_plan.get('providers', []), media=media)
+                                              providers=prepared.mount_plan.get('providers', []),
+                                              hooks=prepared.mount_plan.get('hooks', []), media=media)
         with startup_timing.phase('manager.session.create'):
             session = await prepared.create_session(session_id=runtime.session_id,
                 session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None,

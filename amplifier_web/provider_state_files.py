@@ -61,23 +61,3 @@ def with_state_files(module, config):
 def uses_state_files(rows):
     """Does one of these provider rows name a module with state files?"""
     return any(isinstance(row, dict) and row.get('module') in STATE_FILES for row in rows or ())
-
-
-def install(coordinator):
-    """Give each module that this session loads its state-file paths.
-
-    Core loads every module through ``coordinator.loader`` and makes its own
-    loader only when it finds none. Call this before the session initializes.
-    The session's configuration stays as it is.
-    """
-    loader = getattr(coordinator, 'loader', None)
-    if loader is None:
-        from amplifier_core.loader import ModuleLoader
-        loader = ModuleLoader(coordinator=coordinator)  # The loader that Core makes itself.
-        coordinator.loader = loader
-    load = loader.load
-
-    async def load_with_state_files(module_id, config=None, *arguments, **options):
-        return await load(module_id, with_state_files(module_id, config), *arguments, **options)
-
-    loader.load = load_with_state_files

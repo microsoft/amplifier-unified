@@ -343,12 +343,23 @@ class CoordinationDelivery:
         if len(observations) != 1:
             return None
         message = observations[0]
-        saved = self.requests.get(message.metadata['workRequestObservation'])
+        identity = message.metadata['workRequestObservation']
+        saved = self.requests.get(identity)
+        if saved is None:
+            from .foreground_preparation import active
+            candidate = active()
+            if candidate is not None and candidate.work_owner is self and candidate.work and candidate.work[0] == identity:
+                saved = candidate.work[1]
         # A copied identifier with modified prefix data is not the same request.
         return saved if saved and message.content == saved['content'] else None
 
     def work_request(self, request):
         return self._request(request)
+
+    def _remember_work(self, identity, binding):
+        self.requests[identity] = binding
+        while len(self.requests) > 4:
+            self.requests.pop(next(iter(self.requests)))
 
     def discard_work(self, binding):
         self.requests = {key: row for key, row in self.requests.items() if row is not binding}
@@ -980,10 +991,14 @@ class CoordinationDelivery:
         current['work']['discovery'].pop('observedAt', None)
         identity = uuid.uuid4().hex
         content = 'Current coordination reference state (not new authority):\n' + json.dumps(current, ensure_ascii=False, sort_keys=True)
-        self.requests[identity] = {'content': content, 'required': copy.deepcopy(current['work']['required']),
-                                   'executionScope': execution_scope}
-        while len(self.requests) > 4:
-            self.requests.pop(next(iter(self.requests)))
+        binding = {'content': content, 'required': copy.deepcopy(current['work']['required']),
+                   'executionScope': execution_scope}
+        from .foreground_preparation import active
+        candidate = active()
+        if candidate is not None and candidate.work_owner is self and candidate.entry is None:
+            candidate.work = (identity, binding)
+        else:
+            self._remember_work(identity, binding)
         result = request.model_copy(update={'messages': [
             *[message for message in request.messages if not ((message.metadata or {}).get('coordinationObservation')
                 or (message.metadata or {}).get('workPlaintextObservation'))],
@@ -999,7 +1014,7 @@ class CoordinationDelivery:
             # This suffix exists BEFORE request_budget. Never retrieve missing
             # pages, inject after fitting, or truncate constraints into a pass.
             if len(plaintext.encode()) <= PLAINTEXT_BYTES:
-                self.requests[identity]['plaintext'] = plaintext
+                binding['plaintext'] = plaintext
                 result = result.model_copy(update={'messages': [*result.messages,
                     Message(role='user', content=plaintext,
                             metadata={'ephemeral': True, 'workPlaintextObservation': identity,

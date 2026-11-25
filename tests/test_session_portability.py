@@ -2,29 +2,80 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from amplifier_foundation.session.metadata import SessionMetadataStore
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.service import AppService
+
+
+async def complete_reconciliation(app):
+    """Start one bounded pass, then advance it without restarting or title polling."""
+    for attempt in range(64):
+        await app.history.refresh(force=attempt == 0)
+        shared = app.state['sharedHistory']
+        assert not shared.get('error'), shared
+        phase = shared.get('reconciliation', {}).get('phase')
+        assert phase != 'unavailable', shared
+        if phase == 'complete':
+            return shared
+    raise AssertionError(f'Native reconciliation did not complete: {shared}')
 
 
 async def prepare_discovered_session(app, sid, workspace):
     """Finish initial discovery before testing a subsequent external update."""
     from amplifier_web.session_files import project_slug
 
-    # Even an explicit refresh advances only one bounded discovery slice.
-    # Prepare the original record, never retry the post-CLI rename assertion.
-    for attempt in range(64):
-        await app.history.refresh(force=attempt == 0)
-        shared = app.state['sharedHistory']
-        assert not shared.get('error'), shared
-        if shared.get('reconciliation', {}).get('phase') == 'complete':
-            break
-    else:
-        raise AssertionError(f'Initial native discovery did not complete: {shared}')
+    shared = await complete_reconciliation(app)
     row = app.history.index._catalog.get(project_slug(workspace), sid)
     assert row is not None, shared
     assert row['name'] == app._session(sid)['title'] == 'Created in web'
     return row
+
+
+async def test_reconciliation_completion_advances_one_pass_not_loading_state():
+    forces = []
+    app = SimpleNamespace(state={})
+    async def refresh(*, force):
+        forces.append(force)
+        app.state['sharedHistory'] = {
+            'loading': False, 'error': None,
+            'reconciliation': {'phase': 'complete' if len(forces) == 3 else 'running'},
+        }
+    app.history = SimpleNamespace(refresh=refresh)
+    assert (await complete_reconciliation(app))['reconciliation']['phase'] == 'complete'
+    assert forces == [True, False, False]
+
+
+@pytest.mark.parametrize('fault', ['error', 'unavailable', 'exhausted'])
+async def test_reconciliation_completion_fails_without_retrying_failed_pass(fault):
+    forces = []
+    app = SimpleNamespace(state={})
+    async def refresh(*, force):
+        forces.append(force)
+        app.state['sharedHistory'] = {
+            'loading': False, 'error': 'Native read failed' if fault == 'error' else None,
+            'reconciliation': {'phase': 'unavailable' if fault == 'unavailable' else 'running'},
+        }
+    app.history = SimpleNamespace(refresh=refresh)
+    with pytest.raises(AssertionError):
+        await complete_reconciliation(app)
+    assert forces == [True] + [False] * (63 if fault == 'exhausted' else 0)
+
+
+async def test_completed_reconciliation_does_not_retry_a_wrong_name(tmp_path):
+    forces = []
+    wrong = {'name': 'Wrong completed title'}
+    app = SimpleNamespace(state={}, _session=lambda sid: {'title': wrong['name']})
+    async def refresh(*, force):
+        forces.append(force)
+        app.state['sharedHistory'] = {'loading': False, 'error': None,
+                                     'reconciliation': {'phase': 'complete'}}
+    app.history = SimpleNamespace(refresh=refresh,
+        index=SimpleNamespace(_catalog=SimpleNamespace(get=lambda project, sid: wrong)))
+    with pytest.raises(AssertionError):
+        await prepare_discovered_session(app, 'synthetic', tmp_path)
+    assert forces == [True]
 
 
 async def test_round_trip_preparation_finishes_bounded_cold_discovery(tmp_path, monkeypatch):
@@ -40,6 +91,9 @@ async def test_round_trip_preparation_finishes_bounded_cold_discovery(tmp_path, 
         web.save(sid, messages, {'bundle': 'anchors', 'working_dir': str(tmp_path)})
         directory = web.directory(sid)
         original = (directory / 'transcript.jsonl').read_bytes()
+        events = directory / 'events.jsonl'
+        events.write_text('{"event":"tool:post","result":"do not repeat"}\n')
+        original_events = events.read_bytes()
         # Deterministically suspend real discovery, without sleeping, replacing
         # its reader, or increasing the production reconciliation budget.
         with monkeypatch.context() as cold:
@@ -48,11 +102,38 @@ async def test_round_trip_preparation_finishes_bounded_cold_discovery(tmp_path, 
             assert app.state['sharedHistory']['reconciliation']['phase'] == 'running'
             assert app.history.index._catalog.get(project_slug(tmp_path), sid) is None
             await prepare_discovered_session(app, sid, tmp_path)
-        SessionMetadataStore(directory).set_name('External canonical name')
-        await app.history.refresh()
+        with monkeypatch.context() as renamed:
+            renamed.setattr(app.history.index, '_recovery_budget', 1)
+            existing_invalidations = app.history.index._invalidations
+            def without_watcher_hints():
+                watching, _ = existing_invalidations()
+                return watching, set()
+            renamed.setattr(app.history.index, '_invalidations', without_watcher_hints)
+            SessionMetadataStore(directory).set_name('External canonical name')
+            existing_refresh = app.history.refresh
+            forces, active_pass = [], []
+            async def observe_slice(*, force):
+                if forces:
+                    assert force is False
+                    assert app.history.index._recovery is active_pass[0]
+                forces.append(force)
+                await existing_refresh(force=force)
+                if len(forces) == 1:
+                    assert force is True
+                    assert app.state['sharedHistory']['loading'] is False
+                    assert app.state['sharedHistory']['reconciliation']['phase'] == 'running'
+                    assert web.load(sid)[1]['name'] == 'External canonical name'
+                    assert app.history.index._catalog.get(project_slug(tmp_path), sid)['name'] == 'Created in web'
+                    active_pass.append(app.history.index._recovery)
+                    assert active_pass[0] is not None
+            renamed.setattr(app.history, 'refresh', observe_slice)
+            await complete_reconciliation(app)
+            assert len(forces) > 1
         assert app._session(sid)['title'] == 'External canonical name'
         assert app.history.index._catalog.get(project_slug(tmp_path), sid)['name'] == 'External canonical name'
+        assert app.directory.resolve(sid)['title'] == 'External canonical name'
         assert (directory / 'transcript.jsonl').read_bytes() == original
+        assert events.read_bytes() == original_events
         assert web.load(sid)[0] == messages
     finally:
         await app.close()
@@ -175,7 +256,7 @@ async def test_installed_cli_round_trip(tmp_path, monkeypatch):
         finally:
             root.release()
         assert web.load(sid)[1]["name"] == "Renamed in the actual CLI"
-        await app.history.refresh()
+        await complete_reconciliation(app)
         after = app.history.index._catalog.get(before['nativeProject'], sid)
         witness = {'canonical': web.load(sid)[1], 'catalog': after,
                    'resident': {key: app._session(sid).get(key) for key in

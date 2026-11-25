@@ -140,8 +140,8 @@ class Observations:
         return {'origin': origin, 'messageId': source['id'], 'textDigest': fingerprint(source.get('text', '')), 'at': self.clock()}
 
     def reason(self, watch):
-        from .updates import work_paused
-        if work_paused(self.app.state): return 'Work is paused for an application or ecosystem update'
+        from .updates import new_work_paused
+        if new_work_paused(self.app.state): return 'Work is paused for an application or ecosystem update'
         from .errors import AppError
         try: session = self.app._session(watch['sessionId'])
         except AppError: return 'The authorizing conversation is no longer available'
@@ -223,8 +223,8 @@ class Observations:
     async def tick(self):
         # This timer owns only observation state. It never publishes app snapshots.
         if not self.store.acquire(self.clock()): return
-        from .updates import work_paused
-        if work_paused(self.app.state): return
+        from .updates import new_work_paused
+        if new_work_paused(self.app.state): return
         for watch in self.store.rows('watch', status='active'):
             if not self.store.acquire(self.clock()): return
             try: reason = self.reason(watch)

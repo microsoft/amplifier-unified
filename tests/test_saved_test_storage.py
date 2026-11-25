@@ -184,3 +184,62 @@ def test_ledger_alias_is_refused_without_reading_target(app, tmp_path):
 def test_invalid_cursor_is_rejected(app, cursor):
     with pytest.raises(ValueError, match='valid saved-test page'):
         sizes.read(app, cursor)
+
+
+def results_only(identity='partial', size=20):
+    value = row(identity)
+    result = value['lastOperation']['result']
+    archive = result['archives'].pop()
+    archive.update(bytes=size, logicalBytes=0)
+    result['archives'] = [archive]
+    result['retention'] = {'verified': True, 'policy': 'selected-artifacts', 'sourceSha256': 'a'*64,
+                           'format': 'tar', 'selection': ['/artifacts'], 'archiveBytes': size, 'logicalBytes': 0}
+    return value
+
+
+async def test_results_only_export_exposes_verified_bytes_without_changing_complete_page_totals(app):
+    partial = results_only()
+    partial['testMachine'] = {'id': 'remote'}
+    result = partial['lastOperation']['result']
+    result['downloadedArchives'] = copy.deepcopy(result['archives'])
+    insert(app, partial)
+    ledger = app.data_dir / 'workspace-resources/reservations.sqlite3'
+    before = ledger.read_bytes()
+    page = (await storage_cleanup.dispatch(app, 'storage.cleanup.evidence', {}, 'ui', None))['result']
+    item, = page['items']
+    assert (item['resultBytes'], item['sourceBytes'], item['workspaceBytes'], item['totalBytes']) == (20, None, None, None)
+    assert item['workspaceAvailability'] == 'not-exported' and 'downloaded' in item['custody']
+    assert (page['recordedBytes'], page['accountedCount'], page['unaccountedCount']) == (0, 0, 1)
+    assert ledger.read_bytes() == before
+
+    insert(app, row('complete'))
+    insert(app, results_only('empty', size=0))
+    page = sizes.read(app)
+    assert [item['resultBytes'] for item in page['items']] == [0, 20, 20]
+    assert (page['recordedBytes'], page['accountedCount'], page['unaccountedCount']) == (320, 1, 2)
+
+
+@pytest.mark.parametrize('change', [
+    'retention-selection', 'retention-extra-role', 'archive-role', 'logical-size', 'unverified',
+    'archive-size', 'wrong-total', 'unexpected-source-bytes', 'source-binding', 'download-hash', 'extra-export',
+])
+def test_results_only_must_match_the_original_artifact_receipt(app, change):
+    value = results_only()
+    result = value['lastOperation']['result']
+    archive, = result['archives']
+    retained = result['retention']
+    if change == 'retention-selection': retained['selection'] = ['/workspace']
+    if change == 'retention-extra-role': retained['selection'].append('/workspace')
+    if change == 'archive-role': archive['source'] = '/workspace'
+    if change == 'logical-size': archive['logicalBytes'] = False
+    if change == 'unverified': archive['verified'] = False
+    if change == 'archive-size': retained['archiveBytes'] += 1
+    if change == 'wrong-total': retained['totalBytes'] = 0
+    if change == 'unexpected-source-bytes': retained['sourceBytes'] = False
+    if change == 'source-binding': retained['sourceSha256'] = 'd' * 64
+    if change == 'download-hash': result['downloadedArchives'] = [{**archive, 'sha256': 'd' * 64}]
+    if change == 'extra-export': result['archives'].append({**archive, 'source': '/workspace'})
+    insert(app, value)
+    item, = sizes.read(app)['items']
+    assert item['resultBytes'] is None and item['totalBytes'] is None
+    assert 'workspaceAvailability' not in item and 'custody' not in item

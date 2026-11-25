@@ -478,11 +478,16 @@ class PromptSuggestions:
                 if record is None:
                     return self.wire(dict(args, status='expired'))
                 self.records.move_to_end(key)
-                if action.endswith('.cancel'):
+                if action.endswith('.cancel') and record['status'] == 'pending':
+                    # Withdrawal cancels work, not its already-recorded outcome.
+                    # Repeated cancellation must not interrupt owned cleanup.
                     self._finish(record, 'cancelled')
                     if record.get('task') and not record['task'].cancelling():
                         record['task'].cancel()
                 elif record['status'] in {'pending', 'ready'} and not self.current(record):
+                    # A completed READY still needs fresh display authority,
+                    # including on cancel after navigation. Never return its
+                    # body merely because cancellation omits selected-chat admission.
                     self._finish(record, 'stale')
                     if record.get('task') and not record['task'].cancelling():
                         record['task'].cancel()

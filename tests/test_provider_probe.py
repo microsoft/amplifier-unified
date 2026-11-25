@@ -257,6 +257,32 @@ async def test_provider_owns_default_all_custom_and_empty_filter_scopes():
     assert calls == [{}, {'filters':{}}, {'filters':{'include':['Custom*']}}, {'filters':{'include':[]}}]
 
 
+async def test_optional_purpose_ranking_uses_existing_metadata_transport_and_cache(tmp_path):
+    from types import SimpleNamespace
+    from amplifier_web.provider_catalog import ProviderCatalog, model_key
+    from amplifier_web.suggestion_settings import recommendation
+    calls = []
+    info = {'version': 1, 'source': 'provider-api',
+            'purpose_recommendations': {'prompt-suggestions': ['Retired/ID', 'Company/Current']}}
+    class Provider:
+        def get_model_list_info(self): return info
+        async def list_models(self):
+            calls.append('list')
+            return [{'id': 'Company/Current'}]
+        async def complete(self, *args): raise AssertionError('Metadata never infers')
+    result = await provider_probe.listed_models(Provider())
+    assert calls == ['list'] and result['modelListInfo'] == info
+    result['providerMetadata'] = {'module': 'provider-company', 'modelListInfo': result.pop('modelListInfo')}
+    cache = ProviderCatalog(tmp_path / 'purpose-catalog.json')
+    key = model_key('exact-company-account')
+    cache.put(key, result)
+    restored = ProviderCatalog(cache.path)
+    row = {'enabled': True, 'module': 'provider-company', 'sharedCatalogKey': key[1]}
+    assert recommendation(SimpleNamespace(catalog=restored), row) == {
+        'model': 'Company/Current', 'provenance': 'provider-api', 'basis': 'provider-purpose'}
+    assert calls == ['list']
+
+
 async def test_selector_keyword_is_never_guessed_and_failures_keep_their_type():
     class Provider:
         def get_model_list_info(self):return {'version':1,'source':'provider-api'}
