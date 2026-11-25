@@ -3,6 +3,8 @@
 import hashlib
 import time
 
+from .execution_working_set import current as current_execution
+
 
 def _hold(reason, label, scope='session', *, quiescent=False):
     return {'quiescent': quiescent, 'reasonCode': reason, 'label': label, 'scope': scope}
@@ -76,7 +78,7 @@ def _settings_hold(service, session, *, activity=None):
         return _hold('session-not-quiescent', 'Conversation has not reached a quiescent state')
     if any(row.get('phase') == 'pending' for row in session.get('worktreeHandoffs', [])):
         return _hold('checkout-handoff-pending', 'Checkout handoff has not settled')
-    if any(turn.get('phase') == 'running' for turn in session.get('execution', {}).get('turns', [])):
+    if any(turn.get('phase') == 'running' for turn in current_execution(session).get('turns', [])):
         return _hold('running-turn', 'Conversation has a running turn')
     for worker in session.get('workers', []):
         if worker.get('status') in {'queued', 'starting', 'running', 'working', 'stopping'}:
@@ -95,7 +97,7 @@ def _conversation_working(session):
     from .message_delivery import sending_input
     return session.get('status') in {'working', 'starting', 'stopping'} or (session.get('status') == 'ready' and
         (sending_input(session) or
-         any(turn.get('phase') == 'running' for turn in session.get('execution', {}).get('turns', []))))
+         any(turn.get('phase') == 'running' for turn in current_execution(session).get('turns', []))))
 
 
 def _worker_working(worker):
@@ -105,8 +107,8 @@ def _worker_working(worker):
 def working_sessions(service):
     """Count conversations whose own or background work is running, queued or finishing.
 
-    The same two predicates as the update gate, and the same reads: a saved
-    execution record and resident input are read only when status is `ready`.
+    The same two predicates as the update gate, and the same reads:
+    current execution and resident input are read only when status is `ready`.
     The owner's uninstall asks this before a normal stop would interrupt work.
     """
     return sum(_conversation_working(row) or any(_worker_working(worker) for worker in row.get('workers', []))
