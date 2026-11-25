@@ -392,7 +392,7 @@ class NativeHomeBoundaryTests(unittest.TestCase):
             pinned.publish_private("server.yaml", original)
         self.addCleanup(shutil.rmtree, allocation)
         result = subprocess.run(
-            ["cmd.exe", "/d", "/c", f'mklink /J "{alias}" "{unrelated}"'],
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(alias), str(unrelated)],
             capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
         self.addCleanup(alias.rmdir)  # remove the junction itself before fixture cleanup

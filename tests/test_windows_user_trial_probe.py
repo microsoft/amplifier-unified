@@ -3403,8 +3403,9 @@ def test_native_prefix_route_uses_only_fixed_three_and_its_own_evidence():
     assert "'evidence/' + stem + '-native.json'" in body
     assert "target = base / (stem + '-tests')" in body
     assert "str(base / (stem + '-temp'))" in body
-    assert "origin = workflow if name == 'tests/test_runtime.py' else source" in body
-    # Prefix files contain no runtime fixture; every one remains candidate-bound.
+    assert "origin = workflow if name in ('tests/test_runtime.py', 'tests/test_host_config.py') else source" in body
+    # Only the reviewed junction fixture follows authoring; other prefix files
+    # and every installed product/lock input remain candidate-bound.
     files = next(n for n in ast.walk(tree) if isinstance(n, ast.If) and
                  isinstance(n.test, ast.Name) and n.test.id == "prefix" and
                  any(isinstance(c, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "files" for t in c.targets)
@@ -3420,7 +3421,7 @@ def test_native_prefix_route_uses_only_fixed_three_and_its_own_evidence():
     assert "assert selected.passed(code)" in body and "result['postTestAudit'] = 'passed'" in body
 
 
-@pytest.mark.parametrize("missing_helper", [False, True])
+@pytest.mark.parametrize("missing_helper", [False, True, "authoring-junction"])
 def test_native_prefix_staging_never_substitutes_authoring_or_product_tree(tmp_path, missing_helper):
     import shutil
     _, _, tree = remaining_ci_code(FIVE_STEP)
@@ -3437,7 +3438,8 @@ def test_native_prefix_staging_never_substitutes_authoring_or_product_tree(tmp_p
         for name in names:
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
-            if not (missing_helper and root == source and name == "tests/test_runtime_controls.py"):
+            if not ((missing_helper is True and root == source and name == "tests/test_runtime_controls.py")
+                    or (missing_helper == "authoring-junction" and root == workflow and name == "tests/test_host_config.py")):
                 path.write_text(label + name)
     candidate = {"head": "a" * 40, "tree": "b" * 40}
     namespace = {"source": source, "workflow": workflow, "base": base, "candidate": candidate,
@@ -3454,14 +3456,86 @@ def test_native_prefix_staging_never_substitutes_authoring_or_product_tree(tmp_p
     assert set(path.name for path in (base / "prefix-tests").iterdir()) == {"tests"}
     for name in names:
         copied = (base / "prefix-tests" / name).read_bytes()
-        assert copied == (source / name).read_bytes() != (workflow / name).read_bytes()
+        origin = workflow if name == "tests/test_host_config.py" else source
+        other = source if origin == workflow else workflow
+        assert copied == (origin / name).read_bytes() != (other / name).read_bytes()
         assert result["testFiles"][name] == hashlib.sha256(copied).hexdigest()
-        assert result["testAuthoring"][name] == candidate
+        assert result["testAuthoring"][name] == (result["workflow"] if origin == workflow else candidate)
     assert not (base / "prefix-tests/tests/test_runtime.py").exists()
 
 
+@pytest.mark.parametrize("profile", [r"C:\Users\runneradmin", r"C:\Users\Fixture User"])
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_native_junction_command_keeps_argv_unescaped_and_returncode_observable(profile, returncode):
+    from pathlib import PureWindowsPath
+    source = ast.parse((ROOT / "tests/test_host_config.py").read_text())
+    case = next(n for n in ast.walk(source) if isinstance(n, ast.FunctionDef)
+                and n.name == "test_app_home_through_read_config_rejects_junction_without_changing_target")
+    call, = [n for n in ast.walk(case) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and isinstance(n.func.value, ast.Name) and n.func.value.id == "subprocess" and n.func.attr == "run"]
+    alias = PureWindowsPath(profile) / ".unified-home-test-fixture" / "app-home"
+    unrelated = alias.parent / "unrelated"
+    seen = []
+    result = types.SimpleNamespace(returncode=returncode, stderr=b"PRIVATE simulated stderr")
+    def run(*args, **kwargs):
+        seen.append((args, kwargs))
+        return result
+    value = eval(compile(ast.Expression(call), "<authored-junction-command>", "eval"),
+                 {"subprocess": types.SimpleNamespace(run=run), "alias": alias, "unrelated": unrelated})
+    expected = ["cmd.exe", "/d", "/c", "mklink", "/J", str(alias), str(unrelated)]
+    assert seen == [((expected,), {"capture_output": True, "timeout": 10})]
+    assert value is result and value.returncode == returncode
+    # Python's Windows argv serialization must not insert C-runtime backslash
+    # escapes into a shell program containing already quoted path operands.
+    command_line = subprocess.list2cmdline(expected)
+    assert '\\"' not in command_line and command_line.startswith("cmd.exe /d /c mklink /J ")
+    if " " in profile:
+        assert command_line.endswith(f'"{alias}" "{unrelated}"')
+    old = subprocess.list2cmdline(["cmd.exe", "/d", "/c", f'mklink /J "{alias}" "{unrelated}"'])
+    assert '\\"' in old and old != command_line  # Source mechanism, not native execution proof.
+
+
+def test_native_junction_fixture_changes_only_command_arguments_and_keeps_postaudit_binding():
+    source = ast.parse((ROOT / "tests/test_host_config.py").read_text())
+    case = next(n for n in ast.walk(source) if isinstance(n, ast.FunctionDef)
+                and n.name == "test_app_home_through_read_config_rejects_junction_without_changing_target")
+    call, = [n for n in ast.walk(case) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and isinstance(n.func.value, ast.Name) and n.func.value.id == "subprocess" and n.func.attr == "run"]
+    assert ast.dump(call.args[0], include_attributes=False) == ast.dump(ast.parse(
+        '["cmd.exe", "/d", "/c", "mklink", "/J", str(alias), str(unrelated)]', mode="eval").body,
+        include_attributes=False)
+    call.args[0] = ast.Constant(None)
+    # Exact accepted583 case except that one argv: returncode assertion,
+    # native write-refusal/invariants/subtests and cleanup ordering all remain.
+    assert hashlib.sha256(ast.dump(case, include_attributes=False).encode()).hexdigest() == (
+        "f9c4a729d6ef6b366301ec692b22f7adac62ee58b11b58c9c9012a5eb59dd033")
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    body = ast.unparse(tree)
+    binding = "origin = workflow if name in ('tests/test_runtime.py', 'tests/test_host_config.py') else source"
+    assert body.count(binding) == 2
+    assert body.index(binding, body.index("result['postTestAudit'] = 'started'")) < body.index("result['postTestAudit'] = 'passed'")
+    assert "audit.candidate(workflow) == result['workflow']" in body
+    assert "result['testAuthoring'][name]" in body
+
+
+def selected_native_report(node, phase, outcome="passed", *, subtest=False):
+    from _pytest.reports import TestReport
+    from _pytest.subtests import SubtestReport
+    cls = SubtestReport if subtest else TestReport
+    report = cls(nodeid=node, location=("test_synthetic.py", 0, "synthetic"),
+                 keywords={}, outcome=outcome, longrepr=None, when=phase)
+    # A collector must not access these private fields, even for equality.
+    class Private:
+        def __eq__(self, other):
+            raise AssertionError("PRIVATE equality")
+        def __repr__(self):
+            raise AssertionError("PRIVATE representation")
+    report.context = Private()
+    return report
+
+
 @pytest.mark.parametrize("fault", [None, "missing", "extra", "duplicate", "skip", "xfail", "failed", "exit"])
-def test_native_prefix_existing_collector_requires_exact_nine_phases(fault):
+def test_native_prefix_existing_collector_requires_parent_and_subtest_phases(fault):
     _, _, tree = remaining_ci_code(FIVE_STEP)
     result = inline_definitions(tree, ["Results"], {"nodes": PREFIX_NODES})["Results"]()
     selected = list(PREFIX_NODES)
@@ -3471,14 +3545,18 @@ def test_native_prefix_existing_collector_requires_exact_nine_phases(fault):
     result.pytest_collection_finish(types.SimpleNamespace(items=[types.SimpleNamespace(nodeid=n) for n in selected]))
     for n in selected:
         for phase in ("setup", "call", "teardown"):
+            if n == PREFIX_NODES[1] and phase == "call":
+                for _ in range(2):
+                    result.pytest_runtest_logreport(selected_native_report(n, "call", subtest=True))
             bad = n == PREFIX_NODES[0] and phase == "call"
-            row = types.SimpleNamespace(nodeid=n, when=phase,
-                outcome="skipped" if bad and fault == "skip" else "failed" if bad and fault == "failed" else "passed")
+            row = selected_native_report(n, phase,
+                "skipped" if bad and fault == "skip" else "failed" if bad and fault == "failed" else "passed")
             if bad and fault == "xfail": row.wasxfail = "synthetic"
             result.pytest_runtest_logreport(row)
     report = result.snapshot(1 if fault == "exit" else 0)
     assert report["passed"] is (fault is None)
-    assert report["phaseCount"] == len(selected) * 3
+    assert report["phaseCount"] == len(selected) * 3 + 2
+    assert report["subtestCount"] == 2 and report["parentPhaseCount"] == len(selected) * 3
     assert "private/unselected" not in json.dumps(report)
 
 
@@ -3682,6 +3760,210 @@ except AssertionError:
         assert report["selection"]["exitCode"] == 0
 
 
+@pytest.mark.parametrize("fault", [
+    None, "missing-subtest", "extra-subtest", "duplicate-object", "missing-parent",
+    "duplicate-parent", "parent-instead", "foreign", "wrong-phase", "unknown-type",
+    "failed", "skipped", "xfail", "late-failed", "late-skipped", "late-xfail",
+    "late-node", "late-phase", "early-parent", "overflow",
+])
+def test_native_subtest_reports_keep_strict_typed_order_and_final_facts(fault):
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    result = inline_definitions(tree, ["Results"], {"nodes": PREFIX_NODES})["Results"]()
+    result.pytest_collection_finish(types.SimpleNamespace(items=[
+        types.SimpleNamespace(nodeid=n) for n in PREFIX_NODES]))
+    rows = []
+    for node in PREFIX_NODES:
+        rows.append(selected_native_report(node, "setup"))
+        if node == PREFIX_NODES[1]:
+            rows.extend(selected_native_report(node, "call", subtest=True) for _ in range(2))
+        rows.extend(selected_native_report(node, p) for p in ("call", "teardown"))
+    sub = rows[4]
+    if fault == "missing-subtest": rows.pop(5)
+    elif fault == "extra-subtest": rows.insert(5, selected_native_report(PREFIX_NODES[1], "call", subtest=True))
+    elif fault == "duplicate-object": rows[5] = sub
+    elif fault == "missing-parent": rows.pop(6)
+    elif fault == "duplicate-parent": rows.insert(7, rows[6])
+    elif fault == "parent-instead": rows[5] = selected_native_report(PREFIX_NODES[1], "call")
+    elif fault == "foreign": sub.nodeid = "PRIVATE-FOREIGN"
+    elif fault == "wrong-phase": sub.when = "teardown"
+    elif fault == "unknown-type":
+        rows[5] = types.SimpleNamespace(nodeid=PREFIX_NODES[1], when="call", outcome="passed")
+    elif fault in ("failed", "skipped"): sub.outcome = fault
+    elif fault == "xfail": sub.wasxfail = "PRIVATE-XFAIL"
+    elif fault == "early-parent": rows[4], rows[6] = rows[6], rows[4]
+    elif fault == "overflow": rows.extend(selected_native_report(PREFIX_NODES[1], "call", subtest=True) for _ in range(100))
+    for row in rows:
+        result.pytest_runtest_logreport(row)
+    if fault in ("late-failed", "late-skipped"): sub.outcome = fault.removeprefix("late-")
+    elif fault == "late-xfail": sub.wasxfail = "PRIVATE-LATE"
+    elif fault == "late-node": sub.nodeid = "PRIVATE-LATE"
+    elif fault == "late-phase": sub.when = "teardown"
+    report = result.snapshot(0)
+    assert report["passed"] is (fault is None)
+    assert report["phaseCount"] == len(rows)
+    assert len(report["phases"]) == len(report["reportKinds"]) == len(report["finalReports"]) == min(len(rows), 96)
+    assert report["omittedPhases"] == max(0, len(rows) - 96)
+    assert report["duplicateReports"] == int(fault in ("duplicate-object", "duplicate-parent"))
+    assert "PRIVATE" not in json.dumps(report)
+    if fault is None:
+        assert report["parentPhaseCount"] == 9 and report["subtestCount"] == 2
+        assert report["reportKinds"] == ["parent"] * 4 + ["subtest"] * 2 + ["parent"] * 5
+        assert report["expectedSubtests"] == {PREFIX_NODES[1]: 2}
+    elif fault and fault.startswith("late-"):
+        assert report["phases"][4] == [PREFIX_NODES[1], "call", "passed"]
+        assert report["invalid"] and report["finalReports"][4] != [
+            PREFIX_NODES[1], "call", "passed", "subtest", False]
+
+
+@pytest.mark.parametrize("fault", [
+    "pass", "failed", "skipped", "xfail", "missing", "extra", "duplicate",
+    "foreign", "missing-parent", "late-failed",
+])
+def test_native_subtest_real_unittest_reports_preserve_all_outcomes(tmp_path, fault):
+    """Real pytest/unittest reports, synthetic fixture only; never create a junction."""
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    definitions = ast.unparse(ast.Module(body=[n for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in {
+            "safe_failure", "safe_lease_witness", "Results"}], type_ignores=[]))
+    (tmp_path / "collector.py").write_text(definitions, encoding="utf-8")
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_host_config.py").write_text('''import os, unittest, pytest
+class NativeHomeBoundaryTests(unittest.TestCase):
+    def test_app_home_through_read_config_rejects_junction_without_changing_target(self):
+        fault = os.environ["CAPTURE_FAULT"]
+        count = 1 if fault == "missing" else 3 if fault == "extra" else 2
+        for index in range(count):
+            with self.subTest(explicit_home="/PRIVATE-HOME", number=index):
+                if index == 0 and fault == "failed": self.fail("PRIVATE-FAIL")
+                if index == 0 and fault == "skipped": self.skipTest("PRIVATE-SKIP")
+                if index == 0 and fault == "xfail": pytest.xfail("PRIVATE-XFAIL")
+''', encoding="utf-8")
+    (tests / "test_decision_accounts.py").write_text(
+        "def test_real_catalog_child_does_not_allocate_console(): pass\n", encoding="utf-8")
+    (tests / "test_optional_controller_availability.py").write_text(
+        "def test_native_default_selection_full_app_chat_save_reload(): pass\n", encoding="utf-8")
+    runner = '''
+import json, os, pathlib, sys
+import pytest
+from _pytest.subtests import SubtestReport
+root, fault = pathlib.Path(sys.argv[1]), sys.argv[2]
+nodes = tuple(json.loads(sys.argv[3]))
+os.chdir(root)
+os.environ["CAPTURE_FAULT"] = fault
+exec(compile((root / "collector.py").read_text(), "<collector>", "exec"))
+paths = {os.path.normcase(str(p)): ("tests/" + p.name, len(p.read_bytes().splitlines()))
+         for p in (root / "tests").glob("test_*.py")}
+pytest.hookimpl(hookwrapper=True, tryfirst=True)(Results.pytest_runtest_makereport)
+selected = Results(paths)
+actual = []
+class Capture:
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_runtest_logreport(self, report):
+        actual.append(report)
+code = pytest.main(["-q", "-p", "no:cacheprovider", "--rootdir", str(root),
+                   "--confcutdir", str(root), *nodes], plugins=[selected, Capture()])
+original = selected.snapshot(code)
+# Replay actual report OBJECTS into a fresh collector for observer-only negative
+# controls. This does not run any test a second time or fabricate subtest types.
+observed = Results(paths)
+class Item:
+    def __init__(self, nodeid): self.nodeid = nodeid
+class Session:
+    items = [Item(node) for node in nodes]
+observed.pytest_collection_finish(Session())
+injected = False
+for report in actual:
+    sub = type(report) is SubtestReport
+    if fault == "missing-parent" and report.nodeid == nodes[1] and report.when == "call" and not sub:
+        continue
+    if fault == "foreign" and sub and not injected:
+        report.nodeid = "PRIVATE-FOREIGN"
+        injected = True
+    observed.pytest_runtest_logreport(report)
+    if fault == "duplicate" and sub and not injected:
+        observed.pytest_runtest_logreport(report)
+        injected = True
+if fault == "late-failed":
+    next(report for report in actual if type(report) is SubtestReport).outcome = "failed"
+(root / "result.json").write_text(json.dumps({
+    "original": original, "observed": observed.snapshot(code)}), encoding="utf-8")
+'''
+    child = subprocess.run([sys.executable, "-I", "-B", "-c", runner,
+        str(tmp_path), fault, json.dumps(PREFIX_NODES)],
+        env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+        capture_output=True, text=True, timeout=30)
+    assert child.returncode == 0, child.stdout + child.stderr
+    raw = json.loads((tmp_path / "result.json").read_text())
+    assert "PRIVATE" not in json.dumps(raw) and str(tmp_path) not in json.dumps(raw)
+    original, observed = raw["original"], raw["observed"]
+    synthetic = fault in {"duplicate", "foreign", "missing-parent", "late-failed"}
+    assert original["passed"] is (fault == "pass" or synthetic)
+    assert observed["passed"] is (fault == "pass")
+    assert original["collected"] == list(PREFIX_NODES) and original["parentPhaseCount"] == 9
+    assert original["subtestCount"] == (1 if fault == "missing" else 3 if fault == "extra" else 2)
+    assert original["omittedPhases"] == observed["omittedPhases"] == 0
+    if fault == "failed":
+        assert original["exitCode"] == 1 and original["failureCount"] >= 1
+        assert any(row[2] == "failed" and kind == "subtest"
+                   for row, kind in zip(original["phases"], original["reportKinds"]))
+    elif fault in {"skipped", "xfail"}:
+        assert any(row[2] != "passed" and kind == "subtest"
+                   for row, kind in zip(original["phases"], original["reportKinds"]))
+    else:
+        assert original["exitCode"] == 0
+    if fault == "duplicate": assert observed["duplicateReports"] == 1
+    if fault == "foreign": assert observed["unexpectedPhases"] == 1
+    if fault == "missing-parent": assert observed["parentPhaseCount"] == 8
+    if fault == "late-failed":
+        assert observed["invalid"] and any(row[2] == "failed" for row in observed["finalReports"])
+
+
+@pytest.mark.parametrize("mode", ["five", "unlisted"])
+def test_native_subtest_allowance_never_applies_to_other_cases(mode):
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    nodes = FIVE_NODES if mode == "five" else ("test_synthetic.py::test_other",)
+    result = inline_definitions(tree, ["Results"], {"nodes": nodes})["Results"]()
+    result.pytest_collection_finish(types.SimpleNamespace(items=[
+        types.SimpleNamespace(nodeid=n) for n in nodes]))
+    for node in nodes:
+        result.pytest_runtest_logreport(selected_native_report(node, "setup"))
+        if node == nodes[0]:
+            for _ in range(2):
+                result.pytest_runtest_logreport(selected_native_report(node, "call", subtest=True))
+        for phase in ("call", "teardown"):
+            result.pytest_runtest_logreport(selected_native_report(node, phase))
+    report = result.snapshot(0)
+    assert not report["passed"] and report["expectedSubtests"] == {}
+    assert report["parentPhaseCount"] == len(nodes) * 3 and report["subtestCount"] == 2
+    assert report["phaseCount"] == len(nodes) * 3 + 2
+
+
+def test_native_subtest_projection_is_closed_and_keeps_original_oracles():
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Results")
+    methods = {n.name: n for n in cls.body if isinstance(n, ast.FunctionDef)}
+    for name in ("__init__", "pytest_runtest_logreport", "final_reports", "passed", "snapshot"):
+        method = methods[name]
+        assert not any(isinstance(n, ast.Attribute) and n.attr in {
+            "context", "params", "kwargs", "msg", "longrepr", "_to_json", "__dict__"
+        } for n in ast.walk(method))
+        assert not any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                       and n.func.id in {"repr", "vars", "id"} for n in ast.walk(method))
+    init = ast.unparse(methods["__init__"])
+    assert "from _pytest.subtests import SubtestReport" in init
+    assert repr(PREFIX_NODES[1]) in init and "{junction: 2} if junction in nodes else {}" in init
+    logged = ast.unparse(methods["pytest_runtest_logreport"])
+    assert "report is seen" in logged and "len(self.phases) < 96" in logged
+    assert "self.report_types.get(type(report), 'other')" in logged
+    assert "self.final_reports()" in ast.unparse(methods["passed"])
+    assert "self.final_reports()" in ast.unparse(methods["snapshot"])
+    # Reuse the unchanged whole-case normalized assertion, not a weakened
+    # two-call approximation of the native fixture or its post-test audit.
+    test_native_junction_fixture_changes_only_command_arguments_and_keeps_postaudit_binding()
+    test_remaining_workflow_keeps_full_selection_and_first_result_failure_hook()
+
+
 @pytest.mark.parametrize("fault", [None, "missing", "extra", "duplicate", "reordered", "wrong-node",
                                   "no-call", "skip", "xfail", "setup-failed", "call-failed",
                                   "teardown-failed", "collect-failed", "collect-skipped", "exit-code"])
@@ -3703,8 +3985,7 @@ def test_remaining_five_phase_accounting_refuses_any_missing_native_proof(fault)
                 continue
             outcome = "failed" if node == FIVE_NODES[-1] and fault == phase + "-failed" else "passed"
             if node == FIVE_NODES[-1] and phase == "call" and fault == "skip": outcome = "skipped"
-            row = types.SimpleNamespace(nodeid="unrelated" if fault == "wrong-node" else node,
-                                        when=phase, outcome=outcome)
+            row = selected_native_report("unrelated" if fault == "wrong-node" else node, phase, outcome)
             if node == FIVE_NODES[-1] and fault == "xfail": row.wasxfail = "not a pass"
             result.pytest_runtest_logreport(row)
     assert result.passed(1 if fault == "exit-code" else 0) is (fault is None)
@@ -3970,7 +4251,7 @@ def test_remaining_evidence_overflow_is_explicit_and_never_a_pass():
     result.pytest_collection_finish(types.SimpleNamespace(items=[
         types.SimpleNamespace(nodeid=FIVE_NODES[0]) for _ in range(40)]))
     for _ in range(100):
-        result.pytest_runtest_logreport(types.SimpleNamespace(nodeid=FIVE_NODES[0], when="call", outcome="passed"))
+        result.pytest_runtest_logreport(selected_native_report(FIVE_NODES[0], "call"))
     report = result.snapshot(0)
     assert report["collectedCount"] == 40 and report["omittedCollected"] == 8
     assert report["phaseCount"] == 100 and report["omittedPhases"] == 4
