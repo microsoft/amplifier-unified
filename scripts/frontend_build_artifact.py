@@ -44,7 +44,7 @@ def safe_path(name):
     return path
 
 
-def regular_tree(folder, *, allow_empty=False):
+def regular_tree(folder, *, allow_empty=False, bounded=True):
     """Reject links and special files before reading any artifact bytes."""
     if not stat.S_ISDIR(folder.lstat().st_mode):
         raise ValueError('Build output must be a real directory')
@@ -64,7 +64,7 @@ def regular_tree(folder, *, allow_empty=False):
             safe_path(relative)
             paths.append((relative, path))
             total += info.st_size
-            if len(paths) > MAX_FILES or total > MAX_BYTES:
+            if bounded and (len(paths) > MAX_FILES or total > MAX_BYTES):
                 raise ValueError('Build output exceeds the artifact size limit')
     if not paths and not allow_empty:
         raise ValueError('Build output is empty')
@@ -184,10 +184,10 @@ def verify(root, directory):
     return manifest
 
 
-def tree(folder):
+def tree(folder, *, bounded=True):
     """Include empty directories: Git does not record them, but they are local work."""
     files = {name: {'sha256': digest(path.read_bytes()), 'bytes': path.stat().st_size}
-             for name, path in regular_tree(folder, allow_empty=True)}
+             for name, path in regular_tree(folder, allow_empty=True, bounded=bounded)}
     directories = sorted((Path(parent) / name).relative_to(folder).as_posix()
                          for parent, names, _ in os.walk(folder) for name in names)
     return {'files': files, 'directories': directories}
@@ -269,50 +269,66 @@ def prepare_apply(root, directory, recovery, state):
     save_apply_state(recovery, state, 'prepared')
 
 
+def wanted_tree(state):
+    # A local build may include empty output directories. Imported archives use
+    # the exact directory set implied by their published asset inventory.
+    return asset_tree(state['manifest']['assets']) if 'manifest' in state else state['after']
+
+
+def recorded_tree(folder, state):
+    # Bound external transfers; a locally produced build keeps its supported size.
+    return tree(folder, bounded='manifest' in state)
+
+
 def replace_static(root, recovery, state):
     target, new, old = root / STATIC, recovery / 'new', recovery / 'old'
-    wanted = asset_tree(state['manifest']['assets'])
-    if not old.exists():
-        if tree(target) != state['before'] or tree(new) != wanted:
+    wanted = wanted_tree(state)
+    before = state['before']
+    if not old.exists() and before is not None:
+        if recorded_tree(target, state) != before or recorded_tree(new, state) != wanted:
             raise ValueError('Generated files changed before replacement')
         target.rename(old)
-    if tree(old) != state['before']:
+    if (recorded_tree(old, state) if old.exists() else None) != before:
         raise ValueError('Saved original generated files changed')
     if not target.exists():
-        if tree(new) != wanted:
+        if recorded_tree(new, state) != wanted:
             raise ValueError('Prepared replacement changed')
         new.rename(target)
-    if new.exists() or tree(target) != wanted:
+    if new.exists() or recorded_tree(target, state) != wanted:
         raise ValueError('Replacement contains local changes; leaving recovery files intact')
-    check_apply_inputs(root, state)
-    save_apply_state(recovery, state, 'verified')
 
 
 def finish_apply(root, recovery, state):
-    if tree(root / STATIC) != asset_tree(state['manifest']['assets']):
+    if recorded_tree(root / STATIC, state) != wanted_tree(state):
         raise ValueError('Applied generated files changed; leaving recovery files intact')
     old = recovery / 'old'
     if old.exists():
-        remaining = tree(old)
+        remaining = recorded_tree(old, state)
         before = state['before']
         if (any(before['files'].get(name) != value for name, value in remaining['files'].items())
                 or not set(remaining['directories']) <= set(before['directories'])):
             raise ValueError('Saved original files changed; leaving recovery files intact')
-        # A previous invocation may have stopped partway through this deletion.
+    discard_verified(recovery)
+
+
+def discard_verified(recovery):
+    # Keep the record while deleting the backup. A killed cleanup can verify
+    # the subset remaining in old and finish its own deletion on re-entry.
+    old = recovery / 'old'
+    if old.exists():
         shutil.rmtree(old)
     (recovery / 'state.tmp').unlink(missing_ok=True)
-    (recovery / 'state.json').unlink()
+    (recovery / 'state.json').unlink(missing_ok=True)
     recovery.rmdir()
 
 
 def restore_original(root, recovery, state):
     """On an ordinary failure, restore only bytes still known to belong to us."""
     target, new, old = root / STATIC, recovery / 'new', recovery / 'old'
-    if state['phase'] != 'prepared' or not old.exists() or tree(old) != state['before']:
+    if state['phase'] != 'prepared' or not old.exists() or recorded_tree(old, state) != state['before']:
         return
-    check_apply_inputs(root, state)
     if target.exists():
-        if new.exists() or tree(target) != asset_tree(state['manifest']['assets']):
+        if new.exists() or recorded_tree(target, state) != wanted_tree(state):
             return
         target.rename(new)
     old.rename(target)
@@ -329,8 +345,10 @@ def apply(root, directory):
             raise ValueError('Apply requires checkout and Git metadata on the same filesystem')
         if any(directory.resolve().is_relative_to(path) for path in (target, recovery)):
             raise ValueError('Artifact overlaps generated output or recovery directory')
-        manifest = verify(root, directory)
         with apply_lock(recovery.with_suffix('.lock')):
+            if (root / '.web-client-output').exists():
+                raise ValueError('Interrupted local web build; rerun the web build before applying an artifact')
+            manifest = verify(root, directory)
             return apply_locked(root, directory, recovery, manifest)
     except Exception as error:
         error.add_note(f'Apply recovery: {recovery}. Preserve local work; rerun apply with the same artifact after resolving conflicts.')
@@ -370,10 +388,14 @@ def apply_locked(root, directory, recovery, manifest):
             prepare_apply(root, directory, recovery, state)
         if state['phase'] == 'prepared':
             replace_static(root, recovery, state)
+            check_apply_inputs(root, state)
+            save_apply_state(recovery, state, 'verified')
         finish_apply(root, recovery, state)
     except Exception as error:
         try:
-            restore_original(root, recovery, state)
+            if state['phase'] == 'prepared' and (recovery / 'old').exists():
+                check_apply_inputs(root, state)
+                restore_original(root, recovery, state)
         except Exception as restore_error:
             error.add_note(f'Original files remain in recovery: {restore_error}')
         raise
