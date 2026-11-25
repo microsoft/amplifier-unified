@@ -25,6 +25,16 @@ name: Windows standard account
 # watch that took 2 seconds or more after the app had answered.
 on:
   workflow_dispatch:
+    inputs:
+      case:
+        description: Existing consumer journey or the one synthetic scheduler transport test
+        type: choice
+        options: [consumer, synthetic-task-29411]
+        default: consumer
+      fixture_sha:
+        description: Full immutable fixture commit (required for synthetic-task-29411)
+        type: string
+        default: ''
   pull_request:
     paths:
       - .github/workflows/windows-standard-account.yml
@@ -57,6 +67,7 @@ permissions:
 jobs:
   windows-standard-account:
     name: Consumer journey as a standard user
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case == 'consumer' }}
     runs-on: windows-latest
     timeout-minutes: 115
     env:
@@ -118,6 +129,7 @@ jobs:
   # them.
   portable-checks:
     name: The case's own checks (Linux, Python 3.13)
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.case == 'consumer' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -145,3 +157,73 @@ jobs:
         run: |
           uv run --no-sync pytest -q -ra -p no:cacheprovider tests/test_windows_standard_account.py | tee "$RUNNER_TEMP/portable-checks.log"
           tail -n 1 "$RUNNER_TEMP/portable-checks.log" | grep -E '^[0-9]+ passed(, [0-9]+ warnings?)? in [0-9.]+s( \([0-9:]+\))?$'
+  synthetic-task-29411:
+    name: One synthetic scheduler task as an interactive standard user
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.case == 'synthetic-task-29411' }}
+    runs-on: windows-latest
+    # Two-minute test mechanism; budget also includes locked pytest setup,
+    # one local sign-in and independently checked cleanup, not the consumer journey.
+    timeout-minutes: 40
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+      UV_PYTHON_DOWNLOADS: never
+      UV_LINK_MODE: copy
+      AMPLIFIER_CREATE_A_STANDARD_USER_ON_THIS_RUNNER: '1'
+      AMPLIFIER_STANDARD_ACCOUNT_CASE: synthetic-task-29411
+      AMPLIFIER_STANDARD_FIXTURE_SHA: ${{ inputs.fixture_sha }}
+      AMPLIFIER_STANDARD_WORKFLOW_SHA: ${{ github.workflow_sha }}
+    steps:
+      - name: Require immutable fixture selection
+        id: selection
+        timeout-minutes: 1
+        shell: pwsh
+        run: |
+          if ($env:AMPLIFIER_STANDARD_FIXTURE_SHA -cnotmatch '^[0-9a-f]{40}$') { throw 'A full immutable fixture SHA is required.' }
+          if ($env:AMPLIFIER_STANDARD_FIXTURE_SHA -cne $env:AMPLIFIER_STANDARD_WORKFLOW_SHA) { throw 'Fixture must be the executing workflow commit.' }
+          'bound=true' >> $env:GITHUB_OUTPUT
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        id: fixture
+        timeout-minutes: 2
+        with:
+          ref: ${{ inputs.fixture_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        timeout-minutes: 3
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        timeout-minutes: 2
+      - name: Stage original test and product with locked pytest dependencies only
+        timeout-minutes: 7
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -cne $env:AMPLIFIER_STANDARD_WORKFLOW_SHA) { throw 'Fixture identity changed.' }
+          python -I -B tests/fixtures/windows_standard_account_native.py prepare
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic scheduler preparation failed.' }
+      - name: Run one original scheduler test in one owned standard-user session
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -cne $env:AMPLIFIER_STANDARD_WORKFLOW_SHA) { throw 'Fixture identity changed.' }
+          python -I -B tests/fixtures/windows_standard_account_native.py run
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic scheduler case failed; preserve private recovery evidence.' }
+      - name: Independently reconcile owned cleanup or retain unknown custody
+        if: ${{ always() && steps.selection.outputs.bound == 'true' && steps.fixture.outcome == 'success' }}
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -cne $env:AMPLIFIER_STANDARD_WORKFLOW_SHA) { throw 'Fixture identity changed.' }
+          python -I -B tests/fixtures/windows_standard_account_native.py cleanup
+          if ($LASTEXITCODE -ne 0) { throw 'Cleanup is incomplete; runner disposal is not a cleanup receipt.' }
+      - name: Retain only typed outcomes and source hashes
+        if: always()
+        timeout-minutes: 2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: synthetic-task-29411
+          path: ${{ runner.temp }}/standard-account-evidence/
+          if-no-files-found: error
+          retention-days: 7

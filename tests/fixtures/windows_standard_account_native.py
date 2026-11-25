@@ -70,6 +70,7 @@ import threading
 import time
 import tomllib
 import uuid
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = "https://github.com/microsoft/amplifier-unified"
@@ -195,6 +196,8 @@ def load(name, path):
 
 
 def evidence():
+    if selected_case() == SYNTHETIC_CASE:
+        return synthetic_folders()[0].parent / "private-records"
     return Path(os.environ["RUNNER_TEMP"]).resolve() / "standard-account-evidence"
 
 
@@ -994,6 +997,643 @@ def one_question(asked, answer):
     return len(asked) == 1 and asked[0].get("theQuestion") is True and asked[0].get("answer") == answer
 
 
+# ---- Narrow synthetic scheduler case. This is not consumer-journey acceptance.
+SYNTHETIC_CASE = "synthetic-task-29411"
+SYNTHETIC_NODE = "tests/test_windows_service.py::test_native_synthetic_task_create_run_exit_remove"
+SYNTHETIC_BASE = "58370195b8d2a39ba72974a21e3ae033cc584f4c"
+SYNTHETIC_FILES = ("amplifier_web/__init__.py", "amplifier_web/windows_service.py",
+                   "amplifier_web/windows_files.py", "tests/test_windows_service.py", "tests/conftest.py")
+SYNTHETIC_DEPS = ("pytest", "iniconfig", "packaging", "pluggy", "pygments", "colorama")
+
+
+def selected_case(environ=None):
+    value = (os.environ if environ is None else environ).get("AMPLIFIER_STANDARD_ACCOUNT_CASE", "consumer")
+    if value not in ("consumer", SYNTHETIC_CASE):
+        raise ValueError("Unknown standard-account case")
+    return value
+
+
+def synthetic_folders():
+    root = Path(os.environ["RUNNER_TEMP"]).resolve() / "standard-account-synthetic-private"
+    return root / "stage", root / "exchange"
+
+
+def synthetic_failure(error):
+    # No exception text, SID, task name, XML, user name, argv or credentials.
+    name = type(error).__name__
+    return name if name in {"AssertionError", "ValueError", "OSError", "PermissionError",
+                            "TimeoutError", "FileNotFoundError", "RuntimeError", "SystemExit"} else "Error"
+
+
+def protected_publish(folder, name, value):
+    """Administrator-owned fixture record: create once, flush, same-handle readback."""
+    raw = json.dumps(value, sort_keys=True).encode("utf-8")
+    need(len(raw) <= 60000, "Private fixture record exceeds its bound")
+    need(read_protected(folder, folder=True)[1] == ADMINISTRATORS, "Unowned fixture directory")
+    with open(folder / name, "xb") as stream:
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    content, owner, _ = read_protected(folder / name)
+    need(owner == ADMINISTRATORS and content == raw, "Private fixture publication was not verified")
+
+
+class SchedulerWitness:
+    """Admission guard plus passive observation; admitted calls/results are unchanged.
+
+    Input intent is NOT a registered-definition receipt. A lost create response
+    cannot be recovered by adopting a later query. No mutation is retried.
+    """
+    def __init__(self, original, sid, publish, source):
+        self.original, self.sid, self.publish, self.source = original, sid, publish, source
+        self.name = self.registered = None
+        self.absent_before = self.created = self.started = self.running = self.exited = self.absent = False
+        self.create_attempted = self.start_attempted = self.remove_attempted = False
+        self.failed = False
+        self.calls = 0
+        self.failures = []
+        self.failure_saved = True
+
+    def __call__(self, op, sid, **arguments):
+        self.boundary = "admission"
+        try:
+            return self.admitted(op, sid, **arguments)
+        except BaseException as error:
+            self.failed = True
+            # An error from the real transport is UNKNOWN, not a no-effect
+            # refusal. A subsequent test-finally refusal is a separate record.
+            if len(self.failures) < 16:
+                failure = {"operation": op if op in {"query", "create", "start", "remove"} else "other",
+                           "boundary": self.boundary, "errorType": synthetic_failure(error),
+                           "effect": "unknown" if self.boundary == "transport" else
+                                     "returned" if self.boundary == "evidence" else "not_forwarded"}
+                self.failures.append(failure)
+                try:
+                    self.publish(f"failure-{len(self.failures):02}.json", failure)
+                except Exception:
+                    self.failure_saved = False
+            else:
+                self.failure_saved = False
+            raise
+
+    def admitted(self, op, sid, **arguments):
+        name = arguments.get("name")
+        need(sid == self.sid and isinstance(name, str)
+             and re.fullmatch(r"AmplifierUnified-Test-[0-9a-f]{32}", name),
+             "Synthetic task identity refused")
+        need(self.name in (None, name), "A second synthetic task identity was refused")
+        need(op in {"query", "create", "start", "remove"}, "Synthetic operation refused")
+        self.name = name
+        need(self.calls < 300, "Synthetic scheduler observation bound exceeded")
+        self.calls += 1
+        if op == "create":
+            need(self.absent_before and not self.create_attempted, "Create is not a fresh observed request")
+            self.create_attempted = True
+            xml = arguments.get("xml")
+            need(isinstance(xml, str) and len(xml.encode()) < 48000 and "<!" not in xml,
+                 "Synthetic definition refused")
+            root = ET.fromstring(xml)
+            ns = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+            need(root.findtext(f"{ns}RegistrationInfo/{ns}URI") == "\\" + name
+                 and root.findtext(f"{ns}Principals/{ns}Principal/{ns}UserId") == sid,
+                 "Synthetic XML identity refused")
+            self.publish("intent.json", {"schema": 1, "name": name, "sid": sid, "xml": xml,
+                                         "node": SYNTHETIC_NODE, "source": self.source})
+        elif op in {"start", "remove"}:
+            need(self.registered is not None and arguments.get("previous") == self.registered,
+                 "No matching registered task receipt; retained for reconciliation")
+            flag = "start_attempted" if op == "start" else "remove_attempted"
+            need(not getattr(self, flag), "Repeated mutation refused")
+            setattr(self, flag, True)
+        self.boundary = "transport"
+        answer = self.original(op, sid, **arguments)
+        self.boundary = "evidence"
+        need(isinstance(answer, dict), "Scheduler did not return a record")
+        if op == "create":
+            need(answer.get("exists") is True and isinstance(answer.get("xml"), str),
+                 "Creation has no registered-definition receipt")
+            self.publish("registered.json", {"schema": 1, "name": name, "sid": sid, "xml": answer["xml"]})
+            self.registered, self.created = answer["xml"], True
+        elif op == "start":
+            self.started = True
+        elif op == "query":
+            if not self.create_attempted and answer.get("exists") is False:
+                self.absent_before = True
+            if self.started and answer.get("xml") == self.registered:
+                if answer.get("state") == 4 and answer.get("instances") == 1:
+                    self.running = True
+                if self.running and answer.get("instances") == 0 and answer.get("lastResult") == 0:
+                    self.exited = True
+            if self.remove_attempted and answer.get("exists") is False:
+                self.absent = True
+        self.publish(f"observation-{self.calls:03}.json",
+                     {"operation": op, "exists": answer.get("exists"), "state": answer.get("state"),
+                      "instances": answer.get("instances"), "lastResult": answer.get("lastResult"),
+                      "xmlSha256": hashlib.sha256(answer.get("xml", "").encode()).hexdigest()})
+        return answer
+
+    def complete(self):
+        return all((self.absent_before, self.created, self.started, self.running,
+                    self.exited, self.absent)) and not self.failed
+
+
+def synthetic_outcome(code, ids, phases, witness_complete):
+    return (code == 0 and ids == [SYNTHETIC_NODE] and phases == [
+        {"phase": "setup", "outcome": "passed"}, {"phase": "call", "outcome": "passed"},
+        {"phase": "teardown", "outcome": "passed"}] and witness_complete is True)
+
+
+def synthetic_binding(account, stage, exchange, phase):
+    """One protected phase and location; never adopt another writable exchange."""
+    if account.get("case") == SYNTHETIC_CASE or phase == SYNTHETIC_CASE:
+        need(account.get("case") == phase == SYNTHETIC_CASE
+             and account.get("stage") == str(Path(stage).resolve())
+             and account.get("exchange") == str(Path(exchange).resolve()),
+             "Synthetic phase or placement differs from its admission")
+
+
+def synthetic_summary(value, identity):
+    """Validate before copying any subject-controlled value to public results."""
+    need(type(value) is dict and set(value) == {
+        "finished", "status", "selected", "phases", "schedulerComplete", "subjectAbsent", "source"},
+         "Invalid synthetic result shape")
+    need(value["finished"] is True and value["status"] in {"PASS", "FAIL"}
+         and type(value["selected"]) is int and 0 <= value["selected"] <= 1
+         and type(value["schedulerComplete"]) is bool and type(value["subjectAbsent"]) is bool
+         and value["source"] == identity, "Synthetic result identity or types differ")
+    phases = value["phases"]
+    need(type(phases) is list and len(phases) <= 3, "Invalid phase list")
+    for row in phases:
+        need(type(row) is dict and set(row) == {"phase", "outcome"}
+             and row["phase"] in {"setup", "call", "teardown"}
+             and row["outcome"] in {"passed", "failed", "skipped"}, "Invalid phase outcome")
+    names = [row["phase"] for row in phases]
+    sequences = [[], ["setup"]]
+    if phases and phases[0]["outcome"] == "passed":
+        sequences += [["setup", "call"], ["setup", "call", "teardown"]]
+    else:
+        sequences += [["setup", "teardown"]]
+    need(names in sequences, "Invalid phase sequence")
+    good = synthetic_outcome(0, [SYNTHETIC_NODE] if value["selected"] == 1 else [],
+                             phases, value["schedulerComplete"]) and value["subjectAbsent"]
+    need(value["status"] != "PASS" or good, "False passing subject summary")
+    return {"status": "PASS" if good and value["status"] == "PASS" else "FAIL",
+            "selected": value["selected"], "phases": copy.deepcopy(phases),
+            "schedulerComplete": value["schedulerComplete"], "source": dict(identity)}
+
+
+def synthetic_private_source(stage, prepared):
+    return {"identity": prepared["identity"], "files": prepared["files"],
+            "sourceRoot": str(stage / "source"), "fixture": str(stage / FILES[0])}
+
+
+def subject_handoff(exchange, intent, sid):
+    """Readable by the controller through exchange's admin/SYSTEM/own-SID ACL.
+
+    This is a create-once copy of the already-flushed private intent, not authority
+    to remove a task. The controller uses it only to query the exact subject.
+    The original remains exclusively owned through windows_files. The trusted
+    subject SID can modify its exchange; this is not hostile same-SID attestation.
+    """
+    raw = json.dumps(intent, sort_keys=True).encode("utf-8")
+    need(len(raw) <= 60000, "Subject handoff is too large")
+    path = exchange / "subject-handoff.json"
+    with open(path, "xb") as stream:
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    content, owner, _ = read_protected(path)
+    need(owner == sid and content == raw, "Subject handoff readback failed")
+
+
+def finish_subject(publish, value, active_error):
+    """Evidence error is fatal but never replaces an error already propagating."""
+    try:
+        publish("finished.json", value)
+    except Exception:
+        if active_error is None:
+            raise
+
+
+def synthetic_record(stage, name):
+    raw, owner, _ = read_protected(stage / name)
+    need(owner == ADMINISTRATORS, "Private controller record has another owner")
+    return json.loads(raw.decode("utf-8"))
+
+
+def verify_synthetic_files(stage, prepared):
+    need(prepared.get("case") == SYNTHETIC_CASE
+         and prepared["identity"]["product"] == SYNTHETIC_BASE
+         and re.fullmatch("[0-9a-f]{40}", prepared["identity"]["fixture"]),
+         "Unbound synthetic source selection")
+    need(set(prepared["files"]) == {FILES[0], *("source/" + name for name in SYNTHETIC_FILES)},
+         "Staged source inventory is incomplete")
+    for name, digest in prepared["files"].items():
+        need(hashlib.sha256((stage / name).read_bytes()).hexdigest() == digest,
+             "Staged source changed")
+
+
+def synthetic_requirements(lock):
+    """Only pytest's Python 3.13 closure, exact versions and registry wheel hashes."""
+    selected = {p["name"]: p for p in lock["package"] if p["name"] in SYNTHETIC_DEPS}
+    need(set(selected) == set(SYNTHETIC_DEPS), "Missing locked pytest dependency")
+    lines = []
+    for name in SYNTHETIC_DEPS:
+        row = selected[name]
+        need(row.get("source", {}).get("registry") == "https://pypi.org/simple",
+             "Test dependency is not a locked registry package")
+        # Python<3.11 compatibility dependencies are unnecessary on required3.13.
+        for dep in row.get("dependencies", []):
+            need(dep["name"] in selected or dep.get("marker") == "python_full_version < '3.11'",
+                 "Pytest dependency closure changed")
+        hashes = [wheel["hash"] for wheel in row.get("wheels", [])]
+        need(hashes and all(re.fullmatch(r"sha256:[0-9a-f]{64}", h) for h in hashes),
+             "Missing locked wheel hashes")
+        lines.append(f"{name}=={row['version']} " + " ".join("--hash=" + h for h in hashes))
+    return "\n".join(lines) + "\n"
+
+
+def safe_synthetic_result(name, value):
+    if name == "cleanup.json":
+        # Existing cleanup APIs may return detailed strings. They stay private;
+        # only this closed projection belongs in the uploaded evidence folder.
+        allowed = {"absent", "ended", "restored", "unchanged", "retained"}
+        value = {key: answer if type(answer) is bool or
+                 (type(answer) is str and answer in allowed) else "retained"
+                 for key, answer in value.items()}
+    else:
+        need(set(value) <= {"status", "case", "errorType", "selected", "phases", "source", "schedulerComplete"},
+             "Unexpected public evidence fields")
+        need(value.get("status") in {"PASS", "FAIL"}, "Invalid public status")
+        if "source" in value:
+            source = value["source"]
+            need(set(source) == {"fixture", "product", "lockSha256"}
+                 and re.fullmatch("[0-9a-f]{40}", source["fixture"])
+                 and source["product"] == SYNTHETIC_BASE
+                 and re.fullmatch("[0-9a-f]{64}", source["lockSha256"]), "Invalid public source identity")
+        if "phases" in value:
+            need(len(value["phases"]) <= 3 and all(set(row) == {"phase", "outcome"}
+                 and row["phase"] in {"setup", "call", "teardown"}
+                 and row["outcome"] in {"passed", "failed", "skipped"} for row in value["phases"]),
+                 "Invalid public phase evidence")
+    path = Path(os.environ["RUNNER_TEMP"]).resolve() / "standard-account-evidence"
+    path.mkdir(exist_ok=True)
+    (path / name).write_text(json.dumps(value, indent=2), encoding="utf-8")
+
+
+def prepare_synthetic():
+    """Stage exact selected source and the small locked test closure, not an app."""
+    try:
+        require_disposable_runner()
+        selected = os.environ.get("AMPLIFIER_STANDARD_FIXTURE_SHA", "")
+        need(re.fullmatch("[0-9a-f]{40}", selected)
+             and selected == os.environ.get("AMPLIFIER_STANDARD_WORKFLOW_SHA"),
+             "Fixture must match the executing workflow commit")
+        git = lambda *args: subprocess.check_output(["git", *args], cwd=ROOT).strip()
+        need(git("rev-parse", "HEAD").decode() == selected and not git("status", "--porcelain"),
+             "Fixture checkout identity or cleanliness changed")
+        stage, exchange = synthetic_folders()
+        need(not stage.parent.exists(), "Synthetic placement already exists; do not replay")
+        stage.mkdir(parents=True)
+        exchange.mkdir()
+        protected = execute([system("icacls.exe"), stage.parent, "/inheritance:r", "/grant:r",
+                             f"*{ADMINISTRATORS}:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "/Q"])
+        need(protected["exitCode"] == 0, "Could not protect private controller storage")
+        files = {}
+        for name in SYNTHETIC_FILES:
+            raw = subprocess.check_output(["git", "show", SYNTHETIC_BASE + ":" + name], cwd=ROOT)
+            target = stage / "source" / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(raw)
+            files["source/" + name] = hashlib.sha256(raw).hexdigest()
+        fixture = stage / FILES[0]
+        fixture.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / FILES[0], fixture)
+        files[FILES[0]] = hashlib.sha256(fixture.read_bytes()).hexdigest()
+        raw_lock = subprocess.check_output(["git", "show", SYNTHETIC_BASE + ":uv.lock"], cwd=ROOT)
+        requirements = stage / "requirements.txt"
+        requirements.write_text(synthetic_requirements(tomllib.loads(raw_lock.decode())), encoding="utf-8")
+        uv = shutil.which("uv")
+        need(uv, "uv is unavailable")
+        environment = stage / "pytest-env"
+        made = execute([uv, "venv", "--python", sys.executable, environment], timeout=120)
+        need(made["exitCode"] == 0, "Test environment creation failed")
+        python = environment / "Scripts/python.exe"
+        installed = execute([uv, "pip", "install", "--python", python, "--require-hashes",
+                             "--only-binary", ":all:", "-r", requirements], timeout=300)
+        need(installed["exitCode"] == 0, "Locked test dependency installation failed")
+        need(execute([uv, "pip", "check", "--python", python])["exitCode"] == 0,
+             "Locked test dependency check failed")
+        prepared = {"case": SYNTHETIC_CASE, "identity": {"fixture": selected, "product": SYNTHETIC_BASE,
+                    "lockSha256": hashlib.sha256(raw_lock).hexdigest()}, "files": files, "python": str(python)}
+        protected_publish(stage, "synthetic-prepared.json", prepared)
+        safe_synthetic_result("preparation.json", {"status": "PASS", "source": prepared["identity"]})
+        return True
+    except BaseException as error:
+        safe_synthetic_result("preparation.json", {"status": "FAIL", "errorType": synthetic_failure(error)})
+        return False
+
+
+EXACT_HELPER = r"""
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+if ($p.name -notmatch '^AmplifierStandardAccountCheck-[0-9a-f]{32}$') { throw 'Invalid helper identity' }
+if ($p.sid -notmatch '^S-1-5-21-[0-9-]+$') { throw 'Invalid helper principal' }
+$s = New-Object -ComObject 'Schedule.Service'; $s.Connect(); $f = $s.GetFolder('\')
+function Find {
+    try { return $f.GetTask($p.name) } catch {
+        $e = $_.Exception; while ($null -ne $e.InnerException) { $e = $e.InnerException }
+        if ($e.HResult -ne -2147024894) { throw }; return $null
+    }
+}
+$t = Find
+if ($p.op -eq 'create') {
+    if ($null -ne $t) { throw 'Helper already exists' }
+    $d = $s.NewTask(0)
+    $d.RegistrationInfo.Description = $p.mark
+    $d.Principal.UserId = $p.sid; $d.Principal.LogonType = 3; $d.Principal.RunLevel = 0
+    $d.Settings.DisallowStartIfOnBatteries = $false; $d.Settings.StopIfGoingOnBatteries = $false
+    $d.Settings.ExecutionTimeLimit = 'PT5M'
+    $a = $d.Actions.Create(0); $a.Path = $p.program; $a.Arguments = $p.arguments; $a.WorkingDirectory = $p.folder
+    $t = $f.RegisterTaskDefinition($p.name, $d, 2, $p.sid, $null, 3, $null)
+} elseif ($p.op -in @('start', 'remove')) {
+    if ($null -eq $t -or $t.Xml -cne $p.previous -or $t.Definition.Principal.UserId -cne $p.sid) {
+        throw 'Helper definition or principal changed'
+    }
+    if ($t.GetInstances(0).Count -ne 0) { throw 'Helper is still running' }
+    if ((Find).Xml -cne $p.previous) { throw 'Helper changed before mutation' }
+    if ($p.op -eq 'start') { $null = $t.Run($null) } else { $f.DeleteTask($p.name, 0); $t = Find }
+} elseif ($p.op -ne 'query') { throw 'Unsupported helper operation' }
+if ($null -eq $t) { @{exists=$false} | ConvertTo-Json -Compress }
+else {
+    @{exists=$true; xml=$t.Xml; sid=$t.Definition.Principal.UserId; state=[int]$t.State;
+      instances=[int]$t.GetInstances(0).Count; lastResult=[long]$t.LastTaskResult} | ConvertTo-Json -Compress
+}
+"""
+
+
+def exact_helper(op, record, previous=None):
+    need(op in {"query", "create", "start", "remove"}
+         and re.fullmatch(r"AmplifierStandardAccountCheck-[0-9a-f]{32}", record.get("name", ""))
+         and re.fullmatch(r"S-1-5-21-[0-9-]+", record.get("sid", "")), "Helper identity refused")
+    if op in {"start", "remove"}:
+        need(isinstance(previous, str) and previous and len(previous.encode()) < 48000,
+             "Helper has no registered-definition receipt")
+    result = powershell(EXACT_HELPER, {**record, "op": op, "previous": previous}, timeout=30)
+    need(result["exitCode"] == 0 and isinstance(result["json"], dict), "Exact helper operation failed")
+    return result["json"]
+
+
+def credential_present():
+    pointer = C.POINTER(_Credential)()
+    _adv.CredReadW.argtypes = [W.LPCWSTR, W.DWORD, W.DWORD, C.POINTER(C.POINTER(_Credential))]
+    if not _adv.CredReadW(DESKTOP_TARGET, 1, 0, C.byref(pointer)):
+        if C.get_last_error() == 1168:
+            return False
+        raise _failed()
+    _adv.CredFree.argtypes = [C.c_void_p]
+    _adv.CredFree(pointer)
+    return True
+
+
+def run_synthetic():
+    """Reuse the existing account/session APIs, but not the consumer task helper."""
+    stage, exchange = synthetic_folders()
+    result = {"status": "FAIL", "case": SYNTHETIC_CASE}
+    try:
+        require_disposable_runner()
+        prepared = synthetic_record(stage, "synthetic-prepared.json")
+        verify_synthetic_files(stage, prepared)
+        need(not (stage / "owner-intent.json").exists(), "Synthetic account run already started")
+        need(not credential_present(), "A loopback credential already exists; it is not replaced")
+        import winreg
+        earlier_setting = None
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Terminal Server Client") as key:
+                earlier_setting, kind = winreg.QueryValueEx(key, "AuthenticationLevelOverride")
+                need(kind == winreg.REG_DWORD, "Viewer setting has an unsupported type")
+        except FileNotFoundError:
+            pass
+        runner = token_facts()
+        name, mark = "amp-std-" + uuid.uuid4().hex[:6], MARK + uuid.uuid4().hex
+        need(account_sid(name) is None, "Account collision")
+        protected_publish(stage, "owner-intent.json", {"user": name, "mark": mark})
+        password = new_password(name)
+        sid = create_user(name, password, mark)
+        protected_publish(stage, "owner.json", {"user": name, "mark": mark, "sid": sid})
+        need(whose(name, mark) == "this run's", "Account ownership changed")
+        join(name, USERS)
+        join(name, REMOTE_DESKTOP_USERS)
+        need(sorted(local_groups(name)) == sorted([sid_name(USERS), sid_name(REMOTE_DESKTOP_USERS)]),
+             "Account is not the owned standard user")
+        # Private parent remains admin-owned; this SID can traverse to its stage
+        # and exchange only. No inherited grant to other users.
+        for path, rights in ((stage.parent, "RX"), (stage, "(OI)(CI)RX"), (exchange, "(OI)(CI)M")):
+            granted = execute([system("icacls.exe"), path, "/grant", f"*{sid}:{rights}", "/Q"])
+            need(granted["exitCode"] == 0, "Owned standard user grant failed")
+        # Reuse sign_in's session-only credential and recorded viewer/setting.
+        protected_publish(stage, "viewer-before.json", {"earlier": earlier_setting})
+        protected_publish(stage, "signin-intent.json", {"target": DESKTOP, "owned": True})
+        viewer, session = sign_in(name, password)
+        del password
+        need(forget() == "absent" and not credential_present(), "Session credential removal not verified")
+        account = {"case": SYNTHETIC_CASE, "sid": sid, "stage": str(stage), "exchange": str(exchange),
+                   "runnerSession": runner["desktopSession"],
+                   "testSession": session, "hosted": {fact: os.environ.get(fact) for fact in HOSTED_FACTS}}
+        protected_publish(stage, "account.json", account)
+        helper = {"name": HELPER + "-" + uuid.uuid4().hex, "sid": sid, "mark": mark,
+                  "program": prepared["python"], "folder": str(exchange),
+                  "arguments": subprocess.list2cmdline(["-I", "-B", str(stage / FILES[0]), "standard",
+                      "--stage", str(stage), "--exchange", str(exchange), "--phase", SYNTHETIC_CASE])}
+        protected_publish(stage, "helper-intent.json", helper)
+        created = exact_helper("create", helper)
+        need(created.get("exists") and created.get("sid") == sid and isinstance(created.get("xml"), str),
+             "Helper registration not confirmed")
+        protected_publish(stage, "helper-registered.json", {**helper, "xml": created["xml"]})
+        protected_publish(stage, "helper-start-intent.json", {"name": helper["name"], "sid": sid})
+        exact_helper("start", helper, created["xml"])
+        deadline = time.monotonic() + 300
+        while True:
+            state = exact_helper("query", helper)
+            need(state.get("exists") and state.get("xml") == created["xml"] and state.get("sid") == sid,
+                 "Helper identity changed")
+            summary = read_json(exchange / "synthetic-result.json")
+            if summary and summary.get("finished") and state.get("instances") == 0:
+                result.update(synthetic_summary(summary, prepared["identity"]))
+                need(result["status"] == "PASS" and state.get("lastResult") == 0,
+                     "Original synthetic scheduler test failed")
+                break
+            need(time.monotonic() < deadline, "Helper deadline expired; retain exact task")
+            time.sleep(1)
+    except BaseException as error:
+        result["status"] = "FAIL"
+        result["errorType"] = synthetic_failure(error)
+    safe_synthetic_result("result.json", result)
+    return result["status"] == "PASS"
+
+
+def cleanup_synthetic():
+    """Independent cleanup evidence. Uncertain tasks retain account/profile custody."""
+    stage, exchange = synthetic_folders()
+    result = {}
+    def part(name, action):
+        try:
+            result[name] = action()
+        except Exception:
+            result[name] = "retained"
+    # No sign-in admission means no authority to delete an existing credential.
+    signed = None
+    try:
+        signed = synthetic_record(stage, "signin-intent.json")
+        need(signed == {"target": DESKTOP, "owned": True}, "Unowned sign-in record")
+    except FileNotFoundError:
+        pass
+    except Exception:
+        signed = None
+        result["credential"] = result["viewers"] = result["viewerSetting"] = "retained"
+    if signed:
+        part("credential", lambda: "absent" if forget() == "absent" and not credential_present() else "retained")
+        part("viewers", lambda: end_viewers(saved("viewers.json") or []))
+    else:
+        result.setdefault("credential", "unchanged")
+        result.setdefault("viewers", "unchanged")
+    def setting():
+        prior = synthetic_record(stage, "viewer-before.json")
+        import winreg
+        outcome = restore_setting(prior["earlier"], winreg)
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Terminal Server Client") as key:
+            try:
+                _, kind = winreg.QueryValueEx(key, "AuthenticationLevelOverride")
+                need(kind == winreg.REG_DWORD and prior["earlier"] is not None,
+                     "Restored viewer value has another type")
+            except FileNotFoundError:
+                need(prior["earlier"] is None, "Viewer setting disappeared")
+        return outcome
+    if signed:
+        part("viewerSetting", setting)
+    else:
+        result.setdefault("viewerSetting", "unchanged")
+    try:
+        owner = synthetic_record(stage, "owner.json")
+        need(whose(owner["user"], owner["mark"]) == "this run's"
+             and sid_text(account_sid(owner["user"])) == owner["sid"], "Account identity not proven")
+        helper = synthetic_record(stage, "helper-registered.json")
+        need(helper["sid"] == owner["sid"], "Helper owner mismatch")
+        state = exact_helper("query", helper)
+        if state.get("exists"):
+            need(state.get("xml") == helper["xml"] and state.get("sid") == owner["sid"]
+                 and state.get("instances") == 0, "Helper is changed or active")
+            exact_helper("remove", helper, helper["xml"])
+        need(exact_helper("query", helper).get("exists") is False, "Helper absence unconfirmed")
+        result["helperTask"] = "absent"
+        # Never impersonate the subject SID or adopt a changed/missing subject
+        # receipt. A failure retains the account/profile and its recovery data.
+        raw, sid, _ = read_protected(exchange / "subject-handoff.json")
+        intent = json.loads(raw)
+        prepared = synthetic_record(stage, "synthetic-prepared.json")
+        need(sid == owner["sid"] and intent["sid"] == sid
+             and intent["source"] == synthetic_private_source(stage, prepared)
+             and intent["node"] == SYNTHETIC_NODE
+             and re.fullmatch(r"AmplifierUnified-Test-[0-9a-f]{32}", intent["name"]),
+             "Subject private identity not proven")
+        # Read-only admin query through existing transport; no name-only removal.
+        need(task("state", intent["name"]).get("exists") is False, "Synthetic task retained")
+        result["subjectTask"] = "absent"
+        part("signedOut", lambda: sign_out(owner["user"], None))
+        if result.get("signedOut") is True:
+            part("profile", lambda: remove_profile(owner["sid"]))
+            if result.get("profile") == "absent":
+                def remove_owned():
+                    need(remove_account(owner["user"], owner["mark"]) in (0, 2221),
+                         "Account deletion was refused")
+                    return "absent" if account_sid(owner["user"]) is None else "retained"
+                part("account", remove_owned)
+        # No broad taskkill, no consumer/production task, no automatic rerun.
+    except Exception:
+        result.setdefault("helperTask", "retained")
+        result.setdefault("subjectTask", "retained")
+    for name in ("signedOut", "profile", "account"):
+        result.setdefault(name, "retained")
+    safe_synthetic_result("cleanup.json", result)
+    return (result.get("credential") == "absent" and result.get("viewers") == "ended"
+            and result.get("viewerSetting") in {"restored", "unchanged"}
+            and result.get("helperTask") == result.get("subjectTask") == "absent"
+            and result.get("signedOut") is True and result.get("profile") == result.get("account") == "absent")
+
+
+def synthetic_standard(stage, exchange, account, token):
+    """One exact unchanged pytest test, in this actual standard-user process."""
+    from contextlib import redirect_stdout, redirect_stderr
+    synthetic_binding(account, stage, exchange, SYNTHETIC_CASE)
+    need(account.get("case") == SYNTHETIC_CASE and standard_token(token, account)
+         and token["desktopSession"] == account["testSession"], "Standard desktop token required")
+    prepared = json.loads((stage / "synthetic-prepared.json").read_text(encoding="utf-8"))
+    verify_synthetic_files(stage, prepared)
+    # Source modules are a recorded stdlib-only subset, not an installed app.
+    sys.path.insert(0, str(stage / "source"))
+    from amplifier_web import windows_service as service, windows_files
+    need(service._owner() == token["sid"], "Product owner differs from the process token")
+    for module in (service, windows_files):
+        expected = stage / "source/amplifier_web" / (module.__name__.split(".")[-1] + ".py")
+        need(Path(module.__file__).resolve() == expected.resolve(), "Unexpected product import origin")
+    import pytest
+    need(Path(pytest.__file__).resolve().is_relative_to((stage / "pytest-env").resolve()),
+         "Pytest did not come from the staged locked environment")
+    private = exchange / "subject-private"
+    with windows_files.directory(private, owned_root=private, create=True) as directory:
+        def publish(name, value):
+            raw = json.dumps(value, sort_keys=True).encode()
+            directory.publish_private(name, raw)
+            need(directory.read_private(name, limit=len(raw)) == raw, "Private subject receipt readback failed")
+            if name == "intent.json":
+                subject_handoff(exchange, value, token["sid"])
+        publish("started.json", {"node": SYNTHETIC_NODE, "sid": token["sid"],
+                                "session": token["desktopSession"], "source": prepared["identity"]})
+        ids, phases = [], []
+        original = service._scheduler
+        witness = SchedulerWitness(original, token["sid"], publish, synthetic_private_source(stage, prepared))
+        class Observe:
+            def pytest_collection_finish(self, session):
+                ids.extend(item.nodeid for item in session.items)
+                need(ids == [SYNTHETIC_NODE], "Expected the one original synthetic task case")
+            def pytest_runtest_setup(self, item):
+                actual = token_facts()
+                need(standard_token(actual, account) and actual["desktopSession"] == account["testSession"]
+                     and service._owner() == actual["sid"], "Pytest process lost its standard-account binding")
+            def pytest_runtest_logreport(self, report):
+                phases.append({"phase": report.when, "outcome": report.outcome})
+        prior = os.environ.get("AMPLIFIER_TEST_WINDOWS_TASKS")
+        os.environ["AMPLIFIER_TEST_WINDOWS_TASKS"] = "1"
+        service._scheduler = witness
+        code = -1
+        try:
+            # Private log only. The exact test can print a SID/task name on failure.
+            with open(private / "pytest-private.log", "x", encoding="utf-8") as log:
+                with redirect_stdout(log), redirect_stderr(log):
+                    code = pytest.main(["-c", os.devnull, "--rootdir", str(stage / "source"),
+                                        "--confcutdir", str(stage / "source"), "-p", "no:cacheprovider",
+                                        "-q", "--tb=no", "--basetemp", str(exchange / "pytest-temp"),
+                                        str(stage / "source") + "/" + SYNTHETIC_NODE], plugins=[Observe()])
+        finally:
+            active_error = sys.exc_info()[1]
+            service._scheduler = original
+            if prior is None:
+                os.environ.pop("AMPLIFIER_TEST_WINDOWS_TASKS", None)
+            else:
+                os.environ["AMPLIFIER_TEST_WINDOWS_TASKS"] = prior
+            finish_subject(publish, {"code": int(code), "phases": phases,
+                "schedulerComplete": witness.complete(), "subjectAbsent": witness.absent,
+                "failures": witness.failures, "failureEvidenceSaved": witness.failure_saved}, active_error)
+        good = synthetic_outcome(int(code), ids, phases, witness.complete())
+        # Safe summary only; never publish the private authority record/XML/SID.
+        summary = {"finished": True, "status": "PASS" if good else "FAIL", "selected": len(ids),
+                   "phases": phases, "schedulerComplete": witness.complete(),
+                   "subjectAbsent": witness.absent, "source": prepared["identity"]}
+        (exchange / "synthetic-result.json").write_text(json.dumps(summary), encoding="utf-8")
+        return good
+
+
 # ---- As the runner's account.
 def folders():
     base = Path(os.environ["RUNNER_TEMP"]).resolve()
@@ -1002,6 +1642,8 @@ def folders():
 
 def prepare():
     """Build what the standard user installs and runs. Preparation is not the subject."""
+    if selected_case() == SYNTHETIC_CASE:
+        return prepare_synthetic()
     report = {"status": "FAIL", "stage": "candidate"}
     try:
         git = lambda *args: subprocess.check_output(["git", *args], cwd=ROOT, text=True).strip()
@@ -1204,6 +1846,8 @@ def page_warnings(report):
 
 
 def run():
+    if selected_case() == SYNTHETIC_CASE:
+        return run_synthetic()
     report = {"status": "FAIL", "stage": "the account",
               "steps": [{"name": name, "status": "FAIL", "reason": "Not reached"}
                         for name in FIRST + SECOND + THIRD],
@@ -1559,6 +2203,8 @@ def cleanup():
     in the result. Nothing reads whether a program is left, and `cleaned`
     does not name that request.
     """
+    if selected_case() == SYNTHETIC_CASE:
+        return cleanup_synthetic()
     result, owned = {}, saved("ownership.json")
 
     def part(label, action):
@@ -2926,6 +3572,9 @@ def standard(stage, exchange, phase):
     account = json.loads(content.decode("utf-8"))
     token = token_facts()
     admit_standard(account, token, owner, changeable or read_protected(record.parent, folder=True)[2])
+    synthetic_binding(account, stage, exchange, phase)
+    if phase == SYNTHETIC_CASE:
+        return synthetic_standard(stage, exchange, account, token)
     # One run for each phase: a second start of the helper task changes nothing.
     try:
         with open(exchange / f"{phase}.started", "x", encoding="utf-8") as marker:
@@ -2941,7 +3590,7 @@ if __name__ == "__main__":
     parser.add_argument("operation", choices=("prepare", "run", "cleanup", "standard"))
     parser.add_argument("--stage")
     parser.add_argument("--exchange")
-    parser.add_argument("--phase", choices=("first", "journey", "certificate", "second", "third"))
+    parser.add_argument("--phase", choices=("first", "journey", "certificate", "second", "third", SYNTHETIC_CASE))
     args = parser.parse_args()
     if args.operation == "standard":
         raise SystemExit(0 if standard(args.stage, args.exchange, args.phase) else 1)
