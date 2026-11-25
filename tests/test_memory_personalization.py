@@ -7,7 +7,7 @@ import pytest
 from amplifier_core.message_models import ChatRequest, Message, ToolSpec
 from amplifier_web.service import AppError, AppService
 from amplifier_web.memory_consolidation import generate
-from amplifier_web.memory_delivery import MemoryDelivery
+from amplifier_web.memory_delivery import MemoryDelivery, USE_GUIDE
 from amplifier_web.surface_delivery import SurfaceProvider
 from test_recall import make
 from test_service import Runtime
@@ -264,6 +264,7 @@ async def test_provider_boundary_revalidates_deletion_and_disable_after_budget(m
     await provider.complete(request)
     memory = delivered[-1].messages[-1]
     assert memory.metadata['ephemeral'] and 'untrusted data' in memory.content
+    assert USE_GUIDE in memory.content and PREFERENCE in memory.content
     assert 'Memory context supplied' in app._session(current)['messages'][-1]['text']
     assert app.recall.personalization.status(app._session(current))['lastContext']['items']
     note = (await app.dispatch('memory.context', {'sessionId':current}))['result']['items'][0]
