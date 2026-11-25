@@ -172,13 +172,18 @@ jobs:
       AMPLIFIER_CREATE_A_STANDARD_USER_ON_THIS_RUNNER: '1'
       AMPLIFIER_STANDARD_ACCOUNT_CASE: synthetic-task-29411
       AMPLIFIER_STANDARD_FIXTURE_SHA: ${{ inputs.fixture_sha }}
+      AMPLIFIER_STANDARD_WORKFLOW_SHA: ${{ github.workflow_sha }}
     steps:
       - name: Require immutable fixture selection
+        id: selection
         timeout-minutes: 1
         shell: pwsh
         run: |
           if ($env:AMPLIFIER_STANDARD_FIXTURE_SHA -cnotmatch '^[0-9a-f]{40}$') { throw 'A full immutable fixture SHA is required.' }
+          if ($env:AMPLIFIER_STANDARD_FIXTURE_SHA -cne $env:AMPLIFIER_STANDARD_WORKFLOW_SHA) { throw 'Fixture must be the executing workflow commit.' }
+          'bound=true' >> $env:GITHUB_OUTPUT
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        id: fixture
         timeout-minutes: 2
         with:
           ref: ${{ inputs.fixture_sha }}
@@ -195,19 +200,22 @@ jobs:
         timeout-minutes: 7
         shell: pwsh
         run: |
+          if ((git rev-parse HEAD) -cne $env:AMPLIFIER_STANDARD_WORKFLOW_SHA) { throw 'Fixture identity changed.' }
           python -I -B tests/fixtures/windows_standard_account_native.py prepare
           if ($LASTEXITCODE -ne 0) { throw 'Synthetic scheduler preparation failed.' }
       - name: Run one original scheduler test in one owned standard-user session
         timeout-minutes: 10
         shell: pwsh
         run: |
+          if ((git rev-parse HEAD) -cne $env:AMPLIFIER_STANDARD_WORKFLOW_SHA) { throw 'Fixture identity changed.' }
           python -I -B tests/fixtures/windows_standard_account_native.py run
           if ($LASTEXITCODE -ne 0) { throw 'Synthetic scheduler case failed; preserve private recovery evidence.' }
       - name: Independently reconcile owned cleanup or retain unknown custody
-        if: always()
+        if: ${{ always() && steps.selection.outputs.bound == 'true' && steps.fixture.outcome == 'success' }}
         timeout-minutes: 5
         shell: pwsh
         run: |
+          if ((git rev-parse HEAD) -cne $env:AMPLIFIER_STANDARD_WORKFLOW_SHA) { throw 'Fixture identity changed.' }
           python -I -B tests/fixtures/windows_standard_account_native.py cleanup
           if ($LASTEXITCODE -ne 0) { throw 'Cleanup is incomplete; runner disposal is not a cleanup receipt.' }
       - name: Retain only typed outcomes and source hashes

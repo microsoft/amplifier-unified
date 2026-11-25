@@ -3709,10 +3709,20 @@ def test_synthetic_selector_is_closed_default_and_native_job_is_manual(case):
     assert job["if"] == "${{ github.event_name == 'workflow_dispatch' && inputs.case == 'synthetic-task-29411' }}"
     assert job["timeout-minutes"] == "40"
     assert all("continue-on-error" not in x for x in [job, *job["steps"]])
-    assert job["steps"][-2]["if"] == job["steps"][-1]["if"] == "always()"
+    assert job["steps"][-1]["if"] == "always()"
+    assert job["steps"][-2]["if"] == (
+        "${{ always() && steps.selection.outputs.bound == 'true' && steps.fixture.outcome == 'success' }}")
     assert job["steps"][-1]["with"]["path"] == "${{ runner.temp }}/standard-account-evidence/"
     assert job["steps"][1]["with"]["ref"] == "${{ inputs.fixture_sha }}"
     assert job["steps"][1]["with"]["persist-credentials"] == "false"
+    assert job["env"]["AMPLIFIER_STANDARD_WORKFLOW_SHA"] == "${{ github.workflow_sha }}"
+    selection = job["steps"][0]["run"]
+    assert "-cne $env:AMPLIFIER_STANDARD_WORKFLOW_SHA" in selection
+    assert selection.index("-cne") < selection.index("'bound=true'")
+    for step in job["steps"]:
+        if "run" in step and "windows_standard_account_native.py" in step["run"]:
+            assert step["run"].splitlines()[0].startswith(
+                "if ((git rev-parse HEAD) -cne $env:AMPLIFIER_STANDARD_WORKFLOW_SHA)")
     assert "pytest" not in job["steps"][-3]["run"]  # Native subject invoked only by protected helper.
 
 
@@ -3755,7 +3765,8 @@ def test_synthetic_subject_rejects_foreign_or_missing_identity(scheduler_fixture
     f = scheduler_fixture
     with pytest.raises(AssertionError):
         f.guard("create", sid, name=name, xml=f.xml)
-    assert f.calls == [] and f.recorded == {}
+    assert f.calls == [] and list(f.recorded) == ["failure-01.json"]
+    assert f.recorded["failure-01.json"]["effect"] == "not_forwarded"
 
 
 @pytest.mark.parametrize("operation", ["replace", "retire", "stop"])
@@ -3781,6 +3792,10 @@ def test_synthetic_unknown_creation_does_not_adopt_later_query(scheduler_fixture
         f.guard("create", f.sid, name=f.name, xml=f.xml)
     assert f.guard.registered is None and not f.guard.complete()
     assert [op for op, _, _ in f.calls] == ["query", "create", "query"]
+    assert f.recorded["failure-01.json"] == {
+        "operation": "create", "boundary": "transport", "effect": "unknown", "errorType": "TimeoutError"}
+    assert f.recorded["failure-02.json"]["boundary"] == "admission"
+    assert f.recorded["failure-02.json"]["operation"] == "remove"
 
 
 @pytest.mark.parametrize("bad_record", ["intent.json", "registered.json"])
@@ -3885,6 +3900,8 @@ def test_synthetic_uncertain_task_cleanup_retains_account_profile(case, tmp_path
     stage, exchange = tmp_path / "stage", tmp_path / "exchange"
     owner = {"user": "synthetic-user", "mark": "synthetic-mark", "sid": USER["sid"]}
     helper = {"name": "AmplifierStandardAccountCheck-" + "a" * 32, "sid": USER["sid"], "xml": "<exact/>"}
+    prepared = {"identity": {"fixture": "a" * 40, "product": case.SYNTHETIC_BASE, "lockSha256": "b" * 64},
+                "files": {}}
     calls, saved = [], []
     monkeypatch.setattr(case, "synthetic_folders", lambda: (stage, exchange))
     def record(_, name):
@@ -3892,6 +3909,8 @@ def test_synthetic_uncertain_task_cleanup_retains_account_profile(case, tmp_path
             raise FileNotFoundError
         if failure == "missing-receipt":
             raise ValueError("malformed")
+        if name == "synthetic-prepared.json":
+            return prepared
         return owner if name == "owner.json" else helper
     monkeypatch.setattr(case, "synthetic_record", record)
     monkeypatch.setattr(case, "whose", lambda *a: "another account" if failure == "foreign-owner" else "this run's")
@@ -3906,7 +3925,9 @@ def test_synthetic_uncertain_task_cleanup_retains_account_profile(case, tmp_path
         return {"exists": False}
     monkeypatch.setattr(case, "exact_helper", transport)
     monkeypatch.setattr(case, "read_protected", lambda p: (
-        json.dumps({"sid": USER["sid"], "name": "AmplifierUnified-Test-" + "a"*32}).encode(), USER["sid"], True))
+        json.dumps({"sid": USER["sid"], "name": "AmplifierUnified-Test-" + "a"*32,
+                    "node": case.SYNTHETIC_NODE, "source": case.synthetic_private_source(stage, prepared)}).encode(),
+        USER["sid"], True))
     monkeypatch.setattr(case, "task", lambda *a: {"exists": True})
     for name in ("remove_profile", "remove_account", "sign_out", "forget", "end_viewers", "ask_to_end_programs"):
         monkeypatch.setattr(case, name, lambda *a, n=name: pytest.fail("Unexpected effect: " + n))
@@ -3942,3 +3963,130 @@ def test_synthetic_private_intent_flush_readback_precedes_return(case, tmp_path,
         b"changed", case.ADMINISTRATORS, True))
     with pytest.raises(AssertionError):
         case.protected_publish(tmp_path, "second.json", {"name": "synthetic"})
+
+
+def test_synthetic_phase_and_exact_exchange_binding_precedes_execution(case, tmp_path):
+    stage, exchange = tmp_path / "stage", tmp_path / "exchange"
+    account = {"case": case.SYNTHETIC_CASE, "stage": str(stage.resolve()), "exchange": str(exchange.resolve())}
+    assert case.synthetic_binding(account, stage, exchange, case.SYNTHETIC_CASE) is None
+    for args in [(account, stage, tmp_path / "other", case.SYNTHETIC_CASE),
+                 (account, stage, exchange, "first"), ({}, stage, exchange, case.SYNTHETIC_CASE)]:
+        with pytest.raises(AssertionError):
+            case.synthetic_binding(*args)
+    assert case.synthetic_binding({}, stage, exchange, "first") is None  # Existing consumer remains accepted.
+    source = FIXTURE.read_text()
+    standard = source[source.index("def standard(stage, exchange, phase):"):]
+    assert standard.index("synthetic_binding(") < standard.index("return synthetic_standard(")
+    narrow = source[source.index("def synthetic_standard("):source.index("# ---- As the runner's account.")]
+    assert narrow.index("synthetic_binding(") < narrow.index("from amplifier_web")
+    assert 'publish("started.json"' in narrow  # The bound directory's exclusive receipt prevents replay.
+
+
+def test_synthetic_subject_handoff_is_flushed_owned_and_exclusive(case, tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(case.os, "fsync", lambda fd: seen.append("flush"))
+    def read(path):
+        seen.append("readback")
+        return Path(path).read_bytes(), USER["sid"], True
+    monkeypatch.setattr(case, "read_protected", read)
+    value = {"name": "AmplifierUnified-Test-" + "a"*32, "sid": USER["sid"], "source": {"fixture": "a"*40}}
+    case.subject_handoff(tmp_path, value, USER["sid"])
+    assert seen == ["flush", "readback"]
+    assert json.loads((tmp_path / "subject-handoff.json").read_text()) == value
+    with pytest.raises(FileExistsError):
+        case.subject_handoff(tmp_path, value, USER["sid"])
+
+
+def test_synthetic_finish_evidence_error_never_replaces_active_failure(case):
+    original, publication = RuntimeError("original"), OSError("evidence")
+    def broken(*args):
+        raise publication
+    assert case.finish_subject(broken, {}, original) is None
+    with pytest.raises(OSError) as caught:
+        case.finish_subject(broken, {}, None)
+    assert caught.value is publication
+    # Actual finally propagation, not only direct function return.
+    with pytest.raises(RuntimeError) as caught:
+        try:
+            raise original
+        finally:
+            case.finish_subject(broken, {}, sys.exc_info()[1])
+    assert caught.value is original
+
+
+def good_synthetic_summary(case):
+    identity = {"fixture": "a"*40, "product": case.SYNTHETIC_BASE, "lockSha256": "b"*64}
+    summary = {"finished": True, "status": "PASS", "selected": 1, "source": identity,
+               "schedulerComplete": True, "subjectAbsent": True,
+               "phases": [{"phase": name, "outcome": "passed"} for name in ("setup", "call", "teardown")]}
+    return identity, summary
+
+
+@pytest.mark.parametrize("change", [{"extra": "PRIVATE"}, {"selected": True}, {"selected": 2},
+    {"finished": False}, {"source": {"private": "PRIVATE"}}, {"schedulerComplete": False},
+    {"subjectAbsent": False}, {"phases": [{"phase": "call", "outcome": "passed"}]},
+    {"phases": [{"phase": "setup", "outcome": "PRIVATE"}]}])
+def test_synthetic_controller_rejects_untyped_or_false_passing_summary(case, change):
+    identity, summary = good_synthetic_summary(case)
+    with pytest.raises(AssertionError):
+        case.synthetic_summary({**summary, **change}, identity)
+
+
+def test_synthetic_controller_retains_valid_failed_phase_before_rejecting_pass(case):
+    identity, summary = good_synthetic_summary(case)
+    projected = case.synthetic_summary(summary, identity)
+    assert projected["status"] == "PASS" and projected["source"] == identity
+    assert projected["source"] is not summary["source"] and projected["phases"] is not summary["phases"]
+    for failure in ("failed", "skipped"):
+        changed = {**summary, "status": "FAIL", "schedulerComplete": False,
+                   "phases": [{"phase": "setup", "outcome": "passed"},
+                              {"phase": "call", "outcome": failure}, {"phase": "teardown", "outcome": "passed"}]}
+        projected = case.synthetic_summary(changed, identity)
+        assert projected["status"] == "FAIL" and projected["phases"][1]["outcome"] == failure
+        with pytest.raises(AssertionError):
+            case.synthetic_summary({**changed, "status": "PASS"}, identity)
+
+
+def test_synthetic_cleanup_uses_admin_readable_handoff_without_impersonation(case, tmp_path, monkeypatch):
+    stage, exchange = tmp_path / "stage", tmp_path / "exchange"
+    identity, _ = good_synthetic_summary(case)
+    prepared = {"identity": identity, "files": {}}
+    owner = {"user": "own-user", "mark": "own-mark", "sid": USER["sid"]}
+    helper = {"name": "AmplifierStandardAccountCheck-"+"a"*32, "sid": USER["sid"], "xml": "<registered/>"}
+    queried, saved, removed, reads = [], [], [], []
+    def record(_, name):
+        if name == "signin-intent.json":
+            return {"target": case.DESKTOP, "owned": True}
+        if name == "viewer-before.json":
+            raise OSError("independent setting restoration failure")
+        return {"owner.json": owner, "helper-registered.json": helper,
+                "synthetic-prepared.json": prepared}[name]
+    monkeypatch.setattr(case, "synthetic_folders", lambda: (stage, exchange))
+    monkeypatch.setattr(case, "synthetic_record", record)
+    monkeypatch.setattr(case, "saved", lambda name: [])
+    monkeypatch.setattr(case, "forget", lambda: "absent")
+    monkeypatch.setattr(case, "credential_present", lambda: False)
+    monkeypatch.setattr(case, "end_viewers", lambda items: "ended")
+    monkeypatch.setattr(case, "whose", lambda *a: "this run's")
+    monkeypatch.setattr(case, "account_sid", lambda name: None if removed else USER["sid"])
+    monkeypatch.setattr(case, "sid_text", lambda sid: sid)
+    def task(op, bound, previous=None):
+        queried.append((op, bound["name"], previous))
+        return {"exists": False}
+    monkeypatch.setattr(case, "exact_helper", task)
+    def read(path):
+        reads.append(path)
+        return json.dumps({"sid": USER["sid"], "name": "AmplifierUnified-Test-"+"a"*32,
+            "node": case.SYNTHETIC_NODE, "source": case.synthetic_private_source(stage, prepared)}).encode(), USER["sid"], True
+    monkeypatch.setattr(case, "read_protected", read)
+    monkeypatch.setattr(case, "task", lambda op, name: {"exists": False})
+    monkeypatch.setattr(case, "sign_out", lambda *a: True)
+    monkeypatch.setattr(case, "remove_profile", lambda sid: removed.append("profile") or "absent")
+    monkeypatch.setattr(case, "remove_account", lambda *a: removed.append("account") or 0)
+    monkeypatch.setattr(case, "safe_synthetic_result", lambda name, result: saved.append(result))
+    assert case.cleanup_synthetic() is False  # Independent HKCU failure remains a failure.
+    assert reads == [exchange / "subject-handoff.json"]
+    assert removed == ["profile", "account"]
+    assert saved[0]["helperTask"] == saved[0]["subjectTask"] == saved[0]["account"] == "absent"
+    assert saved[0]["viewerSetting"] == "retained"
+    assert [x[0] for x in queried] == ["query", "query"]  # No name-only removal.

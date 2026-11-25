@@ -1051,8 +1051,32 @@ class SchedulerWitness:
         self.create_attempted = self.start_attempted = self.remove_attempted = False
         self.failed = False
         self.calls = 0
+        self.failures = []
+        self.failure_saved = True
 
     def __call__(self, op, sid, **arguments):
+        self.boundary = "admission"
+        try:
+            return self.admitted(op, sid, **arguments)
+        except BaseException as error:
+            self.failed = True
+            # An error from the real transport is UNKNOWN, not a no-effect
+            # refusal. A subsequent test-finally refusal is a separate record.
+            if len(self.failures) < 16:
+                failure = {"operation": op if op in {"query", "create", "start", "remove"} else "other",
+                           "boundary": self.boundary, "errorType": synthetic_failure(error),
+                           "effect": "unknown" if self.boundary == "transport" else
+                                     "returned" if self.boundary == "evidence" else "not_forwarded"}
+                self.failures.append(failure)
+                try:
+                    self.publish(f"failure-{len(self.failures):02}.json", failure)
+                except Exception:
+                    self.failure_saved = False
+            else:
+                self.failure_saved = False
+            raise
+
+    def admitted(self, op, sid, **arguments):
         name = arguments.get("name")
         need(sid == self.sid and isinstance(name, str)
              and re.fullmatch(r"AmplifierUnified-Test-[0-9a-f]{32}", name),
@@ -1081,11 +1105,9 @@ class SchedulerWitness:
             flag = "start_attempted" if op == "start" else "remove_attempted"
             need(not getattr(self, flag), "Repeated mutation refused")
             setattr(self, flag, True)
-        try:
-            answer = self.original(op, sid, **arguments)
-        except BaseException:
-            self.failed = True
-            raise
+        self.boundary = "transport"
+        answer = self.original(op, sid, **arguments)
+        self.boundary = "evidence"
         need(isinstance(answer, dict), "Scheduler did not return a record")
         if op == "create":
             need(answer.get("exists") is True and isinstance(answer.get("xml"), str),
@@ -1119,6 +1141,70 @@ def synthetic_outcome(code, ids, phases, witness_complete):
     return (code == 0 and ids == [SYNTHETIC_NODE] and phases == [
         {"phase": "setup", "outcome": "passed"}, {"phase": "call", "outcome": "passed"},
         {"phase": "teardown", "outcome": "passed"}] and witness_complete is True)
+
+
+def synthetic_binding(account, stage, exchange, phase):
+    """One protected phase and location; never adopt another writable exchange."""
+    if account.get("case") == SYNTHETIC_CASE or phase == SYNTHETIC_CASE:
+        need(account.get("case") == phase == SYNTHETIC_CASE
+             and account.get("stage") == str(Path(stage).resolve())
+             and account.get("exchange") == str(Path(exchange).resolve()),
+             "Synthetic phase or placement differs from its admission")
+
+
+def synthetic_summary(value, identity):
+    """Validate before copying any subject-controlled value to public results."""
+    need(type(value) is dict and set(value) == {
+        "finished", "status", "selected", "phases", "schedulerComplete", "subjectAbsent", "source"},
+         "Invalid synthetic result shape")
+    need(value["finished"] is True and value["status"] in {"PASS", "FAIL"}
+         and type(value["selected"]) is int and 0 <= value["selected"] <= 1
+         and type(value["schedulerComplete"]) is bool and type(value["subjectAbsent"]) is bool
+         and value["source"] == identity, "Synthetic result identity or types differ")
+    phases = value["phases"]
+    need(type(phases) is list and len(phases) <= 3, "Invalid phase list")
+    for number, row in enumerate(phases):
+        need(type(row) is dict and set(row) == {"phase", "outcome"}
+             and row["phase"] == ("setup", "call", "teardown")[number]
+             and row["outcome"] in {"passed", "failed", "skipped"}, "Invalid phase outcome")
+    good = synthetic_outcome(0, [SYNTHETIC_NODE] if value["selected"] == 1 else [],
+                             phases, value["schedulerComplete"]) and value["subjectAbsent"]
+    need(value["status"] != "PASS" or good, "False passing subject summary")
+    return {"status": "PASS" if good and value["status"] == "PASS" else "FAIL",
+            "selected": value["selected"], "phases": copy.deepcopy(phases),
+            "schedulerComplete": value["schedulerComplete"], "source": dict(identity)}
+
+
+def synthetic_private_source(stage, prepared):
+    return {"identity": prepared["identity"], "files": prepared["files"],
+            "sourceRoot": str(stage / "source"), "fixture": str(stage / FILES[0])}
+
+
+def subject_handoff(exchange, intent, sid):
+    """Readable by the controller through exchange's admin/SYSTEM/own-SID ACL.
+
+    This is an immutable copy of the already-flushed private intent, not authority
+    to remove a task. The controller uses it only to query the exact subject.
+    The original remains exclusively owned through windows_files.
+    """
+    raw = json.dumps(intent, sort_keys=True).encode("utf-8")
+    need(len(raw) <= 60000, "Subject handoff is too large")
+    path = exchange / "subject-handoff.json"
+    with open(path, "xb") as stream:
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    content, owner, _ = read_protected(path)
+    need(owner == sid and content == raw, "Subject handoff readback failed")
+
+
+def finish_subject(publish, value, active_error):
+    """Evidence error is fatal but never replaces an error already propagating."""
+    try:
+        publish("finished.json", value)
+    except Exception:
+        if active_error is None:
+            raise
 
 
 def synthetic_record(stage, name):
@@ -1192,7 +1278,9 @@ def prepare_synthetic():
     try:
         require_disposable_runner()
         selected = os.environ.get("AMPLIFIER_STANDARD_FIXTURE_SHA", "")
-        need(re.fullmatch("[0-9a-f]{40}", selected), "An immutable fixture SHA is required")
+        need(re.fullmatch("[0-9a-f]{40}", selected)
+             and selected == os.environ.get("AMPLIFIER_STANDARD_WORKFLOW_SHA"),
+             "Fixture must match the executing workflow commit")
         git = lambda *args: subprocess.check_output(["git", *args], cwd=ROOT).strip()
         need(git("rev-parse", "HEAD").decode() == selected and not git("status", "--porcelain"),
              "Fixture checkout identity or cleanliness changed")
@@ -1342,7 +1430,8 @@ def run_synthetic():
         viewer, session = sign_in(name, password)
         del password
         need(forget() == "absent" and not credential_present(), "Session credential removal not verified")
-        account = {"case": SYNTHETIC_CASE, "sid": sid, "runnerSession": runner["desktopSession"],
+        account = {"case": SYNTHETIC_CASE, "sid": sid, "stage": str(stage), "exchange": str(exchange),
+                   "runnerSession": runner["desktopSession"],
                    "testSession": session, "hosted": {fact: os.environ.get(fact) for fact in HOSTED_FACTS}}
         protected_publish(stage, "account.json", account)
         helper = {"name": HELPER + "-" + uuid.uuid4().hex, "sid": sid, "mark": mark,
@@ -1363,14 +1452,14 @@ def run_synthetic():
                  "Helper identity changed")
             summary = read_json(exchange / "synthetic-result.json")
             if summary and summary.get("finished") and state.get("instances") == 0:
-                need(summary.get("status") == "PASS" and state.get("lastResult") == 0,
+                result.update(synthetic_summary(summary, prepared["identity"]))
+                need(result["status"] == "PASS" and state.get("lastResult") == 0,
                      "Original synthetic scheduler test failed")
-                result.update(status="PASS", selected=summary["selected"], phases=summary["phases"],
-                              source=summary["source"], schedulerComplete=summary["schedulerComplete"])
                 break
             need(time.monotonic() < deadline, "Helper deadline expired; retain exact task")
             time.sleep(1)
     except BaseException as error:
+        result["status"] = "FAIL"
         result["errorType"] = synthetic_failure(error)
     safe_synthetic_result("result.json", result)
     return result["status"] == "PASS"
@@ -1432,9 +1521,12 @@ def cleanup_synthetic():
         result["helperTask"] = "absent"
         # Never impersonate the subject SID or adopt a changed/missing subject
         # receipt. A failure retains the account/profile and its recovery data.
-        raw, sid, _ = read_protected(exchange / "subject-private/intent.json")
+        raw, sid, _ = read_protected(exchange / "subject-handoff.json")
         intent = json.loads(raw)
+        prepared = synthetic_record(stage, "synthetic-prepared.json")
         need(sid == owner["sid"] and intent["sid"] == sid
+             and intent["source"] == synthetic_private_source(stage, prepared)
+             and intent["node"] == SYNTHETIC_NODE
              and re.fullmatch(r"AmplifierUnified-Test-[0-9a-f]{32}", intent["name"]),
              "Subject private identity not proven")
         # Read-only admin query through existing transport; no name-only removal.
@@ -1465,6 +1557,7 @@ def cleanup_synthetic():
 def synthetic_standard(stage, exchange, account, token):
     """One exact unchanged pytest test, in this actual standard-user process."""
     from contextlib import redirect_stdout, redirect_stderr
+    synthetic_binding(account, stage, exchange, SYNTHETIC_CASE)
     need(account.get("case") == SYNTHETIC_CASE and standard_token(token, account)
          and token["desktopSession"] == account["testSession"], "Standard desktop token required")
     prepared = json.loads((stage / "synthetic-prepared.json").read_text(encoding="utf-8"))
@@ -1485,11 +1578,13 @@ def synthetic_standard(stage, exchange, account, token):
             raw = json.dumps(value, sort_keys=True).encode()
             directory.publish_private(name, raw)
             need(directory.read_private(name, limit=len(raw)) == raw, "Private subject receipt readback failed")
+            if name == "intent.json":
+                subject_handoff(exchange, value, token["sid"])
         publish("started.json", {"node": SYNTHETIC_NODE, "sid": token["sid"],
                                 "session": token["desktopSession"], "source": prepared["identity"]})
         ids, phases = [], []
         original = service._scheduler
-        witness = SchedulerWitness(original, token["sid"], publish, prepared["identity"])
+        witness = SchedulerWitness(original, token["sid"], publish, synthetic_private_source(stage, prepared))
         class Observe:
             def pytest_collection_finish(self, session):
                 ids.extend(item.nodeid for item in session.items)
@@ -1513,13 +1608,15 @@ def synthetic_standard(stage, exchange, account, token):
                                         "-q", "--tb=no", "--basetemp", str(exchange / "pytest-temp"),
                                         str(stage / "source") + "/" + SYNTHETIC_NODE], plugins=[Observe()])
         finally:
+            active_error = sys.exc_info()[1]
             service._scheduler = original
             if prior is None:
                 os.environ.pop("AMPLIFIER_TEST_WINDOWS_TASKS", None)
             else:
                 os.environ["AMPLIFIER_TEST_WINDOWS_TASKS"] = prior
-            publish("finished.json", {"code": int(code), "phases": phases,
-                                     "schedulerComplete": witness.complete(), "subjectAbsent": witness.absent})
+            finish_subject(publish, {"code": int(code), "phases": phases,
+                "schedulerComplete": witness.complete(), "subjectAbsent": witness.absent,
+                "failures": witness.failures, "failureEvidenceSaved": witness.failure_saved}, active_error)
         good = synthetic_outcome(int(code), ids, phases, witness.complete())
         # Safe summary only; never publish the private authority record/XML/SID.
         summary = {"finished": True, "status": "PASS" if good else "FAIL", "selected": len(ids),
@@ -3467,6 +3564,7 @@ def standard(stage, exchange, phase):
     account = json.loads(content.decode("utf-8"))
     token = token_facts()
     admit_standard(account, token, owner, changeable or read_protected(record.parent, folder=True)[2])
+    synthetic_binding(account, stage, exchange, phase)
     if phase == SYNTHETIC_CASE:
         return synthetic_standard(stage, exchange, account, token)
     # One run for each phase: a second start of the helper task changes nothing.
