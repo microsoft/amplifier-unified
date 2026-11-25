@@ -262,13 +262,20 @@ async def test_two_https_hosts_pair_deduplicate_fence_and_revoke(tmp_path, monke
             sock.close()
 
 
-def test_opt_in_and_offer_expiry(tmp_path, monkeypatch):
+async def test_opt_in_and_offer_expiry(tmp_path, monkeypatch):
     config = {"public_origins": ["https://127.0.0.1:39278"], "tls": LOCAL_TLS}
     opt_out = LinkedInstances(tmp_path, config)
-    with pytest.raises(AppError) as disabled:
-        opt_out.list()
-    assert disabled.value.code == "link_unsupported"
+    for args in ({"path": "/linkedInstances"}, {"target": {"instanceId": "a" * 32}}):
+        with pytest.raises(AppError) as denied:
+            await agent_route(opt_out, "get_state", args)
+        assert denied.value.code == "link_unsupported"
+    with pytest.raises(AppError) as offer_denied:
+        opt_out.offer({"commandId": "disabled-offer", "origin": config["public_origins"][0]})
+    assert offer_denied.value.code == "link_unsupported"
     assert not opt_out.store.path.exists()
+    # Owners can inspect retained grants without activating the network.
+    local = opt_out.list()
+    assert local["origins"] == local["links"] == []
     now = [100]
     links = LinkedInstances(tmp_path, {**config, "linked_instances": True}, clock=lambda: now[0])
     monkeypatch.setattr("amplifier_web.linked_instances._leaf_fingerprint", lambda *_: "a" * 64)
