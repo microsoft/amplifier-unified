@@ -242,6 +242,133 @@ async def test_failed_save_keeps_old_payload_and_unclean_restart(app_factory, mo
     assert restored.clients.records['0']['drafts'][row['id']] == 'private-0'
 
 
+@pytest.mark.parametrize('persist_marker', [False, True])
+async def test_full_save_clears_recovery_marker_in_same_commit_and_restart(app_factory, monkeypatch, persist_marker):
+    app, rows = large_chat(app_factory)
+    row, unrelated = rows
+    prior = committed_restart_evidence(app)
+    path = view_path(app.data_dir, row)
+    old_text = path.read_text()
+    row['messages'][0]['text'] = 'repair this presentation'
+    with app.clients.bind('0'):
+        app.clients.draft(row['id'], 'recovered private draft')
+    failure = sqlite3.OperationalError('staged presentation rejected')
+    real_save, atomic = state_records.save, SessionStore._atomic
+
+    def fail(*args, **kwargs):
+        real_save(*args, **kwargs)
+        raise failure
+
+    def reject_restore(candidate, text):
+        if candidate == path and text == old_text:
+            raise OSError('presentation restoration refused')
+        return atomic(candidate, text)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(state_records, 'save', fail)
+        patch.setattr(SessionStore, '_atomic', staticmethod(reject_restore))
+        with pytest.raises(sqlite3.OperationalError) as caught:
+            app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
+    assert caught.value is failure
+    assert app._state['_viewRecoveryPending'] is True
+    assert committed_restart_evidence(app) == prior
+    assert path.read_text() != old_text and str(path) not in app._view_cache
+    assert resource_files.marked_references(app.db, app._state) is None
+
+    # Neither a record-only nor a global-writing scoped save reconciles the
+    # failed owner's presentation. The latter also models a persisted marker
+    # left by an earlier host; no test-only SQL clears or creates that marker.
+    unrelated['streaming'] = 'unrelated scoped save'
+    app._save(session_ids={unrelated['id']}, record_only=not persist_marker)
+    scoped = committed_restart_evidence(app)
+    assert app._state['_viewRecoveryPending'] is True
+    assert scoped['state'].get('_viewRecoveryPending', False) is persist_marker
+    assert scoped['bodies'][row['id']] == prior['bodies'][row['id']]
+    assert resource_files.marked_references(app.db, app._state) is None
+    expected = copy.deepcopy(row['messages'])
+
+    app._publish()
+
+    assert '_viewRecoveryPending' not in app._state
+    durable = committed_restart_evidence(app)
+    assert '_viewRecoveryPending' not in durable['state']
+    assert durable['bodies'][row['id']]['messages'] == expected
+    assert json.loads(path.read_text()) == durable['payloads'][row['id']]
+    assert app.clients.saved['0'] == durable['clients']['0']
+    assert json.loads(durable['clients']['0'])['drafts'][row['id']] == 'recovered private draft'
+    assert app.clients.saved['1'] == durable['clients']['1']
+    await close_without_checkpoint(app)
+    restored = app_factory(home=app.data_dir)
+    assert '_viewRecoveryPending' not in restored._state
+    assert '_viewRecoveryPending' not in state_records.load(restored.db)
+    assert restored._session(row['id'])['messages'] == expected
+    assert restored.clients.records['0']['drafts'][row['id']] == 'recovered private draft'
+    assert restored.clients.records['1']['drafts'][unrelated['id']] == 'private-1'
+    assert not app.runtime.started and not restored.runtime.started
+    assert not app.runtime.sent and not restored.runtime.sent
+
+
+@pytest.mark.parametrize('restore_view_fails', [False, True])
+async def test_failed_full_commit_keeps_recovery_marker_and_unknown_roots(app_factory, monkeypatch, restore_view_fails):
+    app, rows = large_chat(app_factory)
+    row = rows[0]
+    # Use an ordinary scoped save to retain uncertainty, including its durable
+    # global value. Only a successful full reconciliation may retire it.
+    app._state['_viewRecoveryPending'] = True
+    app._save(session_ids=set())
+    prior = committed_restart_evidence(app)
+    old_refs = copy.deepcopy(app._session_projection_refs)
+    old_clients = dict(app.clients.saved)
+    path = view_path(app.data_dir, row)
+    old_text = path.read_text()
+    row['messages'][0]['text'] = 'not committed'
+    with app.clients.bind('0'):
+        app.clients.draft(row['id'], 'not committed private draft')
+    database, atomic = app.db, SessionStore._atomic
+    failure = sqlite3.OperationalError('full commit refused')
+    commits = []
+
+    class FailCommit:
+        def __getattr__(self, name):
+            return getattr(database, name)
+
+        def commit(self):
+            commits.append(True)
+            # Staged absence is not a live acknowledgement or durable deletion.
+            assert '_viewRecoveryPending' not in state_records.load(database)
+            assert app._state['_viewRecoveryPending'] is True
+            assert committed_restart_evidence(app) == prior
+            raise failure
+
+    def reject_restore(candidate, text):
+        if restore_view_fails and candidate == path and text == old_text:
+            raise OSError('presentation restoration refused')
+        return atomic(candidate, text)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(app, 'db', FailCommit())
+        patch.setattr(SessionStore, '_atomic', staticmethod(reject_restore))
+        with pytest.raises(sqlite3.OperationalError) as caught:
+            app._publish()
+    assert caught.value is failure and commits == [True]
+    assert not app.db.in_transaction
+    assert app._state['_viewRecoveryPending'] is True
+    assert committed_restart_evidence(app) == prior
+    assert app._session_projection_refs == old_refs
+    assert app.clients.saved == old_clients
+    assert app._progress_dirty and app.clients.dirty
+    assert resource_files.marked_references(app.db, app._state) is None
+    assert (path.read_text() != old_text) is restore_view_fails
+    if restore_view_fails:
+        assert str(path) not in app._view_cache
+    await close_without_checkpoint(app)
+    restored = app_factory(home=app.data_dir)
+    assert restored._session(row['id'])['messages'] == prior['bodies'][row['id']]['messages']
+    assert restored.clients.records['0']['drafts'][row['id']] == 'private-0'
+    assert not app.runtime.started and not restored.runtime.started
+    assert not app.runtime.sent and not restored.runtime.sent
+
+
 def test_gc_keeps_message_blob_until_last_committed_owner_changes(app_factory):
     app, rows = large_chat(app_factory)
     first, second = rows
