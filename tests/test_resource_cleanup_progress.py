@@ -489,9 +489,14 @@ async def test_chat_progress_beyond_three_catchups_does_not_starve_collection(tm
 
 
 @pytest.mark.parametrize('store', ['live', 'client_views', 'smart_tool_operations',
-                                 'conversation_shares', 'output_records'])
+                                 'conversation_shares', 'output_records', 'state_records'])
 async def test_between_batches_new_root_retains_old_candidate_and_complete_closure(tmp_path, monkeypatch, store):
     app, keep, _ = setup(tmp_path)
+    if store == 'state_records':
+        from amplifier_web import state_records
+        app.db.execute('CREATE TABLE state (id INTEGER PRIMARY KEY,value TEXT)')
+        state_records.initialize(app.db)
+        state_records.checkpoint(app.db, {'revision': 0, 'sessions': [], 'runtimeControl': {}})
     app._state['keep'] = keep
     child = files.put(app.db, {'old': 'candidate child'})
     parent = files.put(app.db, {'child': child})
@@ -517,6 +522,10 @@ async def test_between_batches_new_root_retains_old_candidate_and_complete_closu
             assert not app.db.in_transaction
             if store == 'live':
                 app._state['adopted'] = parent
+            elif store == 'state_records':
+                state_records.save(app.db, {'revision': 1, 'adopted': parent}, {}, set(),
+                                   global_keys={'adopted'})
+                app.db.commit()
             else:
                 app.db.execute('CREATE TABLE IF NOT EXISTS ' + store + ' (id TEXT PRIMARY KEY,value TEXT)')
                 app.db.execute('INSERT INTO ' + store + ' VALUES(?,?)', ('adopt', json.dumps(parent)))
@@ -538,6 +547,53 @@ async def test_between_batches_new_root_retains_old_candidate_and_complete_closu
         assert storage_migration.resource(app.db, child['$resource']) == {'old': 'candidate child'}
         assert app.db.execute('SELECT COUNT(*) FROM state_resources').fetchone()[0] == 4
         assert app._resource_edges.hits == 0
+        assert not app.lock.locked() and not app.db.in_transaction
+    finally:
+        await close(app)
+
+
+@pytest.mark.parametrize('store', ['live', 'client'])
+async def test_recovery_marker_between_batches_stops_further_deletion(tmp_path, monkeypatch, store):
+    from amplifier_web.performance_diagnostics import PerformanceDiagnostics
+
+    app, _, _ = setup(tmp_path)
+    for index in range(8):
+        files.put(app.db, {'obsolete': index})
+    app.db.commit()
+    ordered = [row[0] for row in app.db.execute('SELECT id FROM state_resources ORDER BY id')]
+    # The first page only inspects a retained resource. The recovery signal must
+    # prevent deletion of every remaining candidate, including its backing file.
+    app._state['keep'] = {'$resource': ordered[0]}
+    app.clients = SimpleNamespace(records={'view': {}})
+    app.performance_diagnostics = PerformanceDiagnostics()
+    monkeypatch.setattr(storage_migration, 'BACKGROUND_PRUNE_LIMIT', 1)
+    original = files.remove_files_async
+    batches, signals = [], []
+
+    async def signal_recovery():
+        async with app.lock:
+            target = app._state if store == 'live' else app.clients.records['view']
+            target['_viewRecoveryPending'] = True
+            signals.append(True)
+
+    async def remove(db, identities):
+        batches.append(list(identities))
+        result = await original(db, identities)
+        if len(batches) == 1:
+            signals.append(asyncio.create_task(signal_recovery()))
+        return result
+
+    monkeypatch.setattr(files, 'remove_files_async', remove)
+    try:
+        await storage_migration._maintenance_async(app)
+        await signals[0]
+        assert signals[-1] is True and batches == [[]]
+        assert [row[0] for row in app.db.execute('SELECT id FROM state_resources ORDER BY id')] == ordered
+        assert all((files.root(app.db) / (identity + '.json')).is_file() for identity in ordered)
+        facts = app.performance_diagnostics.storage_collection_snapshot()
+        assert facts['outcome'] == 'deferred'
+        assert facts['reason'] == 'presentation-recovery-pending'
+        assert not facts['removalCountsComplete']
         assert not app.lock.locked() and not app.db.in_transaction
     finally:
         await close(app)
