@@ -211,7 +211,7 @@ class ClientBuildTests(unittest.TestCase):
         rename = Path.rename
 
         def fail(path, target):
-            if path.name == 'ready':
+            if path.name == 'new':
                 raise OSError('cannot install')
             return rename(path, target)
 
@@ -227,7 +227,7 @@ class ClientBuildTests(unittest.TestCase):
         rename = Path.rename
 
         def fail(path, target):
-            if path.name in {'ready', 'source'}:
+            if path.name in {'new', 'old'}:
                 raise OSError('rename unavailable')
             return rename(path, target)
 
@@ -237,6 +237,131 @@ class ClientBuildTests(unittest.TestCase):
         previous = Path(str(error.exception).split(' from ', 1)[1])
         self.assertEqual((previous / 'index.html').read_text(), 'previous')
 
+
+    def kill_during_install(self, package, seam):
+        # Actual process death skips finally blocks and releases the output lock.
+        script = """
+import os, signal, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import web_client_build as build
+root, package, seam = Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4]
+def die():
+    if os.name == 'nt':
+        os._exit(81)
+    os.kill(os.getpid(), signal.SIGKILL)
+rename = Path.rename
+def interrupt(path, destination):
+    if seam == 'rollback-cleanup' and path.name == 'new':
+        raise OSError('publication failed')
+    result = rename(path, destination)
+    if (seam == 'first' and destination.name == 'old'
+            or seam == 'second' and path.name == 'new'):
+        die()
+    return result
+Path.rename = interrupt
+remove = build.shutil.rmtree
+def partial(path, *args, **kwargs):
+    if ((seam == 'commit-cleanup' and path.name == 'old')
+            or (seam == 'rollback-cleanup' and path.name == 'new')):
+        (path / 'index.html').unlink()
+        die()
+    return remove(path, *args, **kwargs)
+build.shutil.rmtree = partial
+build.install(root, package)
+"""
+        import os
+        import signal
+        import sys
+        process = subprocess.run([sys.executable, '-I', '-c', script,
+                                  str(ROOT / 'scripts'), str(self.root), str(package), seam],
+                                 capture_output=True, text=True, timeout=30)
+        self.assertEqual(process.returncode, 81 if os.name == 'nt' else -signal.SIGKILL,
+                         process.stderr)
+
+    def test_next_build_recovers_interrupted_renames_and_cleanup_before_compiling(self):
+        package, _ = self.package()
+        static = self.root / 'amplifier_web/static'
+        work = self.root / '.web-client-output'
+        for seam in ('first', 'second', 'commit-cleanup', 'rollback-cleanup'):
+            with self.subTest(seam=seam):
+                write(static / 'index.html', 'previous client')
+                write(static / 'untouched.txt', 'previous file')
+                self.kill_during_install(package, seam)
+                self.assertEqual(static.exists(), seam != 'first')
+                self.assertTrue(work.exists())
+                with patch.object(build, 'prepare', side_effect=RuntimeError('new build failed')):
+                    with self.assertRaisesRegex(RuntimeError, 'new build failed'):
+                        build.build(self.root)
+                expected = 'previous client' if seam == 'rollback-cleanup' else 'new client'
+                self.assertEqual((static / 'index.html').read_text(), expected)
+                self.assertEqual((static / 'untouched.txt').exists(), seam == 'rollback-cleanup')
+                self.assertFalse(work.exists())
+
+    def test_recovery_preserves_changed_output_and_unowned_directories(self):
+        package, _ = self.package()
+        static = self.root / 'amplifier_web/static'
+        work = self.root / '.web-client-output'
+        # Historical staging names have no transaction binding.
+        unowned = static.parent / '.web-client-previous-example/source/notes'
+        write(unowned, 'owner work')
+        write(static / 'index.html', 'old')
+        self.kill_during_install(package, 'first')
+        saved = work / 'old/index.html'
+        write(saved, 'changed while stopped')
+        with self.assertRaisesRegex(ValueError, 'Saved original'):
+            build.install(self.root, package)
+        self.assertEqual(saved.read_text(), 'changed while stopped')
+        self.assertEqual(unowned.read_text(), 'owner work')
+        write(saved, 'old')
+        build.install(self.root, package)
+        self.assertEqual(unowned.read_text(), 'owner work')
+        write(work / 'notes.txt', 'not a transaction')
+        with self.assertRaisesRegex(ValueError, 'Unrecognized'):
+            build.install(self.root, package)
+        self.assertEqual((work / 'notes.txt').read_text(), 'not a transaction')
+
+    def test_changed_published_output_is_preserved_after_second_rename(self):
+        package, _ = self.package()
+        static = self.root / 'amplifier_web/static'
+        write(static / 'index.html', 'previous')
+        self.kill_during_install(package, 'second')
+        write(static / 'index.html', 'local change')
+        with self.assertRaisesRegex(ValueError, 'Replacement contains local changes'):
+            build.install(self.root, package)
+        self.assertEqual((self.root / '.web-client-output/old/index.html').read_text(), 'previous')
+        self.assertEqual((static / 'index.html').read_text(), 'local change')
+
+    def test_first_install_recovers_after_second_rename_and_retains_legacy_backup(self):
+        package, _ = self.package()
+        static = self.root / 'amplifier_web/static'
+        legacy = static.parent / '.web-client-previous-old/source/index.html'
+        write(legacy, 'older backup from unmarked release')
+        self.kill_during_install(package, 'second')
+        build.install(self.root, package)
+        self.assertEqual((static / 'index.html').read_text(), 'new client')
+        self.assertEqual(legacy.read_text(), 'older backup from unmarked release')
+        self.assertFalse((self.root / '.web-client-output').exists())
+
+    def test_concurrent_writer_and_pending_artifact_keep_their_output(self):
+        package, _ = self.package()
+        work = self.root / '.web-client-output'
+        subprocess.run(['git', 'init', '-q', str(self.root)], check=True)
+        with build.static_build(self.root) as stage:
+            with self.assertRaises(OSError):
+                build.install(self.root, package)
+            with self.assertRaises(OSError):
+                build.output.apply(self.root, package)
+            shutil.copytree(package / 'static', stage / 'new')
+            (self.root / 'amplifier_web').mkdir()
+        (self.root / '.git/frontend-build-apply').mkdir()
+        with self.assertRaisesRegex(ValueError, 'Pending generated artifact'):
+            build.install(self.root, package)
+        self.assertFalse(work.exists())
+        (self.root / '.git/frontend-build-apply').rmdir()
+        work.mkdir()
+        with self.assertRaisesRegex(ValueError, 'Interrupted local web build'):
+            build.output.apply(self.root, package)
 
 if __name__ == '__main__':
     unittest.main()
