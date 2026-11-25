@@ -389,6 +389,39 @@ async def test_voice_pins_session_and_end_does_not_stop_work(service):
     assert not service.runtime.stopped
 
 
+class DeliveredFirstRuntime(Runtime):
+    """As the real runtime does: send returns when the worker has the input; the turn ends later."""
+    async def send(self, session, text, input_id, emit):
+        self.sent.append((session["id"], text, input_id))
+        self.emit = emit
+        return {"accepted": True}
+
+
+async def test_voice_delegation_delivered_before_its_turn_ends_is_not_a_runtime_error(tmp_path):
+    # A voice delegation has no user bubble with a delivery: that lives in the command receipt.
+    # Reading it from a missing bubble raised KeyError('delivery'), which became a
+    # runtime.error; the waiting call then told the caller that the request had failed.
+    runtime = DeliveredFirstRuntime()
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    await app.dispatch("session.create", {})
+    sid = app.get_state()["selectedSessionId"]
+    await app.voice_delegate("Voice request", "voice:call:item", session_id=sid)
+    await asyncio.gather(*app.tasks)
+    session = app._session(sid)
+    assert session["status"] == "working" and not session.get("error")
+    assert not [row for row in session.get("runtimeEvents", []) if row["type"] == "runtime.error"]
+    receipt = json.loads(app.db.execute("SELECT receipt FROM commands WHERE id=?", ("voice:call:item",)).fetchone()[0])
+    assert receipt["delivery"] == "accepted"
+    waiting = asyncio.create_task(app.wait_for_response(sid, "voice:call:item", timeout=2))
+    await asyncio.sleep(0)
+    assert not waiting.done()
+    await runtime.emit("runtime.generation", {"sessionId": sid, "event": "generation.finished",
+        "generation_id": "voice-generation", "input_ids": ["voice:call:item"], "text": "Done",
+        "active_job_ids": [], "disposition": "manager_turn_finished"})
+    assert (await waiting)["text"] == "Done"
+    await app.close()
+
+
 async def test_skin_roundtrip_and_external_assets_rejected(service):
     from copy import deepcopy
     import base64

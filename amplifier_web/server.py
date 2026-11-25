@@ -128,6 +128,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     if hasattr(runtime, 'retention'):
         service.state['runtime']['retention'] = dict(runtime.retention.settings)
     app["service"] = service
+    from .linked_instances import install as setup_linked_instances
+    setup_linked_instances(app, service)
     from .acp_server import setup_routes as setup_acp
     setup_acp(app)
     from .room_context import setup_routes as setup_room_context
@@ -529,13 +531,12 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         return await serve(request, service, streams)
 
     async def attachment(request):
-        from .attachments import file_path
+        from .attachment_download import download
         try:
-            path, row = file_path(service.data_dir, request.match_info["identity"])
-        except (ValueError, FileNotFoundError):
-            raise AppError("Attachment not found", 404)
+            response, row = await asyncio.to_thread(download, service.data_dir, request.match_info["identity"])
+        except (ValueError, OSError):
+            raise AppError("Attachment not found", 404) from None
         from urllib.parse import quote
-        response = web.FileResponse(path)
         response.headers["Content-Type"] = row["mime"]
         response.headers["Content-Disposition"] = ("inline" if row["mime"].startswith("image/") else "attachment") + "; filename*=UTF-8''" + quote(row["name"])
         return response
@@ -717,6 +718,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_post(browser_entry.REDEEM_PATH, browser_entry.redeem)
     app.router.add_post(browser_entry.CODE_PATH, browser_entry.code_issue)
     app.router.add_post(browser_entry.CODE_REDEEM_PATH, browser_entry.code_redeem)
+    app.router.add_post(browser_entry.KEY_REDEEM_PATH, browser_entry.key_redeem)
     app.router.add_get("/setup", setup)
     app.router.add_get("/api/ca", certificate)
     app.router.add_get("/ca.crt", certificate)

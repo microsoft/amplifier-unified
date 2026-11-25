@@ -11,7 +11,7 @@ import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const installed=process.env.AMPLIFIER_TEST_INSTALLED_STATIC==='1';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/peer_preview_ui_server.py',import.meta.url)),fileURLToPath(new URL('../../',import.meta.url))],{stdio:['ignore','pipe','inherit'],env:{...process.env,PEER_PREVIEW_DUPLICATE_TITLES:'1'}});
-let browser,page;const results=[];
+let browser,otherBrowser,page;const results=[];
 try{
  const target=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture readiness timeout')),30000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n')){try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}}catch{}}})});
  browser=await chromium.launch({headless:true});
@@ -54,7 +54,10 @@ try{
   await expect(related).toHaveCount(0);
  }
  await inspectRequest(page,'Received from Navigation design · readiness-review',facts.sourceA);
- const otherContext=await browser.newContext({viewport:{width:1280,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-peer-preview'}});
+ // Chromium single-process mode in the DTU cannot isolate a second browser
+ // context. A second browser process exercises the same two-client contract.
+ if(process.env.CHROMIUM_SINGLE_PROCESS==='1')otherBrowser=await chromium.launch({headless:true});
+ const otherContext=await (otherBrowser||browser).newContext({viewport:{width:1280,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-peer-preview'}});
  const otherPage=await otherContext.newPage();observe(otherPage);
  await otherPage.goto(target);await showFixtureConversation(otherPage,{navPinned:false});
  await otherPage.evaluate(id=>window.amplifier.dispatch('session.select',{id}),facts.sourceA);
@@ -335,4 +338,4 @@ try{
   writeFileSync(join(process.env.AMPLIFIER_PROOF_DIR,'failure.json'),JSON.stringify({error:String(error),body:await page.locator('body').innerText().catch(()=>''),url:page.url()},null,2));
  }
  throw error;
-}finally{await browser?.close();fixture.kill();}
+}finally{await otherBrowser?.close();await browser?.close();fixture.kill();}

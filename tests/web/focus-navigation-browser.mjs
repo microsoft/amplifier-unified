@@ -38,6 +38,7 @@ try{
  const filters=page.getByRole('group',{name:'Filter work'});
  const home=async()=>{await page.getByRole('navigation',{name:'Site navigation'}).getByRole('button',{name:'Home',exact:true}).click();await ready()};
  await page.goto(`http://127.0.0.1:${port}`);await ready();
+ const branding=(await state()).instanceBranding;assert.ok(branding?.name);
  await page.getByRole('group',{name:'Work view'}).getByRole('button',{name:'Focus',exact:true}).click();
  await expect(card).toHaveCount(1);await expect(previous).toBeDisabled();
  const initial=await info(),selected=(await state()).selectedSessionId,first=await identity();
@@ -83,7 +84,7 @@ try{
  await expect(page.locator('.a-nav-chat.is-selected')).toHaveCount(0);
  await expect(page.locator('.a-nav-chat-select[aria-current=page]')).toHaveCount(0);
  await expect(page.locator('header')).not.toContainText('Home');
- await expect(page).toHaveTitle('Amplifier');
+ await expect(page).toHaveTitle(branding.name);
  assert.equal((await state()).selectedSessionId,retained);
  assert.equal((await state()).view.draft,'Keep this draft while browsing Focus');
  await card.locator('.a-work-card-open').click();await expect(composer).toContainText('Keep this draft while browsing Focus');
@@ -94,14 +95,24 @@ try{
  const failed=initial.state.sessions.find(row=>row.nativeIdentity==='alpha-197');
  if(await identity()!==failed.id)await next.click();
  await expect(card).toHaveAttribute('data-session-id',failed.id);
+ const recoveryStart=actions.length,trouble=page.locator('[data-part="conversation-trouble"]');
  await card.locator('.a-work-card-open').click();
- await expect(page.getByRole('button',{name:'Continue conversation',exact:true})).toBeVisible();
- await home();
+ await expect.poll(async()=>(await state()).selectedSessionId).toBe(failed.id);
+ await expect(trouble).toBeVisible();
+ await expect(trouble).toContainText('Something needs attention.');
+ await expect(trouble).toContainText('Your saved messages are kept. Review the details below.');
  await expect(page.getByRole('button',{name:'Continue conversation',exact:true})).toHaveCount(0);
- await card.locator('.a-work-card-open').click();
- await expect(page.getByRole('button',{name:'Continue conversation',exact:true})).toBeVisible();
  await home();
- report.checks.push('A retained chat error stays on its chat and returns there; Home does not leak its recovery actions');
+ await expect(trouble).toHaveCount(0);
+ await card.locator('.a-work-card-open').click();
+ await expect.poll(async()=>(await state()).selectedSessionId).toBe(failed.id);
+ await expect(trouble).toBeVisible();
+ await expect(trouble).toContainText('Something needs attention.');
+ await expect(page.getByRole('button',{name:'Continue conversation',exact:true})).toHaveCount(0);
+ await home();
+ await expect(trouble).toHaveCount(0);
+ assert.deepEqual(actions.slice(recoveryStart).filter(row=>['conversation.send','conversation.retry','session.recover'].includes(row.action)),[]);
+ report.checks.push('A retained chat error stays on its chat and returns there; Home does not leak its error surface or initiate recovery');
 
  const listed=await page.evaluate(()=>window.amplifier.dispatch('workspace.list',{query:'playground'}));
  const project=listed.result.items.find(row=>row.path===initial.paths.two);

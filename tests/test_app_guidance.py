@@ -12,6 +12,8 @@ async def test_guidance_requires_trusted_role_and_installs_once(role):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
     from amplifier_core import HookRegistry
+    from amplifier_web.memory_delivery import ORIENTATION as memory_hint, USE_GUIDE
+    from amplifier_web.surface_delivery import ORIENTATION as surface_hint, READ_GUIDE
     from amplifier_web.app_guidance import COMMON_GUIDANCE, execution_guidance, install_app_access
     from amplifier_web.coordination_guidance import READ_GUIDANCE, PLANNING_GUIDANCE, NATIVE_CHILD_GUIDANCE
 
@@ -37,6 +39,8 @@ async def test_guidance_requires_trusted_role_and_installs_once(role):
     assert (PLANNING_GUIDANCE in injection) is (role == 'root')
     assert (NATIVE_CHILD_GUIDANCE in injection) is (role == 'native_child')
     assert execution_guidance(role) in injection
+    assert surface_hint in injection and memory_hint in injection
+    assert READ_GUIDE not in injection and USE_GUIDE not in injection
     bridge.assert_not_awaited()
 
 
@@ -131,6 +135,19 @@ def test_manager_guidance_keeps_open_objectives_alive_across_process_boundaries(
     assert 'session.handoff.start for independent work in a destination folder, without automatic result return' in CANVAS_GUIDANCE
     assert 'Neither requires an open browser; review and navigation do' in CANVAS_GUIDANCE
     assert 'coordination.send mode:auto' in CANVAS_GUIDANCE
+
+
+def test_ordinary_peer_speech_does_not_require_result_ceremony():
+    from amplifier_web.app_guidance import CANVAS_GUIDANCE
+    from amplifier_web.builtin_behaviors import resource_root
+
+    assert 'Ordinary peer speech needs no prior result acknowledgement or qualified artifact report' in CANVAS_GUIDANCE
+    for relative in ('skills/coordinate-work/SKILL.md',
+                     'skills/coordinate-work/references/protocol.md'):
+        text = ' '.join((resource_root() / relative).read_text().split())
+        assert 'Ordinary peer speech needs no prior result acknowledgement or qualified artifact report' in text
+        assert 'coordination.send' in text and 'replyToRequestId' in text
+        assert 'path@sha256:' in text and 'artifacts[].status:' in text
 
 
 def test_surface_runtime_import_does_not_require_host_css_parser():

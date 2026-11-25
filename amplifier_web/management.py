@@ -902,6 +902,7 @@ class Management:
             # Drafts have no session to refresh. Re-resolve their defaults and
             # prevent an in-flight probe from restoring the old configuration.
             self.service.state['configurationRevision'] = self.service.state.get('configurationRevision', 0) + 1
+            self.service.prompt_suggestions.invalidate()
             self.service.state['draftDefaults'] = {}
             self.service.state.setdefault('setup', {}).pop('providersRequestedWorkspace', None)
             for session in self.service.state['sessions']:
@@ -1454,6 +1455,8 @@ class Management:
                             self.configuration_transition(self.service._session(session['id']), configuration_operation,
                                 stage='readback', effect='mounted')
                             self.service._publish_changes(sessions={session['id']})
+                if args['operation'] == 'context.recovery.status' and command_id:
+                    result = {**result, 'readCommandId': command_id}
                 refreshed={}
                 if result.get('requiresRestart') and not placement:refreshed['configuration.providers']=await self.service.runtime.control(session['id'],'configuration.providers',{})
                 refresh={'native.compact':'native.status','mode.set':'mode.list','mode.clear':'mode.list','goals.set':'goals.get','goals.clear':'goals.get','budget.set':'budget.get','provider.select':'configuration.providers','provider.reset':'configuration.providers','configuration.toggle':'configuration.inspect'}.get(args['operation'])
@@ -1461,6 +1464,10 @@ class Management:
                 async with self.service.lock:
                     self.service.state.setdefault('runtimeControl',{}).setdefault(session['id'],{}).update(refreshed)
                     self.service.state.setdefault('runtimeControl',{}).setdefault(session['id'],{})[args['operation']]=result
+                    if args['operation'] == 'context.clear' and result.get('cleared'):
+                        current = self.service._session(session['id'])
+                        current['_lastPromptUsage'] = {'startedAt': time.time()}
+                        current.pop('nextMessageImpact', None)
                     if args['operation'] in {'provider.select', 'provider.reset'}:
                         current=self.service._session(session['id'])
                         current['selection'] = copy.deepcopy(result['selection'])

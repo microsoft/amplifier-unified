@@ -44,7 +44,31 @@ async function open(page,name,scope='.a-composer'){
 }
 async function close(page,opener){await page.keyboard.press('Escape');await expect(page.locator('dialog[open]')).toHaveCount(0);await expect(opener).toBeFocused()}
 async function snapshot(page){const s=await state(page),i=await inspect(page);return {selected:s.selectedSessionId,canvas:s.canvas,drafts:i.drafts,attachments:i.attachments,sendCount:i.sends.length,scroll:await page.locator('.a-messages').evaluate(n=>n.scrollTop)}}
-async function contextFor(viewport,scheme){const context=await browser.newContext({acceptDownloads:true,viewport,colorScheme:scheme,hasTouch:viewport.width<500,isMobile:viewport.width<500,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});await context.route(url=>url.origin!==base,r=>r.abort('blockedbyclient'));const page=await context.newPage();page.setDefaultTimeout(10000);page.setDefaultNavigationTimeout(15000);page.on('pageerror',e=>report.errors.push(e.message));assert.equal((await page.request.post(base+'/fixture/browser-session',{timeout:5000})).status(),200);await page.goto(base);await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id,null,{timeout:15000});await call(page,'session.create',{title:'Image study',bundle:'anchors'});await call(page,'view.update',{patch:{scheme}});await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();return {context,page}}
+async function contextFor(viewport,scheme){
+ const context=await browser.newContext({acceptDownloads:true,viewport,colorScheme:scheme,hasTouch:viewport.width<500,isMobile:viewport.width<500,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ try{
+  await context.route(url=>url.origin!==base,r=>r.abort('blockedbyclient'));
+  const page=await context.newPage();page.setDefaultTimeout(10000);page.setDefaultNavigationTimeout(15000);
+  page.on('pageerror',e=>report.errors.push(e.message));
+  assert.equal((await page.request.post(base+'/fixture/browser-session',{timeout:5000})).status(),200);
+  await page.goto(base);
+  // Attaching a client precedes its independent browser preference report.
+  // Wait for that real acknowledgement before editing this browser's scheme.
+  await page.waitForFunction(()=>{
+   const s=window.amplifier?.getState(),a=s?.appearance;
+   return !!s?.client?.id&&a?.availability==='connected'&&a.local?.reported===true&&!a.local.error;
+  },null,{timeout:15000});
+  await call(page,'session.create',{title:'Image study',bundle:'anchors'});
+  const changed=await call(page,'view.update',{patch:{scheme}});assert.equal(changed.accepted,true);
+  await expect.poll(async()=>(await state(page)).appearance.effective.scheme).toBe(scheme);
+  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
+  return {context,page};
+ }catch(error){
+  try{await bounded(context.close(),10000,'Close failed viewer setup')}
+  catch(cleanup){throw new AggregateError([error,cleanup],'Viewer setup and cleanup failed',{cause:error})}
+  throw error;
+ }
+}
 async function run(name,fn){const row={name,status:'running'};report.cases.push(row);try{await fn();row.status='passed'}catch(e){row.status='failed';row.error=e.stack;primary??=e}await save()}
 try{
  const r=await ready;base=r.base;assert.equal(r.pid,fixture.pid);const build=await readFile(join(root,'amplifier_web/static/build.json'));assert.equal(hash(build),r.buildSha256);report.build={sha256:r.buildSha256,package:r.packageRoot,metadata:JSON.parse(build)};

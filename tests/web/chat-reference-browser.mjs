@@ -8,6 +8,7 @@ import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {readComposerDraft} from './composer-test-helpers.mjs';
 import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.mjs';
+import {updateAppearance} from './settings-fixture.mjs';
 import {bounded,combinedFailure,observed,resultOf,withActionRoute} from './chat-reference-harness.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
@@ -364,16 +365,7 @@ try{
  await act(page,'session.rename',{id:target,title:longTitle});
  for(const [width,scheme] of [[1440,'light'],[390,'dark'],[320,'light']]){
   await page.setViewportSize({width,height:width===1440?1000:844});
-  const revision=await bounded(page.evaluate(async scheme=>{
-   const shell=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
-   const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:shell.revision,
-    composition:{...shell.effectiveComposition,presentation:{...shell.effectiveComposition.presentation,scheme}}});
-   if(prepared.accepted!==true)throw Error('Fixture appearance preparation refused');
-   const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:shell.revision,changeId:prepared.result.id});
-   if(applied.accepted!==true)throw Error('Fixture appearance refused');
-   return applied.result.revision;
-  },scheme),20000,'Fixture appearance did not settle');
-  await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState()?.revision)).toBe(revision);
+  await bounded(updateAppearance(page,{scheme}),20000,'Fixture appearance did not settle');
   await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',scheme);
   await expect(renamed).toHaveAccessibleName(`Open chat: ${longTitle} · ${attached.result.workspace}`);
   await expect(sourceArticle.locator('.a-chat-reference-original')).toHaveText(

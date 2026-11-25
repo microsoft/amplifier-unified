@@ -16,6 +16,37 @@ checks = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(checks)
 
 
+@pytest.mark.parametrize('attempt,path', [(None, ''), (2, '/attempts/2')])
+def test_status_reads_only_the_selected_attempt_and_preserves_job_outcomes(monkeypatch, attempt, path):
+    prefix = f'repos/{checks.REPOSITORY}/actions/runs/123'
+    link = 'https://github.com/microsoft/amplifier-unified/actions/runs/123'
+    def job(name, state, conclusion, steps):
+        return {'name': name, 'status': state, 'conclusion': conclusion, 'html_url': link + '/job/1',
+                'started_at': '2026-11-23T17:00:00Z',
+                'completed_at': '2026-11-23T17:00:09Z' if state == 'completed' else None, 'steps': steps}
+    responses = {
+        ('api', prefix + path): {'name': 'Verification', 'head_sha': 'a' * 40, 'run_attempt': 2,
+                                 'html_url': link, 'status': 'in_progress', 'conclusion': None},
+        ('api', prefix + '/attempts/2/jobs?per_page=100&page=1'):
+            {'total_count': 3, 'jobs': [job('build', 'completed', 'failure', [
+                {'name': 'Install', 'status': 'completed', 'conclusion': 'success'},
+                {'name': 'Test', 'status': 'completed', 'conclusion': 'failure'}])]},
+        ('api', prefix + '/attempts/2/jobs?per_page=100&page=2'):
+            {'total_count': 3, 'jobs': [job('browser', 'in_progress', None, [
+                {'name': 'Run browser', 'status': 'in_progress', 'conclusion': None}]),
+                      job('another-suite', 'completed', 'skipped', [])]},
+    }
+    monkeypatch.setattr(checks, 'gh', lambda *args: responses.pop(args))
+    result = checks.run_status(123, attempt)
+    assert not responses
+    assert result['state'] == 'in_progress' and result['skippedJobs'] == 1
+    assert result['url'] == link + '/attempts/2'
+    assert result['jobs'] == [
+        {'job': 'build', 'state': 'failure', 'url': link + '/job/1', 'seconds': 9, 'steps': ['Test']},
+        {'job': 'browser', 'state': 'in_progress', 'url': link + '/job/1', 'steps': ['Run browser']},
+    ]
+
+
 @pytest.fixture
 def publication(tmp_path, monkeypatch):
     repository = 'microsoft/amplifier-unified'

@@ -1,6 +1,7 @@
 import {spawn} from 'node:child_process';
 import {composerOptionsPanel,showComposerOption} from './composer-options-helpers.mjs';
-import {mkdir} from 'node:fs/promises';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
+import {mkdir,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createServer} from 'vite';
@@ -11,7 +12,8 @@ const evidence=process.env.AMPLIFIER_TEST_OUTPUT||join(tmpdir(),'amplifier-setup
 import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/browser_detail_server.py',root],{stdio:['ignore','pipe','inherit']});
-let browser,vite;const errors=[];
+const stopFixture=ownFixture(fixture,{label:'Setup journey fixture'});
+let browser,vite,failure;const errors=[],composerGeometry=[];
 try{
  const ready=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exit '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.port){clearTimeout(timer);resolve(value)}}catch{}})});
  const target=`http://127.0.0.1:${ready.port}`,headers={Authorization:'Bearer fixture-detail-token','content-type':'application/json'};
@@ -47,9 +49,37 @@ try{
  await expect(options).toBeVisible();
  await expect(options).toHaveCount(1);
  await expect(page.getByRole('button',{name:'Conversation bundle',exact:true})).toHaveCount(0);
+ const checkWritingAndControls=g=>{
+  assert.ok(g.writing.width>0&&g.editor.height>0,'The writing area remains usable');
+  assert.equal(g.editor.x,g.writing.x);assert.equal(g.editor.width,g.writing.width);
+  assert.ok(g.editor.y>=g.writing.y&&g.editor.bottom<=g.writing.bottom);
+  assert.ok(g.model.y>=g.writing.bottom-1,'Model control stays below the writing row');
+  assert.ok(g.model.y>=g.surface.y&&g.model.bottom<=g.surface.bottom,'Model remains inside the shared composer');
+  assert.ok(g.writing.x<=g.add.x&&g.writing.right>=g.end.right,'Writing spans the controls row');
+  for(const control of [g.add,g.model,g.end]){
+   assert.ok(control.x>=g.surface.x&&control.right<=g.surface.right&&control.bottom<=g.surface.bottom);
+   assert.ok(control.y>=g.writing.bottom-1,'Controls do not overlap writing');
+  }
+  assert.ok(g.add.right<=g.model.x&&g.model.right<=g.end.x,'Second-row controls do not overlap');
+  assert.ok(g.model.width>=g.target&&g.model.height>=g.target,'Model retains native pointer target');
+  assert.equal(g.hit,true,'Model center is an actual pointer target');
+  assert.equal(g.overflow,false);
+ };
  const belowField=async()=>{
-  const optionBox=await options.boundingBox(),surface=await page.locator('[data-part="composer-surface"]').boundingBox();
-  assert.ok(optionBox.y>=surface.y+surface.height-1,'Model control stays below the writing field');
+  const geometry=await options.evaluate(model=>{
+   const surface=model.closest('[data-part="composer-surface"]'),rect=node=>node.getBoundingClientRect().toJSON();
+   const box=rect(model);
+   return {surface:rect(surface),writing:rect(surface.querySelector('.a-compose-writing')),
+    editor:rect(surface.querySelector('[role=textbox]')),model:box,
+    add:rect(surface.querySelector('.a-compose-add')),end:rect(surface.querySelector('.a-compose-end')),
+    target:matchMedia('(pointer:fine)').matches?32:44,viewport:innerWidth,
+    hit:model.contains(document.elementFromPoint(box.x+box.width/2,box.y+box.height/2)),
+    overflow:surface.scrollWidth>surface.clientWidth+1};
+  });
+  composerGeometry.push(geometry);await writeFile(join(evidence,'setup-composer-geometry.json'),JSON.stringify(composerGeometry,null,2));
+  checkWritingAndControls(geometry);
+  assert.throws(()=>checkWritingAndControls({...geometry,model:{...geometry.model,y:geometry.writing.y}}),
+   /below the writing row/,'The relational oracle still rejects a model overlapping writing');
   await expect(page.getByRole('button',{name:'Add attachments',exact:true})).toBeVisible();
  };
  await belowField();
@@ -63,8 +93,8 @@ try{
  await menu.getByRole('combobox',{name:/^Connection/}).selectOption('fixture');
  await showComposerOption(page,'model');
  await expect(menu.getByRole('combobox',{name:'Conversation model',exact:true})).toBeVisible();
- await expect(menu.getByRole('button',{name:'Refresh this connection',exact:true})).toBeVisible();
  await showComposerOption(page,'bundle');
+ await expect(menu.getByRole('button',{name:'Refresh this connection',exact:true})).toBeVisible();
  await expect(menu.getByRole('combobox',{name:'Registered root bundles',exact:true})).toBeVisible();
  // Disclosure is idempotent; model/connection remain in this same panel.
  await showComposerOption(page,'bundle');
@@ -165,4 +195,5 @@ try{
  await page.screenshot({path:join(evidence,'onboarding-mobile.png')});
  assert.deepEqual(errors,[]);
  console.log('Setup journey passed: later empty connections, assistant handoff, single new chat, Canvas navigation/reload, narrow chat, and mobile.');
-}finally{await browser?.close();await vite?.close();fixture.kill('SIGTERM')}
+}catch(error){failure=error;throw error}
+finally{await finishFixture({label:'Setup journey fixture',close:[['browser',()=>browser?.close()],['Vite',()=>vite?.close()]],stop:stopFixture,originalError:failure})}

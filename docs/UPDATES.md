@@ -57,11 +57,11 @@ waits for an idle host before replacement. The tool keeps its staged target,
 its activation gate, and any existing failure receipts. An interrupted tool
 stage with no known target keeps its existing handoff protection.
 
-Normal app replacement does not require recovery of an idle configuration error
-or adoption of saved configuration by an absent worker. `configurationPending`
-and retained operation phases describe intent/evidence, not executing work.
+Normal app, component and Smart Tool updates do not require recovery of an idle
+configuration error or adoption of saved configuration by an absent worker.
+`configurationPending` and retained operation phases describe intent/evidence, not executing work.
 For example, a lost native receipt can leave settings unresolved without keeping
-the host on an old application release. The target must have no mounted worker,
+the host on old software. The held conversation must have no mounted worker,
 preparation, running turn or child work, executing refresh, unsettled management task or
 runtime operation. Cancellation requested is not settled work. The app owner
 rechecks held-owner, execution/native target and Stop bindings across validation
@@ -74,10 +74,13 @@ native seal and input fence remain unchanged. It never resumes, reconciles,
 mounts, cancels or rewrites that operation, and does not enqueue target model
 input. Missing, contradictory, partial or unknown historical evidence stays
 unresolved; replacement does not upgrade it to a known outcome. Status reads do
-not rescan native receipts or saved configuration to decide app quiescence.
-Component activation retains its existing stronger configuration gate; explicit
-user-only force-restart semantics are unchanged. Real active work can still
-require waiting or deliberate interruption; an idle recovery hold alone cannot.
+not rescan native receipts or saved configuration to decide update quiescence.
+All update paths use the same activity assessment, without classifying old
+operations as legacy or modern. Component and tool activation retain their
+runtime-lifecycle and admission locks; generation promotion keeps active workers
+on their leased generation. Explicit user-only force-restart semantics are
+unchanged. Real active work can still require waiting or deliberate interruption;
+an idle recovery hold alone cannot.
 
 At ordinary error settlement and startup, the configuration owner can observe
 an authenticated terminal no-effect receipt for the exact native attempt without
@@ -86,7 +89,8 @@ the original request, attempts and history, and persists an old-input cutoff bef
 releasing that operation's local fence. It neither warms the old chat nor drains
 its queued input. Missing, conflicting, partial and saved-but-unloaded outcomes
 remain local fences; no consumer recovery action is required for an unrelated
-application replacement. This bookkeeping is not a second recovery service.
+update. This bookkeeping is not a prerequisite for updates or a second recovery
+service.
 
 ### Partial failure does not abort independent progress
 
@@ -189,7 +193,8 @@ retained outcomes survive later unrelated tier promotions through the existing
 generation receipt and reverified source identities. A fresh unknown failure
 cannot borrow an older settled outcome. Cancellation during later preparation
 retains the inspection fence even if the visible diagnostic still names the
-earlier fetch failure. Changes to source identity, desired revision or relevant
+earlier fetch failure. The successor-host retirement rule below can release
+that fence only with proof that the owning process has stopped. Changes to source identity, desired revision or relevant
 configuration can make new work eligible; a retention-only status projection
 does not.
 
@@ -443,6 +448,8 @@ Qualified component generations use per-worker activation. Promotion atomically 
 Custom workspace/session dependency overrides qualify a separate environment on explicit execution, coalesced by effective configuration and source content. Browsing a chat does not prepare it. Identical qualified graphs share immutable environments; provider keys, connection IDs, model selection and prompt text do not define a dependency graph. Conflicting distribution sources in an offered union fail candidate qualification instead of silently choosing one. Local overrides retain their explicit source semantics.
 
 The logical roles are candidate, current and previous. Physical generations remain while live workers, custom profiles, recorded environments or explicit source references need them. Private worker leases protect admission and process lifetime. Cleanup retires only proven, unreferenced owned generations and environments; uncertain data and shared source objects are retained. A busy worker on one generation does not block cleanup of an unrelated unused generation. Rollback promotes the previous qualified generation through the same adoption boundary and disables automatic installation.
+
+If Git reports a missing file object while uv checks out a component, Unified retries once using a cache under its own data directory. After the candidate passes validation, later updates using the same original cache start with the recovered cache, including after a host restart. Existing installations remain usable throughout. If that private cache develops the same fault, Unified uses uv to clear it before retrying. Offline and explicit command-line cache selections keep their usual behavior.
 
 Availability checks reuse a private inventory index, invalidated by generation, registry and configuration changes, with periodic full reconciliation. Remote-ref requests retain coalescing and bounded cached availability; a manual refresh refreshes remote availability. Every installation repeats exact source preflight, so cached availability cannot authorize overwriting an intervening local edit. Unified owns its registry, source store and runtimes. CLI caches and registries remain separate; shared settings, credentials and native projects/history authorities are unchanged.
 
@@ -913,12 +920,38 @@ loads keys into the host process.
 The dependency graph key alone omits values that can repair a failed profile.
 It excludes the unrelated settings publication counter. Reading, ordinary rechecks and non-runtime preferences do not
 authorize another identical preparation. Explicit retry still runs every guard.
-A fresh install request can reconcile only a recorded, settled candidate-only
-snapshot copy with the same durable active pointer and no activation/rollback
-handoff. It creates a new candidate, never resumes the interrupted copy. Unknown
-or legacy operations, unsettled threads, fetch/installer/native initialization
-and activation effects remain fenced; cancellation alone proves none of them
-safe to replay.
+A deliberate Install can still reconcile a recorded, settled candidate-only
+snapshot copy in its owning host, with the same durable active pointer and no
+activation/rollback handoff. Later preparation has a stricter host boundary:
+new preparation proofs record the owning host instance and process ID. A
+successor host can retire an interrupted `copy-only` or `preparing` candidate
+only when the instance differs **and** a passive OS liveness check proves that
+the recorded process has exited. A different instance ID, cancellation, an old
+timestamp or a restart request alone is not proof. Permission errors, unknown
+liveness and reused live PIDs keep the fence. On Windows this uses a passive
+process handle, never `os.kill(pid, 0)`.
+
+Both paths require the original candidate directory identity, byte-identical
+active pointer, an exact interrupted preparation receipt, no active/previous
+selection of that candidate, and no pending handoff or activation/rollback
+events. Successor retirement may leave an unvalidated `plan.json`, but never
+accepts `validated.json` (including a dangling link). Unknown boundaries and
+older proofs without process ownership remain fenced for diagnostic review;
+this is deliberately not an age-based migration or an instruction to edit
+saved diagnostics. Same-host later preparation remains refused even if it was
+cancelled, because its threads or helpers may still be settling.
+
+Restart Amplifier normally, then choose **Check for updates**, and **Install**
+after a fresh check offers an update. With automatic checks enabled, a successor
+that verifies retirement runs a fresh check itself; automatic installation still
+obeys the normal settings, desired-selection and admission guards. With automatic
+checks off, Check remains the deliberate path; retiring the fence does not turn
+those settings on. No old candidate is reused, resumed, activated or declared
+successful. It stays inert for ordinary storage maintenance, and earlier failure
+receipts remain history. Shared source reuse still passes its existing integrity
+checks; retirement never rolls back or certifies earlier shared-store effects.
+If ownership or another guard cannot be verified, retain the diagnostics for
+review rather than resetting the installation or removing the fence by hand.
 The unresolved component operation is retained separately from the current
 diagnostic display batch; starting an app, tool or rollback batch cannot erase
 its fence. Its exact interrupted receipt, not an unrelated latest event, anchors
@@ -1172,9 +1205,10 @@ pins for future update checks. The Core source-build prohibition remains enabled
 Checking, staging and validating an application update do not pause conversations,
 block new messages or freeze delegation. A qualified update waits for the normal
 idle readiness check. Active tools, children, calls and unresolved operations
-postpone the update, not unrelated work. Continuously busy hosts can leave an
-update pending; the existing explicit **Restart now** control is the separate
-operator choice to interrupt work for a qualified restart.
+can keep an update waiting. On a busy host, choose
+[Update safely and resume](#update-safely-and-resume) to queue incoming work
+while current turns settle. **Interrupt work and restart** is the separate
+explicit choice to interrupt running work.
 
 An agent with an active saved objective can instead use `task.waitForUpdate` with
 its own `sessionId`, exact task `expectedRevision`, and `target` copied from
@@ -1239,8 +1273,8 @@ new explicit wait can then use the current task and staged target, even while
 other owners are waiting. Missing or uncertain cancellation does not free the
 slot; a late observation cannot replace a newer wait or rewrite the old receipt.
 
-After final candidate validation, activation rechecks readiness under the same
-host lock that commits replacement. Work arriving during validation takes priority
+Under the ordinary idle-update policy, activation rechecks readiness after final
+candidate validation under the same host lock that commits replacement. Work arriving during validation takes priority
 and postpones that replacement. Only the actual replacement/restart window holds
 ordinary new human messages. They are saved under their original input IDs,
 acknowledged as saved, and sent in order after the exact restarted installation
@@ -1254,3 +1288,24 @@ allowance. An unconfirmed boundary cancellation remains unresolved; it is not
 assumed successful. Replacement uncertainty remains fenced and is never treated
 as a pre-replacement withdrawal. No new automatic worker-yield boundary is created
 merely because an update is staged.
+
+### Update safely and resume
+
+For a staged application update, a person can choose **Update safely and resume**
+in Settings → Updates. The client sends the staged host, revision, generation and
+attempt identities to `updates.safeResume`.
+The host saves the admission hold before acknowledging the request. New ordinary
+messages keep their input IDs. Queued coordination and due schedules remain with
+their existing owners. Active native tasks receive one save-and-yield instruction
+on their next model request in the current turn. They yield through their guarded checkpoint
+at a supported continuation boundary. Other turns, calls, and tools may finish.
+Stop and changes of task, input, placement, or access retain their usual precedence.
+
+After the first healthy restart the host checks its installed app dependencies.
+If any need updating, the same release is qualified again and restarted while
+the original work stays queued. Its selected package revisions must match both
+the candidate and the running host. The included worker components are checked next.
+A failed or unverified required component keeps the work waiting through retry.
+Once included revisions are verified current or promoted for new workers, the
+host admits saved messages and eligible continuations through their original
+receipts. Optional sources may continue updating independently.

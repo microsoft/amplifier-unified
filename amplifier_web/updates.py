@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit
 import uuid
 from .host.config import write_private
+from . import update_uv_cache
 
 DEFAULT_CHECK_INTERVAL_HOURS = 4
 CHECK_INTERVAL_HOURS = (1, 4, 8, 24)
@@ -34,6 +35,11 @@ def work_paused(state):
     updates = state.get('updates', {})
     from .app_replacement import pending
     return updates.get('phase') == 'activating' or bool(updates.get('pendingRestart')) or pending(updates)
+
+
+def new_work_paused(state):
+    drain = state.get('updates', {}).get('drain') or {}
+    return work_paused(state) or bool(drain.get('safeUpdate') and drain.get('phase') != 'released')
 
 
 def pending_tool_activations(state):
@@ -54,7 +60,8 @@ def prepared_tool_activations(state):
 
 
 def availability_check_blocked(manager, state, tier):
-    if (manager.closed or manager.awaiting_restart() or state.get('pendingRelease')
+    if (manager.closed or manager.awaiting_restart() or getattr(manager, '_releasing_update_inputs', False)
+            or state.get('pendingRelease')
             or (state.get('pendingApp') or {}).get('featureSelection')):
         return True
     if prepared_tool_activations(state):
@@ -284,6 +291,14 @@ def configured_sources(service):
 async def process(*args, cwd=None, env=None, timeout=90, raw=False, _redaction_env=None):
     from .update_command_details import Capture, STDOUT_LIMIT, STDERR_LIMIT, local_excerpt
     from .update_diagnostics import CommandFailure, CommandTimeout, CommandOutput, CommandBytes, command_facts
+    started = time.monotonic()
+    caller_env = env
+    candidate = update_uv_cache.for_command(args, env) if _redaction_env is None else None
+    cache = None
+    if candidate and candidate.root.is_dir():
+        cache = await candidate.location(args, env, cwd, process, timeout)
+        if candidate.selected(cache):
+            env = update_uv_cache.environment(env, cache)
     redaction_env = dict(_redaction_env or {})
     redaction_env.update(env if env is not None else os.environ)
     if (env if env is not None else os.environ).get('AMPLIFIER_GITHUB_ACCESS') == 'anonymous':
@@ -294,7 +309,6 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False, _redaction_e
         # anonymous reads, without changing credential helpers, EOL or includes.
         from .reset import git_filesystem_environment
         env = git_filesystem_environment(env)
-    started=time.monotonic()
     # All commands here use captured pipes, never an interactive console. A
     # pythonw consumer entry must not create a console for its CLI children.
     native = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
@@ -304,6 +318,8 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False, _redaction_e
         # Keep the host's own limit and the original argv for diagnostics/retry.
         launcher = Path(__file__).with_name('mac_uv_exec.py')
         command = (sys.executable, '-I', '-S', str(launcher), *args)
+    if time.monotonic() - started >= timeout:
+        raise CommandTimeout(time.monotonic() - started)
     proc = await asyncio.create_subprocess_exec(*map(str,command), cwd=cwd, env=env,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         start_new_session=os.name != 'nt', **native)
@@ -317,7 +333,7 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False, _redaction_e
     def detail(facts):
         return {**facts, **local_excerpt(err, redaction_env)}
     try:
-        await asyncio.wait_for(asyncio.shield(readers), timeout)
+        await asyncio.wait_for(asyncio.shield(readers), max(0, timeout - (time.monotonic() - started)))
     except BaseException as error:
         def terminate(force=False):
             # The parent may already have exited while descendants hold pipes.
@@ -372,14 +388,33 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False, _redaction_e
                     (b'Authentication failed' if out.auth_failure or err.auth_failure else b'') +
                     (b'\nAMPLIFIER_UPDATE_PROBE={"ok":false,"repositoryAccessFailure":true}\n'
                      if out.access_probe or err.access_probe else b''))
-        retry = anonymous_retry_environment(args, env, stdout, stderr + evidence)
         remaining = timeout - (time.monotonic() - started)
-        if retry is not None and remaining > 0:
+        # Both recovery paths share the same deadline and two-attempt receipt.
+        retry = None
+        retry_fact = 'anonymousRetry'
+        if _redaction_env is None and remaining > 0:
+            if (candidate and len(args) > 1 and args[1] in {'lock', 'sync'}
+                    and err.missing_git_blob and err.failed_git_reset):
+                cache = cache or await candidate.location(args, caller_env, cwd, process, remaining)
+                remaining = timeout - (time.monotonic() - started)
+                if cache is not None and remaining > 0:
+                    try:
+                        await candidate.prepare_retry(cache, args, env, cwd, process, remaining, redaction_env)
+                    except (OSError, RuntimeError, TimeoutError, ValueError):
+                        pass  # Cleanup has its own receipt. Preserve the original checkout failure.
+                    else:
+                        remaining = timeout - (time.monotonic() - started)
+                        if remaining > 0:
+                            retry = update_uv_cache.environment(env, cache)
+                            retry_fact = 'gitCacheRetry'
+            else:
+                retry = anonymous_retry_environment(args, env, stdout, stderr + evidence)
+        if retry is not None:
             def combine(value):
                 later = value.diagnostic_facts
                 local_later = getattr(value, 'local_command_details', None) or [
                     {**{key: val for key, val in later.items() if key != 'commandAttempts'}, 'stderr': ''}]
-                later['anonymousRetry'] = True
+                later[retry_fact] = True
                 later['commandAttempts'] = facts['commandAttempts'] + later.get('commandAttempts', [
                     {key: val for key, val in later.items() if key != 'commandAttempts'}])
                 value.local_command_details = [detail(facts['commandAttempts'][0])] + local_later
@@ -394,6 +429,8 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False, _redaction_e
                     failure.diagnostic_facts = exception_facts(failure)
                 combine(failure)
                 raise
+            if retry_fact == 'gitCacheRetry':
+                candidate.recovered.add(cache)
             combine(result)
             return result
         failure = CommandFailure(facts)
@@ -649,9 +686,9 @@ class UpdateManager:
         self._start_check_open = True
         self._activation_failed = None  # See _activation_held.
         self._update_health_seen_revision = service.state.get('configurationRevision')
-        from .update_restart import target
+        from .update_restart import publish_targets
         state['activation'] = activation(self)
-        state['forceRestartTarget'] = target(self)
+        publish_targets(self)
         publish_health(self)
         from .windows_launcher_follow import project
         project(self)
@@ -690,7 +727,7 @@ class UpdateManager:
     def _derive_state(self):
         """Refresh the publication fields under service.lock; report any change."""
         state = self.service.state['updates']
-        fields = ('blockers', 'activation', 'detail', 'currentStatus', 'forceRestartTarget')
+        fields = ('blockers', 'activation', 'detail', 'currentStatus', 'forceRestartTarget', 'safeResumeTarget')
         before = tuple(state.get(key) for key in fields)
         from .update_health import activation, publish as publish_health, PREPARED_STARTING, PREPARED_WAITING
         state['blockers'] = (self.app_blockers() if state.get('pendingApp')
@@ -704,10 +741,10 @@ class UpdateManager:
         # text replaces or extends it (no IO; it never raises).
         from .windows_launcher_follow import project
         project(self)
-        from .update_restart import target
+        from .update_restart import publish_targets
         # Also the identity that task.waitForUpdate names. The page's offer to
         # interrupt work is a matter of its view (update_health.browser_view).
-        state['forceRestartTarget'] = target(self)
+        publish_targets(self)
         return before != tuple(state.get(key) for key in fields)
 
     def configuration_changed(self):
@@ -757,8 +794,7 @@ class UpdateManager:
         return bool(self.app_blockers())
 
     def app_blockers(self):
-        from .update_blockers import blockers
-        return blockers(self.service, application=True)
+        return self.blockers()
 
     async def inventory_sources(self, *, indexed=False):
         """Checks use the app index; an explicit audit also inspects saved scopes."""
@@ -1000,13 +1036,19 @@ class UpdateManager:
 
     async def _check(self, *, tier='application', install=False, fresh=True, automatic=False):
         from .update_sequence import summary
-        from .update_health import pending_preparation
+        from .update_health import pending_preparation, preparation_owner_stopped, reconcile_preparation
         async with self.lock:
             state = self.service.state['updates']
             # A capacity observation can own this lock when a refresh arrives.
             # Queue that refresh, then recheck admission against current state.
             if availability_check_blocked(self, state, tier):
                 return
+            from .update_drain import verified_target
+            drain = state.get('drain') or {}
+            if drain.get('safeUpdate') and drain.get('phase') == 'replacing' and verified_target(self, drain):
+                tier, install = 'included', True
+                # A fresh check invalidates the previous proof before any await.
+                drain['componentsReady'] = False
             # A check has passed its admission since this host started. That
             # ends the start reason of check_due; a refusal above does not.
             self._start_check_open = False
@@ -1016,8 +1058,8 @@ class UpdateManager:
                 await self.publish(runnerAvailabilityCheck=True)
             if state.get('pendingApp') or (pending_tool_activations(state) and (
                     not prepared_tool_activations(state) or has_new_app_target(self, state))):
-                # A tool can be waiting for a saved configuration indefinitely.
-                # Refresh only the app row; the staged tool retains its own handoff.
+                # Refresh only the app row while a tool awaits activation;
+                # the staged tool retains its own handoff.
                 from .app_updates import check_staged
                 await check_staged(self)
                 return
@@ -1039,6 +1081,10 @@ class UpdateManager:
                                detail='Checking the application release…' if tier == 'application' else 'Checking included components…' if tier == 'included' else 'Checking other components…', error=None)
             try:
                 application = state.get('application', {})
+                if tier == 'included':
+                    from .safe_update import check_host
+                    if not await check_host(self):
+                        return
                 if tier == 'application':
                     from .app_updates import check as check_application
                     application = await check_application()
@@ -1070,6 +1116,9 @@ class UpdateManager:
                             detail='App update available. Included components will be checked after the new app restarts.' if app_available else 'Component checks are waiting for the application check.')
                         return
                     tier = 'included'
+                pending = pending_preparation(self.diagnostics.state)
+                if pending and preparation_owner_stopped(self, pending.get('preparation') or {}):
+                    reconcile_preparation(self)
                 if pending_preparation(self.diagnostics.state):
                     await self.publish(phase='checked', application=application,
                         detail='Component checks are paused until the interrupted preparation is reconciled.')
@@ -1155,7 +1204,9 @@ class UpdateManager:
                             and type(facts.get('exitCode')) is int and facts['exitCode'] > 0
                             and not facts.get('timedOut'))
                 checked = []
-                for stage in (['included', 'other'] if tier == 'included' else ['other']):
+                safe_included = tier == 'included' and drain.get('safeUpdate') and drain.get('phase') == 'replacing'
+                stages = ['included'] if safe_included else ['included', 'other'] if tier == 'included' else ['other']
+                for stage in stages:
                     selected = [row for row in rows if row.get('updateTier', 'other') == stage]
                     sequence['stage'] = stage
                     await self.publish(sequence={**sequence}, detail='Checking included components…' if stage == 'included' else 'Checking other components…')
@@ -1170,6 +1221,9 @@ class UpdateManager:
                     if sequence[stage]['available'] or (stage == 'included' and protected):break
                 from .update_sequence import verify_app_selection
                 await asyncio.to_thread(verify_app_selection, self, checked)
+                if tier == 'included':
+                    from .safe_update import included_result
+                    included_result(self, group_sources(checked))
                 self.inventory = checked
                 write_private(self.directory/'inventory.json',json.dumps(checked))
                 public = group_sources(checked)
@@ -1179,7 +1233,16 @@ class UpdateManager:
                     row.get('status') in {'check_failed', 'local_changes'} and not availability(row)
                     for row in checked if row.get('updateTier') == 'included')
                 failed_check = any(row.get('status') == 'check_failed' for row in checked)
-                if not available and not blocked:sequence['stage'] = 'complete';sequence['install'] = False
+                if safe_included and not available and not drain.get('componentsReady'):
+                    # A protected or missing required source can be ineligible for
+                    # automatic installation. Keep the failed check visible for retry.
+                    blocked = failed_check = True
+                if not available and not blocked:
+                    if safe_included and drain.get('componentsReady'):
+                        sequence['nextStage'] = 'other'
+                    else:
+                        sequence['stage'] = 'complete'
+                        sequence['install'] = False
                 from .update_health import refresh as refresh_health
                 await refresh_health(self)
                 await self.publish(phase='error' if blocked and failed_check else 'checked' if blocked else 'available' if available else 'checked',
@@ -1237,7 +1300,9 @@ class UpdateManager:
         from .app_updates import stage,activate,supersedes_staged
         state = self.service.state['updates']
         pending = state.get('pendingApp')
-        if (pending and not pending.get('featureSelection') and not self.app_busy()
+        from .safe_update import waiting, component_restart
+        pinned = waiting(state) or component_restart(state.get('drain') or {}, pending or {})
+        if (pending and not pinned and not pending.get('featureSelection') and not self.app_busy()
                 and time.time() - (state.get('pendingAppCheckAt') or 0) >= 60):
             # The idle window may arrive between scheduled checks. Refresh once
             # before activation; a recent check also avoids duplicate requests.
@@ -1249,7 +1314,7 @@ class UpdateManager:
             if pending_tool_activations(state) and not has_new_app_target(self, state):
                 return
             pending = state.get('pendingApp')
-            if not pending or supersedes_staged(state.get('application', {}), pending):
+            if not pending or not pinned and supersedes_staged(state.get('application', {}), pending):
                 await stage(self)
         await activate(self)
 
@@ -1291,7 +1356,7 @@ class UpdateManager:
                     return
                 async with self.lock:
                     if not reconcile_preparation(self):
-                        raise ValueError('The interrupted update has no proof of settled candidate-only preparation. Inspect its diagnostics before another installation; its outcome is not replayed.')
+                        raise ValueError('The interrupted update has no proof of inactive candidate-only preparation. Inspect its diagnostics before another installation; its outcome is not replayed.')
         from .update_partial import availability
         if (state.get('sequence', {}).get('stage') == 'included'
                 and state['sequence'].get('included', {}).get('issues')
@@ -1393,7 +1458,8 @@ class UpdateManager:
             stage=self.directory/'releases'/release
             stage.mkdir(parents=True,mode=0o700)
             from .update_health import pointer_witness, candidate_copy
-            proof = {'candidate': release, 'activeBefore': pointer_witness(self),
+            proof = {'candidate': release, 'host': self.service.instance_id, 'hostPid': os.getpid(),
+                     'activeBefore': pointer_witness(self),
                      'directoryIdentity': [stage.stat().st_dev, stage.stat().st_ino],
                      'boundary': 'copy-only', 'copySettled': True}
             self.diagnostics.state['batch']['preparation'] = proof
@@ -1556,6 +1622,10 @@ class UpdateManager:
             raise
 
     async def validate(self,stage,release):
+        with update_uv_cache.candidate_cache(self.home, self.diagnostics):
+            return await UpdateManager._validate(self,stage,release)
+
+    async def _validate(self,stage,release):
         from .runtime_environment import stage as stage_runtime, receipt_directory
         from .runtime_qualification import freeze, prepare_overrides, verify_recorded
         receipt=receipt_directory(self.home,release)
@@ -1874,6 +1944,9 @@ class UpdateManager:
                     self.inventory = adopted_inventory(self.inventory, partial)
                     write_private(self.directory / 'inventory.json', json.dumps(self.inventory), owned_root=self.home)
                 sequence = self.service.state['updates'].get('sequence')
+                if tier == 'included' and not rollback:
+                    from .safe_update import included_result
+                    included_result(self, items, promoted=True)
                 if sequence:
                     from .update_sequence import summary
                     tier_summary = summary([row for row in items if row.get('updateTier') == tier])
@@ -2017,6 +2090,8 @@ class UpdateManager:
         if getattr(self, '_manual_handoff_commit_unknown', False):return
         settings=self.service.state['settings'].get('updates',{})
         state=self.service.state['updates']
+        from .safe_update import adoption_target, enroll, waiting, component_restart
+        await enroll(self)
         from .update_drain import observe_waiters
         await observe_waiters(self)
         if self.awaiting_restart():
@@ -2037,7 +2112,7 @@ class UpdateManager:
         drain = state.get('drain') or {}
         if drain.get('phase') in {'draining', 'replacing', 'releasing'}:
             installed = state.get('applicationResult') or {}
-            if all(installed.get(key) == drain.get('target', {}).get(key) for key in ('attemptId', 'revision')):
+            if all(installed.get(key) == adoption_target(drain).get(key) for key in ('attemptId', 'revision')):
                 await finish(self, 'installed')
             elif not state.get('pendingApp') or state.get('phase') in {'error', 'interrupted'} or drain.get('hostInstanceId') != self.service.instance_id:
                 await finish(self, 'withdrawn')
@@ -2087,7 +2162,7 @@ class UpdateManager:
             return
         if state.get('pendingApp'):
             if state.get('phase') in {'error', 'interrupted'}:return
-            if self.check_due():
+            if self.check_due() and not waiting(state) and not component_restart(drain, state['pendingApp']):
                 await self.check(fresh=True, automatic=True)
             await self.app()
             return
@@ -2100,7 +2175,20 @@ class UpdateManager:
         if state.get('initialPreparation') and state.get('sequence', {}).get('stage') == 'complete':
             await self.publish(initialPreparation=False)
         sequence = state.get('sequence', {})
-        from .update_health import pending_preparation
+        from .update_health import pending_preparation, preparation_owner_stopped, reconcile_preparation
+        pending = pending_preparation(self.diagnostics.state)
+        reconciled = False
+        if (pending and preparation_owner_stopped(self, pending.get('preparation') or {})
+                and not self.lock.locked()):
+            async with self.lock:
+                reconciled = reconcile_preparation(self)
+                if reconciled:
+                    # The retired attempt may have queued a later tier or an
+                    # install before it was interrupted. Only fresh discovery
+                    # or a new explicit request can authorize the next install.
+                    sequence = {**state.get('sequence', {}), 'install': False}
+                    sequence.pop('nextStage', None)
+                    await self.publish(sequence=sequence, phase='checked')
         if pending_preparation(self.diagnostics.state):
             # Health, drain, storage, worker adoption and independent app/tool
             # paths above still run. No component availability/install is replayed.
@@ -2110,7 +2198,11 @@ class UpdateManager:
             if state.get('appAvailable') and settings.get('autoInstall', True) and not automatic_retry_held(state):
                 await self.app()
             return
-        if sequence.get('nextStage') and state.get('phase') not in {'error','interrupted'}:
+        if reconciled and settings.get('autoCheck', True):
+            # Retiring a fence is not permission to install stale inventory.
+            # Fresh discovery still obeys the ordinary install/admission policy.
+            await self.check(fresh=True, automatic=True)
+        elif sequence.get('nextStage') and state.get('phase') not in {'error','interrupted'}:
             # App-first checking deliberately skips component discovery. After
             # the new app starts, refresh those refs rather than inheriting a
             # cached result from before its required components were published.

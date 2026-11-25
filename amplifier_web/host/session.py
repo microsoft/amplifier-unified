@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 
 from .config import HostConfig, expand_environment, load_config, merge, write_private, provider_mount_sources, provider_dropped
+from . import hook_config
 from .components import HostComponents, ComponentResolver, compose_bundles, imagegen_defaults, capability_defaults, explicit_context_forwarding, installed_package_source
 from .components import declarations, git_source
 from ..surface_delivery import _accepts_exact_count
@@ -92,6 +93,7 @@ class _SelectedRequest:
     refitted: bool = False
     execution: object = None
     release_options: object = None
+    foreground: object = None
 
 
 class SelectedProvider:
@@ -101,10 +103,15 @@ class SelectedProvider:
         self.execution_adapter = execution_adapter
         self._selected_requests = []
         self._refused_requests = []
+        self.portable_handoff = None
         from ..overflow_feedback import OverflowFeedback
         self._overflow_feedback = OverflowFeedback()
     def _execution_provider(self):
         return self.execution_adapter(self.original) if callable(self.execution_adapter) else self.original
+
+    def prepared_foreground(self, request, *, request_options=None):
+        from ..foreground_preparation import prepare
+        return prepare(self._execution_provider(), request, request_options, selection=self)
 
     def owns_budget_route(self, provider):
         """Recognize the loop's exact pre-transport wrapper around this selection."""
@@ -165,6 +172,10 @@ class SelectedProvider:
                 selected = selected.model_copy(update={"max_output_tokens": request.max_output_tokens})
                 return await method(selected, **kwargs)
             return compact
+        if name == "supports_native_compaction" and callable(method) and "model" in inspect.signature(method).parameters:
+            def supports(*, model=None):
+                return method(model=model or self.selection.get("model"))
+            return supports
         if name == "validate_compacted_context" and callable(method):
             def validate(message):
                 if "model" in inspect.signature(method).parameters:
@@ -311,7 +322,7 @@ class SelectedProvider:
             return False
         entry = next((row for row in self._selected_requests
                       if row.original is request and row.selected is selected), None)
-        if entry is None or entry.refitted:
+        if entry is None or entry.refitted or entry.foreground is not None:
             return False
         self._refused_requests = ([row for row in self._refused_requests if row[0] is not request]
                                   + [(request, error, execution, selected)])[-4:]
@@ -346,6 +357,12 @@ class SelectedProvider:
         options = dict(kwargs)
         self._overflow_feedback.forget(request)
         execution = self._execution_provider()
+        from ..foreground_preparation import active
+        candidate = active()
+        if candidate is not None and candidate.selection is self and candidate.original is request:
+            candidate.check_selection(execution, kwargs)
+        elif any(row.original is request and row.foreground is not None for row in self._selected_requests):
+            raise ValueError("Ordinary request belongs to another preparation task")
         self._check_media_fit(request, execution)
         selected, kwargs = self._selected_request(request, kwargs)
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
@@ -353,6 +370,10 @@ class SelectedProvider:
                                                    execution, binding=self.selection)
         retained = False
         try:
+            if self.portable_handoff and not (getattr(selected, "metadata", None) or {}).get("purpose"):
+                from ..portable_handoff import complete
+                handoff, self.portable_handoff = self.portable_handoff, None
+                return await complete(self, execution, selected, kwargs, handoff)
             return await execution.complete(selected, **kwargs)
         except BaseException as error:
             retained = self._retain_refusal(request, selected, execution, error)
@@ -480,7 +501,10 @@ def _apply_settings(bundle, config):
                     row["source"] = expand_environment(row["source"])
                 values.append(row)
             else:
-                values.append(expand_environment(row))
+                expanded = expand_environment(row)
+                if kind == "hooks" and row.get("module") == hook_config.MODULE and "config" in row:
+                    hook_config.retain_references(row["config"], expanded["config"])
+                values.append(expanded)
         setattr(bundle, kind, values)
     # Foundation intentionally skips source-less rows during preparation and
     # will not let another account's prepared module stand in at mount time.
@@ -601,7 +625,9 @@ def _expand_module_configuration(node, in_provider=False):
     provider = in_provider or node.get("module", "").startswith("provider-")
     result = {}
     for key, value in node.items():
-        if key in {"config", "source"}:
+        if key == "config" and node.get("module") == hook_config.MODULE:
+            result[key] = hook_config.declared_config(value)
+        elif key in {"config", "source"}:
             result[key] = copy.deepcopy(value) if provider and key == "config" else expand_environment(value)
         elif key in {"instruction", "instructions", "system_prompt"}:
             result[key] = copy.deepcopy(value)
@@ -1018,6 +1044,46 @@ class ResolvedRoot:
         return root
 
 
+def _inherited_provider_authorization(loaded, edited, config):
+    """Normalize mounted root sources only; children retain exact source matching."""
+    from ..runtime_controls import identity
+    from ..provider_environment import HOST_CREDENTIAL
+    from ..decision_accounts import logical_plan
+    from .components import portable_module_sources
+    authorized = logical_plan(loaded.to_mount_plan())
+    snapshot = is_snapshot(loaded)
+    components = getattr(loaded, '_host_components', None) or required_components()
+
+    def bound(value):
+        if isinstance(value, dict):
+            return value == HOST_CREDENTIAL or any(bound(item) for item in value.values())
+        return isinstance(value, list) and any(bound(item) for item in value)
+
+    def visit(node, host):
+        for row in node.get('providers', []):
+            if not row.get('enabled', True) or not bound(row.get('config', {})):
+                continue
+            matches = [old for old in host.get('providers', [])
+                       if old.get('module') == row['module'] and identity(old) == identity(row)]
+            if len(matches) > 1:
+                raise ValueError('Ambiguous authorized provider instance/source.')
+            if not matches or not matches[0].get('enabled', True):
+                continue  # The unchanged exact credential matcher owns refusal.
+            old = matches[0]
+            pair = portable_module_sources({'providers': [row, old]}, config.home)['providers']
+            if pair[0].get('source') == pair[1].get('source'):
+                continue  # Saved explicit C/C wins, even with an ambient B.
+            selected = module_source(config, snapshot, old['module'], old.get('source'), components,
+                                     portable=True)
+            if isinstance(selected, str) and selected == pair[0].get('source'):
+                old['source'] = selected
+    # Root mount capture never rewrites agent declarations. Do not authorize
+    # their mismatched sources from ambient policy during credential rebinding.
+    # The existing exact credential matcher still visits those scopes itself.
+    visit(edited, authorized)
+    return authorized
+
+
 def apply_runtime_plan(loaded, edited, config, execution_workspace):
     from ..runtime_controls import validate_plan
     from ..decision_accounts import logical_plan
@@ -1028,7 +1094,8 @@ def apply_runtime_plan(loaded, edited, config, execution_workspace):
         # plan has no authority to restore the automatic-origin exception.
         loaded._host_automatic_routing = False
     from ..provider_environment import rebind_provider_credentials
-    edited, bound = rebind_provider_credentials(edited, loaded.to_mount_plan(), home=config.home)
+    authorized = _inherited_provider_authorization(loaded, edited, config)
+    edited, bound = rebind_provider_credentials(edited, authorized, home=config.home)
     loaded._host_provider_credentials_bound = bound
     for key in ("providers", "tools", "hooks"):
         if key in edited:
@@ -1237,7 +1304,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         components = getattr(loaded, "_host_components", None) or required_components()
         components.apply(loaded)
         from .config import configure_skill_cache
-        configure_skill_cache(loaded, config.registry_home)
+        injected_skill_caches = configure_skill_cache(loaded, config.registry_home)
         adapted = components.normalize(adapted)
         write_private(directory / "baseline-mount-plan.json", json.dumps(redact(baseline), indent=2, default=str))
         write_private(directory / "live-mount-plan.json", json.dumps(redact(adapted), indent=2, default=str))
@@ -1329,13 +1396,18 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         initialization = initialization_hooks(isolation=isolation, decision_accounts=decision_accounts,
                                               routing=routing, retain=retain_session,
                                               ephemeral_servers=ephemeral_mcp_servers,
-                                              providers=prepared.mount_plan.get('providers', []), media=media)
+                                              providers=prepared.mount_plan.get('providers', []),
+                                              hooks=prepared.mount_plan.get('hooks', []), media=media)
         with startup_timing.phase('manager.session.create'):
             session = await prepared.create_session(session_id=runtime.session_id,
                 session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None,
                 **initialization)
         decision_accounts.require_complete()
         coordinator = session.coordinator
+        from ..skill_cache_move import verified_move
+        coordinator.register_capability("web.context_transition.skill_cache_move",
+            lambda contract, old_sha, generation: verified_move(
+                config.home, config.registry_home, injected_skill_caches, contract, old_sha, generation))
         # Native initialization has finished. Report the first configured
         # failure before adapting delegate, applying settings, or mounting the
         # attachment context, all of which rely on completed construction.
@@ -1400,6 +1472,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         if not providers:
             raise RuntimeError("No provider is configured. Add config.providers to the shared Amplifier settings.yaml.")
         with startup_timing.phase('manager.provider.info'):
+            from ..next_message_impact import cache_traits
             choices = []
             for identity, provider in providers.items():
                 info = provider.get_info()
@@ -1407,7 +1480,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                     info = await info
                 defaults = getattr(info, "defaults", {}) or {}
                 choices.append({"id": identity, "provider": getattr(info, "id", identity),
-                    "display_name": getattr(info, "display_name", None),
+                    "display_name": getattr(info, "display_name", None), "promptCacheTraits": cache_traits(info),
                     **({"available": False, "failure": provider.failure} if isinstance(provider, UnavailableProvider) else {}),
                     "model": defaults.get("model"), "effort": defaults.get("reasoning_effort") or next((row.get("config",{}).get("reasoning_effort") for row in prepared.mount_plan.get("providers",[]) if (row.get("instance_id") or row.get("id") or row["module"].removeprefix("provider-"))==identity),None), "sharedCatalogKey":catalog_keys.get(identity), "models": []})
         # Keep public connection choices available even when a saved ID prevents

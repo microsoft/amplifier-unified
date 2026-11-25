@@ -15,7 +15,8 @@ from amplifier_web.updates import configured_sources
 
 
 async def test_source_inventory_reuses_scoped_inputs_only_within_one_check(service, tmp_path, monkeypatch):
-    import amplifier_foundation.settings as foundation
+    from amplifier_web import decision_namespace
+    from amplifier_web.shared_settings import SettingsReadCache
     paths = settings_paths(tmp_path)
     paths['global'].parent.mkdir(parents=True, exist_ok=True)
     paths['global'].write_text('bundle:\n  active: git+https://example.invalid/shared@main\n')
@@ -23,17 +24,57 @@ async def test_source_inventory_reuses_scoped_inputs_only_within_one_check(servi
         'bundle': 'git+https://example.invalid/session@main'} for number in range(30)]
     service.state['settings'].update(workspace=str(tmp_path), bundle='git+https://example.invalid/shared@main')
     service.state['workspaces'] = []
-    original, calls = foundation.read_settings, []
+    original, calls = decision_namespace.read_scopes, []
+    cached_read, caches = SettingsReadCache.read, []
 
     def read(inputs):
         calls.append(tuple(inputs))
         return original(inputs)
 
-    monkeypatch.setattr(foundation, 'read_settings', read)
+    def cache_read(cache, inputs):
+        caches.append(cache)
+        return cached_read(cache, inputs)
+
+    # The cache's miss boundary is the current per-scope namespace reader, not
+    # Foundation's older whole-settings reader. Keep the real parsing/merging.
+    monkeypatch.setattr(decision_namespace, 'read_scopes', read)
+    monkeypatch.setattr(SettingsReadCache, 'read', cache_read)
     first, incomplete = configured_sources(service)
     assert not incomplete and len(calls) == 1
+    assert len(caches) == 31  # App selection plus all 30 saved sessions.
+    first_cache = caches[0]
+    assert all(cache is first_cache for cache in caches)
+    shared = ('https://example.invalid/shared', 'main')
+    assert first[shared] == {'Selected bundle'}
+    untouched = copy.deepcopy(first)
+    first[shared].add('caller-only evidence')
+    caches.clear()
     second, incomplete = configured_sources(service)
-    assert not incomplete and first == second and len(calls) == 2
+    assert not incomplete and second == untouched and len(calls) == 2
+    assert len(caches) == 31
+    assert caches[0] is not first_cache
+    assert all(cache is caches[0] for cache in caches)
+    cache = caches[0]
+    scoped = settings_paths(tmp_path, session_id='saved-0')
+    settings = cache.read(scoped.values())
+    settings['bundle']['active'] = 'caller-only mutation'
+    assert cache.read(scoped.values())['bundle']['active'] == 'git+https://example.invalid/shared@main'
+    assert len(calls) == 2, 'Absent session files share the same effective inputs'
+    # A newly present session scope must not reuse the global-only value.
+    scoped['session'].parent.mkdir(parents=True, exist_ok=True)
+    scoped['session'].write_text('sources:\n  modules:\n    tool-session: git+https://example.invalid/scoped@main\n')
+    scoped_bytes = scoped['session'].read_bytes()
+    changed = cache.read(scoped.values())
+    assert len(calls) == 3 and calls[-1] == tuple(scoped.values())
+    assert changed['sources']['modules']['tool-session'] == 'git+https://example.invalid/scoped@main'
+    changed['sources']['modules'].clear()
+    assert cache.read(scoped.values())['sources']['modules']['tool-session'].endswith('/scoped@main')
+    assert len(calls) == 3
+    third, incomplete = configured_sources(service)
+    assert not incomplete and len(calls) == 5  # Two effective scopes in this new check.
+    assert third[('https://example.invalid/scoped', 'main')] == {'Module source configuration'}
+    assert second == untouched and first[shared] == {'Selected bundle', 'caller-only evidence'}
+    assert scoped['session'].read_bytes() == scoped_bytes
 
 
 @pytest.mark.parametrize('historical,read_only', [(True, True), (True, False), (False, True)])

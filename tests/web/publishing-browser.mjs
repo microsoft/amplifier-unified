@@ -11,8 +11,8 @@ async function openPublishing(page){
  await page.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId);
  const canvas=page.locator('#workspace-canvas');
  if(!await canvas.isVisible())await page.getByRole('button',{name:'Open canvas',exact:true}).click();
- const overview=canvas.getByRole('tab',{name:'Chat overview',exact:true});
- if(await overview.getAttribute('aria-selected')!=='true')await overview.click();
+ const overview=canvas.getByRole('button',{name:'Chat overview',exact:true}).or(canvas.getByRole('tab',{name:'Chat overview',exact:true}));
+ if(await canvas.getAttribute('data-mode')!=='overview')await overview.click();
  const delivery=canvas.locator('[data-overview-section="publishing"]');
  if(!await delivery.evaluate(el=>el.open))await delivery.locator(':scope > summary').click();
  await expect(canvas.getByRole('region',{name:'Managed publishing'})).toBeVisible();

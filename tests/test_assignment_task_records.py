@@ -354,14 +354,26 @@ async def test_sqlite_backup_observes_whole_old_or_new_conversion(app, tmp_path)
             assert list(db.execute('SELECT id,fingerprint,receipt FROM commands ORDER BY id')) == expected
 
 
-async def test_explicit_conversation_reset_clears_normalized_items_with_commands(app):
+async def test_explicit_conversation_reset_hides_tasks_but_retains_effect_receipts(app):
     from amplifier_web.management import Management
-    from amplifier_web.recovery import reset
+    from test_reset_retention import dispatch_reset
     owner, value = await legacy(app)
     await change(app, owner, 'claim', next(iter(value['tasks'].values())), 'convert')
     assert task_count(app, app.assignments.current(owner)) == 1
-    await reset(Management(app), {'parts': ['conversations'], 'apply': True, 'confirmation': 'RESET'})
-    assert not app.db.execute('SELECT 1 FROM commands').fetchone()
+    commands = rows(app)
+    app.management = Management(app)
+    await dispatch_reset(app, 'reset-conversations', ('conversations',))
+    retained = {identity: (digest, receipt) for identity, digest, receipt in rows(app)}
+    assert all(retained[identity] == (digest, receipt) for identity, digest, receipt in commands)
+    assert not app.state['sessions'] and app.state['selectedSessionId'] is None
+    with pytest.raises(AppError):
+        await app.dispatch('assignment.tasks.list', {'sessionId': owner['id']})
+    operation = app.state['maintenance']['resetOperationId']
+    duplicate = await app.dispatch('maintenance.reset', {
+        'parts': ['conversations'], 'apply': True, 'confirmation': 'RESET',
+    }, command_id='reset-conversations')
+    assert duplicate['duplicate']
+    assert app.state['maintenance']['resetOperationId'] == operation
 
 
 async def test_oversized_legacy_map_remains_unavailable_for_conversion(app):

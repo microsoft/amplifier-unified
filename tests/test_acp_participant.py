@@ -15,7 +15,8 @@ def peer(tmp_path, *, resume=True):
 
 
 def operations(tmp_path):
-    return [json.loads(line) for line in (tmp_path / 'peer/operations.jsonl').read_text().splitlines()]
+    path = tmp_path / 'peer/operations.jsonl'
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
 
 async def deny(_tool, _options):

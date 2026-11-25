@@ -26,7 +26,11 @@ try{
  const turn=page.locator('[data-group-id="inspect@long-answer"]'),button=turn.locator(':scope > button.a-execution-turn-line');await button.waitFor();
  if(await button.getAttribute('aria-expanded')==='false')await button.click();
  const row=id=>turn.locator(`[data-node-id$=":preview-${id}"]`),header=id=>row(id).locator(':scope > button.a-execution-action-line');
- const open=async id=>{if(await header(id).getAttribute('aria-expanded')==='false')await header(id).click();return row(id)};
+ const inspector=page.locator('#work-step-inspector');
+ const open=async id=>{
+  if(await inspector.isVisible())await inspector.getByRole('button',{name:'Close step details'}).click();
+  await header(id).click();await expect(inspector).toBeVisible();return inspector;
+ };
  for(const [id,text] of [['search','search="coordinate-work"'],['dispatch','dispatch → workspace.read'],['scalars','limit=0, enabled=false, cursor=null'],['array','["a", 0, false, null]'],['object','filter={names: […]'],['false','false'],['zero','0'],['null','null'],['short-string','"inspect this"']])await expect(header(id)).toContainText(text);
  await expect(header('secrets')).toContainText('[redacted]');assert.ok(!(await header('secrets').innerText()).includes('SECRET'));
  await expect(header('long-preview')).toContainText('…');assert.equal(reads.length,0,'Collapsed hints require no payload requests');

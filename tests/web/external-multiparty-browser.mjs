@@ -6,9 +6,11 @@ import {join} from 'node:path';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {fixturePython} from './fixture-python.mjs';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 
 const root=process.env.AMPLIFIER_TEST_ROOT||fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(fixturePython(root+'/.venv/bin/python'),[root+'/tests/fixtures/external_multiparty_ui_server.py'],{stdio:['ignore','pipe','inherit']});
+const stopFixture=ownFixture(fixture,{label:'External multiparty fixture'});
 const artifacts=process.env.AMPLIFIER_TEST_ARTIFACTS;
 const report={passed:false,posts:[]};let browser;
 try{
@@ -64,6 +66,75 @@ try{
  const sharedBindings=shared.externalAgent.participants.map(row=>row.sessionId);assert.equal(new Set(sharedBindings).size,2);
  await page.reload();await expect(page.getByText('Beta answer: 42',{exact:true})).toBeVisible();
  assert.deepEqual((await observe()).peers,sharedFirst.peers);
+ // Change each independent peer through its own standard ACP session.
+ for(const [width,identity] of [[1280,'alpha'],[390,'beta']]){
+  const phone=width===390?await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH||undefined}):null;
+  try{
+  const editor=phone?await phone.newPage({viewport:{width,height:844},hasTouch:true,isMobile:true,
+   extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}):page;
+  if(phone){
+   await editor.goto(url);await editor.waitForFunction(()=>window.amplifier?.dispatch);
+   await editor.evaluate(id=>window.amplifier.dispatch('session.select',{id}),sharedId);
+  }
+  const settings=editor.getByRole('button',{name:'Agent settings',exact:true});
+  const panel=editor.getByRole('dialog',{name:'Agent settings',exact:true});
+  const input=editor.getByRole('textbox',{name:'Message Amplifier',exact:true});
+  await expect(settings).toBeVisible();
+  const centerY=async locator=>{const {y,height}=await locator.boundingBox();return y+height/2};
+  assert.ok(Math.abs(await centerY(settings.locator('span'))-await centerY(settings))<=1,'Trigger text is vertically centered');
+  assert.ok(Math.abs(await centerY(settings)-await centerY(editor.locator('[data-part="composer-primary-action"]')))<=2,'Settings and the send control share a center line');
+  const before=await input.boundingBox();
+  await settings.click();
+  await panel.getByLabel('Agent',{exact:true}).selectOption(identity);
+  await expect(panel.getByLabel('Connection')).toHaveValue('one');
+  const after=await input.boundingBox();
+  assert.deepEqual(after,before);
+  for(const [label,value] of [['Connection','two'],['Model','review'],['Effort','high']]){
+   const selector=panel.getByLabel(label,{exact:true});
+   await selector.selectOption(value);
+   await expect(selector).toHaveValue(value);
+   await expect(selector).toBeEnabled();
+  }
+  await expect(panel.getByRole('button',{name:/^Keep /})).toHaveCount(0);
+  const snapshot=await observe();
+  const changes=snapshot.peers[identity].filter(row=>row.kind==='configure');
+  assert.equal(changes.length,3);
+  assert.ok(changes.every(row=>row.sessionId===sharedBindings[identity==='alpha'?0:1]));
+  assert.deepEqual(changes.at(-1).settings,{provider:'two',model:'review',effort:'high'});
+  if(identity==='alpha')assert.equal(snapshot.peers.beta.filter(row=>row.kind==='configure').length,0);
+  if(artifacts)await editor.screenshot({path:join(artifacts,'agent-settings-'+width+'.png')});
+  await expect(panel.getByText('Agent settings',{exact:true})).toHaveCount(0);
+  await expect(panel.getByRole('button',{name:/close|dismiss/i})).toHaveCount(0);
+  if(phone){
+   const popup=await panel.boundingBox();
+   await editor.touchscreen.tap(popup.x+popup.width/2,popup.y-8);
+  }else await editor.keyboard.press('Escape');
+  await expect(panel).toBeHidden();
+  if(!phone)await expect(settings).toBeFocused();
+  }finally{await phone?.close()}
+ }
+ await page.setViewportSize({width:1280,height:950});
+ // Separate browser clients keep private drafts and navigation, even while
+ // they inspect the same public room. Neither draft is submitted to a peer.
+ const afterSettings=(await observe()).peers;
+ const secondBrowser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH||undefined});
+ const other=await secondBrowser.newPage({viewport:{width:1280,height:950},
+  extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ try{
+  await other.goto(url);await other.waitForFunction(()=>window.amplifier?.dispatch);
+  await other.evaluate(id=>window.amplifier.dispatch('session.select',{id}),sharedId);
+  const otherComposer=other.getByRole('textbox',{name:'Message Amplifier',exact:true});
+  await composer.fill('First private draft — never public');
+  await otherComposer.fill('Second private draft — never public');
+  await expect(composer).toHaveText('First private draft — never public');
+  await other.evaluate(id=>window.amplifier.dispatch('session.select',{id}),legacyId);
+  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),sharedId);
+  await expect(composer).toHaveText('First private draft — never public');
+  await other.evaluate(id=>window.amplifier.dispatch('session.select',{id}),sharedId);
+  await expect(otherComposer).toHaveText('Second private draft — never public');
+  assert.deepEqual((await observe()).peers,afterSettings);
+  report.privateClientViews={separateDrafts:true,separateNavigation:true,noPeerPrompt:true};
+ }finally{await secondBrowser.close()}
  // Both streamed drafts remain attributed; a public post while busy is not
  // forced into either current prompt. Room Stop cancels current and queued work.
  await send('wait-for-stop');
@@ -146,7 +217,6 @@ try{
  report.passed=true;
  console.log(JSON.stringify({passed:true,sharedRoom:true,autonomousPeerResponse:true,independentStreams:true,roomStopAndLaterPost:true,legacyDirectedPreserved:true,noNativeWorker:true,mobileNoOverflow:true}));
 }finally{
- if(artifacts){await mkdir(artifacts,{recursive:true});await writeFile(join(artifacts,'result.json'),JSON.stringify(report,null,2));}
- await browser?.close();
- if(fixture.exitCode===null){const exited=new Promise(resolve=>fixture.once('exit',resolve));fixture.kill('SIGTERM');await exited;}
+ try{if(artifacts){await mkdir(artifacts,{recursive:true});await writeFile(join(artifacts,'result.json'),JSON.stringify(report,null,2));}}
+ finally{await finishFixture({label:'External multiparty fixture',close:[['Browser',()=>browser?.close()]],stop:stopFixture})}
 }

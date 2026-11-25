@@ -1,4 +1,4 @@
-"""Proposed narrow placement API: test-first, NOT implemented at this base.
+"""Narrow placement recovery through real controls and synthetic native boot.
 
 All data is synthetic. AppService/Management/authority/command ledger are real;
 subprocess boot/lease is a fixture, but Worker controls, Core mounts, both file
@@ -185,6 +185,37 @@ async def settle_submitted_commands(b):
 
 async def start(b):
     await asyncio.wait_for(b.runtime.start(b.owner, b.app.on_runtime_event), 12)
+
+
+async def start_owned_placement_turn(b):
+    await start(b)
+    row = b.runtime.workers[b.owner['id']]
+    assert row['process'].returncode is None
+    evidence = await b.runtime._request(b.owner['id'], 'fixture.root_turn',
+        generationId='placement-owned-generation', inputId='operator-choice',
+        interruptionRevision=b.owner.get('interruptionRevision', 0))
+    generation = b.owner['collaborationGeneration']
+    assert generation['id'] == evidence['generationId'] and not generation['terminal']
+    assert generation['inputIds'] == ['operator-choice']
+    tree = b.owner['execution']
+    assert tree['currentTurnId'] == 'operator-choice'
+    turn, = [turn for turn in tree['turns'] if turn['id'] == 'operator-choice']
+    assert turn['runtimeOwnerId'] == row['runtimeOwnerId']
+    assert turn['generationId'] == evidence['generationId']
+    assert turn['startedAt'] == evidence['observedAt'] and turn['phase'] == 'completed'
+    annotation = b.owner['messageAnnotations']['input-status:operator-choice']
+    assert annotation['_generationStartedAt'] == evidence['observedAt']
+    assert annotation['inputStatus']['generationId'] == evidence['generationId']
+    assert b.owner['status'] == 'idle'
+    return row
+
+
+def assert_owned_exit(b, old_worker):
+    assert old_worker['process'].returncode == 0 and old_worker['executionEnded'] is True
+    assert b.runtime.workers[b.owner['id']]['runtimeOwnerId'] != old_worker['runtimeOwnerId']
+    generation = b.owner['collaborationGeneration']
+    assert generation['id'] == 'placement-owned-generation'
+    assert generation['terminal'] is True and generation['completed'] is False
 
 
 async def tool(b, name, arguments):
@@ -677,6 +708,7 @@ async def test_placement_controls_preserve_bytes_until_ordinary_persistence(plac
 @pytest.mark.parametrize('change', ['terminal', 'revoked', 'stopped'])
 async def test_completed_root_can_read_and_retrieve_exact_receipt_without_admission(placement, monkeypatch, change):
     b = placement
+    old_worker = await start_owned_placement_turn(b)
     snapshot = await read_placement(b)
     authorized = await authorize(b)
     args = bind_args(b, snapshot)
@@ -686,6 +718,7 @@ async def test_completed_root_can_read_and_retrieve_exact_receipt_without_admiss
     # This must be the terminal generation produced by the real worker exit,
     # not a fixture reset to manufacture new mutation authority.
     assert b.owner['collaborationGeneration']['terminal'] is True
+    assert_owned_exit(b, old_worker)
     if change == 'revoked':
         await revoke(b.app, authorized)
     elif change == 'stopped':
@@ -770,6 +803,7 @@ async def test_retained_no_effect_receipt_does_not_borrow_authority_for_new_requ
 @pytest.mark.parametrize('actor', ['foreign-root', 'child', 'missing-principal'])
 async def test_terminal_observation_and_receipt_remain_transport_root_bound(placement, action, actor):
     b = placement
+    old_worker = await start_owned_placement_turn(b)
     snapshot = await read_placement(b)
     await authorize(b)
     args = bind_args(b, snapshot)
@@ -777,6 +811,7 @@ async def test_terminal_observation_and_receipt_remain_transport_root_bound(plac
     assert (await finished(b.app, 'bind-placement'))['phase'] == 'ready'
     await settle_submitted_commands(b)
     assert b.owner['collaborationGeneration']['terminal'] is True
+    assert_owned_exit(b, old_worker)
     retained = await operation(b)
     before, stamp, trace = b.path.read_bytes(), b.path.stat().st_mtime_ns, stages(b)
     source = b.peer if actor == 'foreign-root' else b.owner
@@ -794,6 +829,7 @@ async def test_terminal_observation_and_receipt_remain_transport_root_bound(plac
 @pytest.mark.parametrize('mismatch', ['payload', 'root'])
 async def test_terminal_binding_receipt_rejects_same_id_with_changed_identity(placement, mismatch):
     b = placement
+    old_worker = await start_owned_placement_turn(b)
     snapshot = await read_placement(b)
     await authorize(b)
     args = bind_args(b, snapshot)
@@ -801,6 +837,7 @@ async def test_terminal_binding_receipt_rejects_same_id_with_changed_identity(pl
     assert (await finished(b.app, 'bind-placement'))['phase'] == 'ready'
     await settle_submitted_commands(b)
     assert b.owner['collaborationGeneration']['terminal'] is True
+    assert_owned_exit(b, old_worker)
     retained = await operation(b)
     before, stamp, trace = b.path.read_bytes(), b.path.stat().st_mtime_ns, stages(b)
     if mismatch == 'root':
@@ -828,3 +865,20 @@ async def test_binding_receipt_lookup_rejects_a_command_from_another_action(plac
         await submit(b, bind_args(b, snapshot), 'not-a-binding-command')
     assert b.path.read_bytes() == before and stages(b) == []
     assert not b.runtime.workers and not b.owner.get('pendingConfiguration')
+
+
+async def test_unbound_configuration_worker_exit_does_not_end_seeded_generation(placement):
+    b = placement
+    await start(b)
+    old_worker = b.runtime.workers[b.owner['id']]
+    generation = copy.deepcopy(b.owner['collaborationGeneration'])
+    assert not b.owner.get('execution', {}).get('turns')
+    snapshot = await read_placement(b)
+    await authorize(b)
+    await submit(b, bind_args(b, snapshot))
+    assert (await finished(b.app, 'bind-placement'))['phase'] == 'ready'
+    await settle_submitted_commands(b)
+    assert old_worker['process'].returncode == 0 and old_worker['executionEnded'] is True
+    assert b.runtime.workers[b.owner['id']]['runtimeOwnerId'] != old_worker['runtimeOwnerId']
+    assert b.owner['collaborationGeneration'] == generation
+    assert generation['terminal'] is False

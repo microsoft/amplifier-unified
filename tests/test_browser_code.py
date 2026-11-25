@@ -1,4 +1,4 @@
-"""Sign-in by typed code for a browser on another device (Windows host).
+"""Sign-in by typed code or saved key for a browser on another device (Windows host).
 
 No listener: real aiohttp requests through the real authentication middleware
 and the real handlers. Synchronous on purpose: the focused Windows job installs
@@ -62,9 +62,9 @@ def home(tmp_path_factory):
 class PrivateFiles:
     """The two existing owner credentials behind the private-directory seam.
 
-    The sign-out record is not a model. On native Windows it goes through this
-    seam to the real private store (`native`); the other systems do not use
-    the seam for it.
+    The sign-out record and the record of the saved sign-in key are not
+    models. On native Windows they go through this seam to the real private
+    store (`native`); the other systems do not use the seam for them.
     """
 
     def __init__(self, native=None):
@@ -78,7 +78,7 @@ class PrivateFiles:
         class Pinned:
             def read_private(self, name, *, limit):
                 files.events.append(name)
-                if name == "session-epoch" and files.native is not None:
+                if name in {"session-epoch", "sign-in-key"} and files.native is not None:
                     with files.native(path, owned_root=owned_root) as real:
                         return real.read_private(name, limit=limit)
                 if Path(path).parts[-2:] != ("config", "auth") or name not in {"session-secret", "control-token"}:
@@ -86,7 +86,7 @@ class PrivateFiles:
                 return (SECRET if name == "session-secret" else TOKEN).encode()
 
             def publish_private(self, name, content, *, replace=False):
-                assert name == "session-epoch"              # Nothing else is ever written through this seam.
+                assert name in {"session-epoch", "sign-in-key"}     # Nothing else is ever written through this seam.
                 with files.native(path, owned_root=owned_root, create=True) as real:
                     real.publish_private(name, content, replace=replace)
         yield Pinned()
@@ -118,10 +118,12 @@ def host(home, files):
     app["sessions"] = auth.Sessions()                       # No sign-out yet, as on a new installation.
     entry.initialize(app)
     assert isinstance(app["browser_entry"], entry.GrantStore) and isinstance(app["browser_codes"], entry.CodeStore)
+    assert isinstance(app["browser_key"], entry.SavedKey)
     app.router.add_post(entry.ISSUE_PATH, entry.issue)
     app.router.add_post(entry.REDEEM_PATH, entry.redeem)
     app.router.add_post(entry.CODE_PATH, entry.code_issue)
     app.router.add_post(entry.CODE_REDEEM_PATH, entry.code_redeem)
+    app.router.add_post(entry.KEY_REDEEM_PATH, entry.key_redeem)
     app.router.add_get("/login", auth.login_page)
 
     async def protected(request):
@@ -357,11 +359,11 @@ def test_issue_reply_capacity_and_unavailable_host(host, monkeypatch):
 def test_stores_exist_together_or_not_at_all(host, monkeypatch):
     host["control_token"] = "d" * 64                        # Not the private owner credential.
     entry.initialize(host)
-    assert host["browser_entry"] is None and host["browser_codes"] is None
+    assert host["browser_entry"] is None and host["browser_codes"] is None and host["browser_key"] is None
     monkeypatch.setattr(entry, "is_windows", lambda: False)
     other = web.Application()
     entry.initialize(other)
-    assert other["browser_entry"] is None and other["browser_codes"] is None
+    assert other["browser_entry"] is None and other["browser_codes"] is None and other["browser_key"] is None
 
 
 # The typed code at the remote address.
@@ -724,7 +726,7 @@ def test_the_field_and_sign_in_come_directly_after_the_heading_and_the_error(hos
     Run G: at 300 % the error text moved the button below the window edge,
     because all the help stood between the heading and the field.
     """
-    for path in ("/login", "/login?error=1"):
+    for path in ("/login", "/login?error=key", "/login?error=1"):
         text = call(host, path, method="GET", at=REMOTE, origin=None).text
         body = text[text.index("<main>"):text.index("</main>")]
         heading, error, form, button, end = (body.index(mark) for mark in (
@@ -733,9 +735,12 @@ def test_the_field_and_sign_in_come_directly_after_the_heading_and_the_error(hos
         # Between the heading and the form there is the error text and nothing else.
         between = body[body.index("</h1>") + len("</h1>"):form]
         assert re.fullmatch(r'\s*<p class="error" role="alert">[^<]*</p>\s*', between), between
-        # Every other text and the one link come after the button.
-        assert all(body.index(mark) > end for mark in ('id="code-help"', "<code>", "<a "))
-        assert body.count("<p") == 3
+        # The key form comes next, after one short line. Every other text and the one link come after both forms.
+        key_form = body.index("<form ", end)
+        assert body[end + len("</form>"):key_form].strip() == '<p class="note">Or sign in with a key that you saved.</p>'
+        assert all(body.index(mark) > body.index("</form>", key_form)
+                   for mark in ('id="code-help"', 'id="key-help"', "<code>", "<a "))
+        assert body.count("<p") == 5
     assert "That code did not work" in text
 
 
@@ -1139,15 +1144,15 @@ def test_remote_address_gets_the_code_form_and_the_local_page_is_unchanged(host)
     assert page.status == 200 and page.content_type == "text/html"
     assert "<script" not in text.lower()
     assert f'<title>Sign in · {host["service"].instance_branding.snapshot()["name"]}</title>' in text
-    assert text.count("<form") == 1 and f'<form method="post" action="{entry.CODE_REDEEM_PATH}">' in text
-    assert text.count("<input") == 2 and '<link rel="stylesheet" href="/app-pages.css">' in text
+    assert text.count("<form") == 2 and f'<form method="post" action="{entry.CODE_REDEEM_PATH}">' in text
+    assert text.count("<input") == 4 and '<link rel="stylesheet" href="/app-pages.css">' in text
     for attribute in ('name="code"', 'autocomplete="one-time-code"', 'autocapitalize="characters"',
                       'spellcheck="false"', " required>", '<button type="submit">Sign in</button>'):
         assert attribute in text
     assert ("To get a code, run this on the Windows PC that runs Amplifier: "
             "<code>amplifier-unified browsers code</code>.") in text
     # A PC from the setup file has no short command: the page links to the guide's full one.
-    assert ("If Windows does not find that command, use the full command from the\n"
+    assert ("If Windows does not find a command, use the full command from the\n"
             f'<a href="{entry.GUIDE}" target="_blank" rel="noopener noreferrer">'
             "Windows steps of the deployment guide</a>.") in text
     guide = (Path(__file__).resolve().parents[1] / "docs" / "DEPLOYMENT.md").read_text(encoding="utf-8")
@@ -1158,7 +1163,7 @@ def test_remote_address_gets_the_code_form_and_the_local_page_is_unchanged(host)
     # The field's help is the text that says where the code comes from.
     assert 'aria-describedby="code-help"' in text and text.count('id="code-help"') == 1
     csrf = page.cookies[auth.CSRF_COOKIE]
-    assert f'<input type="hidden" name="csrf" value="{csrf.value}">' in text
+    assert text.count(f'<input type="hidden" name="csrf" value="{csrf.value}">') == 2      # One in each form.
     assert csrf["httponly"] and csrf["samesite"] == "Strict" and csrf["secure"] and csrf["path"] == "/"
     assert page.headers["Cache-Control"] == "no-store"
     # Not no-referrer: a browser would then post the form with "Origin: null".
@@ -1186,6 +1191,8 @@ def test_other_platforms_keep_the_password_page_and_refuse_both_code_endpoints(h
     assert call(host, entry.CODE_PATH, headers=BEARER, body=issue_body(host)).status == 503
     assert redeem(host, code).status == 403
     assert len(host["browser_codes"]._codes) == 1
+    refused = with_key(host, new_key(host))
+    assert refused.status == 403 and refused.text == entry.RELOAD_KEY and host["browser_key"].failures == 0
 
 
 # The owner's command.
@@ -1392,6 +1399,7 @@ def test_host_serves_both_code_endpoints():
     source = (Path(entry.__file__).parent / "server.py").read_text(encoding="utf-8")
     assert "app.router.add_post(browser_entry.CODE_PATH, browser_entry.code_issue)" in source
     assert "app.router.add_post(browser_entry.CODE_REDEEM_PATH, browser_entry.code_redeem)" in source
+    assert "app.router.add_post(browser_entry.KEY_REDEEM_PATH, browser_entry.key_redeem)" in source
 
 
 def test_command_line_names_both_operations(monkeypatch):
@@ -1399,4 +1407,564 @@ def test_command_line_names_both_operations(monkeypatch):
     args = cli._parse()
     assert (args.command, args.browsers_command, args.origin) == ("browsers", "code", REMOTE)
     monkeypatch.setattr(sys, "argv", ["amplifier-unified", "browsers", "sign-out"])
-    assert cli._parse().origin is None
+    assert cli._parse().origin is None and cli._parse().remove is False
+    monkeypatch.setattr(sys, "argv", ["amplifier-unified", "browsers", "key", "--remove"])
+    args = cli._parse()
+    assert (args.command, args.browsers_command, args.remove) == ("browsers", "key", True)
+
+
+# The saved sign-in key.
+
+def new_key(app):
+    """A key, as the owner's command makes it on the PC."""
+    return entry.make_key(app["service"].data_dir)[0]
+
+
+async def typed_key(app, key, *, at=REMOTE, csrf=None, headers=None, body=None, **options):
+    """Post the key form at a remote address, as the page on the other device does."""
+    csrf = csrf or auth.new_csrf(app["session_secret"])
+    return await send(app, entry.KEY_REDEEM_PATH, at=at, headers={
+        "Content-Type": FORM, "Cookie": f"{auth.CSRF_COOKIE}={csrf}", **(headers or {})},
+        body=body or urlencode({"csrf": csrf, "key": key}), **options)
+
+
+def with_key(*args, **options):
+    return asyncio.run(typed_key(*args, **options))
+
+
+def wrong_key(response):
+    return (response.status == 303 and response.headers["Location"] == "/login?error=key"
+            and auth.SESSION_COOKIE not in response.cookies)
+
+
+def other_key(key):
+    """The key with another first symbol."""
+    return next(symbol for symbol in entry.CODE_ALPHABET if symbol != key[0]) + key[1:]
+
+
+def test_key_has_125_bits_and_its_record_holds_only_the_hash(host):
+    home = host["service"].data_dir
+    assert auth.read_sign_in_key(home) is None              # A new installation has no key.
+    key, replaced = entry.make_key(home)
+    assert re.fullmatch(f"[{entry.CODE_ALPHABET}]{{25}}", key) and replaced is False
+    assert len(entry.CODE_ALPHABET) ** entry.KEY_LENGTH == 2 ** 125
+    assert entry.SavedKey.display("ABCDEFGHJKLMNPQRSTUVWXYZ2") == "ABCDE-FGHJK-LMNPQ-RSTUV-WXYZ2"
+    record = auth._sign_in_key_path(home).read_bytes()
+    made, digest = record.decode("ascii").split()
+    assert record.endswith(b"\n") and digest == hashlib.sha256(key.encode()).hexdigest()
+    assert key.encode() not in record and abs(int(made) - auth.time.time()) < 5
+    assert auth.read_sign_in_key(home) == (int(made), digest)
+    if os.name != "nt":
+        assert os.stat(auth._sign_in_key_path(home)).st_mode & 0o777 == 0o600
+    assert len({entry.make_key(home)[0] for _ in range(20)}) == 20
+
+
+@pytest.mark.parametrize("peer", ["127.0.0.1", "100.101.102.103"])
+def test_key_signs_in_at_every_remote_address_again_and_again(host, peer):
+    """A Tailscale TCP forward connects from 127.0.0.1; a LAN browser does not."""
+    key = new_key(host)
+    assert call(host, "/api/protected", method="GET", at=REMOTE, origin=None).status == 401
+    for at, typed_text in ((REMOTE, key), (OTHER, entry.SavedKey.display(key).lower()), (REMOTE, " ".join(key))):
+        response = with_key(host, typed_text, at=at, peer=peer)
+        assert signed_in(response), at
+        assert response.headers["Cache-Control"] == "no-store" and response.headers["Referrer-Policy"] == "no-referrer"
+        cookie = response.cookies[auth.SESSION_COOKIE]
+        assert cookie["secure"] and cookie["httponly"] and cookie["samesite"] == "Strict" and cookie["path"] == "/"
+        assert int(cookie["max-age"]) == 600 and response.cookies[auth.CSRF_COOKIE].value == ""
+        assert auth.valid_session(host, cookie.value) and session_payload(cookie.value)["via"] == "remote"
+        assert call(host, "/api/protected", method="GET", at=at, origin=None,
+                    headers={"Cookie": f"{auth.SESSION_COOKIE}={cookie.value}"}).status == 200
+    assert host["browser_key"].failures == 0
+
+
+def test_wrong_key_costs_no_private_read_shows_its_error_and_logs_only_a_count(host, monkeypatch, capsys):
+    key = new_key(host)
+    reads, read = [], auth.read_sign_in_key
+    monkeypatch.setattr(auth, "read_sign_in_key", lambda data_dir: reads.append(1) or read(data_dir))
+    guess = other_key(key)
+    response = with_key(host, guess)
+    assert wrong_key(response) and auth.CSRF_COOKIE not in response.cookies
+    assert response.headers["Cache-Control"] == "no-store" and response.headers["Referrer-Policy"] == "no-referrer"
+    assert capsys.readouterr().out == "Remote sign-in: 1 wrong keys since start.\n"
+    assert len(reads) == 1                                  # The host's first look at the record.
+    host["browser_key"].failures = 95
+    code = make_code(host)
+    # Any device that reaches the address can send wrong keys; each stays cheap.
+    for attempt in (guess, guess.lower(), "O" + key[1:], key[:-1], key + "2", code, "not a key", "", "é" * 25):
+        assert wrong_key(with_key(host, attempt)), attempt
+    assert capsys.readouterr().out == "Remote sign-in: 100 wrong keys since start.\n"
+    assert len(reads) == 1 and host["browser_key"].failures == 104
+    # No lockout and no delay: after all these the saved key still works, and a code is no key.
+    assert signed_in(with_key(host, key)) and signed_in(redeem(host, code))
+    printed = capsys.readouterr()
+    assert printed.out == "Remote sign-in: a browser signed in with the saved key.\n"
+    assert key not in printed.out + printed.err and guess not in printed.out + printed.err
+    assert wrong(redeem(host, key))                         # And the key is no code.
+
+
+def test_no_key_and_a_removed_key_open_nothing(host):
+    home = host["service"].data_dir
+    assert wrong_key(with_key(host, "ABCDEFGHJKLMNPQRSTUVWXYZ2"))      # No key is saved.
+    assert entry.remove_key(home) is False and not auth._sign_in_key_path(home).exists()
+    key = new_key(host)
+    assert signed_in(with_key(host, key))
+    assert entry.remove_key(home) is True
+    assert auth._sign_in_key_path(home).read_bytes() == b"none\n" and auth.read_sign_in_key(home) is None
+    assert wrong_key(with_key(host, key)) and entry.remove_key(home) is False
+
+
+def test_a_new_key_ends_the_earlier_one_at_the_next_request(host):
+    home = host["service"].data_dir
+    first = new_key(host)
+    session = with_key(host, first).cookies[auth.SESSION_COOKIE].value
+    second, replaced = entry.make_key(home)
+    assert replaced is True and second != first
+    assert wrong_key(with_key(host, first)) and signed_in(with_key(host, second))
+    assert auth.valid_session(host, session)                # A browser that is signed in stays signed in.
+
+
+def clock(monkeypatch, start):
+    """One clock for the host and the owner's commands; a pause moves it."""
+    now = [start]
+    monkeypatch.setattr(auth.time, "time", lambda: now[0])
+    monkeypatch.setattr(auth.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    return now
+
+
+def test_sign_out_of_all_browsers_ends_the_saved_key(host, monkeypatch):
+    home = host["service"].data_dir
+    now = clock(monkeypatch, 1_900_000_100)
+    key = new_key(host)
+    session = with_key(host, key).cookies[auth.SESSION_COOKIE].value
+    now[0] += 10
+    assert auth.valid_session(host, session)
+    auth.sign_out_all(home)                                 # The owner's command, in another process.
+    # The running host has not applied it yet: the key opens nothing, and that is not a wrong key.
+    assert wrong_key(with_key(host, key)) and host["browser_key"].failures == 0
+    assert auth.refresh_sessions(host) is True and not auth.valid_session(host, session)
+    now[0] += 30
+    assert wrong_key(with_key(host, key)) and host["browser_key"].failures == 1     # The key ended with the sign-out.
+    assert auth.read_sign_in_key(home) is not None          # Its record is still there, and of no use.
+    later, replaced = entry.make_key(home)
+    assert replaced is False and signed_in(with_key(host, later))
+
+
+def test_key_is_made_in_a_second_after_the_saved_sign_out(host, monkeypatch):
+    home = host["service"].data_dir
+    now = clock(monkeypatch, 1_900_000_200)
+    auth.sign_out_all(home)
+    assert auth.refresh_sessions(host) is True and host["sessions"].epoch == 1_900_000_200
+    key = new_key(host)                                     # In the second of the sign-out: the command waits.
+    assert auth.read_sign_in_key(home)[0] == 1_900_000_201 and signed_in(with_key(host, key))
+    now[0] = 1_900_000_150                                  # The clock of the PC was set back.
+    monkeypatch.setattr(auth.time, "sleep", lambda seconds: None)
+    with pytest.raises(entry.BrowserEntryUnavailable, match="clock"):
+        entry.make_key(home)
+    assert auth.read_sign_in_key(home)[0] == 1_900_000_201  # Nothing was saved.
+    assert wrong_key(with_key(host, key))                   # A key from a later second than the present opens nothing.
+
+
+@pytest.mark.parametrize("made,works", [(1_900_000_300, False), (1_900_000_301, True),
+                                        (1_900_000_400, True), (1_900_000_401, False)])
+def test_key_counts_from_the_second_after_the_applied_sign_out_to_the_present_second(host, monkeypatch, made, works):
+    """The rule of a session, for the second in which the key was made."""
+    monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_400)
+    host["sessions"].epoch = 1_900_000_300
+    key = "ABCDEFGHJKLMNPQRSTUVWXYZ2"
+    auth.write_sign_in_key(host["service"].data_dir, (made, hashlib.sha256(key.encode()).hexdigest()))
+    assert signed_in(with_key(host, key)) is works
+
+
+def test_record_that_cannot_be_read_is_no_key_and_is_read_again(host, monkeypatch):
+    home = host["service"].data_dir
+    key = new_key(host)
+    read, look, reads = auth.read_sign_in_key, auth.sign_in_key_hint, []
+
+    def fails(data_dir):
+        reads.append(1)
+        raise OSError("in use")
+    monkeypatch.setattr(auth, "read_sign_in_key", fails)
+    assert wrong_key(with_key(host, key)) and wrong_key(with_key(host, other_key(key))) and len(reads) == 2
+    monkeypatch.setattr(auth, "read_sign_in_key", read)
+    assert signed_in(with_key(host, key))                   # Nothing was kept from the reads that failed.
+    monkeypatch.setattr(auth, "sign_in_key_hint", lambda data_dir: auth._UNSEEN)
+    assert wrong_key(with_key(host, key))                   # A look that failed finds no key.
+    monkeypatch.setattr(auth, "sign_in_key_hint", look)
+    assert signed_in(with_key(host, key))
+    # A malformed record is an error for its reader. For the host it is no key, and the host
+    # does not read it again until the file changes.
+    auth.write_sign_in_key(home, ("soon", "0" * 64))
+    with pytest.raises(ValueError):
+        auth.read_sign_in_key(home)
+    del reads[:]
+    monkeypatch.setattr(auth, "read_sign_in_key", lambda data_dir: reads.append(1) or read(data_dir))
+    assert wrong_key(with_key(host, key)) and wrong_key(with_key(host, other_key(key))) and len(reads) == 1
+    monkeypatch.setattr(auth, "read_sign_in_key", read)
+    for content in (b"12 " + b"a" * 63 + b"\n", b"12 " + b"A" * 64 + b"\n", b"1" * 13 + b" " + b"a" * 64 + b"\n",
+                    b"12 " + b"a" * 64 + b"\n\n", b"none", b""):
+        assert not auth._SIGN_IN_KEY_RECORD.fullmatch(content), content
+    # The longest record that is read has 78 bytes. A longer file is malformed, whatever it begins with.
+    digest = hashlib.sha256(key.encode()).hexdigest()
+    auth.write_sign_in_key(home, (999_999_999_999, digest))
+    assert len(auth._sign_in_key_path(home).read_bytes()) == 78 and auth.read_sign_in_key(home)[1] == digest
+    auth.write_sign_in_key(home, (auth.read_sign_in_key(home)[0], digest + "\n" + "a" * 100))
+    with pytest.raises(ValueError):
+        auth.read_sign_in_key(home)
+    assert wrong_key(with_key(host, key))
+    assert entry.remove_key(home) is True and auth.read_sign_in_key(home) is None      # Such a record is replaced too.
+
+
+def test_record_that_is_replaced_between_the_look_and_the_read_leaves_no_earlier_key(host, monkeypatch):
+    """The host looks at the file, then reads it. A key that is made in between counts for that request."""
+    home = host["service"].data_dir
+    first = new_key(host)
+    assert signed_in(with_key(host, first))                 # The host has read the record of the first key.
+    second = new_key(host)
+    read, made = auth.read_sign_in_key, {}
+
+    def replaced_before_the_read(data_dir):
+        if not made:
+            made["started"] = True
+            made["third"] = entry.make_key(data_dir)[0]     # The owner's command, after the host's look.
+        return read(data_dir)
+    monkeypatch.setattr(auth, "read_sign_in_key", replaced_before_the_read)
+    assert wrong_key(with_key(host, second))                # The record that was read is the third key's.
+    monkeypatch.setattr(auth, "read_sign_in_key", read)
+    assert wrong_key(with_key(host, first)) and wrong_key(with_key(host, second))
+    assert signed_in(with_key(host, made["third"]))
+
+
+KEY_REFUSED = {name: REFUSED[name] for name in (
+    "loopback Host", "localhost Host", "Host that is not a configured address", "configured address that is not HTTPS",
+    "no Origin", "another Origin", "opaque Origin", "plain HTTP", "plain HTTP without Origin",
+    "no CSRF cookie", "unsigned CSRF", "expired CSRF", "a session used as CSRF",
+    "JSON content type", "multipart content type")}
+KEY_REFUSED.update({
+    "form CSRF is not the cookie's": lambda app, key: {"body": fields(app, key=key)["body"]},
+    "no key field": lambda app, key: fields(app),
+    "a code field in place of the key": lambda app, key: fields(app, code=key),
+    "extra field": lambda app, key: fields(app, key=key, next="/"),
+    "duplicate field": lambda app, key: {
+        name: value + ("&key=" + key if name == "body" else "") for name, value in fields(app, key=key).items()},
+})
+
+
+@pytest.mark.parametrize("options", KEY_REFUSED.values(), ids=[name.replace(" ", "-") for name in KEY_REFUSED])
+def test_failed_precondition_is_refused_before_the_key_record_is_looked_at(host, monkeypatch, options):
+    key = new_key(host)
+    monkeypatch.setattr(auth, "sign_in_key_hint", lambda data_dir: pytest.fail("The record was looked at"))
+    response = with_key(host, key, **options(host, key))
+    assert response.status == 403 and auth.SESSION_COOKIE not in response.cookies
+    assert host["browser_key"].failures == 0                # Not counted as a wrong key.
+
+
+def test_oversize_key_form_and_a_host_that_cannot_be_confirmed_open_nothing(host, monkeypatch):
+    key = new_key(host)
+    assert with_key(host, key, body="csrf=" + "x" * 4096 + "&key=" + key).status == 413
+    read = entry.read_owner_control_token
+    monkeypatch.setattr(entry, "read_owner_control_token", lambda *a: "d" * 64)    # The private credential changed.
+    assert wrong_key(with_key(host, key)) and host["browser_key"].failures == 0
+    monkeypatch.setattr(entry, "read_owner_control_token", read)
+    host["service"].update_manager.running_identity["instanceId"] = "e" * 32
+    assert signed_in(with_key(host, key))                   # Unlike a code, the key outlasts a restart of the host.
+
+
+def test_with_remote_access_off_the_key_opens_nothing(host):
+    """The default: only this computer's own addresses are configured."""
+    key = new_key(host)
+    for origins in ([LOCAL, "https://localhost:8941"], []):
+        host["server_config"]["public_origins"] = origins
+        for at in (REMOTE, OTHER, UNLISTED, LOCAL, "https://localhost:8941"):
+            response = with_key(host, key, at=at)
+            assert response.status == 403 and auth.SESSION_COOKIE not in response.cookies
+    assert host["browser_key"].failures == 0
+
+
+def test_key_form_is_refused_when_the_host_has_no_key_store(host):
+    key = new_key(host)
+    host["browser_key"] = None
+    response = with_key(host, key)
+    assert response.status == 403 and response.text == entry.RELOAD_KEY and auth.SESSION_COOKIE not in response.cookies
+
+
+def test_remote_page_has_the_key_form_and_its_own_error_text(host):
+    page = call(host, "/login", method="GET", at=REMOTE, origin=None)
+    text = page.text
+    assert f'<form method="post" action="{entry.KEY_REDEEM_PATH}">' in text
+    for attribute in ('<label for="key">Sign-in key</label>', 'id="key" name="key" type="password"',
+                      'autocomplete="current-password"', 'aria-describedby="key-help"',
+                      '<button type="submit">Sign in with key</button>'):
+        assert attribute in text
+    # The code field keeps the focus, and a password manager finds one password field.
+    assert text.count("autofocus") == 1 and text.index("autofocus") < text.index('id="key"')
+    assert text.count('type="password"') == 1
+    assert ("To make a key that you can save, for example in a password manager, run this on that PC:\n"
+            "<code>amplifier-unified browsers key</code>.") in text and text.count('id="key-help"') == 1
+    assert "That key did not work" not in text
+    again = call(host, "/login?error=key", method="GET", at=REMOTE, origin=None).text
+    assert ("That key did not work. Check it and type it again. A key stops working when you make a new key, "
+            "remove it or sign out all browsers on the PC.") in again and "That code did not work" not in again
+    # The page's own form signs in.
+    assert signed_in(with_key(host, new_key(host), csrf=page.cookies[auth.CSRF_COOKIE].value))
+    # The page of this computer has no key form.
+    assert 'name="key"' not in call(host, "/login", method="GET", at=LOCAL, origin=None).text
+
+
+def test_real_https_sign_in_with_the_saved_key_at_the_remote_address(host, tmp_path):
+    """Real sockets, real TLS and the real middleware; the listener is on loopback, as behind a Tailscale forward."""
+    from cryptography.hazmat.primitives import serialization
+    from amplifier_web import deployment, windows_tls
+    config = deployment.validate_server({"public_origins": [LOCAL, REMOTE]})
+    root, root_key = windows_tls._new_root(config)
+    cert, key_file = windows_tls._encoded_pair(*windows_tls._new_local_leaf(root, root_key, config))
+    (tmp_path / "leaf.crt").write_bytes(cert)
+    (tmp_path / "leaf.key").write_bytes(key_file)
+    serving = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    serving.load_cert_chain(tmp_path / "leaf.crt", tmp_path / "leaf.key")
+    trusting = ssl.create_default_context(cadata=root.public_bytes(serialization.Encoding.PEM).decode())
+    served = web.Application(middlewares=[auth.auth_required])
+    for name in ("control_token", "session_secret", "server_config", "allowed_origins", "service",
+                 "browser_entry", "browser_codes", "browser_key", "sessions"):
+        served[name] = host[name]
+    served.router.add_post(entry.KEY_REDEEM_PATH, entry.key_redeem)
+    served.router.add_get("/login", auth.login_page)
+
+    async def protected(request):
+        return web.json_response({"authenticated": True})
+    served.router.add_get("/api/protected", protected)
+    home, remote_host = host["service"].data_dir, REMOTE.split("://", 1)[1]
+
+    async def run():
+        runner = web.AppRunner(served)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=serving)
+        await site.start()
+        base = f"https://127.0.0.1:{runner.addresses[0][1]}"
+        try:
+            async with aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar()) as client:
+                def at_remote(method, path, **options):
+                    headers = {"Host": remote_host, **options.pop("headers", {})}
+                    return client.request(method, base + path, ssl=trusting, server_hostname="pc.tail1234.ts.net",
+                                          allow_redirects=False, headers=headers, **options)
+
+                async def sign_in(typed_text):
+                    async with at_remote("GET", "/login") as page:
+                        csrf = page.cookies[auth.CSRF_COOKIE].value
+                        assert f'action="{entry.KEY_REDEEM_PATH}"' in await page.text()
+                    form = {"Origin": REMOTE, "Content-Type": FORM, "Cookie": f"{auth.CSRF_COOKIE}={csrf}"}
+                    async with at_remote("POST", entry.KEY_REDEEM_PATH, headers=form,
+                                         data=urlencode({"csrf": csrf, "key": typed_text})) as response:
+                        return response.status, response.headers["Location"], response.cookies.get(auth.SESSION_COOKIE)
+
+                async def signed(cookie):
+                    async with at_remote("GET", "/api/protected", headers={
+                            "Cookie": f"{auth.SESSION_COOKIE}={cookie.value}"}) as response:
+                        return response.status
+                key = entry.make_key(home)[0]                # The owner's command at the PC.
+                assert await sign_in(other_key(key)) == (303, "/login?error=key", None)
+                # The same form at the local address is not a remote sign-in.
+                csrf = auth.new_csrf(SECRET)
+                async with client.post(base + entry.KEY_REDEEM_PATH, ssl=trusting, allow_redirects=False,
+                                       data=urlencode({"csrf": csrf, "key": key}), headers={
+                                           "Host": LOCAL.split("://", 1)[1], "Origin": LOCAL, "Content-Type": FORM,
+                                           "Cookie": f"{auth.CSRF_COOKIE}={csrf}"}) as local:
+                    assert local.status == 403
+                status, location, cookie = await sign_in(entry.SavedKey.display(key))
+                assert (status, location) == (303, "/") and cookie["secure"] and cookie["httponly"]
+                assert await signed(cookie) == 200
+                # The key is not used up: a second browser signs in with it.
+                status, location, second = await sign_in(key)
+                assert (status, location) == (303, "/") and second.value != cookie.value and await signed(second) == 200
+                # The owner signs out all browsers at the PC. The host applies it: both browsers are signed
+                # out, and the key opens nothing.
+                auth.sign_out_all(home)
+                assert await sign_in(key) == (303, "/login?error=key", None)
+                assert auth.refresh_sessions(served) is True
+                assert await signed(cookie) == 401 and await signed(second) == 401
+                assert await sign_in(key) == (303, "/login?error=key", None)
+        finally:
+            await runner.cleanup()
+    asyncio.run(run())
+
+
+# The owner's command for the key.
+
+@pytest.fixture
+def key_command(home, monkeypatch):
+    """The real CLI entry and the real record; only the saved configuration is replaced."""
+    from amplifier_web import application_generations, deployment, host_dependencies
+    monkeypatch.setattr(host_dependencies, "prepare_environment", lambda: None)
+    monkeypatch.setattr(application_generations, "delegate", lambda: None)
+    # The command needs no credential: the owner's private folder is its authority.
+    for owner, name in ((auth, "control_token"), (auth, "session_secret"), (entry, "read_owner_control_token")):
+        monkeypatch.setattr(owner, name, lambda *a: pytest.fail("The command read a credential"))
+
+    def run(*arguments, origins=(REMOTE, OTHER), windows=True, command="key"):
+        monkeypatch.setattr(entry, "is_windows", lambda: windows)
+        monkeypatch.setattr(deployment, "load_server_config",
+                            lambda data_dir, overrides=None: {"public_origins": list(origins)})
+        monkeypatch.setattr(sys, "argv", ["amplifier-unified", "--data-dir", str(home), "browsers", command, *arguments])
+        return cli.main()
+    return run
+
+
+def test_key_command_shows_a_new_key_once_and_saves_only_its_record(key_command, home, capsys):
+    key_command()
+    out = capsys.readouterr().out
+    shown = re.search(f"^    ((?:[{entry.CODE_ALPHABET}]{{5}}-){{4}}[{entry.CODE_ALPHABET}]{{5}})$", out, re.M)[1]
+    assert out == (
+        "Save this sign-in key now, for example in a password manager. Amplifier does not show it again.\n\n"
+        f"    {shown}\n\n"
+        'On the other device, open Amplifier and type the key in the field "Sign-in key". '
+        f"Addresses for other devices:\n  {REMOTE}\n  {OTHER}\n"
+        'Amplifier must be running. It uses a new address only after the steps "Turn remote access on" '
+        "of the deployment guide.\n"
+        "The key works until you make a new key, remove it (amplifier-unified browsers key --remove) "
+        "or sign out all browsers.\n")
+    digest = auth.read_sign_in_key(home)[1]
+    assert digest == hashlib.sha256(shown.replace("-", "").encode()).hexdigest()
+    key_command(origins=(LOCAL, PLAIN, OTHER))              # Only one address is for other devices.
+    again = capsys.readouterr().out
+    assert again.endswith("The earlier key no longer works.\n") and shown not in again and f"  {OTHER}\n" in again
+    assert REMOTE not in again and LOCAL not in again and PLAIN not in again
+    assert auth.read_sign_in_key(home)[1] != digest
+
+
+def test_key_command_removes_the_key_and_the_sign_out_command_ends_it(key_command, home, monkeypatch, capsys):
+    key_command("--remove")
+    assert capsys.readouterr().out == "No sign-in key was saved.\n"
+    key_command()
+    capsys.readouterr()
+    key_command("--remove")
+    assert capsys.readouterr().out == "The sign-in key is removed. Browsers that are signed in stay signed in.\n"
+    assert auth.read_sign_in_key(home) is None and auth.session_epoch(home) == 0       # No browser was signed out.
+    key_command()
+    capsys.readouterr()
+    signed_out = ("All browsers on all devices are signed out. A running Amplifier applies this within a few seconds.\n"
+                  "To use Amplifier in a browser again, open it from this computer.\n")
+    key_command(command="sign-out")
+    assert capsys.readouterr().out == signed_out + (
+        "The saved sign-in key no longer works. To make a new one, run this: amplifier-unified browsers key.\n")
+    # The saved second ends the key, and the record is gone as well: the key cannot come back with the clock.
+    assert auth.read_sign_in_key(home) is None and auth.session_epoch(home) > 0
+    key_command(command="sign-out")
+    assert capsys.readouterr().out == signed_out            # No key: no line about one.
+    key_command()                                           # In a second after the sign-out.
+    assert "The earlier key no longer works." not in capsys.readouterr().out
+    later = auth.read_sign_in_key(home)
+    assert later[0] > auth.session_epoch(home)
+    # A removal that is not confirmed is said, with the command that removes the key.
+    write = auth.write_sign_in_key
+
+    def fails(*arguments):
+        raise OSError("ABCDE")
+
+    def fails_after_the_save(*arguments):
+        write(*arguments)
+        raise OSError("ABCDE")
+    # A host that is not a Windows host has no key and no key command: its sign-out names neither.
+    remove = entry.remove_key
+    monkeypatch.setattr(entry, "remove_key", lambda data_dir: pytest.fail("The key's record was looked at"))
+    key_command(command="sign-out", windows=False)
+    assert capsys.readouterr().out == signed_out and auth.read_sign_in_key(home) == later
+    monkeypatch.setattr(entry, "remove_key", remove)
+    for writer, record in ((fails, later), (fails_after_the_save, None)):
+        monkeypatch.setattr(auth, "write_sign_in_key", writer)
+        key_command(command="sign-out")                     # The sign-out itself is done: no error exit.
+        assert capsys.readouterr().out == signed_out + (
+            "Amplifier could not confirm that the saved sign-in key is removed. Run this: "
+            "amplifier-unified browsers key --remove.\n")
+        assert auth.read_sign_in_key(home) == record
+
+
+def test_sign_out_command_ends_a_key_from_a_second_that_the_clock_has_not_reached_again(
+        key_command, home, monkeypatch, capsys):
+    """The clock of the PC was ahead when the key was made, or it was set back later."""
+    now = clock(monkeypatch, 1_900_000_500)
+    key_command()
+    key = re.search(f"^    ((?:[{entry.CODE_ALPHABET}]{{5}}-){{4}}[{entry.CODE_ALPHABET}]{{5}})$",
+                    capsys.readouterr().out, re.M)[1]
+    record = auth.read_sign_in_key(home)
+    app = {"service": SimpleNamespace(data_dir=home), "sessions": auth.Sessions.load(home)}
+    saved = entry.SavedKey()
+    assert record[0] == 1_900_000_500 and saved.accepts(app, key)
+    now[0] = 1_900_000_100                                  # The clock was set back.
+    assert not saved.accepts(app, key)                      # A key from a later second opens nothing now.
+    key_command(command="sign-out")
+    assert "The saved sign-in key no longer works." in capsys.readouterr().out
+    assert auth.refresh_sessions(app) is True and app["sessions"].epoch < record[0]    # An earlier second than the key's.
+    now[0] = 1_900_000_600                                  # The clock reaches the second of the key again.
+    assert auth.read_sign_in_key(home) is None and not saved.accepts(app, key)
+    # The rule alone reads the clock: with the record still there, the key would be back.
+    auth.write_sign_in_key(home, record)
+    assert saved.accepts(app, key)
+
+
+def test_key_command_refusals_are_plain_and_change_nothing(key_command, home, monkeypatch, capsys):
+    with pytest.raises(SystemExit) as stopped:
+        key_command(windows=False)
+    assert str(stopped.value) == "On this computer, sign in with the host account password on the sign-in page."
+    with pytest.raises(SystemExit) as stopped:
+        key_command(origins=(LOCAL, PLAIN))
+    assert "amplifier-unified config set public_origins" in str(stopped.value)
+    for command in ("code", "sign-out"):
+        with pytest.raises(SystemExit) as stopped:
+            key_command("--remove", command=command)
+        assert str(stopped.value) == "--remove is only valid with browsers key."
+    assert auth.read_sign_in_key(home) is None and auth.session_epoch(home) == 0
+    key_command()
+    record = auth.read_sign_in_key(home)
+    capsys.readouterr()
+
+    write = auth.write_sign_in_key
+
+    def fails(*arguments):
+        raise OSError("ABCDE")
+
+    def fails_after_the_save(*arguments):
+        write(*arguments)                                   # As a save that fails when the record is in place.
+        raise OSError("ABCDE")
+    texts = {(): "Amplifier could not confirm that a new sign-in key is saved",
+             ("--remove",): "Amplifier could not confirm that the sign-in key is removed"}
+    for writer in (fails, fails_after_the_save):
+        monkeypatch.setattr(auth, "write_sign_in_key", writer)
+        for arguments, phrase in texts.items():
+            with pytest.raises(SystemExit) as stopped:
+                key_command(*arguments)
+            said = str(stopped.value)
+            assert said.startswith(phrase) and str(home) in said and "Run the command again." in said
+            # No sentence says that nothing changed, and none says what works: neither is known.
+            said = said.replace(str(home), "")
+            assert "ABCDE" not in said and "NOT" not in said and "Nothing was changed" not in said
+        assert capsys.readouterr().out == ""                # No key was shown.
+        changed = auth.read_sign_in_key(home) != record
+        assert changed is (writer is fails_after_the_save)
+    # A save that leaves another record than the one that was written is not confirmed either.
+    for arguments, phrase in texts.items():
+        monkeypatch.setattr(auth, "write_sign_in_key", lambda *a: None)
+        before = auth.read_sign_in_key(home)
+        if arguments and before is None:
+            write(home, record)                             # A removal needs a record to remove.
+            before = record
+        with pytest.raises(SystemExit) as stopped:
+            key_command(*arguments)
+        assert str(stopped.value).startswith(phrase) and capsys.readouterr().out == ""
+        assert auth.read_sign_in_key(home) == before
+    # A save that cannot be read back is not confirmed either.
+    monkeypatch.setattr(auth, "write_sign_in_key", write)
+    key_command()
+    capsys.readouterr()
+    read = auth.read_sign_in_key
+    for arguments, phrase in texts.items():
+        looks = []
+
+        def unread_after_the_save(data_dir):
+            looks.append(1)
+            if len(looks) > 1:
+                raise OSError("ABCDE")
+            return read(data_dir)
+        monkeypatch.setattr(auth, "read_sign_in_key", unread_after_the_save)
+        with pytest.raises(SystemExit) as stopped:
+            key_command(*arguments)
+        assert str(stopped.value).startswith(phrase) and capsys.readouterr().out == ""
+        monkeypatch.setattr(auth, "read_sign_in_key", read)

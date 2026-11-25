@@ -40,6 +40,24 @@ def forbidden(kind):
     raise AssertionError('Unexpected ' + kind)
 
 
+async def readonly_setup(self, action, args):
+    COUNTERS['intercept:' + action] += 1
+    if action == 'providers.list':
+        return {'providers': []}
+    if action == 'providers.suggestionModels':
+        # This is a saved-settings read, not discovery or inference. Keep an
+        # exact, disabled response instead of admitting the providers namespace.
+        from amplifier_web.suggestion_provider import INSTRUCTION
+        return {'suggestionModels': {
+            'enabled': False, 'provider': None, 'model': None, 'effort': None,
+            'prompt': INSTRUCTION, 'defaultPrompt': INSTRUCTION,
+            'transcriptMode': 'last_n', 'humanTurns': 6,
+            'revision': hashlib.sha256(b'inline-media-disabled-suggestions-v1').hexdigest(),
+            'takesEffect': 'next_request',
+        }, 'providers': []}
+    return forbidden('provider-operation:' + action)
+
+
 def isolate_probes(cache_home):
     # Install guards BEFORE create_app can schedule any producer. Runtime mocks
     # alone do not prevent independent defaults/catalog/naming SDK probes.
@@ -53,12 +71,6 @@ def isolate_probes(cache_home):
 
     async def naming(*args, **kwargs):
         COUNTERS['intercept:naming'] += 1
-
-    async def setup(self, action, args):
-        COUNTERS['intercept:' + action] += 1
-        if action == 'providers.list':
-            return {'providers': []}
-        return forbidden('provider-operation:' + action)
 
     original = Management.perform
 
@@ -76,7 +88,7 @@ def isolate_probes(cache_home):
     draft_defaults.resolve_defaults = defaults
     automatic_naming.AutomaticNaming.schedule = naming
     naming_backfill.NamingBackfill.start = lambda *args, **kwargs: forbidden('naming-start')
-    SetupManager.perform = setup
+    SetupManager.perform = readonly_setup
     SetupManager.provider_rows = lambda *args, **kwargs: []
     SetupManager.cached_probe = lambda *args, **kwargs: forbidden('provider-probe')
     Management.perform = management
@@ -88,7 +100,7 @@ def isolate_probes(cache_home):
         Path(__file__).with_name('inline_media_process_guard.py'))
     guard = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(guard)
-    guard.install(cache_home, forbidden,
+    return guard.install(cache_home, forbidden,
         lambda: COUNTERS.update({'display-projector-start': 1}))
 
 
@@ -110,19 +122,25 @@ class NoModel:
 
 
 async def main():
-    with tempfile.TemporaryDirectory(prefix='unified-inline-media-') as temporary:
-        root = Path(temporary)
-        os.environ.update(AMPLIFIER_HOME=str(root / 'native'), AMPLIFIER_WEB_HOME=str(root / 'app'),
-                          AMPLIFIER_SESSION_STATE_HOME=str(root / 'locks'),
-                          AMPLIFIER_UNIFIED_IMPORT_HOME=str(root / 'legacy'))
-        isolate_probes(root / 'app')
-        loop = asyncio.get_running_loop()
-        loop.set_exception_handler(lambda loop, context: ERRORS.append(str(context.get('exception') or context.get('message'))))
-        auth.authenticate_pam = lambda user, password: (user, password) == ('media-fixture', 'fixture-password')
-        app = await create_app(root / 'app', workspace=root, runtime=NoModel(), voice=False,
-                               preload_providers=False, background_updates=False)
-        await serve(root, app)
-    print(json.dumps({'phase': 'fixture-process', 'temporaryRemoved': not root.exists()}), flush=True)
+    root = None
+    try:
+        with tempfile.TemporaryDirectory(prefix='unified-inline-media-') as temporary:
+            root = Path(temporary)
+            os.environ.update(AMPLIFIER_HOME=str(root / 'native'), AMPLIFIER_WEB_HOME=str(root / 'app'),
+                              AMPLIFIER_SESSION_STATE_HOME=str(root / 'locks'),
+                              AMPLIFIER_UNIFIED_IMPORT_HOME=str(root / 'legacy'))
+            isolate_probes(root / 'app')
+            loop = asyncio.get_running_loop()
+            loop.set_exception_handler(lambda loop, context: ERRORS.append(str(context.get('exception') or context.get('message'))))
+            auth.authenticate_pam = lambda user, password: (user, password) == ('media-fixture', 'fixture-password')
+            app = await create_app(root / 'app', workspace=root, runtime=NoModel(), voice=False,
+                                   preload_providers=False, background_updates=False)
+            await serve(root, app)
+    finally:
+        # Report actual removal even when a no-model assertion failed. The
+        # exception still escapes and the process still exits unsuccessfully.
+        print(json.dumps({'phase': 'fixture-process',
+                          'temporaryRemoved': root is not None and not root.exists()}), flush=True)
 
 
 async def serve(root, app):

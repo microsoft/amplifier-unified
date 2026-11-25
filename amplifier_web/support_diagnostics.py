@@ -6,7 +6,18 @@ import re
 
 _TRANSITION_FAILURE_CODES = (
     'transition_unsupported', 'transition_intent_required', 'recovery_checkpoint_rejected',
+    'recovery_unreconciled', 'summary_work_paused',
 )
+
+
+def _context_recovery_fields(code, reason):
+    from .context_continuity import TRANSITION_HOLD_REASONS
+    if type(code) is not str or code not in _TRANSITION_FAILURE_CODES:
+        return {}
+    fields = {'contextRecoveryCode': code}
+    if code == 'recovery_unreconciled' and type(reason) is str and reason in TRANSITION_HOLD_REASONS:
+        fields['contextRecoveryReason'] = reason
+    return fields
 
 
 def environment():
@@ -59,8 +70,8 @@ def exception_chain(error):
                     item['providerFailure'] = {'code': 'function_call_truncated'}
         if type(error).__name__ == 'ContextRecoveryError':
             from .context_continuity import ContextRecoveryError
-            if type(error) is ContextRecoveryError and type(error.code) is str and error.code in _TRANSITION_FAILURE_CODES:
-                item['contextRecoveryCode'] = error.code
+            if type(error) is ContextRecoveryError:
+                item.update(_context_recovery_fields(error.code, error.reason))
         chain.append(item)
         error = error.__cause__ or error.__context__
     return chain
@@ -100,9 +111,8 @@ def public_exception_chain(value):
         if (kind == 'FunctionCallTruncationError'
                 and item.get('providerFailure') == {'code': 'function_call_truncated'}):
             row['providerFailure'] = {'code': 'function_call_truncated'}
-        code = item.get('contextRecoveryCode')
-        if kind == 'ContextRecoveryError' and type(code) is str and code in _TRANSITION_FAILURE_CODES:
-            row['contextRecoveryCode'] = code
+        if kind == 'ContextRecoveryError':
+            row.update(_context_recovery_fields(item.get('contextRecoveryCode'), item.get('contextRecoveryReason')))
         result.append(row)
     return result
 
@@ -214,7 +224,7 @@ def callback_rejection_detail(row):
 def event_detail(row):
     result = {}
     for key in ('event', 'timestamp', 'ts', 'at', 'generation_id', 'session_id', 'sessionId',
-                'rootSessionId', 'runtimeSessionId', 'generationId', 'request_id', 'response_id', 'tool_call_id', 'provider', 'model',
+                'rootSessionId', 'runtimeSessionId', 'generationId', 'inputId', 'request_id', 'response_id', 'tool_call_id', 'provider', 'model',
                 'error_type', 'error_stage', 'error_category', 'disposition', 'operation',
                 'bridgeId', 'action', 'errorType', 'phase', 'type', 'id', 'turnId', 'parentId', 'kind', 'startedAt', 'endedAt', 'scope'):
         value = row.get(key)

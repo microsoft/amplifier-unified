@@ -23,7 +23,7 @@ EFFECTS = {
 PERSISTENT = {
     **dict.fromkeys(('permissions.save', 'permissions.reset'), 'file_access'),
     **dict.fromkeys(('providers.save', 'providers.remove', 'providers.move', 'providers.reorder', 'providers.login', 'providers.configureDecisions'), 'connections'),
-    **dict.fromkeys(('providers.finishSetup', 'routing.use', 'routing.save'), 'model_defaults'),
+    **dict.fromkeys(('providers.finishSetup', 'providers.configureSuggestions', 'routing.use', 'routing.save'), 'model_defaults'),
     **dict.fromkeys(('modules.save', 'modules.remove', 'modules.validate', 'modules.reconcile', 'sources.save', 'sources.remove', 'sources.validate'), 'modules'),
 }
 BUNDLE_GLOBAL = {'bundles.add', 'bundles.toggle', 'bundles.remove', 'bundles.move', 'bundles.reorder'}
@@ -72,7 +72,7 @@ def requirement(action, args):
         return 'bundles', 'local' if args['scope'] == 'workspace' else 'global'
     if action == 'bundle.save':
         return 'bundles', 'global'
-    if action in {'bundle.switch', 'bundle.fork'} or action == 'conversation.configure' and 'bundle' in args:
+    if action in {'bundle.switch', 'bundle.fork'} or action == 'conversation.configure' and ('bundle' in args or 'restorePreviousInputId' in args):
         return 'bundles', 'session'
     if action in {'configuration.apply', 'configuration.patchPlacement.bind'}:
         return 'runtime_configuration', 'session'
@@ -730,7 +730,7 @@ class ConfigurationAuthority:
         self.service._message(session, 'user', f'Permission {decision}:\n\n{comment}', 'permission',
                               approvalId=grant['id'], inputOrigin='approval')
 
-    async def decide(self, args, origin, command_id):
+    async def decide(self, args, origin, command_id, *, admission_check=None):
         if origin not in {'ui', 'user'}:
             self.error('Only the user can answer a configuration approval.')
         sid = args.get('sessionId') or self.service.state.get('selectedSessionId')
@@ -746,6 +746,8 @@ class ConfigurationAuthority:
                 if grant['status'] != 'expired':
                     self.service._task(self.notify_waiter(grant))
                 return {**receipt, 'duplicate': True}
+            if admission_check is not None:
+                admission_check()
             grant = self.record(args['id'])
             if grant['sessionId'] != sid:
                 self.error('The approval belongs to another conversation.')

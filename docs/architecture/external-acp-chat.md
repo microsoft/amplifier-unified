@@ -54,7 +54,12 @@ Optional `cwd` is the local launch directory. `sessionCwd` is the execution
 location sent to the agent, defaulting to the chat's workspace. Neither is a new
 filesystem grant. Arguments are passed directly, without a shell. A fixed SSH
 launcher can use the same stdio boundary; remote deployment is not qualified by
-the local pilot.
+the local pilot. For a fixed agent workspace, optionally enable **Also use the selected
+project in new chats** (`includeChatWorkspace: true`). This sends just that chat's
+selected project as an ACP additional directory on creation and resume if it differs
+from the agent workspace. The path must also exist and be permitted on the agent.
+Peers must advertise additional directories. Existing chats keep their saved scope
+when this setting changes.
 
 Choose the external agent in New chat and an existing workspace, then submit the
 first message. The draft stays private and creates no conversation or connection
@@ -87,10 +92,18 @@ text belongs to the selected conversation body, not the catalog.
 The room connector supplies original message identity/time and bounded attributed
 public context to the agent's advertised Instance attention capability. The
 instance decides whether to engage. Without that optional capability, the
-connector uses the existing Slack-style quiet ordinary ACP speak/pass convention
-on the same participant session. Decision output stays private. A decision is
-neither a permission grant nor proof that work happened; advertised attention
-errors do not silently fall back or repeat. See the canonical
+connector uses one ordinary ACP contribution-or-silence turn on the same
+participant session, not a separate private JSON decision prompt followed by
+another prompt. The agent can contribute to addressed or ambient conversation,
+return no text, or return exactly `[[PASS]]` to remain silent. A possible silence
+marker stays private while its chunks arrive; unambiguous ordinary reply text
+streams live with its author. Silence produces no public post or peer trigger.
+This ordinary turn can use already-authorized tools where the former quiet
+preflight refused client permission callbacks. Existing permission choices, Full,
+Stop and backend tool policy still apply; membership, addressing and received
+text grant no new authority. Negotiated attention remains the sole attention
+owner when advertised: a hold sends no contribution prompt, and its errors do
+not silently fall back or repeat. See the canonical
 [Instance attention contract](https://github.com/microsoft/amplifier-constellation-instance/blob/main/docs/attention.md).
 
 Completed public agent contributions are committed once and offered to the other
@@ -114,6 +127,21 @@ their original identities; interrupted or uncertain dispatches retain unknown
 receipts without automatic replay. Update-held inputs stay under the existing
 update owner's admission boundary. An independent participant's failure does not
 transfer or repeat its work through another agent.
+
+When a peer negotiates `com.microsoft.amplifier.agent-instance` version 1, the
+connector also binds its advertised public agent ID to the exact room source:
+the existing primary configured public origin and conversation ID. Without a
+configured origin, `urn:amplifier:conversation:<room-id>` provides only local UUID
+scope, not cross-installation copy/import disambiguation or authentication.
+The selected source is saved with the binding and reused even if the configured
+origin later changes; reconnect never silently rebinds it. Original input identity,
+immutable revision 0, attributed actor, conversation audience and reply target
+travel as prompt metadata, not as a new grant or JSON-RPC request identity.
+Reconnect fences a changed or missing public identity and resumes the saved
+execution; it never converts an old unbound execution. The peer's session receipt
+supplies its current interruption revision. After Stop, a later explicit input
+refreshes that revision through exact resume rather than guessing it. This
+optional profile does not add a source registry or replay uncertain inputs.
 
 The shared-room connector supplies bounded public context. When the peer advertises
 standard HTTP MCP support and the host has a primary configured HTTPS public

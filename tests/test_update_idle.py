@@ -25,6 +25,7 @@ for line in sys.stdin:
         else:
             emit({'op': 'reply', 'id': data['id'], 'result': {'plan': {}}})
     elif data['op'] == 'send':
+        emit({'type': 'input.delivered', 'input_id': data['input_id']})
         emit({'op': 'reply', 'id': data['id'], 'result': {'accepted': True}})
     elif data['op'] == 'release':
         if pending:
@@ -70,7 +71,7 @@ async def test_finished_configuration_inspection_does_not_block_staged_update(pr
 
 async def test_ready_during_cold_start_send_keeps_admitted_turn_protected(prepared, monkeypatch):
     service, manager = prepared
-    entered, deliver, ready = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    entered, deliver, ready, delivered = (asyncio.Event() for _ in range(4))
     original = service.runtime._request
     original_emit = service.on_runtime_event
 
@@ -78,6 +79,8 @@ async def test_ready_during_cold_start_send_keeps_admitted_turn_protected(prepar
         await original_emit(kind, payload)
         if kind == 'runtime.status' and payload.get('status') == 'ready':
             ready.set()
+        if kind == 'runtime.status' and payload.get('event') == 'input.delivered':
+            delivered.set()
 
     monkeypatch.setattr(service, 'on_runtime_event', observe)
 
@@ -104,7 +107,8 @@ async def test_ready_during_cold_start_send_keeps_admitted_turn_protected(prepar
         target.assert_not_awaited()
         deliver.set()
         await send
-        # Receiving an admission receipt alone does not finish the turn.
+        # Actual native delivery, not a host-created turn, owns execution.
+        await asyncio.wait_for(delivered.wait(), 3)
         assert manager.busy()
         await service.on_runtime_event('runtime.status', {'sessionId': service._session()['id'], 'status': 'idle'})
         assert not manager.busy()
@@ -237,3 +241,26 @@ async def test_existing_work_guards_still_defer_update(prepared, guard):
     elif guard == 'smart-tool':
         service.state['smartTools'] = {'operations': [{'status': 'running'}]}
     assert manager.busy()
+
+
+async def test_cold_restore_keeps_old_send_unknown_not_executing(prepared):
+    from amplifier_web.service import AppService
+    from amplifier_web.updates import UpdateManager
+    service, manager = prepared
+    session = service._session()
+    service._message(session, 'user', 'Interrupted synthetic delivery',
+                     inputId='old-input', delivery={'status': 'sending'})
+    session['status'] = 'ready'
+    service._save_changes(sessions={session['id']})
+    assert manager.busy()
+    await service.close()
+    reopened = AppService(service.data_dir, RuntimeManager(), workspace=service.default_workspace)
+    reopened.management = Management(reopened)
+    reopened.update_manager = UpdateManager(reopened)
+    try:
+        row = reopened._session(session['id'])
+        assert row['messages'][-1]['delivery']['status'] == 'unknown'
+        assert not reopened.update_manager.busy()
+        assert not reopened.runtime.workers
+    finally:
+        await reopened.close()

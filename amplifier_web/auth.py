@@ -331,8 +331,12 @@ def _epoch_hint(data_dir: Path):
     "the same record"; compare two looks only with `_same_record` and
     `_new_record`.
     """
+    return _record_hint(_epoch_path(data_dir))
+
+
+def _record_hint(path: Path):
     try:
-        info = os.stat(_epoch_path(data_dir))
+        info = os.stat(path)
     except FileNotFoundError:
         return None
     except OSError:
@@ -351,6 +355,73 @@ def _same_record(first, second) -> bool:
 def _new_record(first, second) -> bool:
     """Both looks worked, and the second found another record than the first."""
     return first is not _UNSEEN and second is not _UNSEEN and first != second
+
+
+_SIGN_IN_KEY = "sign-in-key"
+_NO_SIGN_IN_KEY = b"none\n"
+_SIGN_IN_KEY_RECORD = re.compile(rb"([0-9]{1,12}) ([0-9a-f]{64})\n?")
+
+
+def _sign_in_key_path(data_dir: Path) -> Path:
+    if _WINDOWS:
+        from . import windows_files
+        return windows_files.address(data_dir) / "config" / "auth" / _SIGN_IN_KEY
+    return Path(data_dir).expanduser().resolve() / "config" / "auth" / _SIGN_IN_KEY
+
+
+def read_sign_in_key(data_dir: Path):
+    """The record of the owner's saved sign-in key, or None when no key is saved.
+
+    The record is the second in which the key was made and the SHA-256 of the
+    key, never the key. A record that cannot be read or is malformed is an
+    error: it is not "no key", and it is not a key that works.
+    """
+    try:
+        if _WINDOWS:
+            from . import windows_files
+            root = windows_files.address(data_dir)
+            with windows_files.directory(root / "config" / "auth", owned_root=root) as pinned:
+                content = pinned.read_private(_SIGN_IN_KEY, limit=78)
+        else:
+            content = _sign_in_key_path(data_dir).read_bytes()[:79]
+    except FileNotFoundError:
+        return None
+    if content == _NO_SIGN_IN_KEY:
+        return None
+    record = _SIGN_IN_KEY_RECORD.fullmatch(content)
+    if not record:
+        raise ValueError("The saved sign-in key record is malformed.")
+    return int(record[1]), record[2].decode("ascii")
+
+
+def write_sign_in_key(data_dir: Path, record) -> None:
+    """Save the record of a new key, or None for no key, in the owner's private folder."""
+    content = _NO_SIGN_IN_KEY if record is None else f"{record[0]} {record[1]}\n".encode("ascii")
+    if _WINDOWS:
+        write_private(_sign_in_key_path(data_dir), content, owned_root=validated_data_dir(data_dir, create=True))
+    else:
+        auth_dir(data_dir)
+        write_private(_sign_in_key_path(data_dir), content)
+
+
+def sign_in_key_hint(data_dir: Path):
+    """The change hint of the saved key's record; compare as for `_epoch_hint`."""
+    return _record_hint(_sign_in_key_path(data_dir))
+
+
+def sign_in_key_is_current(app, made: int) -> bool:
+    """A saved key ends as a session ends: with the owner's sign-out of all browsers.
+
+    The key is good while the second of its making is after the sign-out that
+    this host applied, and not after the present second. It is the rule of
+    `valid_session` for the session's own second.
+    """
+    return getattr(app.get("sessions"), "epoch", 0) < made <= int(time.time())
+
+
+def saved_sign_out(data_dir: Path) -> int:
+    """The saved sign-out second, for the owner's command; an unreadable record is an error."""
+    return _read_epoch(data_dir)
 
 
 def refresh_sessions(app, streams=()) -> bool:
@@ -382,6 +453,9 @@ def refresh_sessions(app, streams=()) -> bool:
         # after the second of this record, so no stream needs to end.
         return False
     state.epoch = value
+    suggestions = getattr(app["service"], 'prompt_suggestions', None)
+    if suggestions is not None:
+        suggestions.invalidate()
     for task in list(streams):
         task.cancel()
     return True
@@ -402,7 +476,8 @@ async def watch_sessions(app, streams, *, interval=2.0):
                 reported = True
                 try:
                     print("Sign-out of all browsers could not be checked: " + type(error).__name__
-                          + ". Until it can be checked, no browser can sign in with a ticket or a code.", flush=True)
+                          + ". Until it can be checked, no browser can sign in with a ticket, a code or a key.",
+                          flush=True)
                 except (OSError, ValueError):
                     pass
 
@@ -510,6 +585,12 @@ async def auth_required(request: web.Request, handler):
     cross_site = request.headers.get("Sec-Fetch-Site") == "cross-site"
     if not extension and ((cross_site and not is_entry_navigation(request)) or not allowed_origin(request)):
         return web.json_response({"error": "Cross-origin requests are not permitted."}, status=403)
+    if request.method == "POST" and request.path in request.app.get("linked_instance_peer_paths", ()):
+        # These exact routes authenticate their own narrowly scoped requests.
+        # A link credential never acquires a normal app principal.
+        return await handler(request)
+    if request.headers.get("Authorization", "").lower().startswith("bearer ali_"):
+        return web.json_response({"error": "A link cannot access that operation."}, status=403)
     if request.path == '/api/room-context/mcp' and request.method == 'POST':
         # This exact handler checks a room/source-bound transport capability.
         # Neither that capability nor an owner cookie grants other API access.
@@ -520,10 +601,11 @@ async def auth_required(request: web.Request, handler):
                 or not hmac.compare_digest(authorization[7:].encode(), request.app["control_token"].encode())):
             return web.json_response({"error": "The owner control credential is required."}, status=403)
         return await handler(request)
-    if request.path in {browser_entry.REDEEM_PATH, browser_entry.CODE_REDEEM_PATH} and request.method == "POST":
+    if (request.path in {browser_entry.REDEEM_PATH, browser_entry.CODE_REDEEM_PATH, browser_entry.KEY_REDEEM_PATH}
+            and request.method == "POST"):
         # Only these exact public mutations. Each handler requires HTTPS, Origin
         # and signed form CSRF before atomically consuming the one-use ticket
-        # or typed code.
+        # or typed code, or before it compares the typed key.
         return await handler(request)
     if extension and request.method == 'OPTIONS':
         return await handler(request)

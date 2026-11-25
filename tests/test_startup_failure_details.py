@@ -48,6 +48,22 @@ async def test_send_keeps_private_startup_log_location_after_admission_fails(tmp
         await restored.close()
 
 
+async def test_host_failure_before_start_saves_only_bounded_cause(tmp_path, monkeypatch):
+    runtime = RuntimeManager(retention={'prewarm_on_select': False})
+    app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    monkeypatch.setattr(runtime, 'start', AsyncMock(side_effect=FileNotFoundError(2, 'private-detail')))
+    try:
+        await app.dispatch('session.create', {})
+        with pytest.raises(AppError) as rejected:
+            await app.dispatch('conversation.send', {'text': 'hello'}, command_id='host-start')
+        assert rejected.value.receipt['delivery'] == 'failed'
+        failure = app._session()['failure']
+        assert failure['startupFailureFacts']['errors'] == [{'class': 'FileNotFoundError', 'errno': 2}]
+        assert 'private-detail' not in json.dumps(failure)
+    finally:
+        await app.close()
+
+
 @pytest.mark.parametrize('facts', [
     {'errors': [{'class': 'RuntimeError'}, {'class': 'PermissionError', 'errno': 13}], 'truncated': False},
     None,
@@ -395,5 +411,79 @@ async def test_specific_classified_startup_error_keeps_its_guidance(tmp_path, mo
         assert 'private-provider-payload' in (tmp_path / 'logs/workers' / session['diagnosticReceipt']).read_text()
         assert session['messages'][0]['delivery']['status'] == 'failed'
         assert not runtime.workers
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize(('cold_execution', 'active_turn', 'start_in_tail'), [
+    (False, True, True), (True, True, True), (True, False, True), (True, True, False), (True, False, False)])
+async def test_failed_new_input_preserves_open_turn_and_update_hold(tmp_path, monkeypatch, cold_execution, active_turn, start_in_tail):
+    from amplifier_web import update_blockers
+    from amplifier_web.cold_display import MARKER, execution_reference
+    from amplifier_web.execution import ensure_turn
+    from amplifier_web.runtime import RuntimeStartupError
+    from amplifier_web.session_health import causal_timeline
+    from test_service import Runtime
+
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'native'))
+    runtime = Runtime()
+    app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        session = app._session()
+        sid = session['id']
+        generation = {'sessionId': sid, 'rootSessionId': sid, 'generation_id': 'existing-generation'}
+        ensure_turn(session, 'existing-input', 'Original request')
+        await app.on_runtime_event('runtime.generation', {**generation, 'event': 'generation.started',
+                                   'initial_input_id': 'existing-input', 'runtimeOwnerId': 'existing-worker'})
+        await app.on_runtime_event('runtime.status', {'sessionId': sid, 'event': 'input.delivered',
+                                   'status': 'working', 'inputId': 'existing-input'})
+        if not start_in_tail:
+            session['generations'] = []
+        if not active_turn:
+            # A legacy owner can have a native start with no terminal but an interrupted display turn.
+            session['execution']['turns'][0]['phase'] = 'interrupted'
+            session['status'] = 'interrupted'
+        if cold_execution:
+            # The current execution can live behind a stored resource when the chat is reopened.
+            tree = session.pop('execution')
+            session.setdefault(MARKER, {})['execution'] = execution_reference(app.db, tree)
+            assert 'execution' not in dict.keys(session)
+
+        async def fail_before_admission(_session, text, input_id, emit):
+            # A startup error can arrive on the new worker's pipe before send() rejects.
+            await emit('runtime.status', {'sessionId': sid, 'status': 'starting', 'phase': 'runtime-setup'})
+            await emit('runtime.error', {'sessionId': sid, 'phase': 'worker_startup', 'errorType': 'RuntimeStartupError'})
+            await emit('runtime.ended', {'sessionId': sid, 'runtimeOwnerId': 'failed-worker', 'status': 'interrupted'})
+            await emit('runtime.status', {'sessionId': sid, 'status': 'stopped', 'phase': 'worker_startup'})
+            raise RuntimeStartupError('New input was not admitted')
+
+        runtime.send = fail_before_admission
+        with pytest.raises(AppError) as rejected:
+            await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'Follow-up'}, command_id='new-input')
+
+        assert rejected.value.receipt['delivery'] == 'failed'
+        assert session['messages'][-1]['delivery']['status'] == 'failed'
+        if not active_turn:
+            assert session['status'] == 'error' and session['failure']['category'] == 'worker_startup'
+            assert session['execution']['turns'][0]['phase'] == 'interrupted'
+            assert update_blockers.working_sessions(app) == 0
+            return
+        assert session['status'] == 'working' and not session.get('failure')
+        assert session['collaborationGeneration']['terminal'] is False
+        original = next(turn for turn in session['execution']['turns'] if turn['id'] == 'existing-input')
+        assert original['phase'] == 'running' and not original.get('endedAt')
+        assert update_blockers.working_sessions(app) == 1
+        faults = [e for e in session['runtimeEvents'] if e['type'] == 'runtime.error']
+        assert len(faults) == 2 and faults[-1]['inputId'] == 'new-input'
+        assert all(e['scope'] == 'runtime' and not e.get('generationId') for e in faults)
+        assert all(e.get('type') != 'runtime.error' for e in causal_timeline(session))
+
+        await app.on_runtime_event('runtime.generation', {**generation, 'event': 'generation.finished',
+                                   'input_ids': ['existing-input'], 'disposition': 'manager_turn_finished'})
+        await app.on_runtime_event('runtime.status', {'sessionId': sid, 'event': 'session.idle', 'status': 'idle'})
+        assert session['collaborationGeneration']['completed'] is True
+        assert next(turn for turn in session['execution']['turns'] if turn['id'] == 'existing-input')['phase'] == 'completed'
+        assert update_blockers.working_sessions(app) == 0
     finally:
         await app.close()

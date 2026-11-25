@@ -9,6 +9,7 @@ import argparse
 from datetime import datetime
 import hashlib
 import io
+from itertools import count
 import json
 import os
 from pathlib import Path
@@ -42,6 +43,37 @@ def positive_id(value):
     if not isinstance(value, (str, int)) or not re.fullmatch(r'[1-9][0-9]*', str(value)):
         raise ValueError('Expected a positive integer run, attempt or artifact ID')
     return int(value)
+
+
+def run_status(run_id, attempt=None):
+    """Read the jobs of one publisher or verification attempt without fetching logs."""
+    prefix = f'repos/{REPOSITORY}/actions/runs/{positive_id(run_id)}'
+    run = gh('api', prefix if attempt is None else f'{prefix}/attempts/{positive_id(attempt)}')
+    actual = positive_id(run['run_attempt'])
+    jobs = []
+    skipped = 0
+    for number in count(1):
+        page = gh('api', f'{prefix}/attempts/{actual}/jobs?per_page=100&page={number}')
+        for job in page['jobs']:
+            state = job['conclusion'] or job['status']
+            if state == 'skipped':
+                skipped += 1
+                continue
+            row = {'job': job['name'], 'state': state, 'url': job['html_url']}
+            if job['status'] == 'completed' and job['started_at'] and job['completed_at']:
+                elapsed = datetime.fromisoformat(job['completed_at']) - datetime.fromisoformat(job['started_at'])
+                row['seconds'] = int(elapsed.total_seconds())
+            steps = [step['name'] for step in job.get('steps', [])
+                     if step['status'] == 'in_progress' or step['conclusion'] in
+                     ('failure', 'timed_out', 'action_required', 'cancelled')]
+            if steps:
+                row['steps'] = steps
+            jobs.append(row)
+        if not page['jobs'] or len(jobs) + skipped >= page['total_count']:
+            break
+    return {'workflow': run['name'], 'workflowHead': run['head_sha'], 'attempt': actual,
+            'url': f'{run["html_url"]}/attempts/{actual}', 'state': run['conclusion'] or run['status'],
+            'jobs': jobs, 'skippedJobs': skipped}
 
 
 def verify_publication_run(run, repository, run_id, attempt=None):
@@ -269,6 +301,9 @@ def track_report(repository, report):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
+    status = commands.add_parser('status', help='Read current or completed jobs for a specific run')
+    status.add_argument('run_id', type=positive_id)
+    status.add_argument('--attempt', type=positive_id, help='Default: the attempt observed at lookup')
     resolve = commands.add_parser('resolve')
     resolve.add_argument('--output', type=Path, required=True)
     download = commands.add_parser('download')
@@ -278,6 +313,9 @@ def main():
     report.add_argument('--summary-only', action='store_true',
                         help='Write the run summary without issue-write API calls')
     args = parser.parse_args()
+    if args.command == 'status':
+        print(json.dumps(run_status(args.run_id, args.attempt), indent=2))
+        return
     repository = os.environ['GITHUB_REPOSITORY']
     if args.command == 'resolve':
         # Freeze the actual latest published release before selecting its publisher.

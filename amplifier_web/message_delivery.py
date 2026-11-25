@@ -2,6 +2,23 @@
 import json
 
 
+def execution_boundary(session):
+    """Conservative latest saved input and Stop epoch; no new execution identity.
+
+    A saved input with unsettled delivery also fences an older Stop intent.
+    This is not a claim that the native owner incorporated that input.
+    """
+    latest = next((row.get('inputId') for row in reversed(session.get('messages', []))
+                   if row.get('role') == 'user' and row.get('inputId')), None)
+    return {'interruptionRevision': session.get('interruptionRevision', 0), 'inputId': latest}
+
+
+def sending_input(session):
+    """Observe resident admission, never hydrate old conversation history."""
+    return any(row.get('inputId') and row.get('delivery', {}).get('status') == 'sending'
+               for row in dict.get(session, 'messages', []))
+
+
 def receipt_mapping(raw):
     """Read a receipt without manufacturing a replacement for malformed bytes."""
     try:
@@ -35,6 +52,21 @@ def receipt_delivery(raw, session_id, input_id):
 def find_message(session, input_id):
     return next((m for m in session.get('messages', [])
                  if m.get('role') == 'user' and m.get('inputId') == input_id), None)
+
+
+def latest_user_input(session):
+    for row in reversed(session['messages']):
+        if row.get('role') != 'user':
+            continue
+        # Native service observations also have role=user. Keep genuine inputs
+        # as ordering barriers, including legacy inputs without an ID and web
+        # inputs that acquired observation metadata during history alignment.
+        if row.get('inputId') or row.get('nativeInputId') or 'delivery' in row:
+            return row
+        observation = row.get('observation')
+        if not (isinstance(observation, dict) and observation.get('source') and observation.get('id')):
+            return row
+    return None
 
 
 def contains_input(messages, input_id):

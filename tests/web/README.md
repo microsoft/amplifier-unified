@@ -36,6 +36,10 @@ selects its working directory. Use the runner's help for modes, time budgets and
 it retains both registry identities in evidence.
 Named host journeys are also available through this directory's package scripts.
 
+The opt-in `--app004-qualification` appends the fixed chat-reference units and
+deliberate reload check. [The feature validator](chat_reference_qualification.py)
+defines the expected cases and reads evidence from the browser journey.
+
 Fixtures use synthetic state and an owned Python interpreter selected through
 `fixture-python.mjs`; install matching Playwright Chromium or reuse the matching
 owned browser cache. Preserve fixture lifecycle, cancellation and cleanup helpers

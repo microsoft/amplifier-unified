@@ -324,7 +324,7 @@ class ProcessObservations:
         self.owned = []
         self.baseline_command = None
 
-    def capture_stderr(self, row, payload, *, complete):
+    def capture_stderr(self, row, payload, *, complete, identity=None):
         """Only the declared baseline command gets inner failure classification."""
         if row.get('commandRole') != 'baseline-install' or row['returncode'] == 0:
             return
@@ -333,6 +333,11 @@ class ProcessObservations:
                 facts = diagnostics.capture_error_facts(row['returncode'], 'stderr-incomplete')
             else:
                 facts = diagnostics.stream_facts((payload,), row['returncode'])
+                if identity is not None:
+                    require(facts['rawLogSha256'] == hashlib.sha256(payload).hexdigest()
+                            and facts['rawLogBytes'] == len(payload),
+                            'Diagnostic sample identity mismatch')
+                    facts.update(rawLogSha256=identity[0], rawLogBytes=identity[1])
                 require(not row.get('stderrCaptureError')
                         and facts['rawLogSha256'] == row['stderrObservedSha256']
                         and facts['rawLogBytes'] == row['stderrObservedBytes'],
@@ -368,10 +373,13 @@ class ProcessObservations:
             row['commandRole'] = 'baseline-install'
         self.owned.append((process, row))
         self.evidence.report['processes'].append(row)
+        communicating = False
         communicate = process.communicate
         async def observed_communicate(*a, **kw):
+            nonlocal communicating
             # On cancellation/timeout, communicate may not return consumed
             # bytes. Keep *Complete false; never label a partial hash complete.
+            communicating = True
             try:
                 result = await communicate(*a, **kw)
             except BaseException:
@@ -379,6 +387,8 @@ class ProcessObservations:
                 self.capture_stderr(row, b'', complete=False)
                 self.evidence.save_observation()
                 raise
+            finally:
+                communicating = False
             for channel, value in zip(('stdout', 'stderr'), result):
                 try:
                     if value:
@@ -398,6 +408,112 @@ class ProcessObservations:
             self.evidence.save_observation()
             return result
         process.communicate = observed_communicate
+        # The updater drains read(n) and waits independently. Observe only calls
+        # its consumer makes: never launch another reader or change its outcome.
+        eof, waited, classified = set(), False, False
+        stderr_hash, stderr_size, stderr_sample = hashlib.sha256(), 0, bytearray()
+        probe_line, probe_discard = bytearray(), False
+
+        def stream_probe(value, *, final=False):
+            nonlocal probe_discard
+            from amplifier_web.update_diagnostics import probe_record
+            # Bound one UTF-8 line to 4 bytes per maximum accepted character.
+            # Oversized lines are discarded through their delimiter.
+            for piece in value.splitlines(keepends=True):
+                ended = piece.endswith((b'\n', b'\r'))
+                if not probe_discard:
+                    if len(probe_line) + len(piece) > 4 * 8192:
+                        probe_line.clear()
+                        probe_discard = True
+                    else:
+                        probe_line.extend(piece)
+                if ended:
+                    if not probe_discard:
+                        facts = probe_record(bytes(probe_line))
+                        if facts is not None:
+                            row['probeReports'][:] = [facts]
+                    probe_line.clear()
+                    probe_discard = False
+            if final and not probe_discard and probe_line:
+                facts = probe_record(bytes(probe_line))
+                if facts is not None:
+                    row['probeReports'][:] = [facts]
+                probe_line.clear()
+
+        def finish_stream(*, failed=False):
+            nonlocal classified
+            if not classified and (failed or waited and 'stderr' in eof):
+                row['returncode'] = process.returncode
+                self.capture_stderr(row, bytes(stderr_sample), complete=not failed,
+                                    identity=(stderr_hash.hexdigest(), stderr_size))
+                classified = True
+            self.evidence.save_observation()
+
+        def tap_read(reader, channel):
+            read, depth = reader.read, 0
+            async def observed_read(*a, **kw):
+                nonlocal depth, stderr_size
+                outer = depth == 0 and not communicating
+                depth += 1
+                try:
+                    value = await read(*a, **kw)
+                except BaseException:
+                    if outer:
+                        self.evidence.capture_failed = True
+                        row[channel + 'CaptureError'] = 'stream-capture-failed'
+                        row[channel + 'Complete'] = False
+                        finish_stream(failed=True)
+                    raise
+                finally:
+                    depth -= 1
+                if not outer:
+                    return value  # communicate/read(-1) owns its returned bytes.
+                count = a[0] if a else kw.get('n', -1)
+                try:
+                    if value:
+                        if channel == 'stderr' and baseline:
+                            stderr_hash.update(value)
+                            stderr_size += len(value)
+                            room = diagnostics.FAILURE_SCAN_BYTES + 1 - len(stderr_sample)
+                            stderr_sample.extend(value[:max(0, room)])
+                        self.evidence.log(row, channel, value)
+                        if channel == 'stdout' and kind == 'probe':
+                            stream_probe(value)
+                    if count != 0 and (not value or count < 0):
+                        eof.add(channel)
+                        row[channel + 'Complete'] = not row.get(channel + 'CaptureError', False)
+                        if channel == 'stdout' and kind == 'probe':
+                            stream_probe(b'', final=True)
+                except Exception:
+                    self.evidence.capture_failed = True
+                    row[channel + 'CaptureError'] = 'stream-capture-failed'
+                    row[channel + 'Complete'] = False
+                finish_stream()
+                return value
+            reader.read = observed_read
+
+        if kind != 'worker':
+            for channel in ('stdout', 'stderr'):
+                reader = getattr(process, channel)
+                if reader is not None and callable(getattr(reader, 'read', None)):
+                    tap_read(reader, channel)
+            wait = getattr(process, 'wait', None)
+            if callable(wait):
+                async def observed_wait(*a, **kw):
+                    nonlocal waited
+                    try:
+                        result = await wait(*a, **kw)
+                    except BaseException:
+                        if not communicating:
+                            self.evidence.capture_failed = True
+                            finish_stream(failed=True)
+                        raise
+                    if not communicating:
+                        waited = True
+                        row['returncode'] = process.returncode
+                        finish_stream()
+                    return result
+                process.wait = observed_wait
         def tap_reader(reader, channel):
             readline = reader.readline
             async def observed_readline():

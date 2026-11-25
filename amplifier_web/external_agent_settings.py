@@ -17,9 +17,13 @@ def definitions(schema, string):
         'id': identity, 'label': {**string(200), 'minLength': 1},
         'command': {**string(4000), 'minLength': 1},
         'args': {'type': 'array', 'maxItems': 256, 'items': string(4000)},
-        'cwd': string(4000), 'sessionCwd': string(4000),
+        'cwd': string(4000), 'sessionCwd': string(4000), 'includeChatWorkspace': {'type': 'boolean'},
     }, ['label', 'command'])
     return {
+        'conversation.participantConfigure': ('Set an advertised option on one saved ACP agent session.', schema({
+            'sessionId': string(200), 'participantId': identity, 'expectedRevision': string(64),
+            'configId': string(200), 'value': string(500)},
+            ['sessionId','participantId','expectedRevision','configId','value'])),
         'externalAgents.list': ('List saved external agent names for chat creation; no launch arguments or credentials.', schema({}, [])),
         'externalAgents.get': ('Read one private external launch configuration. Agents use existing global connections authority.', schema({'id': identity}, ['id'])),
         'externalAgents.save': ('Save an external launch configuration for immediate use. Omit id to add; existing entries require their expectedRevision. Does not connect, install or rebind existing chats.', schema({'agent': agent, 'expectedRevision': string(64)}, ['agent'])),
@@ -56,7 +60,7 @@ def read(service, identity):
     if row is None:
         raise AppError('This external agent is not configured on this host.', 404)
     return {'revision': revision(row), 'agent': copy.deepcopy({key: row[key] for key in
-            ('id', 'label', 'command', 'args', 'cwd', 'sessionCwd') if key in row})}
+            ('id', 'label', 'command', 'args', 'cwd', 'sessionCwd', 'includeChatWorkspace') if key in row})}
 
 
 def mutate(service, action, args, command_id=None):
@@ -104,7 +108,7 @@ def mutate(service, action, args, command_id=None):
         if 'args' not in previous and selected.get('args') == []:
             selected.pop('args')
         unknown = {key: value for key, value in previous.items()
-                   if key not in {'id', 'label', 'command', 'args', 'cwd', 'sessionCwd'}}
+                   if key not in {'id', 'label', 'command', 'args', 'cwd', 'sessionCwd', 'includeChatWorkspace'}}
         rows[index] = {**unknown, **selected}
     try:
         saved = config if recovered else save_server_config(service.data_dir, {**config, 'externalAgents': rows})

@@ -22,6 +22,9 @@ from test_provider_context_continuation import CurrentContext
 
 
 MODEL = 'claude-fable-5-2'
+DIRECT = 'https://api.anthropic.com'
+PORTABLE = 'https://portable.example.invalid'
+COMPACT_BETA = 'compact-2026-09-04'
 LIMIT = 1_000_000
 FILLER = 'synthetic-sized-evidence-' * 1000
 STEPS = 12
@@ -38,6 +41,9 @@ class Wire:
         self.http = http
         self.counted = {}
         self.counts, self.sent, self.summaries, self.effects, self.events = [], [], [], [], []
+        self.signed_blocks = []
+        self.native_counts = set()
+        self.signed_replay = False
         self.metadata_calls = 0
         self.first_count_cold = None
         self.rejections = rejections
@@ -84,11 +90,18 @@ class Wire:
             measured = count // 2 if self.rejections and not self.refusals and len(self.effects) >= 6 else count
             self.counts.append(measured)
             self.counted[key] = measured
+            if COMPACT_BETA in request.headers.get('anthropic-beta', '').split(','):
+                self.native_counts.add(key)
             return self.http.Response(200, json={'input_tokens': measured})
         assert request.url.path.endswith('/messages') and not body.get('stream')
         assert key in self.counted, 'Provider dispatch bypassed its authoritative count'
         text = json.dumps(body)
-        summary = 'Next ordered conversation data. Incorporate this evidence' in text
+        native = body.get('compaction') == {'type': 'summarize'}
+        summary = native or 'Next ordered conversation data. Incorporate this evidence' in text
+        if native:
+            assert request.url.host == 'api.anthropic.com'
+            assert COMPACT_BETA in request.headers['anthropic-beta'].split(',')
+            assert key in self.native_counts, 'Native preflight must use the beta and identical input'
         if not summary and self.rejections and (len(self.effects) >= 6):
             self.rejections -= 1
             self.refusals.append((key, len(self.effects)))
@@ -102,10 +115,24 @@ class Wire:
         if summary:
             self.summaries.append(count)
             facts = sorted(set(re.findall(r'RECEIPT-\d+', text)))
-            content = [{'type': 'text', 'text': 'ORBIT. Never replay. Completed: ' + ', '.join(facts)}]
-            stop = 'end_turn'
+            note = 'ORBIT. Never replay. Completed: ' + ', '.join(facts)
+            if native:
+                block = {'type': 'compaction', 'signature': f'fixture-{len(self.summaries)}', 'content': note}
+                self.signed_blocks.append(block)
+                content, stop = [block], 'compaction'
+            else:
+                assert request.url.host != 'api.anthropic.com', 'Unexpected portable fallback'
+                content, stop = [{'type': 'text', 'text': note}], 'end_turn'
         else:
             self.sent.append(count)
+            if self.signed_blocks:
+                first, *tail = body['messages']
+                assert first == {'role': 'assistant', 'content': [self.signed_blocks[-1]]}
+                assert COMPACT_BETA in request.headers['anthropic-beta'].split(',')
+                assert key in self.native_counts
+                if re.search(r'RECEIPT-1\b', self.signed_blocks[-1]['content']):
+                    assert not re.search(r'RECEIPT-1\b', json.dumps(tail))
+                    self.signed_replay = True
             for marker in ('ORBIT', 'CURRENT_REFERENCE_1', 'MEMORY_ONE', 'SURFACE_1'):
                 assert marker in text
             for index in self.effects:
@@ -127,12 +154,13 @@ class Wire:
                       'output_tokens': 30}})
 
 
-@pytest.mark.parametrize('rejections,stop,seed_kind', [
-    (0, False, None), (1, False, None), (2, False, None), (1, True, None),
-    (0, False, 'resume'), (0, False, 'oversized-tail')],
+@pytest.mark.parametrize('rejections,stop,seed_kind,base_url', [
+    (0, False, None, PORTABLE), (1, False, None, PORTABLE), (2, False, None, PORTABLE),
+    (1, True, None, PORTABLE), (0, False, 'resume', PORTABLE), (0, False, 'oversized-tail', PORTABLE),
+    (0, False, None, DIRECT), (0, False, 'resume', DIRECT)],
     ids=['proactive', 'reactive', 'second-overflow-terminal', 'stop-before-retry',
-         'resume-over-1m-signed-history', 'oversized-retained-tail'])
-async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(rejections, stop, seed_kind):
+         'resume-over-1m-signed-history', 'oversized-retained-tail', 'native-signed', 'native-resume-over-1m'])
+async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(rejections, stop, seed_kind, base_url):
     module = pytest.importorskip('amplifier_module_provider_anthropic',
         reason='Native qualification installs exact accepted Anthropic source.')
     from anthropic import _base_client
@@ -150,7 +178,7 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
     session = await PreparedBundle(plan, BundleModuleResolver(paths),
         Bundle(name='fable-context-loop', session=plan['session'])).create_session(
             session_id='fable-context-loop')
-    sdk = module.AsyncAnthropic(api_key='synthetic-not-live', max_retries=0,
+    sdk = module.AsyncAnthropic(api_key='synthetic-not-live', max_retries=0, base_url=base_url,
         http_client=http.AsyncClient(transport=http.MockTransport(wire.transport)))
     coordinator = session.coordinator
     context = coordinator.get('context')
@@ -225,6 +253,13 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
     seed_hashes = [digest(row) for row in seed]
     try:
         assert raw._runtime_model_info_cache == {}
+        if seed_kind == 'resume' and base_url == DIRECT:
+            with pytest.raises(RuntimeError, match='native_input_oversized'):
+                await session.execute(prompt)
+            assert not wire.sent and not wire.summaries and context.summary is None
+            assert [digest(row) for row in (await context.get_messages())[:len(seed)]] == seed_hashes
+            assert wire.effects == list(range(1, STEPS + 1))
+            return
         if seed_kind == 'oversized-tail':
             with pytest.raises(Exception, match='(?i)(context|budget|fit)'):
                 await session.execute(prompt)
@@ -254,6 +289,8 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
         assert max(wire.sent) + 4096 <= LIMIT
         assert len(wire.sent) == (1 if seed else STEPS + 1)
         assert wire.summaries and context.summary is not None
+        if base_url == DIRECT:
+            assert wire.signed_replay
         assert any(event.get('outcome') == 'completed' for event in wire.events)
         assert wire.effects == list(range(1, STEPS + 1))
         assert [row['content'] for row in rows if row['role'] == 'user'
@@ -387,7 +424,7 @@ def opaque_history_seed(wire):
     return seed
 
 
-@pytest.mark.parametrize('control', ['recovered', 'count-unavailable', 'second-overflow'])
+@pytest.mark.parametrize('control', ['recovered', 'count-unavailable', 'second-overflow', 'native-no-count'])
 async def test_opaque_history_overflow_requires_one_different_counted_retry(control, monkeypatch):
     module = pytest.importorskip('amplifier_module_provider_anthropic',
         reason='Native qualification installs exact accepted Anthropic source.')
@@ -407,6 +444,7 @@ async def test_opaque_history_overflow_requires_one_different_counted_retry(cont
         Bundle(name='opaque-history-loop', session=plan['session'])).create_session(
             session_id='opaque-history-loop')
     sdk = module.AsyncAnthropic(api_key='synthetic-not-live', max_retries=0,
+        base_url=DIRECT if control == 'native-no-count' else PORTABLE,
         http_client=http.AsyncClient(transport=http.MockTransport(wire.transport)))
     coordinator = session.coordinator
     context = coordinator.get('context')
@@ -471,6 +509,14 @@ async def test_opaque_history_overflow_requires_one_different_counted_retry(cont
         tool_hashes = {row['tool_call_id']: hashlib.sha256(row['content'].encode()).hexdigest()
                        for row in seed if row['role'] == 'tool'}
         assert raw._runtime_model_info_cache == {}
+        if control == 'native-no-count':
+            with pytest.raises(RuntimeError, match='authoritative_measurement_unavailable'):
+                await session.execute(prompt)
+            assert len(wire.foreground) == 1 and not wire.summaries and not wire.counted
+            assert [entry['status'] for entry in wire.timeline if entry['kind'] == 'overflow_response'] == [400]
+            assert not effects and context.summary is None
+            assert [digest(row) for row in (await context.get_messages())[:len(seed)]] == wire.seed_hashes
+            return
         if control == 'recovered':
             result = await session.execute(prompt)
             assert wire.final_marker in result and wire.summary_marker not in result
@@ -636,7 +682,7 @@ async def _opaque_restart_phase(directory, phase):
     coordinator = session.coordinator
     context = coordinator.get('context')
     wire.context = context
-    sdk = module.AsyncAnthropic(api_key='synthetic-not-live', max_retries=0,
+    sdk = module.AsyncAnthropic(api_key='synthetic-not-live', max_retries=0, base_url=PORTABLE,
         http_client=http.AsyncClient(transport=http.MockTransport(wire.transport)))
     raw = module.AnthropicProvider(api_key='synthetic-not-live', coordinator=coordinator, config={
         'default_model': 'claude-sonnet-5', 'enable_1m_context': True,
@@ -935,7 +981,9 @@ async def test_provider_count_diagnostics_reach_real_context_intelligence_captur
             'extra_request_params': {'metadata': {'user_id': private['config']}},
         })
         assert callable(provider_cleanup)
-        assert await coordinator.collect_contributions('observability.events') == [[event]]
+        contributions = await coordinator.collect_contributions('observability.events')
+        assert len(contributions) == 1
+        assert contributions[0].count(event) == 1
         assert coordinator.channels['observability.events'][0]['name'] == 'provider-anthropic'
         await ci.on_session_ready(coordinator)
         assert coordinator.hooks.list_handlers()[event] == ['LoggingHandler']

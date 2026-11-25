@@ -71,6 +71,7 @@ class WorkWindows:
         self.closed = False
         self.projector = None
         self.retry_at = {}
+        self._legacy_reader = asyncio.Lock()
         # Only in-flight latest reads, not retained reporting history. A newer
         # read marks the prior token permanently, even after it settles/evicts.
         self._active_reads = {}
@@ -351,16 +352,34 @@ class WorkWindows:
             from .session_projection import stored_execution
             import json
             detached = detach(self.service.db, saved_reference['$resource'])
+            from .saved_execution_window import PAGE_BYTES, open_tree, source_size
+            from .resource_files import detached_signature, settle_worker
+            prior_placement = next((item['legacyPlacement'] for item in reversed(self.pages.values())
+                if item.get('source') == source and item.get('savedExecutionReference') == saved_reference
+                and 'legacyPlacement' in item), None)
             def saved_work():
-                tree = read_detached(detached, max_bytes=4 * 1024 * 1024)
+                if saved_reference.get('executionProjection') == 1:
+                    signature = detached_signature(detached)
+                    if prior_placement is not None and prior_placement[1] == signature:
+                        return prior_placement
+                    size = source_size(detached, signature)
+                    if size > PAGE_BYTES:
+                        return open_tree(detached, signature, size)
+                tree = read_detached(detached, max_bytes=PAGE_BYTES)
                 if not isinstance(tree, dict):
                     raise ValueError('Invalid saved Work placement.')
                 tree = stored_execution(tree)
-                # Keep within this page's existing output/retention budget.
-                if len(json.dumps([page, tree], ensure_ascii=False).encode()) > 4 * 1024 * 1024:
+                if len(json.dumps([page, tree], ensure_ascii=False).encode()) > PAGE_BYTES:
+                    if saved_reference.get('executionProjection') == 1:
+                        return open_tree(detached, signature, size)
                     raise ValueError('Saved Work placement exceeds this window budget.')
-                return tree
-            tree = await asyncio.to_thread(saved_work)
+                return tree, None, None
+            # Only one monolithic compatibility decode may be active per host.
+            # Hold its slot through cancellation until the detached read settles.
+            async with self._legacy_reader:
+                self._check_current(identity, owner, source, fence)
+                placement = await settle_worker(saved_work)
+            tree, signature, gap = placement
             self._check_current(identity, owner, source, fence)
             if _attempt.get('_superseded'):
                 raise _SupersededRead('The requested conversation changed. Open it again.')
@@ -377,6 +396,11 @@ class WorkWindows:
                 raise _SupersededRead('The requested conversation changed. Open it again.')
             page = {**page, 'savedExecution': tree, 'savedExecutionReference': saved_reference,
                     'savedExecutionFence': fence}
+            if signature is not None:
+                page['legacyPlacement'] = placement
+            if gap:
+                page['unavailableRanges'] = [*page.get('unavailableRanges', ()),
+                                             {'source': 'saved-execution', 'reason': gap}]
         _attempt['stage'] = 'group'
         page = {**page, 'sessionId': identity, 'source': source}
         group = 'event-window:' + page['generation']
@@ -470,7 +494,7 @@ class WorkWindows:
         nodes = self.resident_tree(session).get('nodes', [])
         return nodes[position] if type(position) is int and 0 <= position < len(nodes) else None
 
-    def live_view(self, session, *, include_nodes=True, tree=None):
+    def live_view(self, session, *, include_nodes=True, tree=None, node_range=slice(-100, None)):
         """Bounded current host evidence; never scan historical native nodes."""
         from .cold_display import raw
         resident = raw(session)
@@ -484,9 +508,18 @@ class WorkWindows:
                 source['messages'] = transcript.project(session).get('messages', [])
         source.update({
             'execution': {**{key: tree[key] for key in ('aggregateUsage', 'usage', 'plan', 'currentTurnId') if key in tree},
-                'nodes': [self.live_node(session, row) for row in (tree.get('nodes', [])[-100:] if include_nodes else [])
+                'nodes': [self.live_node(session, row) for row in (tree.get('nodes', [])[node_range] if include_nodes else [])
                 if row.get('liveObservation') or not row.get('canonicalHistory') and not row.get('nativeHistory')],
                 'turns': tree.get('turns', [])[-20:], 'currentTurnId': tree.get('currentTurnId')}})
+        # A page of restored steps can span turns older than the current 20.
+        if saved_turns := tree.get('_savedTurns'):
+            execution = source['execution']
+            selected = {turn['id']: turn for turn in execution['turns']}
+            for node in execution['nodes']:
+                turn = node.get('turnId')
+                if turn not in selected and turn in saved_turns:
+                    selected[turn] = saved_turns[turn]
+            execution['turns'] = list(selected.values())
         return source
 
     def live_node(self, session, node):

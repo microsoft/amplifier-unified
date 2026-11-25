@@ -305,6 +305,9 @@ async def test_confirmed_deletion_defers_all_cleanup_then_recovers(app_factory, 
 @pytest.mark.parametrize('point',['renamed','temporary'])
 def test_process_exit_before_commit_recovers_unindexed_resources(tmp_path,point):
     db=database(tmp_path/'app.sqlite3');keep=files.put(db,{'keep':'exact'});db.commit()
+    expected=files.prepare({'crashed':'never committed'})
+    directory=files.root(db)
+    kept_bytes=(directory/(keep['$resource']+'.json')).read_bytes()
     code='''
 import os,sqlite3,sys
 from pathlib import Path
@@ -313,16 +316,29 @@ from amplifier_web.host.storage import SessionStore
 p,point=sys.argv[1:]
 db=sqlite3.connect(p)
 if point=='temporary':
- def die(path,text):
-  (path.parent/'.checkpoint-crashed').write_text(text)
+ def die(path,encoded):
+  assert isinstance(encoded,bytes) and db.in_transaction
+  with (path.parent/'.checkpoint-crashed').open('wb') as stream:
+   assert stream.write(encoded)==len(encoded)
+   stream.flush()
+   os.fsync(stream.fileno())
   os._exit(71)
  SessionStore._atomic=staticmethod(die)
 put(db,{'crashed':'never committed'})
 os._exit(72)
 '''
-    process=subprocess.run([sys.executable,'-c',code,str(tmp_path/'app.sqlite3'),point])
-    assert process.returncode == (71 if point=='temporary' else 72)
+    process=subprocess.run([sys.executable,'-c',code,str(tmp_path/'app.sqlite3'),point],
+                           capture_output=True,text=True)
+    assert process.returncode == (71 if point=='temporary' else 72), process.stderr
+    orphan=directory/('.checkpoint-crashed' if point=='temporary' else expected.identity+'.json')
+    assert orphan.read_bytes()==expected.encoded
+    assert not db.execute('SELECT 1 FROM state_resources WHERE id=?',(expected.identity,)).fetchone()
+    if point=='temporary':
+        assert not (directory/(expected.identity+'.json')).exists(), 'Crash must precede rename'
     counts=finish(db,{'keep':keep})
+    assert counts[-1]['complete'] and not counts[-1]['blocked']
     assert sum(row['removed'] for row in counts)==1
+    assert not orphan.exists()
+    assert (directory/(keep['$resource']+'.json')).read_bytes()==kept_bytes
     assert files.resolve(db,keep['$resource'],{'$blob':keep['$resource']})=={'keep':'exact'}
     db.close()

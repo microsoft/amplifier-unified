@@ -2,6 +2,7 @@
 import asyncio
 import copy
 import json
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -49,6 +50,27 @@ async def test_many_saved_messages_are_acknowledged_and_released_once_in_order(a
     assert app.state['updates']['drain']['phase'] == 'released'
 
 
+async def test_voice_request_during_an_update_is_refused_in_plain_words_and_changes_nothing(app):
+    sid = app._session()['id']
+    with pytest.raises(AppError, match='An update is being installed. Nothing was sent'):
+        await app.voice_delegate('Voice request', 'voice:call:item', session_id=sid)
+    assert app.runtime.sent == [] and app._session()['status'] != 'error'
+    assert app.db.execute('SELECT 1 FROM commands WHERE id=?', ('voice:call:item',)).fetchone() is None
+    assert app.state['updates']['drain']['messages'] == []
+
+
+async def test_repeated_accepted_voice_command_during_an_update_returns_its_saved_receipt(app):
+    sid = app._session()['id']
+    held = app.state['updates'].pop('drain')
+    first = await app.voice_delegate('Voice request', 'voice:call:item', session_id=sid)
+    await asyncio.gather(*app.tasks)
+    assert first['accepted'] and [row[2] for row in app.runtime.sent] == ['voice:call:item']
+    app.state['updates']['drain'] = held
+    again = await app.voice_delegate('Voice request', 'voice:call:item', session_id=sid)
+    assert again['duplicate'] is True and again['delivery'] == 'accepted'
+    assert [row[2] for row in app.runtime.sent] == ['voice:call:item']
+
+
 async def test_crash_leaves_only_claimed_input_uncertain_and_rest_queued(app):
     await send(app, 'claimed')
     await send(app, 'unattempted')
@@ -90,6 +112,40 @@ async def test_no_effect_defer_race_after_release_keeps_original_input(app):
     await drain.defer_send(app, app._session()['id'], 'racing-input')
     assert [row[2] for row in app.runtime.sent] == ['racing-input']
     assert app._session()['messages'][0]['delivery']['status'] == 'accepted'
+
+
+async def test_replacement_during_worker_qualification_holds_then_sends_once(tmp_path, monkeypatch):
+    from amplifier_web.runtime import RuntimeManager
+    from test_runtime import FIXTURE
+
+    runtime = RuntimeManager(retention={'prewarm_on_select': False})
+    app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    app.update_manager = UpdateManager(app)
+    try:
+        await app.dispatch('session.create', {'title': 'Update during launch'})
+        async def qualify(*args, **kwargs):
+            app.update_manager.diagnostics.state['attemptId'] = 'a' * 32
+            drain.begin_replacement(app.update_manager, {'revision': 'b' * 40})
+
+        monkeypatch.setattr('amplifier_web.runtime_profiles.ensure', qualify)
+        # If startup continues on the outgoing installation the executable is gone.
+        command = runtime._command
+        monkeypatch.setattr(runtime, '_command', lambda *a, **kw: [str(tmp_path / 'outgoing-worker')])
+        assert (await send(app, 'during-launch'))['delivery'] == 'queued_for_update'
+        assert not runtime.workers and not runtime._preparations
+        assert not app._session().get('failure')
+
+        monkeypatch.setattr(runtime, '_command', command)
+        runtime.command = [sys.executable, '-u', '-c', FIXTURE]
+        admit = AsyncMock(wraps=runtime._admit)
+        monkeypatch.setattr(runtime, '_admit', admit)
+        healthy(app)
+        await drain.finish(app.update_manager, 'installed')
+        await drain.finish(app.update_manager, 'installed')
+        assert [call.args[2]['input_id'] for call in admit.await_args_list if call.args[1] == 'send'] == ['during-launch']
+        assert app._session()['messages'][0]['delivery']['status'] == 'accepted'
+    finally:
+        await app.close()
 
 
 async def test_failed_or_unknown_replacement_cannot_release_held_inputs(app):
@@ -276,3 +332,68 @@ async def test_fresh_saved_input_before_native_event_suppresses_update_continuat
     assert not app.runtime.sent
     saved = app.db.execute("SELECT receipt FROM commands WHERE json_extract(receipt,'$.dependencyRequestId')=?", (request['requestId'],)).fetchone()
     assert json.loads(saved[0])['delivery'] == 'suppressed'
+
+
+@pytest.mark.parametrize('after_spawn', [False, True])
+@pytest.mark.parametrize(('prior', 'late_receipt'), [('unknown', False), ('failed', False), ('unknown', True)])
+async def test_update_reaches_retry_before_transport(tmp_path, monkeypatch, prior, late_receipt, after_spawn):
+    from amplifier_web.execution import ensure_turn
+    from amplifier_web.runtime import RuntimeManager
+
+    runtime = RuntimeManager(retention={'prewarm_on_select': False})
+    app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    app.update_manager = UpdateManager(app)
+    try:
+        await app.dispatch('session.create', {})
+        session = app._session()
+        sid, identity = session['id'], 'original'
+        app._message(session, 'user', 'Saved input', 'chat', inputId=identity, delivery={'status': prior})
+        original = {'sessionId': sid, 'inputId': identity, 'delivery': prior}
+        app.db.execute('INSERT INTO commands VALUES (?, ?, ?)', (identity, 'original', json.dumps(original)))
+        turn = ensure_turn(session, 'previous-turn', 'Previous work')['turns'][-1]
+        turn.update(phase='completed', endedAt=1)
+        session.update(status='error', error='Earlier failure')
+        args = {'sessionId': sid, 'inputId': identity, 'confirmUncertain': prior == 'unknown'}
+
+        async def qualify(*unused, **kwargs):
+            assert session['status'] == 'starting'
+            if late_receipt:
+                # The original's durable exact receipt can recover after the outgoing retry was saved.
+                app.db.execute('UPDATE commands SET receipt=? WHERE id=?',
+                               (json.dumps({**original, 'accepted': True, 'delivery': 'accepted'}), identity))
+            app.update_manager.diagnostics.state['attemptId'] = 'a' * 32
+            drain.begin_replacement(app.update_manager, {'revision': 'b' * 40})
+
+        if after_spawn:
+            from test_runtime import FIXTURE
+            runtime.command = [sys.executable, '-u', '-c', FIXTURE]
+            spawn = asyncio.create_subprocess_exec
+            async def spawn_then_replace(*command, **kwargs):
+                proc = await spawn(*command, **kwargs)
+                await qualify()
+                return proc
+            monkeypatch.setattr(asyncio, 'create_subprocess_exec', spawn_then_replace)
+        else:
+            monkeypatch.setattr('amplifier_web.runtime_profiles.ensure', qualify)
+        admit = AsyncMock(wraps=runtime._admit)
+        monkeypatch.setattr(runtime, '_admit', admit)
+        if late_receipt:
+            result = await app.dispatch('conversation.retry', args, command_id='explicit-retry')
+            assert result['result'] == {'delivery': 'accepted', 'resent': False}
+        else:
+            with pytest.raises(AppError) as refused:
+                await app.dispatch('conversation.retry', args, command_id='explicit-retry')
+            assert refused.value.code == 'retry_waiting_for_update' and refused.value.receipt['delivery'] == prior
+        expected = 'accepted' if late_receipt else prior
+        assert session['messages'][-1]['delivery']['status'] == expected
+        assert session['status'] == 'error' and session['error'] == 'Earlier failure'
+        assert session['execution']['currentTurnId'] == 'previous-turn'
+        assert [(t['id'], t['phase']) for t in session['execution']['turns']] == [('previous-turn', 'completed')]
+        assert not app.state['updates']['drain']['messages']
+        healthy(app)
+        await drain.finish(app.update_manager, 'installed')
+        replay = await app.dispatch('conversation.retry', args, command_id='explicit-retry')
+        assert replay['duplicate'] and replay['result']['delivery'] == expected
+        assert not [c for c in admit.await_args_list if c.args[1] in {'send', 'retry'}]
+    finally:
+        await app.close()

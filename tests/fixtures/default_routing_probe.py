@@ -122,11 +122,28 @@ def emit(value):
     print(PREFIX + json.dumps(value, sort_keys=True), flush=True)
 
 
-def offline_guard():
+async def observe_early_routing(original, session, automatic):
+    """Check the supplied host callback's effects, not its wrapper identity."""
+    assert callable(original), "Host omitted early initialization callback"
+    assert not session.initialized, "Routing policy was installed after initialization"
+    await original(session)
+    assert not session.initialized, "Host callback initialized before routing observation"
+    assert session.coordinator.get_capability("routing.defer_agent_resolution") is True
+    assert session.coordinator.get_capability("web.default_routing_policy") is True
+    fallback = session.coordinator.get_capability("web.default_routing_fallback")
+    expected = {"hooks": copy.deepcopy([
+        row for row in session.coordinator.config.get("hooks", [])
+        if row.get("module") == "hooks-routing"])} if automatic else None
+    assert fallback == expected, "Host supplied incorrect automatic routing provenance"
+
+
+def offline_guard(catalog):
     """Tripwire, not an OS sandbox; never allow a swallowed attempt to pass."""
     attempts = []
 
     def audit(event, args):
+        if catalog.permits(event, args):
+            return
         if event in {"socket.connect", "socket.connect_ex", "socket.getaddrinfo",
                      "socket.gethostbyname", "socket.bind", "socket.sendto",
                      "subprocess.Popen", "os.system", "os.posix_spawn", "os.exec"}:
@@ -297,7 +314,8 @@ def preference(instance, model):
     return [{"provider": instance, "model": model}]
 
 
-async def run(paths, warmed_paths, routing_root, distribution, attempts, negative_control=False):
+async def run(paths, warmed_paths, routing_root, distribution, attempts, decision_catalog,
+              negative_control=False):
     upstream = verify_upstream(paths, warmed_paths)
     from amplifier_core import AmplifierSession, HookResult
     from amplifier_core._engine import RustSession
@@ -384,18 +402,13 @@ async def run(paths, warmed_paths, routing_root, distribution, attempts, negativ
             # Do not repair a missing callback here: the real host child/resume
             # path must supply it. Observers only record lifecycle evidence.
             original = kwargs.pop("before_initialize", None)
-            assert ((original is prepare_default_routing and not self.automatic_policy) or (
-                isinstance(original, partial) and original.func is prepare_default_routing
-                and original.args == () and original.keywords == {"automatic": self.automatic_policy}
-            )), "Host omitted expected early default-routing policy"
+            assert callable(original), "Host omitted early initialization callback"
             audit = {"session_id": kwargs.get("session_id"), "parent_id": kwargs.get("parent_id"),
                      "resumed": kwargs.get("is_resumed", False), "lifecycle": [],
                      "matrix_events": [], "failures": []}
 
             async def before_initialize(session):
-                assert not session.initialized, "Routing policy was installed after initialization"
-                await original(session)
-                assert session.coordinator.get_capability("routing.defer_agent_resolution") is True
+                await observe_early_routing(original, session, self.automatic_policy)
 
                 async def observe(event, data):
                     if event in {"session:start", "session:resume"}:
@@ -1035,6 +1048,7 @@ async def run(paths, warmed_paths, routing_root, distribution, attempts, negativ
             exact_package("amplifier_module_tool_delegate", paths["tool-delegate"])
             exact_package("amplifier_module_hooks_routing", paths["hooks-routing"])
             report = {"status": "passed", "installed_wheel": wheel,
+                      "decisionCatalog": decision_catalog,
                       "tool_delegate": str(paths["tool-delegate"]), "routing_hook": str(paths["hooks-routing"]),
                       "executions": executions, "rejected": rejected, "nested_desktop": nested_desktop,
                       "balanced_fallback": balanced_fallback,
@@ -1053,22 +1067,30 @@ def main():
     assert sys.flags.isolated, "Run this probe with Python -I; source/PYTHONPATH qualification is forbidden"
     assert not sys.flags.optimize, "Routing acceptance requires enabled assertions"
     assert sys.argv[1:] in ([], ["--preflight"], ["--negative-control"]), "Unknown probe arguments"
-    attempts = offline_guard()
+    support_path = Path(__file__).parents[1] / "test_default_behaviors_integration.py"
+    spec = importlib.util.spec_from_file_location("_default_routing_composition", support_path)
+    assert spec and spec.loader
+    support = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(support)
+    catalog = support.DecisionCatalogPreparation()
+    attempts = offline_guard(catalog)
     prerequisites, missing = prerequisite_paths()
     if missing:
         emit({"status": "missing_prerequisites", "missing": missing})
         return 77
     paths, warmed_paths, routing_root, distribution = prerequisites
     verify_wheel(distribution)
+    decision_catalog = catalog.warm()
     if sys.argv[1:] == ["--preflight"]:
         upstream = verify_upstream(paths, warmed_paths)
-        emit({"status": "ready", "version": distribution.version, "upstream_wheels": upstream})
+        emit({"status": "ready", "version": distribution.version, "upstream_wheels": upstream,
+              "decisionCatalog": decision_catalog})
         return 0
     # Deliberately no setup/install/fallback here. The caller owns these homes.
     for name in ("AMPLIFIER_WEB_HOME", "AMPLIFIER_HOME", "AMPLIFIER_SESSION_STATE_HOME"):
         assert os.environ.get(name), f"The test driver must supply an isolated {name}"
         assert Path(os.environ[name]).resolve().is_relative_to(Path.cwd().resolve()), name
-    asyncio.run(run(paths, warmed_paths, routing_root, distribution, attempts,
+    asyncio.run(run(paths, warmed_paths, routing_root, distribution, attempts, decision_catalog,
                     negative_control=sys.argv[1:] == ["--negative-control"]))
     return 0
 

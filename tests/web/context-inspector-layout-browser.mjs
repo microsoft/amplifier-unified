@@ -161,9 +161,16 @@ try{
    assert.ok(g.reader.bottom<=g.panel.bottom+1,'reader bounded by pane');
    assert.ok(g.pre.height<=g.pre.scrollHeight+1&&g.pre.overflowY==='visible','no inner pre scroller');
    const chrome=await page.locator('#workspace-canvas .a-canvas-head').evaluate(el=>{
-    const r=el.getBoundingClientRect(),tab=el.querySelector('[role=tab][aria-selected=true]'),t=tab.getBoundingClientRect(),strip=tab.closest('.a-canvas-document-tabs').getBoundingClientRect();
-    return {height:r.height,overflow:el.scrollWidth-el.clientWidth,tabWidth:t.width,visibleWidth:Math.min(t.right,strip.right)-Math.max(t.left,strip.left)};
+    const r=el.getBoundingClientRect(),mode=el.closest('#workspace-canvas').dataset.navigation;
+    const control=mode==='compact'?el.querySelector('.a-open-documents'):el.querySelector('[role=tab][aria-selected=true]');
+    const t=control.getBoundingClientRect(),strip=mode==='compact'?r:control.closest('.a-canvas-document-tabs').getBoundingClientRect();
+    return {mode,height:r.height,overflow:el.scrollWidth-el.clientWidth,controlWidth:t.width,visibleWidth:Math.min(t.right,strip.right)-Math.max(t.left,strip.left),label:control.getAttribute('aria-label')};
    });
+   assert.ok(['compact','tabs'].includes(chrome.mode));
+   if(chrome.mode==='compact'){
+    assert.match(chrome.label,/^Open documents, \d+ open, Context inspector$/);
+    await expect(page.locator('#workspace-canvas .a-canvas-document-tabs')).toBeHidden();
+   }else assert.equal(chrome.label,'Context inspector');
    assert.ok(chrome.height<=56&&chrome.overflow<=1,JSON.stringify(chrome));assert.ok(chrome.visibleWidth>=85,JSON.stringify(chrome));
    report.geometry.push({name:name+'-chrome',...chrome});
   };
@@ -209,7 +216,9 @@ try{
   await expect(panel.locator('.a-context-item').filter({hasText:'source-01.md'})).toBeFocused();
   await expect(panel.getByRole('searchbox')).toHaveValue('source-01');
   await panel.getByRole('searchbox').fill('');await keyEnd(list);await capture('mobile-list-end');
-  await keyStart(list);await panel.locator('.a-context-item').filter({hasText:'source-01.md'}).click();await keyEnd(reader);
+  await keyStart(list);await panel.locator('.a-context-item').filter({hasText:'source-01.md'}).click();
+  await expect(panel.locator('.a-context-pagination small')).toContainText('1–6000 of');
+  await keyEnd(reader);
   await panel.getByRole('button',{name:'Next page',exact:true}).click();
   report.checks.push('320/390 mobile has one active content scroll, explicit Back, reachable pagination and retained search');
   // The exact selection/page survives an unrelated document visit.
@@ -225,11 +234,18 @@ try{
   await panel.getByRole('button',{name:'Back to items'}).click();
   await expect(panel.locator('.a-context-item').filter({hasText:'source-01.md'})).toBeFocused();
   await panel.locator('.a-context-item').filter({hasText:'source-01.md'}).click();
+  // Selecting an item starts a fresh asynchronous body read. Its completion
+  // resets scroll and focuses the heading: wait for the exact page before
+  // sending the next keyboard gesture, not merely for the reader container.
+  await expect(panel.locator('.a-context-pagination small')).toContainText('1–6000 of');
   for(let i=0;i<5;i++){
    await keyEnd(reader);
    const next=panel.getByRole('button',{name:'Next page',exact:true});
    if(await next.isDisabled())break;
+   const range=await panel.locator('.a-context-pagination small').innerText();
+   const endOffset=Number(range.match(/–(\d+) of/)[1]);
    await next.click();
+   await expect(panel.locator('.a-context-pagination small')).toContainText(`${endOffset+1}–`);
   }
   await keyEnd(reader);await expect(panel.getByRole('button',{name:'Next page',exact:true})).toBeDisabled();
   await capture('mobile-final-page');
@@ -244,13 +260,15 @@ try{
   report.checks.push('Open documents stays usable for non-inspector navigation; selected request/item/page survives');
   // All data is still from production capture; only scenario is synthetic.
   await page.request.post(url+'/fixture/context',{data:{scenario:'long-list-unknown'}});
+  await panel.getByRole('button',{name:'Expand request summary',exact:true}).click();
   await panel.getByRole('button',{name:'Refresh',exact:true}).click();
   await expect(panel.locator('.a-context-window')).toContainText('Model window unknown');
   await expect(panel.locator('.a-context-capacity-track')).toHaveCount(0);
   await capture('mobile-unknown-window');
   await expect.poll(()=>scrollTop(list)).toBeLessThan(2);
   await panel.locator('.a-context-evidence summary').click();
-  await expect(panel.locator('.a-context-evidence')).toContainText('No matching preflight');
+  await expect(panel.locator('.a-context-evidence')).toContainText('No preflight observation was retained in this provider/task interval. Its cause was not captured.');
+  await expect(panel.locator('.a-context-evidence')).not.toContainText('Preflight was observed in this provider/task interval');
   await capture('mobile-limit-evidence');
   await panel.locator('.a-context-evidence summary').click();
   await page.setViewportSize({width:1440,height:1000});

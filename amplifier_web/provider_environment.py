@@ -188,7 +188,10 @@ def credential_bindings(value, *, provider=False, module=None):
             provider = str(value["module"]).startswith("provider-")
         result = {}
         for key, item in value.items():
-            if credential_field(key, module=module):
+            if module == "hook-context-intelligence" and key == "destinations" and isinstance(item, dict):
+                # Mapping keys here are destination names, not credential fields.
+                result[key] = {name: credential_bindings(dest) for name, dest in item.items()}
+            elif credential_field(key, module=module):
                 if item is None or isinstance(item, str) and _ENV_REFERENCE.fullmatch(item):
                     result[key] = item
                 elif provider:
@@ -197,6 +200,9 @@ def credential_bindings(value, *, provider=False, module=None):
             else:
                 result[key] = credential_bindings(
                     item, provider=provider, module=value.get("module") if key == "config" else None)
+        if module == "hook-context-intelligence":
+            from .host.hook_config import retain_references
+            retain_references(value, result)
         return result
     if isinstance(value, list):
         return [credential_bindings(item, provider=provider) for item in value]

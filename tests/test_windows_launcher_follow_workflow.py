@@ -24,6 +24,7 @@ import sqlite3
 import subprocess
 import sys
 import tomllib
+import xml.etree.ElementTree as ET
 
 import pytest
 import yaml
@@ -536,8 +537,26 @@ EXPECTED_ON_WINDOWS = "import pytest\n@pytest.mark.xfail(strict=True)\ndef test_
     # pytest did not get the case with the expected failure, only another case of its file.
     (SIBLING, True, None),
 ])
-def test_the_step_that_runs_the_listed_files_stops_for_a_wrong_result(tmp_path, body, windows, stops):
+def test_the_step_that_runs_the_listed_files_stops_for_a_wrong_result(tmp_path, monkeypatch, body, windows, stops):
     """The step's own program, with one made-up test file in place of its list."""
+    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    project = tmp_path / "test_ancestor/project"
+    project.mkdir(parents=True)
+    monkeypatch.setenv("PYTEST_ADDOPTS", f"--rootdir={tmp_path} --deselect=tests/test_one.py::test_two")
+    done, cases = listed_step(project, body, windows)
+    # Assert raw producer identities too: a prefixed name must not be repaired
+    # or excused by the workflow's exact allowlist matching.
+    assert {case.get("classname") for case in cases if case.get("classname")} <= {"tests.test_one"}
+    assert "tests/test_one.py: " in done.stdout, done.stdout + done.stderr
+    assert ("left out on this runner: tests/test_one.py::test_one: a reason" in done.stdout) == (body == ONE_FAILS and windows)
+    if stops is None:
+        assert done.returncode == 0 and "stop the job" not in done.stdout, done.stdout + done.stderr
+    else:
+        assert done.returncode == 1 and stops in done.stdout, done.stdout + done.stderr
+
+
+def listed_step(tmp_path, body, windows, *, local_config=True):
+    """Run the unchanged workflow decision program in its synthetic repository."""
     document = yaml.safe_load(LISTED.read_text(encoding="utf-8"))
     (job,) = document["jobs"].values()
     program = job["steps"][-1]["run"]
@@ -556,6 +575,9 @@ def test_the_step_that_runs_the_listed_files_stops_for_a_wrong_result(tmp_path, 
         assert count == 1, pattern
     (tmp_path / "tests/fixtures").mkdir(parents=True)
     (tmp_path / "tests/test_one.py").write_text(body, encoding="utf-8")
+    if local_config:
+        # cwd alone does not stop pytest from discovering an ancestor config.
+        (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
     # On Windows the step takes the account as the owner of new folders from this file.
     helpers = "tests/fixtures/manual_app_handoff_native.py"
     assert helpers in program
@@ -563,10 +585,18 @@ def test_the_step_that_runs_the_listed_files_stops_for_a_wrong_result(tmp_path, 
     (tmp_path / "step.py").write_text(program, encoding="utf-8")
     done = subprocess.run([sys.executable, "-B", str(tmp_path / "step.py")], cwd=tmp_path, capture_output=True, text=True,
                           timeout=120, env={**os.environ, "RUNNER_TEMP": str(tmp_path), "PYTEST_ADDOPTS": ""})
-    assert "tests/test_one.py: " in done.stdout, done.stdout + done.stderr
-    assert ("left out on this runner: tests/test_one.py::test_one: a reason" in done.stdout) == (body == ONE_FAILS and windows)
-    if stops is None:
-        assert done.returncode == 0 and "stop the job" not in done.stdout, done.stdout + done.stderr
-    else:
-        assert done.returncode == 1 and stops in done.stdout, done.stdout + done.stderr
+    cases = list(ET.parse(tmp_path / "listed-test-files.xml").iter("testcase"))
+    return done, cases
+
+
+def test_synthetic_workflow_without_local_config_rejects_ancestor_prefixed_case(tmp_path):
+    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    project = tmp_path / "test_ancestor/project"
+    project.mkdir(parents=True)
+    done, cases = listed_step(project, "def test_one(): pass\n", False, local_config=False)
+    case, = cases
+    assert case.get("classname") == "test_ancestor.project.tests.test_one"
+    assert not list(case)  # The test passed; the workflow must reject the wrong identity.
+    assert done.returncode == 1
+    assert "no case of this file passed: tests/test_one.py" in done.stdout
 

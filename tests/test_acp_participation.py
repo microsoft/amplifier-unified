@@ -14,8 +14,8 @@ def participant(tmp_path, profile='plain'):
     async def update(value):
         updates.append(value)
 
-    async def permission(options):
-        permissions.append(options)
+    async def permission(tool, options):
+        permissions.append((tool, options))
         return {'outcome': {'outcome': 'cancelled'}}
 
     async def save(value):
@@ -90,51 +90,35 @@ async def test_attention_hold_errors_and_malformed_ticket_do_not_fall_back(tmp_p
         await peer.close()
 
 
-@pytest.mark.parametrize('choice', ['speak', 'pass'])
-async def test_quiet_fallback_hides_all_updates_and_permission_then_preserves_session(tmp_path, choice):
+async def test_plain_ordinary_turn_uses_existing_permission_callback_and_exact_session(tmp_path):
     peer, save, binding, updates, permissions = participant(tmp_path)
     try:
         await peer.connect({}, save)
-        assert await peer.decide({'choice': choice, 'sourceId': 'original'}) == {
-            'decision': choice, 'reason': 'fixture'}
-        assert updates == [] and permissions == []
+        assert await peer.attention({'trigger_id': 'original'}, 1234) is None
+        assert (await peer.prompt('permission')).stop_reason == 'end_turn'
+        assert len(permissions) == 1
         assert next(row for row in operations(tmp_path) if row['kind'] == 'permission')['outcome'] == {
             'outcome': 'cancelled'}
-        if choice == 'speak':
-            await peer.prompt('accepted contribution')
-            assert ''.join(row['content']['text'] for row in updates) == 'Reply: accepted contribution'
-            assert all(row['sessionId'] == binding['sessionId'] for row in operations(tmp_path)
-                       if row['kind'] in ('decision', 'prompt'))
-        else:
-            assert not any(row['kind'] == 'prompt' for row in operations(tmp_path))
+        assert ''.join(row['content']['text'] for row in updates) == 'Reply: permission'
+        assert [row['sessionId'] for row in operations(tmp_path) if row['kind'] == 'prompt'] == [binding['sessionId']]
+        assert await peer.request_permission('other-session', None, []) == {'outcome': {'outcome': 'cancelled'}}
+        assert len(permissions) == 1
     finally:
         await peer.close()
 
 
-@pytest.mark.parametrize('choice', ['malformed', 'oversized'])
-async def test_invalid_decision_is_not_retried_or_executed(tmp_path, choice):
-    peer, save, _, updates, _ = participant(tmp_path)
-    try:
-        await peer.connect({}, save)
-        with pytest.raises(ValueError, match='participation decision'):
-            await peer.decide({'choice': choice})
-        assert updates == []
-        assert [row['kind'] for row in operations(tmp_path)] == ['new', 'decision', 'permission']
-    finally:
-        await peer.close()
-
-
-async def test_stop_during_quiet_decision_cancels_without_public_output(tmp_path):
+async def test_single_active_ordinary_prompt_can_be_cancelled_without_a_second_prompt(tmp_path):
     peer, save, binding, updates, _ = participant(tmp_path)
     task = None
     try:
         await peer.connect({}, save)
-        task = asyncio.create_task(peer.decide({'choice': 'wait'}))
-        await wait_operation(tmp_path, 'permission')
+        task = asyncio.create_task(peer.prompt('wait-for-stop'))
+        await wait_operation(tmp_path, 'prompt')
+        with pytest.raises(RuntimeError, match='active prompt'):
+            await peer.prompt('must not run')
         await peer.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(task, 5)
-        assert updates == []
+        assert (await asyncio.wait_for(task, 5)).stop_reason == 'cancelled'
+        assert len([row for row in operations(tmp_path) if row['kind'] == 'prompt']) == 1
         assert operations(tmp_path)[-1] == {'kind': 'cancel', 'sessionId': binding['sessionId']}
     finally:
         if task is not None:

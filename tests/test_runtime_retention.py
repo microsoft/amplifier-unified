@@ -759,7 +759,7 @@ async def test_changed_configuration_never_cancels_held_work_or_admits_input(man
         writes.append(data['op'])
         await original(owner, data)
     manager._write = write
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match='previous settings. Retry your message'):
         await manager.send(session, 'not admitted', 'new', manager.emit)
     assert manager.workers['held'] is row and row['process'].returncode is None
     assert 'send' not in writes and 'stop' not in writes

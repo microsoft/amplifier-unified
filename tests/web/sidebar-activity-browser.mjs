@@ -6,8 +6,10 @@ import {fileURLToPath} from 'node:url';
 import {writeFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 const fixture=process.env.AMPLIFIER_HUMAN_POST_ONLY?null:spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/active_client_performance_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
-let browser;
+const stopFixture=fixture?ownFixture(fixture,{label:'Sidebar activity fixture'}):async()=>{};
+let browser,failure;
 const launchBrowser=()=>chromium.launch({headless:true,...(process.env.UNIFIED_BROWSER_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}: {})});
 async function settleHumanFixture(child){
  if(child.exitCode!==null||child.signalCode!==null){
@@ -36,7 +38,7 @@ async function humanPostRecency(){
   const errors=[],traffic=[];let measuring=false,sendPayload;
   page.on('pageerror',e=>errors.push(e.message));
   other.on('pageerror',e=>errors.push(e.message));
-  page.on('request',r=>{const path=new URL(r.url()).pathname;if(measuring&&['/api/shell','/api/view'].includes(path))traffic.push(r.method()+' '+path);if(path==='/api/actions'&&r.postDataJSON()?.action==='conversation.send')sendPayload=r.postDataJSON()});
+  page.on('request',r=>{const path=new URL(r.url()).pathname;if(measuring&&['/api/shell','/api/shell/resources','/api/view'].includes(path))traffic.push(r.method()+' '+path);if(path==='/api/actions'&&r.postDataJSON()?.action==='conversation.send')sendPayload=r.postDataJSON()});
   const metrics=async()=>{const r=await page.request.get(url+'/fixture/metrics');assert.equal(r.status(),200);return r.json()};
   const expectDraft=async(target,text)=>{
    const composer=target.getByRole('textbox',{name:'Message Amplifier',exact:true});
@@ -92,15 +94,32 @@ async function humanPostRecency(){
   await control({running:false});
   await page.waitForTimeout(1000);
   const key=await page.evaluate(()=>window.amplifier.getState().shellDataKey);
-  const workLabel=page.locator('.a-execution-turn-line .a-execution-label');
-  await expect(page.locator('[data-part="overlay"]')).toHaveCount(0);await expect(workLabel).toBeVisible();
-  const elapsedBefore=await workLabel.innerText();assert.match(elapsedBefore,/^Working · /);
+  // This fixture emits progress while send admission is held, not a canonical
+  // generation/turn receipt. Its read-only activity owner supplies the timer.
+  const activity=page.locator('[data-part="activity"][data-view-source="activity"][role="status"]');
+  const timer=activity.getByRole('timer',{name:/^Elapsed /});
+  const elapsedSeconds=async()=>{
+   const text=await timer.innerText(),match=/^(?:(\d+)m )?(\d+)s$/.exec(text);
+   assert.ok(match,'Visible activity has a numeric elapsed duration: '+text);
+   return Number(match[1]||0)*60+Number(match[2]);
+  };
+  await expect(page.locator('[data-part="overlay"]')).toHaveCount(0);
+  await expect(activity).toHaveCount(1);await expect(activity).toBeVisible();
+  await expect(activity).toContainText('Waiting for the model response…');
+  await expect(activity).toContainText('Last tool: read_file');
+  await expect(timer).toHaveCount(1);await expect(timer).toBeVisible();
   traffic.length=0;measuring=true;
+  const elapsedBefore=await elapsedSeconds(),ticksBefore=(await metrics()).ticks;
   await control({running:true});
-  await page.waitForTimeout(2200);measuring=false;
+  await page.waitForTimeout(2200);
   assert.deepEqual(await order(),promotedOrder);
   assert.equal(await page.evaluate(()=>window.amplifier.getState().shellDataKey),key);
-  assert.notEqual(await workLabel.innerText(),elapsedBefore,'Visible elapsed time must keep advancing without reporting it back');
+  assert.ok(await elapsedSeconds()>elapsedBefore,'Visible elapsed time advances numerically without reporting it back');
+  const progressed=await metrics();assert.ok(progressed.ticks>ticksBefore);
+  assert.equal(progressed.assistantCount,0);assert.equal(progressed.posts[0].navigationPost.disposition,'pending');
+  assert.equal(progressed.posts[0].navigationPost.inputId,sendPayload.id);
+  assert.equal(progressed.posts[0].navigationPost.fence,admitted.posts[0].navigationPost.fence);
+  measuring=false;
   assert.deepEqual(traffic,[],'posted progress must not cause steady shell/view refetches');
   assert.equal((await metrics()).navigationActivityAt,stable);
   await expectDraft(other,'Keep other-client draft');
@@ -146,19 +165,34 @@ try{
  await page.addInitScript(()=>{const Native=window.WebSocket;window.sidebarProofSockets=[];window.WebSocket=class extends Native{constructor(...args){super(...args);if(String(args[0]).includes('/api/events/'))window.sidebarProofSockets.push(this)}}});
  page.on('websocket',socket=>socket.on('framereceived',frame=>{try{if(JSON.parse(String(frame.payload)).event==='state')stateBaselines++}catch{}}));
  page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{const path=new URL(r.url()).pathname;if(path==='/api/view')reports.push(r.postDataJSON());if(path==='/api/shell')bootstrapReads++;if(path==='/api/shell/resources')resourceReads++;if(measuring&&['/api/shell','/api/shell/resources','/api/view'].includes(path))traffic.push(r.method()+' '+path)});
- await page.goto(url);await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats);
+ await page.goto(url);
+ // Fresh browser documents arrive at Home with navigation unpinned. The
+ // fixture's shared view seed does not request this client's Recent resource.
+ await showFixtureConversation(page,{navPinned:true});
+ await expect(page.locator('#workspace-navigation .a-nav-rail')).toBeVisible();
+ await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats);
  const api=async(path,data)=>{const r=await page.request.post(url+path,{data});assert.equal(r.status(),200);return r.json()};
  const {sessions}=await (await page.request.get(url+'/fixture/metrics')).json();
  const dispatch=(action,args)=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  const shell=()=>page.evaluate(()=>window.amplifier.getShellState().snapshots.chats);
- const order=()=>page.locator('.a-nav-chat[data-session-id]').evaluateAll(rows=>rows.map(row=>row.dataset.sessionId));
+ const recentRows=page.locator('.a-quiet-sidebar [data-sidebar-section=recent] .a-nav-chat[data-session-id]');
+ const order=()=>recentRows.evaluateAll(rows=>rows.map(row=>row.dataset.sessionId));
  const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
  // The shared scale fixture now seeds pins for transport qualification. This
  // journey explicitly creates and reorders its own two pins below.
  for(const id of (await shell()).pinnedSessionIds)await dispatch('session.pin',{id,pinned:false});
  await expect.poll(async()=>(await shell()).pinnedSessionIds).toEqual([]);
- await page.waitForFunction(()=>window.amplifier.getShellState().snapshots.chats.recentNavigation);
- await expect(page.locator('.a-nav-chat[data-session-id]')).toHaveCount(20);
+ await page.waitForFunction(()=>{
+  const state=window.amplifier.getState(),chats=window.amplifier.getShellState().snapshots.chats;
+  return state.view.workSurface==='chat'&&state.view.navPinned
+   &&chats.navigationResources?.includes('recentNavigation')
+   &&!chats.navigationResourcePending?.recentNavigation&&!chats.navigationResourceRetained?.recentNavigation
+   &&chats.recentNavigation?.scope?.selectedSessionId===state.selectedSessionId;
+ });
+ await expect(recentRows).toHaveCount(20);
+ assert.equal((await shell()).recentNavigation.items.length,20);
+ assert.deepEqual(await order(),(await shell()).recentNavigation.items.map(row=>row.id),
+  'Rendered Recent prefix matches the current resource, not Home or retained rows');
  const before=await order();
  // Progress in a different selected conversation must not reshuffle the sidebar.
  await dispatch('session.select',{id:sessions[1]});await api('/fixture/progress',{running:true});await wait(1500);
@@ -239,4 +273,5 @@ try{
  if(process.env.AMPLIFIER_SIDEBAR_EVIDENCE)await writeFile(process.env.AMPLIFIER_SIDEBAR_EVIDENCE,JSON.stringify(result,null,2)+'\n');
  console.log(JSON.stringify(result,null,2));
  }
-}finally{try{await browser?.close()}finally{fixture?.kill('SIGTERM')}}
+}catch(error){failure=error;throw error}
+finally{await finishFixture({label:'Sidebar activity fixture',close:[['browser',()=>browser?.close()]],stop:stopFixture,originalError:failure})}

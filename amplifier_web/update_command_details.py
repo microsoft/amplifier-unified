@@ -23,6 +23,7 @@ class Capture:
         self.data = bytearray()
         self.total = 0
         self.auth_failure = self.github = self.access_probe = False
+        self.missing_git_blob = self.failed_git_reset = False
         self._tail = b''
 
     async def drain(self, reader):
@@ -34,6 +35,8 @@ class Capture:
             from .reset import repository_auth_failure
             from .update_diagnostics import probe_record
             window = self._tail + chunk
+            self.missing_git_blob |= b'error: unable to read sha1 file of ' in window
+            self.failed_git_reset |= b'fatal: Could not reset index file to revision' in window
             self.auth_failure |= repository_auth_failure(window)
             self.github |= b'github.com' in window.lower()
             self.access_probe |= any((probe_record(line) or {}).get('repositoryAccessFailure') is True

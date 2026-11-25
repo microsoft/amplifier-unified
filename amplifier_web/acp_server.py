@@ -24,7 +24,7 @@ from aiohttp import WSMsgType, web
 from .execution_owner import ExecutionOwner, ensure_observers
 from .errors import AppError
 from .runtime_protocol import MAX_MESSAGE_BYTES
-from . import approval_policy
+from . import approval_policy, agent_instance
 
 RETIREMENT = 'com.microsoft.amplifier.retirement'
 # Implementation-specific failure; ACP reserves -32000 for authentication.
@@ -127,7 +127,9 @@ class HostAgent:
     def __init__(self, owner):
         self.owner = owner
         self.initialized = False
+        self.option_snapshots = {}
         self.creation = asyncio.Lock()
+        self.instance = None
 
     def on_connect(self, connection):
         self.client = connection
@@ -136,6 +138,8 @@ class HostAgent:
             'amplifier/retirementRequested', {'sessionId': identity})
 
     async def request_permission(self, identity, approval):
+        if self.instance is not None:
+            self.instance.bound(identity, self.instance.bindings.get(identity))
         details = approval.get('details', {})
         text = str(approval.get('prompt') or approval.get('title') or 'Allow this request?')
         if details:
@@ -148,6 +152,8 @@ class HostAgent:
                 field_meta={approval_policy.NAMESPACE: approval['policyScope']} if approval.get('policyScope') else None,
                 content=[{'type': 'content', 'content': {'type': 'text', 'text': text}}]), options=options)
         outcome = response.outcome
+        if self.instance is not None:
+            self.instance.bound(identity, self.instance.bindings.get(identity))
         return outcome.option_id if outcome.outcome == 'selected' else 'deny'
 
     def require_initialized(self):
@@ -157,25 +163,107 @@ class HostAgent:
     async def initialize(self, protocol_version, **kwargs):
         if self.initialized:
             raise RequestError.invalid_request({'details': 'Connection already initialized.'})
-        self.initialized = True
         policy = approval_policy.negotiate(kwargs.get(approval_policy.NAMESPACE))
-        self.owner.approval_policy = policy is not None
-        return InitializeResponse(protocol_version=1, agent_capabilities=AgentCapabilities(
+        instance = None
+        offered = kwargs.get(agent_instance.NAMESPACE)
+        if (isinstance(offered, dict) and set(offered) == {'version'}
+                and type(offered['version']) is int and offered['version'] == 1):
+            try:
+                profile = agent_instance.InstanceProfile(self.owner)
+                if profile.applies():
+                    instance = profile.describe()
+            except (ValueError, OSError) as error:
+                raise RequestError(_REQUEST_FAILED, str(error)) from None
+        response = InitializeResponse(protocol_version=1, agent_capabilities=AgentCapabilities(
             load_session=False, mcp_capabilities=McpCapabilities(http=True, sse=False),
             session_capabilities=SessionCapabilities(resume=SessionResumeCapabilities())),
             field_meta={RETIREMENT: {'version': 1, 'method': '_amplifier/retire',
                 'notification': '_amplifier/retirementRequested'},
-                **({approval_policy.NAMESPACE: policy} if policy else {})})
+                **({approval_policy.NAMESPACE: policy} if policy else {}),
+                **({agent_instance.NAMESPACE: instance} if instance else {})})
+        if instance is not None:
+            self.instance = profile
+            self.owner.attachment_guard = lambda identity: profile.bound(identity, profile.bindings.get(identity))
+        self.owner.approval_policy = policy is not None
+        self.initialized = True
+        return response
+
+    def instance_metadata(self, kwargs):
+        value = kwargs.get(agent_instance.NAMESPACE)
+        if value is not None and self.instance is None:
+            raise ValueError('The public agent profile was not negotiated.')
+        if self.instance is not None and value is None:
+            raise ValueError('The negotiated public agent requires source metadata.')
+        return value
+
+    async def config_options(self, identity):
+        from .participant_options import advertised
+        from .conversation_models import browse
+        service = getattr(self.owner, 'service', None)
+        if not service or not hasattr(service, 'management'):
+            return []
+        def current_catalog():
+            session = service._session(identity, hydrate=False)
+            catalog = service.state.get('runtimeControl', {}).get(identity, {}).get('configuration.catalog') or {}
+            if (catalog.get('phase') == 'ready' and
+                    catalog.get('configurationRevision') == service.state.get('configurationRevision', 0) and
+                    catalog.get('nextMessageRevision') == session.get('nextMessageRevision', 0)):
+                return catalog
+
+        catalog = current_catalog()
+        if catalog is None:
+            self.option_snapshots.pop(identity, None)
+            try:
+                await browse(service.management, service._session(identity, hydrate=False), include_history=False)
+            except (OSError, AppError, ValueError):
+                return []
+            catalog = current_catalog()
+            if catalog is None:
+                return []
+        self.owner.require_attachment(identity)
+        if self.owner.attachment_guard:
+            self.owner.attachment_guard(identity)
+        options, changes = advertised(service, service._session(identity, hydrate=False))
+        self.option_snapshots[identity] = (catalog['nextMessageRevision'], catalog['configurationRevision'], changes)
+        return options
+
+    async def set_config_option(self, config_id, session_id, value, **kwargs):
+        from acp.schema import SetSessionConfigOptionResponse
+        self.require_initialized()
+        service = self.owner.service
+        def check():
+            self.owner.require_attachment(session_id)
+            if self.owner.attachment_guard:
+                self.owner.attachment_guard(session_id)
+            if service.state.get('configurationRevision', 0) != settings_revision:
+                raise ValueError('Connection settings changed. Refresh the agent options.')
+        try:
+            revision, settings_revision, changes = self.option_snapshots.get(session_id, (None, None, {}))
+            check()
+            patch = changes.get((config_id, value))
+            if not patch:
+                raise ValueError('Choose an advertised value for this session.')
+            await service.dispatch('conversation.configure', {'sessionId': session_id,
+                'expectedRevision': revision, **patch}, origin=self.owner.origin, include_state=False, admission_check=check)
+            return SetSessionConfigOptionResponse(config_options=await self.config_options(session_id))
+        except (AppError, ValueError) as exc:
+            raise RequestError(_REQUEST_FAILED, str(exc)) from None
 
     async def new_session(self, cwd, mcp_servers=None, **kwargs):
         self.require_initialized()
         async with self.creation:
             try:
-                identity = await self.owner.create(cwd, mcp_servers=_http_servers([
-                    row.model_dump(mode='json', by_alias=True) for row in (mcp_servers or [])]))
+                metadata = self.instance_metadata(kwargs)
+                servers = _http_servers([row.model_dump(mode='json', by_alias=True)
+                                         for row in (mcp_servers or [])])
+                if metadata is not None:
+                    identity, info = await self.instance.connect(cwd, metadata, servers)
+                else:
+                    identity = await self.owner.create(cwd, mcp_servers=servers)
             except (AppError, ValueError, OSError) as error:
                 raise RequestError(_REQUEST_FAILED, str(error)) from None
-        return NewSessionResponse(session_id=identity)
+        return NewSessionResponse(session_id=identity, config_options=await self.config_options(identity) or None, field_meta=(
+            {agent_instance.NAMESPACE: info} if metadata is not None else None))
 
     async def resume_session(self, session_id, cwd, mcp_servers=None, **kwargs):
         self.require_initialized()
@@ -183,17 +271,29 @@ class HostAgent:
             if session_id in self.owner.attached:
                 raise RequestError.invalid_params({'details': 'Session already attached.'})
             try:
-                identity = await self.owner.attach(session_id, cwd, mcp_servers=_http_servers([
-                    row.model_dump(mode='json', by_alias=True) for row in (mcp_servers or [])]))
+                metadata = self.instance_metadata(kwargs)
+                servers = _http_servers([row.model_dump(mode='json', by_alias=True)
+                                         for row in (mcp_servers or [])])
+                if metadata is not None:
+                    identity, info = await self.instance.connect(cwd, metadata, servers, session_id)
+                else:
+                    identity = await self.owner.attach(session_id, cwd, mcp_servers=servers)
             except (AppError, ValueError, OSError) as error:
                 raise RequestError(_REQUEST_FAILED, str(error)) from None
             if identity != session_id:
                 raise RequestError.internal_error({'details': 'Owner did not attach the exact saved identity.'})
-        return ResumeSessionResponse()
+        return ResumeSessionResponse(config_options=await self.config_options(session_id) or None, field_meta=(
+            {agent_instance.NAMESPACE: info} if metadata is not None else None))
 
     async def prompt(self, session_id, prompt, **kwargs):
         self.require_initialized()
         input_id = str(uuid.uuid4())
+        try:
+            metadata = self.instance_metadata(kwargs)
+            if metadata is not None:
+                _, input_id = self.instance.input(session_id, metadata)
+        except (ValueError, AppError) as error:
+            raise RequestError(_REQUEST_FAILED, str(error)) from None
         streamed = had_deltas = False
         last_model = None
         tools = set()
@@ -204,6 +304,8 @@ class HostAgent:
 
         async def observe(row):
             nonlocal streamed, had_deltas, last_model
+            if metadata is not None:
+                self.instance.bound(session_id, metadata)
             kind = row.get('type')
             if kind == 'assistant.delta':
                 streamed = had_deltas = True
@@ -242,21 +344,63 @@ class HostAgent:
                 await self.client.session_update(session_id=session_id, update=update)
 
         try:
-            result = await self.owner.prompt(session_id, input_id, '\n'.join(block.text for block in prompt), observe)
+            content = '\n'.join(block.text for block in prompt)
+            if metadata is not None:
+                result = await self.instance.prompt(session_id, metadata, content, observe)
+            else:
+                result = await self.owner.prompt(session_id, input_id, content, observe)
         except (AppError, ValueError, RuntimeError) as error:
-            raise RequestError(_REQUEST_FAILED, str(error)) from None
+            data = None
+            if metadata is not None:
+                try:
+                    data = {'inputReceipt': await self.instance.inspect_input(session_id, metadata)}
+                except (AppError, ValueError):
+                    pass
+            raise RequestError(_REQUEST_FAILED, str(error), data) from None
+        if result.get('outcome') == 'retained':
+            raise RequestError(_REQUEST_FAILED, 'Original input retained; no input was sent again.',
+                               {'inputReceipt': result['receipt']})
         if result.get('outcome') not in {'completed', 'cancelled'}:
             raise RequestError(_REQUEST_FAILED, 'Outcome unresolved; inspect retained owner state before retrying.')
-        if result.get('text') and not streamed:
-            await text(result['text'])
-        return PromptResponse(stop_reason='end_turn' if result['outcome'] == 'completed' else 'cancelled')
+        try:
+            if metadata is not None:
+                self.instance.bound(session_id, metadata)
+            if result.get('text') and not streamed:
+                await text(result['text'])
+            if result['outcome'] == 'completed' and session_id in self.option_snapshots:
+                # A failure to publish optional controls cannot change a completed prompt's disposition.
+                from acp.schema import ConfigOptionUpdate
+                previous = self.option_snapshots[session_id]
+                try:
+                    options = await self.config_options(session_id)
+                    if previous != self.option_snapshots.get(session_id):
+                        await self.client.session_update(session_id=session_id, update=ConfigOptionUpdate(config_options=options))
+                except (RequestError, OSError, AppError, RuntimeError, ValueError):
+                    self.option_snapshots.pop(session_id, None)
+            return PromptResponse(stop_reason='end_turn' if result['outcome'] == 'completed' else 'cancelled',
+                field_meta=({agent_instance.NAMESPACE: await self.instance.inspect_input(session_id, metadata)}
+                            if metadata is not None else None))
+        except (AppError, ValueError, OSError, RuntimeError) as error:
+            raise RequestError(_REQUEST_FAILED,
+                f"Execution {result['outcome']}; response delivery or inspection unavailable: {error} "
+                "The original input was not sent again.",
+                {'outcome': result['outcome'], 'replayed': False, 'inputId': input_id}) from None
 
     async def cancel(self, session_id, **kwargs):
         self.require_initialized()
+        if self.instance is not None:
+            self.instance.bound(session_id, self.instance.bindings.get(session_id))
         await self.owner.cancel(session_id)
 
     async def ext_method(self, method, params):
         self.require_initialized()
+        if method == agent_instance.METHOD:
+            if self.instance is None:
+                raise RequestError(-32601, 'The public agent profile was not negotiated.')
+            try:
+                return await self.instance.control(params)
+            except (AppError, ValueError, OSError, RuntimeError) as error:
+                raise RequestError(_REQUEST_FAILED, str(error)) from None
         if method != 'amplifier/retire':
             raise RequestError(-32601, 'Unsupported ACP extension.')
         if (not isinstance(params, dict) or set(params) != {'sessionId'}
@@ -265,6 +409,8 @@ class HostAgent:
         try:
             async with self.creation:
                 disposition = await self.owner.retire(params['sessionId'])
+                if disposition == 'retired':
+                    self.option_snapshots.pop(params['sessionId'], None)
         except (AppError, ValueError, RuntimeError) as error:
             raise RequestError(_REQUEST_FAILED, str(error)) from None
         return {'sessionId': params['sessionId'], 'disposition': disposition}

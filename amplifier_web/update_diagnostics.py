@@ -498,6 +498,7 @@ class UpdateDiagnostics:
         if failure_location(facts.get('failureLocation')):event['failureLocation']=facts['failureLocation']
         if type(facts.get('timedOut')) is bool:event['timedOut']=facts['timedOut']
         if type(facts.get('anonymousRetry')) is bool:event['anonymousRetry']=facts['anonymousRetry']
+        if facts.get('gitCacheRetry') is True:event['gitCacheRetry']=True
         attempts = command_attempts(facts.get('commandAttempts'))
         if attempts:event['commandAttempts'] = attempts
         for key in ('stdoutTruncated', 'stderrTruncated', 'outputLimitExceeded'):

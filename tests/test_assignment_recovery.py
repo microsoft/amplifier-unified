@@ -1,25 +1,62 @@
 """Explicit human recovery of stopped assignments never replays old work."""
 import copy
+import time
 import pytest
 from amplifier_web.service import AppError, AppService
 from amplifier_web.capacity import admission
 from test_assignments import app, start, child, call, send, generation, until, agent_action, limits
 
 
-async def stop(app, source):
+async def stop(app, source, *, ended_owner='matching'):
     value = app.assignments.current(source)
+    owners = {}
+    # The shared collaboration fixture models transport, not a native process.
+    # Admit a real reducer-bound turn before testing exact-owner process loss.
+    for sid, member in value['members'].items():
+        if member['status'] != 'bound':
+            continue
+        session = app._session(sid)
+        owner = owners[sid] = 'runtime-' + sid
+        await app.on_runtime_event('runtime.generation', {
+            'sessionId': sid, 'rootSessionId': sid, 'runtimeOwnerId': owner,
+            'event': 'generation.started', 'generation_id': 'settlement-' + sid,
+            'initial_input_id': 'settlement-input-' + sid, 'observedAt': time.time(),
+            'interruptionRevision': session.get('interruptionRevision', 0),
+        })
+        turn = session['execution']['turns'][-1]
+        assert turn['runtimeOwnerId'] == owner
+        assert turn['generationId'] == session['collaborationGeneration']['id']
     result = await app.dispatch('assignment.stop', {'sessionId': source['id'], 'expectedRevision': value['revision']}, command_id='stop-recovery')
     await until(lambda: not app.assignments.interrupting)
     # The lightweight fixture emits only status on Stop. Supply the confirmed
     # process-exit event that the actual runtime emits, without inventing success.
     for sid, status in app.collaboration.receipt('stop-recovery')['interruptions'].items():
         if status == 'returned':
-            await app.on_runtime_event('runtime.ended', {'sessionId': sid, 'rootSessionId': sid})
+            await app.on_runtime_event('runtime.ended', {
+                'sessionId': sid, 'rootSessionId': sid,
+                **({'runtimeOwnerId': owners[sid] if ended_owner == 'matching' else ended_owner}
+                   if ended_owner is not None else {}),
+            })
     return app.assignments.current(source)
 
 
 async def resume(app, source, identity='resume-recovery', **extra):
     return await app.dispatch('assignment.resume', {'sessionId': source['id'], 'expectedRevision': app.assignments.current(source)['revision'], **extra}, command_id=identity)
+
+
+@pytest.mark.parametrize('ended_owner', [None, 'foreign-runtime'])
+async def test_unbound_or_foreign_exit_cannot_settle_assignment(app, ended_owner):
+    source = app.state['sessions'][0]
+    await start(app)
+    await stop(app, source, ended_owner=ended_owner)
+    before = copy.deepcopy(app.assignments.current(source))
+    assert not source['collaborationGeneration']['terminal']
+    # A status-only Stop settles presentation, not native generation authority.
+    assert source['execution']['turns'][-1]['phase'] == 'stopped'
+    with pytest.raises(AppError, match='settle'):
+        await resume(app, source)
+    assert app.assignments.current(source) == before
+    assert not app.runtime.inputs
 
 
 async def test_resume_preserves_topology_limits_accounting_and_does_not_run(app):
@@ -183,7 +220,8 @@ async def test_duplicate_resume_cannot_reopen_a_later_stop(app):
     assert not app.runtime.inputs
 
 
-async def test_resume_preserves_separate_budget_pause_until_explicit_budget_edit(app, monkeypatch):
+@pytest.mark.parametrize('local_limit', [30, 100])
+async def test_resume_rechecks_current_budget_without_erasing_denial_or_usage(app, monkeypatch, local_limit):
     from test_task_continuity import controls
     from amplifier_web.capacity import saved_policy
     from amplifier_web.execution import ingest
@@ -197,15 +235,37 @@ async def test_resume_preserves_separate_budget_pause_until_explicit_budget_edit
         row = call(source,'retained-usage', endedAt=1, usage={'totalTokens':30})
         row['phase'] = 'completed'
         assert (await admission(app,source['id'],{'call':row}))['allowed']
+        if local_limit == 30:
+            await worker.perform('capacity.set', {
+                'commandId': 'reached-local-budget', 'expectedRevision': 1, 'maxTotalTokens': 30})
         await stop(app,source)
         with pytest.raises(ValueError,match='assignment was stopped'):
             await worker.capacity.guard(call(source,'stopped-call'))
         before = saved_policy(app,source['id'])
+        denial = copy.deepcopy(worker.capacity.last_denial)
         await resume(app,source)
         assert saved_policy(app,source['id']) == before
-        assert not (await admission(app,source['id'],{'call':call(source,'still-paused')}))['allowed']
-        # Existing control owner and revision-bound edit clear only its denial.
-        await worker.perform('capacity.set', {'commandId':'reviewed-local-budget', 'expectedRevision':1, 'maxTotalTokens':100})
+        assert worker.capacity.last_denial == denial
+        probe = call(source, 'current-budget-check')
+        if local_limit == 30:
+            # A separate reached local limit survives assignment resume.
+            with pytest.raises(ValueError, match='limit reached'):
+                await worker.capacity.guard(probe)
+            assert worker.capacity.last_denial['callId'] == probe['id']
+        else:
+            # A historical Stop refusal is evidence, not a permanent budget hold.
+            # Only a fresh authoritative admission clears it, not resume itself.
+            await worker.capacity.guard(probe)
+            assert worker.capacity.last_denial is None
+            ingest(source, {**probe, 'phase': 'completed', 'endedAt': 2,
+                            'revision': 2, 'usage': {'totalTokens': 0}})
+        assert app.assignments.usage(app.assignments.current(source))['metrics']['grossTotalTokens']['value'] == 30
+        # A revision-bound explicit edit can raise the real local limit, without
+        # resetting consumption or replaying either refused call.
+        await worker.perform('capacity.set', {
+            'commandId': 'reviewed-local-budget', 'expectedRevision': 2 if local_limit == 30 else 1,
+            'maxTotalTokens': 100})
+        assert worker.capacity.last_denial is None
         assert saved_policy(app,source['id'])['maxTotalTokens'] == 100
         row=call(source,'new-call')
         assert (await admission(app,source['id'],{'call':row}))['allowed']

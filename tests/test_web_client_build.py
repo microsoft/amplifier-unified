@@ -41,6 +41,12 @@ class ClientBuildTests(unittest.TestCase):
         write(self.source / '.client-source.json', self.record)
         write(self.source / 'build-inputs.lock.json', self.lock)
         write(self.source / 'src/main.js', 'selected')
+        self.host_registry = self.root / 'tests/web/browser-checks.json'
+        self.host_plan = {'schemaVersion': 1, 'scenarioOrder': ['client', 'host'],
+                          'scenarios': [{'id': 'host', 'command': ['node', 'host.mjs']}]}
+        write(self.host_registry, self.host_plan)
+        write(self.source / 'tests/browser-checks.json', {'schemaVersion': 1, 'scenarios': [
+            {'id': 'client', 'command': ['node', 'client.mjs']}]})
         write(self.source / 'tests/example.test.mjs', '// preserved test')
         write(self.source / '.client-development.json', build.delivery.development_inventory(self.source))
         self.commands = []
@@ -99,6 +105,31 @@ class ClientBuildTests(unittest.TestCase):
 
         with patch.object(build.delivery, 'prepare', side_effect=prepare):
             build.prepare(self.root)
+        self.assertEqual(build.read(self.source / '.client-source.json'), self.record)
+        self.assertFalse(list((self.root / '.build').glob('.web-client-*')))
+
+    def test_cached_client_requires_current_host_order_to_cover_its_registry(self):
+        build.prepare(self.root)
+        write(self.host_registry, {**self.host_plan, 'scenarioOrder': ['host']})
+        with self.assertRaisesRegex(ValueError, 'each owned scenario exactly once'):
+            build.prepare(self.root)
+        self.assertEqual(build.read(self.source / '.client-source.json'), self.record)
+
+    def test_unlisted_scenario_in_new_selection_preserves_working_client(self):
+        successor = {**self.record, 'source': {**self.record['source'], 'revision': 'e' * 40}}
+        write(self.selected, successor)
+
+        def prepare(root, record, destination, **kwargs):
+            shutil.copytree(self.source, destination)
+            shutil.copyfile(record, destination / '.client-source.json')
+            registry = destination / 'tests/browser-checks.json'
+            plan = build.read(registry)
+            plan['scenarios'].append({'id': 'new-scenario', 'command': ['node', 'new.mjs']})
+            write(registry, plan)
+
+        with patch.object(build.delivery, 'prepare', side_effect=prepare):
+            with self.assertRaisesRegex(ValueError, 'each owned scenario exactly once'):
+                build.prepare(self.root)
         self.assertEqual(build.read(self.source / '.client-source.json'), self.record)
         self.assertFalse(list((self.root / '.build').glob('.web-client-*')))
 

@@ -73,6 +73,16 @@ observed at the adapter's local pretransport boundary may identify the request a
 unsent; a provider exception with the same type cannot make that claim.
 The recovery event is metadata only and does not prove provider admission.
 
+## A follow-up while an earlier summary is running
+
+Streaming may ask the host for a single-use view of the ordinary text request
+with its selected model, output allowance, tools and current host observations.
+When Context Managed can use that view while an earlier summary is running,
+dispatch rechecks the same request, selection and required Work. An unused view
+releases its provisional state and preserves other prepared requests. Images,
+an unavailable view or insufficient room use the existing fit and recovery path.
+The original summary retains ownership of its checkpoint.
+
 ## Current context and reasoning continuity
 
 Unified prepares current host observations before measurement, without saving a
@@ -101,20 +111,55 @@ from successful requests that discarded incompatible reasoning.
 
 ## A deliberate model change in an existing conversation
 
-Saving a model choice does no provider work. On a genuinely new ordinary
-foreground input, the host may admit bounded context preparation for the saved
-target connection/model/options. Mounted selection acknowledgement is not proof
-that context fits or that the turn completed. Startup, status reads, retries,
-steering and automatic job/scheduled continuations do not create this admission.
+The picker records only the final saved intent. Browsing a conversation's models
+uses the local catalog. Explicit Refresh can query that connection's model list.
+Neither browsing nor changing a choice admits a turn or prepares history.
+For large prior input, the client can describe a known cache or history cost
+before a change takes effect. The hint uses completed foreground usage, cached
+or mounted provider capabilities and, when available, a verified native-only
+history size. Saving requires no extra confirmation. Hints grant no authority.
 
-A derived checkpoint is reusable only under its exact identity and validated
-canonical prefix/configuration. A structured identity-only transition
-classification is not an import authorization: corrupt digests, changed source
-or configuration, and incompatible paid progress remain rejected. Historical
-source-provider envelope attestation may be unavailable; structural validation
-does not claim that attestation. Target preparation never sends the old model's
-opaque state to the new model, including for counting, and never falls back to
-the old model or a larger cost/context tier.
+On a genuinely admitted foreground turn the same preparation path applies to
+an already active or newly started worker. Opening the chat, steering and
+automatic job or scheduled continuation do not create a fresh recovery grant.
+Identity includes the mounted connection, model and applicable options. The
+target provider can locally qualify a complete native checkpoint for reuse.
+The standalone OpenAI Responses window stays intact across qualified Astra
+and Sol switches; the direct Anthropic adapter preserves the signed block
+across qualified Claude switches. The source boundary, scope and target fit
+must validate before installation. Reuse consumes zero additional compactions.
+
+A completed plain-text summary can also travel with an explicit model change
+on the same verified connection when the destination lacks an exact request
+counter. Unified binds the saved summary to the connection that produced it.
+On a fresh ordinary Send, it checks that binding, the saved source prefix and
+configuration, and the selected destination. The source checkpoint stays on
+disk while the destination receives the verified note and its retained history.
+Only a successful foreground response to the request carrying that note permits
+the writer to save it for the new model. The input, selection, source and Stop
+state must still match at that point. A later worker can then reopen the new
+model's checkpoint without regenerating the covered history.
+
+A failed or interrupted request leaves the original checkpoint available.
+For an older complete text checkpoint without connection provenance, the target
+can rebuild from canonical originals on a fresh Send with an explicitly selected
+connection and model. It starts with no derived state and never uses the old
+note. Only the new note generated on that connection, covering at least the
+old prefix and carried in a confirmed target response's request, may replace
+the old checkpoint. A later worker can then restore the target's note.
+Partial notes, opaque provider state and invalid proofs retain their existing
+recovery paths. A reused account alias alone cannot establish shared provenance.
+
+When native reuse is unavailable, Managed Context uses original messages that
+fit, or a validated readable checkpoint and its recent suffix that fit. If
+summarization is needed, it budgets for the target's instructions, tools, output
+and intact recent exchanges. The resulting ordinary history summary identifies
+older context; original messages remain available. An opaque vendor carrier
+never substitutes for readable history on a different provider. A legacy
+adapter can use the shared portable preparation path without implementing
+a native method. The existing call allowance bounds work when a very large
+prefix needs more than one request. Target preparation never falls back to a
+different model or a larger cost tier.
 
 The existing recovery journal binds the source checkpoint, canonical prefix,
 selection revision, target options, execution input and Stop/configuration
@@ -140,6 +185,17 @@ before reserving a paid call. A changed Stop or selection requires a current off
 Duplicate delivery returns the original receipt. A retry, steering input, peer
 message, schedule or later Send cannot use the authorization.
 
+Status includes the number of unresolved logical calls in `unconfirmedCalls`
+when that number is positive. If a native transition stopped with one
+unconfirmed final reservation and an intact checkpoint for its previous
+completed parts, the same approval can resume from that checkpoint. Its
+`maxAdditionalCalls` is limited to the unused part of the original allowance.
+Unified keeps the uncertain reservation and counts it against that allowance.
+The new Send can reprocess the remaining source; the uncertain call's outcome
+stays unknown. The bound is single-use and the rest of the original allowance
+does not carry over to another Send. Missing progress, an ambiguous install, or
+additional unresolved reservations suppress the offer.
+
 The original `maxCalls` stays in the journal. Status reports the additional calls
 authorized and used separately. The extension covers native compaction for
 that input. Portable summarization keeps its configured allowance.
@@ -159,6 +215,29 @@ on a new genuine foreground input under the same binding and cumulative budget.
 That effect-free retry may use a newly authorized tool/request contract, retaining
 the prior failed preparation's provenance in the existing journal. Paid progress
 and uncertain effects cannot use this exception.
+A human can request a separate one-Send comparison when a qualified worker
+generation moved the host-selected skill cache. Supply `cacheMoveFromGeneration`
+to `context.recovery.status`. The worker substitutes that qualified generation's
+canonical `foundation/cache/skills` path into only the tool-skills defaults
+injected on the current mount. The reconstructed full raw contract must hash to
+the saved legacy digest. Both qualified generations must select the same verified
+skill package and tracked source contents. The current POSIX verifier accepts
+empty cache directories or identical sets of at most 64 empty private lock
+files. Links, populated caches and ambiguous evidence suppress this option.
+
+The separate `cacheMoveOffer` supplies the previous and current generation
+IDs, both contract digests, the slot count, cache comparison and a
+`cacheMoveId`. A new ordinary Send acknowledges that particular change by
+including `cacheMove: {cacheMoveId, fromGeneration, toGeneration}` inside
+`recoveryAllowance`. The worker verifies the evidence again at admission and
+when binding the new input. It retains the complete prior contract digest and
+stores the verified move together with the existing one-use grant, before any
+additional reservation. The actual worker uses the current cache. Historical
+effective contracts record the former physical path without recording whether
+a user or the host originally supplied it. This separate choice authorizes the
+observed change in either case. A budget-only acknowledgment permits only the
+ordinary identical-contract continuation.
+
 An altered earlier canonical prefix still refuses, even when the failed
 preparation bought nothing. Request/tool changes do not authorize rewriting the
 source bound to a retained attempt; preserve the originals and establish a
@@ -256,3 +335,5 @@ its own explicit saved target choice and new foreground input for bounded
 canonical-originals preparation; it cannot invent a valid old checkpoint.
 These are offline-qualified mechanisms, not a claim of live device recovery,
 complete archive migration, or model summary quality.
+
+The host publishes the read command ID as `readCommandId` on the `runtime.control` projection of `context.recovery.status`. A client can use it with the command receipt to identify the result when other activity reads the same control.

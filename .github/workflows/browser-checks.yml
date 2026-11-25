@@ -219,11 +219,14 @@ jobs:
               npx playwright install --with-deps chromium
             )
           fi
+      # Historical revisions keep the feature cases in test_browser_check_runner.py.
       - name: Verify fixed APP004 qualification contracts
         if: ${{ inputs.app004_qualification }}
         run: |
           set -o pipefail
-          uv run --no-sync pytest -v --tb=short tests/test_browser_check_runner.py tests/test_release_qualification.py --junitxml=output/browser-checks/app004-contracts.xml 2>&1 | tee output/browser-checks/app004-contracts.log
+          contracts=(tests/test_browser_check_runner.py tests/test_release_qualification.py)
+          if [[ -f tests/web/chat_reference_qualification.py ]]; then contracts+=(tests/test_chat_reference_qualification.py); fi
+          uv run --no-sync pytest -v --tb=short "${contracts[@]}" --junitxml=output/browser-checks/app004-contracts.xml 2>&1 | tee output/browser-checks/app004-contracts.log
       - name: Verify fixed attachment host contracts
         if: ${{ inputs.attachment_consumption }}
         id: attachment-contracts

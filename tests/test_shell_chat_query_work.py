@@ -14,9 +14,11 @@ from test_history_directory_exact_ids import native_fixture
 def test_chat_totals_reuse_all_activity_groups(tmp_path, status):
     state, directory = directory_fixture(tmp_path)
     state['sessions'] = []
-    # Unknown activity groups must still count in the complete page, even though
-    # the existing public counters deliberately expose just four known kinds.
-    directory.db.execute("UPDATE history_local_rows SET base_activity_kind='future-kind' WHERE id='s1'")
+    # Unknown groups join the four initialized counters. Give the fixture its
+    # own label too: retained Idle/New response labels are recomputed from notices.
+    directory.db.execute(
+        'UPDATE history_local_rows SET base_activity_kind=?,base_activity_label=? WHERE id=?',
+        ('future-kind', 'Future activity', 's1'))
     directory.db.commit()
     state['view']['navStatusFilter'] = status
     traces = []
@@ -31,7 +33,14 @@ def test_chat_totals_reuse_all_activity_groups(tmp_path, status):
     from amplifier_web.history_directory_query import _chat_query
     sql, params, *_ = _chat_query(directory, state, None)
     assert result['total'] == directory.db.execute(sql+' SELECT COUNT(*) FROM filtered', params).fetchone()[0]
-    if status == 'future-kind': assert result['total'] == 1
+    assert state['sessions'] == []
+    assert result['activityCounts']['future-kind'] == 1
+    if status == 'all':
+        assert result['total'] == sum(result['activityCounts'].values())
+    elif status == 'future-kind':
+        assert result['total'] == 1
+        assert [row['id'] for row in result['items']] == ['s1']
+        assert result['items'][0]['activity'] == {'kind': 'future-kind', 'label': 'Future activity'}
 
 
 @pytest.mark.parametrize('section', [None, 'search', 'pinned'])

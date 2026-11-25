@@ -496,18 +496,43 @@ def check_direct_requirements(wheels, names, python_version):
 def verify_candidate_wheel(wheel_path, candidate):
     """Match every packaged payload byte and the complete declared source set."""
     build = tomllib.loads((candidate / 'pyproject.toml').read_text())['tool']['hatch']['build']['targets']['wheel']
-    mappings = {name: name for name in build['packages']}
-    mappings.update({dest: source for source, dest in build.get('force-include', {}).items()})
+    # This owner supports the candidate's literal package roots and rooted-file
+    # exclusions, not a second implementation of Hatch's pattern language.
+    require(not {'sources', 'only-include', 'include'} & build.keys(),
+            'Review unsupported wheel source selection')
+    excluded = set()
+    for name in build.get('exclude', []):
+        require(name.startswith('/') and not any(char in name for char in '*?[]!\\')
+                and '..' not in Path(name).parts and name == '/' + Path(name).as_posix().lstrip('/'),
+                'Review unsupported wheel exclusion')
+        source = candidate / name[1:]
+        require(source.is_file(), 'Wheel exclusion must name an existing source file')
+        excluded.add(source)
+    # Hatch strips the parent of each packages entry, including delivered
+    # components. Forced sources are reserved from ordinary package traversal.
+    forced = build.get('force-include', {})
+    mappings = [(Path(name).name, name, False) for name in build['packages']]
+    mappings += [(dest, source, True) for source, dest in forced.items()]
+    reserved = [candidate / source for source in forced]
     expected = {}
-    for destination, source in mappings.items():
+    for destination, source, is_forced in mappings:
+        require(all(not Path(value).is_absolute() and '..' not in Path(value).parts
+                    for value in (destination, source)), 'Wheel mapping escapes source')
         path = candidate / source
+        require(path.is_file() or path.is_dir(), 'Missing declared wheel source')
         for item in ([path] if path.is_file() else path.rglob('*')):
             if item.is_file() and '__pycache__' not in item.parts and item.suffix != '.pyc':
+                if not is_forced and (item in excluded or any(
+                        item == root or item.is_relative_to(root) for root in reserved)):
+                    continue
                 relative = '' if item == path else '/' + item.relative_to(path).as_posix()
-                expected[destination + relative] = digest(item)
+                name = destination + relative
+                require(name not in expected, 'Ambiguous wheel payload destination')
+                expected[name] = digest(item)
     with zipfile.ZipFile(wheel_path) as wheel:
-        actual = {n: hashlib.sha256(wheel.read(n)).hexdigest() for n in wheel.namelist()
-                  if not n.endswith('/') and '.dist-info/' not in n}
+        names = [n for n in wheel.namelist() if not n.endswith('/') and '.dist-info/' not in n]
+        require(len(names) == len(set(names)), 'Duplicate wheel payload member')
+        actual = {n: hashlib.sha256(wheel.read(n)).hexdigest() for n in names}
     require(actual == expected, 'Candidate wheel payload differs from declared source/resources')
     return actual
 
@@ -948,7 +973,7 @@ def run_fixed_stage(python, env, evidence, stage):
 
 RESIDUAL_HELPER_COUNTS = {
     'tests.test_integration_clients': 16,
-    'tests.test_integration_checks': 115,
+    'tests.test_integration_checks': 118,
 }
 
 

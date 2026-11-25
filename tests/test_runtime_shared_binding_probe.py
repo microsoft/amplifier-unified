@@ -226,7 +226,13 @@ async def test_real_probe_installs_checked_shared_hook_after_adoption_and_freeze
         folder = local / name
         folder.mkdir(parents=True)
         (folder / '__init__.py').write_text('# Dependency-free preparation-only fixture\n')
-    profile = workspace / 'profile.yaml'
+    # A standalone local bundle needs its own source-root marker. An arbitrary
+    # profile.yaml under /workspace otherwise discovers the enclosing app bundle
+    # and collects that application's package into this tiny fixture batch.
+    (tmp_path / 'bundle.yaml').write_text('bundle:\n  name: unselected-parent\n')
+    (tmp_path / 'pyproject.toml').write_text(
+        '[project]\nname="fixture-unselected-parent"\nversion="1"\ndependencies=[]\n')
+    profile = workspace / 'bundle.yaml'
     from amplifier_web.bundles import SNAPSHOT_VERSION
     profile.write_text(json.dumps({
         'bundle': {'name': 'fixture', 'version': SNAPSHOT_VERSION},
@@ -286,6 +292,22 @@ async def test_real_probe_installs_checked_shared_hook_after_adoption_and_freeze
     assert json.loads(c.binding.read_text())['git_url'] == URL
     assert json.loads(c.immutable)['git_url'] == URL + '.git'
     payload_before = qualification.package_content(project)
+    if choice in {'equivalent', 'equivalent-runtime-partial'}:
+        # Observe the actual batch before installation rather than infer its
+        # membership from aggregate counts or inherited distribution metadata.
+        selection_path = c.stage / 'probe-source-selection.json'
+        collected = await asyncio.to_thread(subprocess.run,
+            [*command, '--source-policy-only', str(selection_path)], env=env,
+            text=True, capture_output=True, timeout=90)
+        assert collected.returncode == 0, collected.stdout + collected.stderr
+        selection = json.loads(selection_path.read_text())
+        record_property('probeSourceSelection', json.dumps(selection))
+        assert set(selection['packages']) == {NAME}
+        assert selection['batchPaths'] == {NAME: str(c.obj / SUBDIRECTORY)}
+        verify_checked_selection(c.checked, selection, exact=True)
+        assert qualification.package_content(project) == payload_before
+        assert not qualification.installed_graph(project)
+        assert {path: path.read_bytes() for path in before} == before
     result = await asyncio.to_thread(subprocess.run, command, env=env,
         text=True, capture_output=True, timeout=90)
     record_property('probeStdout', result.stdout)
@@ -302,6 +324,7 @@ async def test_real_probe_installs_checked_shared_hook_after_adoption_and_freeze
         return
     assert result.returncode == 0, result.stdout + result.stderr
     assert facts['ok'] and facts['stage'] == 'prepared'
+    record_property('probeInstalledGraph', json.dumps(qualification.installed_graph(project)))
     assert facts['packages'] == facts['resolverTransactions'] == 1
     assert facts['sources'] == 4  # Hook plus installed loop and two source-only fixture modules.
     installed = environments.installed_sources(project)

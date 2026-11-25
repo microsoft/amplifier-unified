@@ -13,7 +13,7 @@ from filelock import FileLock, Timeout
 
 from . import task_environments as owner
 from . import test_environment_recovery as recovery
-from .updates import work_paused
+from .updates import new_work_paused
 
 PAGE_SIZE = 32
 INTERVAL_SECONDS = 30
@@ -28,7 +28,7 @@ class ReservationMaintenance:
 
     async def tick(self):
         app = self.app
-        if (app.closed or app.test_queue.closing or work_paused(app.state)
+        if (app.closed or app.test_queue.closing or new_work_paused(app.state)
                 or self.busy.locked() or app.runtime_lifecycle_lock.locked()
                 or time.monotonic() < self.next_due):
             return
@@ -37,7 +37,7 @@ class ReservationMaintenance:
             cancelled = threading.Event()
 
             def guard():
-                if cancelled.is_set() or app.closed or app.test_queue.closing or work_paused(app.state):
+                if cancelled.is_set() or app.closed or app.test_queue.closing or new_work_paused(app.state):
                     raise ValueError('Capacity observation paused while the host is changing.')
 
             work = asyncio.create_task(asyncio.to_thread(self.observe_one, guard))

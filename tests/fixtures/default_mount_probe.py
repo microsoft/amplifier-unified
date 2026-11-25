@@ -148,11 +148,14 @@ def guarded_environment(request, monkeypatch, tmp_path):
     if absent:
         missing(absent)
     attempts, git_reads, blocked_platform_probes = [], [], []
+    catalog = _support.DecisionCatalogPreparation()
     active = True
     phase = "fixture/imports"
 
     def audit(event, args):
         if not active:
+            return
+        if catalog.permits(event, args):
             return
         if event == "socket.bind" and args[-1] == ("::1", 0):
             frames = traceback.extract_stack(limit=6)
@@ -202,6 +205,9 @@ def guarded_environment(request, monkeypatch, tmp_path):
 
     sys.addaudithook(audit)
     try:
+        # The canonical isolated metadata helper is a preparation prerequisite,
+        # not permission for subprocesses during composition/mount/export.
+        catalog.warm()
         # Install the guard BEFORE the existing fixture imports product code.
         env = request.getfixturevalue("offline_defaults")
         monkeypatch.chdir(env.workspace)
@@ -217,6 +223,7 @@ def guarded_environment(request, monkeypatch, tmp_path):
         monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
         yield SimpleNamespace(env=env, repositories=repositories, attempts=attempts,
                               git_reads=git_reads, blocked_platform_probes=blocked_platform_probes,
+                              decision_catalog=catalog.evidence,
                               phase=set_phase)
     finally:
         active = False
@@ -301,6 +308,18 @@ def module_wheel(module_id, source_dir):
     return wheel_bytes(package, project["name"], candidates[0])
 
 
+def bind_foundation_resource_anchor(loaded, anchor, state, expected_root):
+    """Bind the real resource-only root without composing its module graph."""
+    expected_root = expected_root.resolve(strict=True)
+    assert anchor.name == "foundation"
+    assert Path(anchor.base_path).resolve(strict=True) == expected_root
+    assert state and state.uri == "git+https://github.com/microsoft/amplifier-foundation@main"
+    assert Path(state.local_path).resolve(strict=True) == expected_root
+    existing = loaded.source_base_paths.get("foundation")
+    assert existing is None or Path(existing).resolve(strict=True) == expected_root
+    loaded.source_base_paths["foundation"] = expected_root
+
+
 @pytest_asyncio.fixture
 async def inputs(guarded_environment, monkeypatch):
     state = guarded_environment
@@ -329,6 +348,15 @@ async def inputs(guarded_environment, monkeypatch):
     assert set(config.app_bundles) == set(env.defaults.DEFAULT_BEHAVIORS)
     assert loaded.providers == [{"module": "provider-test", "config": {"model": "no-call"}}]
     loaded.providers = []  # Remove only the fixture's non-existent sentinel.
+    # The synthetic root does not include Foundation's full behavior graph, but
+    # real agents reference its shared instructions. Load only the real root
+    # manifest/provenance and give the ordinary collector that resource anchor.
+    from amplifier_foundation.registry import load_bundle
+    before_plan, before_context = copy.deepcopy(loaded.to_mount_plan()), dict(loaded.context)
+    anchor = await load_bundle("foundation", registry=registry, auto_include=False)
+    bind_foundation_resource_anchor(loaded, anchor, registry.get_state("foundation"),
+                                    env.roots["foundation"])
+    assert loaded.to_mount_plan() == before_plan and loaded.context == before_context
     original_roots = dict(loaded.source_base_paths)
     adapted, _ = live_plan(loaded.to_mount_plan())
     loaded.session, loaded.agents = adapted["session"], adapted.get("agents", {})
@@ -443,6 +471,7 @@ async def inputs(guarded_environment, monkeypatch):
 @pytest.mark.asyncio
 async def test_preflight(inputs):
     emit({"status": "ready", "apis": inputs.signatures,
+          "decisionCatalog": inputs.state.decision_catalog,
           "declared_modules": inputs.declared, "prepared_commits": inputs.commits,
           "expected_module_paths": {key: str(path) for key, path in inputs.expected_paths.items()},
           "skill_substitutions": inputs.substitutions,
@@ -610,6 +639,7 @@ async def mounted(inputs, monkeypatch):
             assert_origin(row, Path(row["installed"]), required=True)
         if report:
             emit({"status": "passed", **report, "forbidden_effects": [],
+                  "decisionCatalog": data.state.decision_catalog,
                   "real_mounts": dict(required), "validator_mounts": dict(validation),
                   "prepared_module_paths": {key: str(path) for key, path in data.expected_paths.items()},
                   "loaded_package_origins": {
@@ -633,6 +663,18 @@ def check_routing(mounted):
     return expected
 
 
+def exported_frontmatter(content):
+    """Read document fences, not dashes inside serialized agent instructions."""
+    lines = content.splitlines(keepends=True)
+    assert lines and lines[0].rstrip("\r\n") == "---", "Missing opening frontmatter fence"
+    closing = next((i for i, line in enumerate(lines[1:], 1)
+                    if line.rstrip("\r\n") == "---"), None)
+    assert closing is not None, "Missing closing frontmatter fence"
+    document = yaml.safe_load("".join(lines[1:closing]))
+    assert isinstance(document, dict), "Expected exported bundle mapping"
+    return document
+
+
 @pytest.mark.asyncio
 async def test_mount(mounted):
     expected = check_routing(mounted)
@@ -645,6 +687,10 @@ async def test_export(mounted):
 
     expected = check_routing(mounted)
     resources = mounted.controls.export_resources()
+    shared_name = "foundation:context/shared/common-agent-base.md"
+    [shared] = [row for row in resources["context"] if row["name"] == shared_name]
+    assert shared["text"] == (
+        mounted.inputs.env.roots["foundation"] / "context/shared/common-agent-base.md").read_text()
     before = copy.deepcopy(resources)
     manager = BundleManager(mounted.inputs.config.home)
     exported = manager.export_document(
@@ -657,9 +703,10 @@ async def test_export(mounted):
     matrix = resources["routingMatrix"]
     assert matrix["roles"] and set(matrix["baseRoles"]) == set(expected)
     namespaces = {row["namespace"] for row in resources["namespaces"]}
-    assert {"unified", "imagegen", "computer-use", "context-intelligence", "routing-matrix"} <= namespaces
+    assert {"unified", "imagegen", "computer-use", "context-intelligence",
+            "routing-matrix", "foundation"} <= namespaces
     assert set(mounted.prepared.bundle.context) <= {row["name"] for row in resources["context"]}, resources["warnings"]
-    document = yaml.safe_load(exported["content"].split("---", 2)[1])
+    document = exported_frontmatter(exported["content"])
     assert exported["includes"] == [] and "includes" not in document
     routing = _support._row(document["hooks"], "hooks-routing")["config"]
     assert routing["default_matrix"] == "balanced" and "custom_routing_dirs" not in routing

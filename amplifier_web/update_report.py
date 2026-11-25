@@ -83,7 +83,7 @@ def event(row):
     attempts = command_attempts(row.get('commandAttempts'))
     if attempts:
         result['commandAttempts'] = attempts
-    for key in ('anonymousRetry', 'stdoutTruncated', 'stderrTruncated', 'outputLimitExceeded'):
+    for key in ('anonymousRetry', 'gitCacheRetry', 'stdoutTruncated', 'stderrTruncated', 'outputLimitExceeded'):
         if type(row.get(key)) is bool:
             result[key] = row[key]
     if row.get('localDetailStatus') in ('saved', 'unavailable'):
@@ -170,7 +170,7 @@ async def collect(manager):
     # "busy" above is the updater lock, not the activation gate. Use the same
     # evaluator as busy()/blockers(), not cached labels or a second predicate.
     try:
-        gate = assess(manager.service, application=bool(state.get('pendingApp')))
+        gate = assess(manager.service)
         report['activationGate'] = {
             **gate['observation'],
             'blockerCounts': {kind: sum(row['kind'] == kind for row in gate['blockers'])

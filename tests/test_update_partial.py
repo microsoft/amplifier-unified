@@ -4,6 +4,7 @@ These tests prove preparation/identity/guard plumbing, not full profile mounting
 The end-to-end qualification fixture separately owns a real working baseline.
 """
 import asyncio
+import copy
 import json
 import shutil
 import subprocess
@@ -338,3 +339,145 @@ def test_only_settled_positive_fetch_exit_can_enter_retention(error):
 
 def test_other_command_failure_is_not_fetch_authority():
     assert not partial.settled_fetch(CommandFailure({'exitCode': 128}))
+
+
+@pytest.fixture
+def local_git_inventory(tmp_path, monkeypatch):
+    """Read real PEP 610 metadata; keep the local checkout and edits untouched."""
+    from amplifier_web import runtime_environment
+    source = tmp_path / 'local-source'
+    source.mkdir()
+    git(source, 'init', '-b', 'main')
+    git(source, 'config', 'user.name', 'Local fixture')
+    git(source, 'config', 'user.email', 'fixture@example.invalid')
+    (source / 'module.py').write_text('value = 1\n')
+    git(source, 'add', '.')
+    git(source, 'commit', '-m', 'local source')
+    revision = git(source, 'rev-parse', 'HEAD')
+    (source / 'module.py').write_text('value = 2  # local work\n')
+    project = tmp_path / 'local-runtime'
+    dist = project / '.venv/lib/python3.13/site-packages/local_fixture-1.0.dist-info'
+    dist.mkdir(parents=True)
+    (dist / 'METADATA').write_text('Name: local-fixture\nVersion: 1.0\n')
+    (dist / 'direct_url.json').write_text(json.dumps({
+        'url': source.as_uri(), 'vcs_info': {
+            'vcs': 'git', 'requested_revision': 'main', 'commit_id': revision}}))
+    manifest = tmp_path / 'worker.toml'
+    manifest.write_text('[project]\nname="worker"\nversion="1"\ndependencies=[]\n')
+    monkeypatch.setattr(runtime_environment, 'manifest_path', lambda: manifest)
+    observed = runtime_environment.installed_sources(project)['local-fixture']
+    assert observed['provenance'] == 'installed Git distribution'
+    assert observed['url'] == source.as_uri() and observed['current'] == revision
+    row = {'id': 'runtime:local-fixture', 'kind': 'runtime dependency', 'package': 'local-fixture',
+           **observed, 'status': 'current', 'eligible': True, 'latest': revision}
+    watched = [source / 'module.py', source / '.git/HEAD', source / '.git/index',
+               dist / 'METADATA', dist / 'direct_url.json']
+    return row, {path: path.read_bytes() for path in watched}
+
+
+@pytest.mark.parametrize('local_status', ['current', 'pinned', 'update'])
+@pytest.mark.parametrize('failed_remote', [False, True])
+async def test_unselected_local_git_does_not_block_classified_remote_preparation(
+        preparation, local_git_inventory, monkeypatch, local_status, failed_remote):
+    from amplifier_web import update_sequence
+    p = preparation
+    local, before = local_git_inventory
+    local.update(status=local_status, eligible=local_status == 'current')
+    remote_rows = copy.deepcopy(p.rows if failed_remote else [
+        row for row in p.rows if row['url'].endswith('/b')])
+    if failed_remote:
+        for row in remote_rows:
+            if row['url'].endswith('/a'):
+                row.update(status='check_failed', availabilityFailure=True)
+    monkeypatch.setattr(update_sequence, 'included_sources', lambda: (set(), []))
+    rows = update_sequence.classify(p.manager.home, [*remote_rows, local],
+                                   selection={'sources': [], 'witness': '1' * 64})
+    saved_local = copy.deepcopy(local)
+    candidates = [row for row in rows if row['status'] == 'update' and row['eligible']]
+    assert candidates and local not in candidates
+    assert local['url'].startswith('file:') and local['updateTier'] == 'other'
+    p.manager.inventory = rows
+    plan = await partial.stage_sources(p.manager, p.stage, candidates)
+    assert plan.inventory is rows and local == saved_local
+    assert plan.groups[updates.source_key('https://example.invalid/b', 'stable')] == [
+        row for row in remote_rows if row['url'].endswith('/b')]
+    assert all(local not in group for group in plan.groups.values())
+    assert git(p.stage / 'foundation/cache/b', 'rev-parse', 'HEAD') == p.new['b']
+    assert 'https://example.invalid/b' in p.fetched
+    if failed_remote:
+        receipt = partial.read(p.stage)
+        assert set(receipt['results']) == {row['id'] for row in remote_rows}
+        assert receipt['results']['a']['status'] == 'failed'
+        assert receipt['results']['a-duplicate']['status'] == 'failed'
+        assert receipt['results']['runtime:a']['status'] == 'failed'
+        assert receipt['results']['c']['status'] == 'dependency-held'
+        assert receipt['results']['b']['status'] == 'awaiting-adoption'
+    else:
+        assert partial.read(p.stage) is None
+    assert {path: path.read_bytes() for path in before} == before
+    assert json.loads(p.pointer.read_text())['current'] == 'a' * 32
+
+
+async def test_selected_local_git_still_refuses_before_any_acquisition(
+        preparation, local_git_inventory):
+    p = preparation
+    local, before = local_git_inventory
+    local.update(status='update', eligible=True)
+    p.manager.inventory = [*p.rows, local]
+    with pytest.raises(ValueError, match='Unsupported Git source'):
+        await partial.stage_sources(p.manager, p.stage, [*p.rows, local])
+    assert p.fetched == []
+    assert not (p.stage / partial.RECEIPT).exists()
+    assert {path: path.read_bytes() for path in before} == before
+    assert all(git(p.stage / 'foundation/cache' / name, 'rev-parse', 'HEAD') == p.old[name[0]]
+               for name in ('a', 'a-duplicate', 'b', 'c'))
+
+
+async def test_local_git_inventory_is_not_changed_by_prior_retention_projection(
+        preparation, local_git_inventory):
+    p = preparation
+    await partial.stage_sources(p.manager, p.stage, p.rows)
+    p.pointer.write_text(json.dumps({'current': p.stage.name}))
+    local, before = local_git_inventory
+    saved = copy.deepcopy(local)
+    rows = copy.deepcopy(p.rows) + [local]
+    partial.retained_after_check(p.manager, rows, retry_retained=False)
+    assert local == saved
+    assert next(r for r in rows if r['id'] == 'a')['sourceUpdate'] == 'failed'
+    assert {path: path.read_bytes() for path in before} == before
+
+
+@pytest.mark.parametrize('url,kind', [
+    ('https:///missing-host', 'runtime dependency'),
+    ('git://example.invalid/a', 'runtime dependency'),
+    ('file:///private/source', 'bundle / module'),
+])
+async def test_nonlocal_or_nonruntime_invalid_identity_is_not_ignored(preparation, url, kind):
+    p = preparation
+    invalid = {'id': 'invalid', 'kind': kind, 'url': url, 'ref': 'main',
+               'status': 'current', 'eligible': False}
+    p.manager.inventory = [*p.rows, invalid]
+    with pytest.raises(ValueError, match='Unsupported Git source'):
+        await partial.stage_sources(p.manager, p.stage, p.rows)
+    assert p.fetched == []
+    assert not (p.stage / partial.RECEIPT).exists()
+
+
+@pytest.mark.parametrize('dirty', [False, True])
+async def test_unselected_current_remote_sibling_stays_in_retention_group(preparation, dirty):
+    p = preparation
+    duplicate = next(row for row in p.rows if row['id'] == 'a-duplicate')
+    duplicate['status'] = 'current'
+    if dirty:
+        (p.stage / 'foundation/cache/a-duplicate/pyproject.toml').write_text('local sibling edit')
+    candidates = [row for row in p.rows if row['status'] == 'update']
+    if dirty:
+        with pytest.raises(ValueError, match='Local changes|content changed'):
+            await partial.stage_sources(p.manager, p.stage, candidates)
+        assert not (p.stage / partial.RECEIPT).exists()
+        assert (p.stage / 'foundation/cache/a-duplicate/pyproject.toml').read_text() == 'local sibling edit'
+    else:
+        plan = await partial.stage_sources(p.manager, p.stage, candidates)
+        assert duplicate in plan.groups[updates.source_key(duplicate['url'], duplicate['ref'])]
+        assert partial.read(p.stage)['results']['a-duplicate']['status'] == 'failed'
+    assert git(p.stage / 'foundation/cache/a-duplicate', 'rev-parse', 'HEAD') == p.old['a']

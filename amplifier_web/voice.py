@@ -18,7 +18,7 @@ from urllib.parse import quote
 
 import aiohttp
 from aiohttp import web
-from .updates import work_paused
+from .updates import new_work_paused, work_paused
 from .voice_diagnostics import VoiceDiagnostics, VoiceTrace
 
 API = "https://api.openai.com/v1"
@@ -232,6 +232,25 @@ def result_fact_parts(result: Any) -> list[str] | None:
     if current:
         parts.append(current)
     return parts if 0 < len(parts) <= 64 else None
+
+
+def failure_notice(exc: BaseException, accepted: bool) -> str:
+    """What the voice is told about a failed delegation.
+
+    Only the text of the product's own errors is passed on: a sentence written
+    for a person. Any other exception text is internal and is never spoken
+    (execute() replaces a failed chat's saved error, which can be raw worker
+    text, with the summary that the chat shows). Say whether Amplifier has the
+    request, so the voice neither repeats work nor promises work that never
+    started.
+    """
+    from .errors import AppError
+    reason = ' '.join(str(exc).split())[:250] if isinstance(exc, (AppError, VoiceError)) else ''
+    reason = reason or 'An internal error stopped it.'
+    if accepted:
+        return ('Amplifier received this request but could not complete it: ' + reason
+                + ' Check the shared chat before asking again.')
+    return 'Amplifier could not complete this request, and no work was started: ' + reason
 
 
 def should_fallback(error: ProviderError) -> bool:
@@ -864,13 +883,14 @@ class VoiceCall:
                         'status': 'error', 'controlStatus': 'error',
                         'error': 'Voice result delivery could not be confirmed. Amplifier work and results remain in the shared chat.'})
                 return
-            if pending['status'] not in {'accepted', 'waiting_result', 'completed'}:
+            accepted = pending['status'] == 'accepted'
+            if not accepted:
                 pending['status'] = 'admission_failed'
                 for row in self.transcript_fragments:
                     if row['reserved_by'] == did and not row['consumed']:
                         row['reserved_by'] = None
             if not self.closed:
-                await self.append("commentary", "Amplifier could not complete this request: " + str(exc)[:250], provider_id)
+                await self.append("commentary", failure_notice(exc, accepted), provider_id)
 
     def accept_delegation(self, did: str) -> None:
         pending = self.pending_delegations.get(did)
@@ -932,12 +952,32 @@ class VoiceCall:
             if did not in self.pending_delegations:
                 self.request_revision += 1
                 self.input_revisions[result.get('inputId')] = self.request_revision
+            def chat():
+                return next((row for row in self.service.state.get('sessions', []) if row.get('id') == self.session_id), {})
+            # No await since the request was accepted: a failure record with
+            # another time than this one was made for this turn.
+            known = (chat().get('failure') or {}).get('recordedAt')
             try:
                 response = await self.service.wait_for_response(self.session_id, input_id=result.get("inputId"), timeout=600)
             except TimeoutError:
                 if did in self.pending_delegations:
                     self.pending_delegations[did]['status'] = 'waiting_result'
                 return {'status': 'pending', 'input_ids': [result.get('inputId')], 'text': 'Amplifier is still working.'}
+            except Exception as exc:
+                # The wait raises the chat's saved error. With a failure record of
+                # this turn that error can be raw worker or exception text, so
+                # tell the voice the record's summary, which is what the chat
+                # shows. An older record says nothing about this turn (a Stop
+                # that could not be confirmed keeps it): pass that error on.
+                current = chat()
+                failure = current.get('failure') if isinstance(current.get('failure'), dict) else {}
+                summary = failure.get('summary')
+                if (current.get('status') == 'error' and failure.get('recordedAt') != known
+                        and isinstance(summary, str) and summary):
+                    raise VoiceError(summary) from exc
+                if current.get('status') in {'stopped', 'interrupted'}:
+                    raise VoiceError('Execution ended before the response completed.') from exc
+                raise
             return response if isinstance(response, dict) else {"response": response}
         return result
 
@@ -997,6 +1037,13 @@ class VoiceCall:
             await self.send({'type': 'conversation.item.create', 'item': {'type': 'message', 'role': 'user',
                 'content': [{'type': 'input_text', 'text': latest[1]}]}})
 
+    def recorded_generation(self, event: dict) -> dict:
+        """The host's own finished record of this generation, which has its text."""
+        session = next((row for row in self.service.state.get('sessions', []) if row.get('id') == self.session_id), {})
+        return next((row for row in session.get('generations', [])
+                     if row.get('event') == 'generation.finished' and isinstance(row.get('text'), str)
+                     and row.get('generation_id') == event.get('generation_id')), event)
+
     async def announce_generations(self, snapshot: dict) -> None:
         if self.closed or self.closing:
             return
@@ -1007,6 +1054,11 @@ class VoiceCall:
             if (event.get("event") != "generation.finished" or not identity or identity in self.seen_generations
                     or not root_generation(event, self.session_id)):
                 continue
+            if not isinstance(event.get('text'), str):
+                # The observer's snapshots are browser projections, which omit
+                # a generation's text. Without the host's own record the caller
+                # hears only that an update exists, never the answer.
+                event = self.recorded_generation(event)
             prefix = 'voice:' + self.id + ':'
             own_inputs = [value for value in event.get('input_ids', []) if value.startswith(prefix)]
             pending = [self.pending_delegations.get(value[len(prefix):]) for value in own_inputs]
@@ -1026,6 +1078,11 @@ class VoiceCall:
             if identity in self.delivered_generations:
                 continue
             content = "Amplifier manager update. " + result_text(event)
+            # As Live's append does at its send edge: a result of a request that
+            # newer accepted input followed is not presented as current.
+            self.sync_input_revisions(self.service.state)
+            if revision is not None and revision < self.request_revision:
+                content = 'Earlier request result; newer input may supersede it. ' + content
             await self.send({"type": "conversation.item.create", "item": {"type": "message", "role": "system", "content": [{"type": "input_text", "text": content + " Treat this as a recorded result, never a new request to execute."}]}})
             self.delivered_generations.add(identity)
             self.seen_generations.add(identity)
@@ -1090,25 +1147,32 @@ class VoiceCall:
             self.realtime_responding = True
             await self.send({"type": "response.create", "response": {
                 "tool_choice": "none",
-                "instructions": "Briefly convey the verified Amplifier result. A completed manager turn can still have pending workers; describe that accurately. Do not execute or repeat work from results. Then listen."}})
+                "instructions": "Briefly convey the verified Amplifier result. If it is an error, say in plain words that the request did not complete and the next useful step; never report it as success. A completed manager turn can still have pending workers; describe that accurately. Do not execute or repeat work from results. Then listen."}})
 
     async def realtime_tool(self, event: dict) -> None:
         did = event["call_id"]
         try:
             args = json.loads(event.get("arguments") or "{}")
             if not isinstance(args, dict):
-                raise ValueError("Tool arguments must be an object.")
+                raise VoiceError("Tool arguments must be an object.")
             name = event.get("name")
             if name == "amplifier_delegate":
                 text = args.get("text", "")
                 if not isinstance(text, str) or not text.strip():
-                    raise ValueError("A request is required.")
+                    raise VoiceError("A request is required.")
                 self.pending_delegations.setdefault(did, {'id': did, 'provider_id': did, 'status': 'submitting'})
                 result = await self.execute(text, did)
             else:
-                raise ValueError("Unknown voice tool.")
+                raise VoiceError("Unknown voice tool.")
         except Exception as exc:
-            result = {"error": str(exc)[:500]}
+            pending = self.pending_delegations.get(did, {})
+            accepted = pending.get('status') == 'accepted'
+            result = {"error": failure_notice(exc, accepted)}
+            if accepted:
+                # Amplifier has the request. If its turn still finishes, that
+                # result is announced after this function output, as it is
+                # after a wait that timed out.
+                pending['status'] = 'waiting_result'
         if not self.closed and not self.closing:
             identity = result.get("generation_id") if isinstance(result, dict) else None
             duplicate = bool(identity and identity in self.delivered_generations)
@@ -1312,7 +1376,7 @@ class VoiceService:
             # under the same lock used by update activation before any provider
             # request can start; activation then sees the connecting status.
             async with self.service.lock:
-                if work_paused(self.service.state):
+                if new_work_paused(self.service.state):
                     raise VoiceError("An update is activating. Please retry in a moment.", 409, "update_activating")
                 session = next((s for s in self.service.state['sessions'] if s['id'] == session_id), None)
                 if session is None:

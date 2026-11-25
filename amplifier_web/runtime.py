@@ -21,10 +21,10 @@ import uuid
 from typing import Any, Awaitable, Callable
 
 from .runtime_protocol import INPUT_CONTROLS, MAX_MESSAGE_BYTES, encode_message
-
-FILE_ACCESS_REFRESH_TIMEOUT = 10
+from .update_drain import UpdateDeferred
 from .performance_diagnostics import measure, measured
 
+FILE_ACCESS_REFRESH_TIMEOUT = 10
 _CURRENT_GENERATION = object()
 _LOG = logging.getLogger(__name__)
 _WINDOWS = os.name == 'nt'
@@ -134,6 +134,9 @@ class RuntimeOperationPending(RuntimeError):
 
 class RuntimeStartupError(RuntimeError):
     """This attempt failed preparation before the worker submitted its input."""
+
+
+_PREVIOUS_SETTINGS_IN_USE = "This chat's worker is still using its previous settings. Retry your message when the worker is free."
 
 
 class RuntimeHostClosingError(RuntimeError):
@@ -255,6 +258,18 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         allowed = ("id", "revision", "producerId", "budgetRevision", "admittedAt", "parentId", "turnId", "admissionInputId", "generationId", "purpose", "sessionId", "rootSessionId", "kind", "phase", "label",
             "toolCallId", "provider", "model", "parentProvider", "routing", "runId", "startedAt", "endedAt", "usage", "summary", "input", "output", "error", "lifecycle", "failure", "liveObservation")
         public = {key:event[key] for key in allowed if key in event and (key not in {"input", "output", "error"} or event.get("kind") == "tool")}
+        if event.get('kind') == 'llm' and 'modelOutcome' in event:
+            from .model_outcome import public_outcome
+            public.update(public_outcome(event['modelOutcome']))
+        if (event.get('kind') == 'llm' and not event.get('purpose') and
+                event.get('sessionId') == event.get('rootSessionId') == session_id):
+            if event.get('phase') == 'running' and 'turnModelSettings' in event:
+                from .turn_model_settings import public_receipt
+                public['turnModelSettings'] = public_receipt(event['turnModelSettings'], public.get('model'))
+            if event.get('phase') == 'completed' and isinstance(event.get('promptCostBasis'), dict):
+                from .next_message_impact import observation
+                seen = observation(event)
+                public['promptCostBasis'] = {k: seen[k] for k in ('instance','traits','portableHistoryTokens','modelWindow') if k in seen}
         if event.get("phase") == "running" and event.get("incompleteHistoryDispatched") is True:
             public["incompleteHistoryDispatched"] = True
         from .tool_observations import metadata as tool_metadata
@@ -262,6 +277,13 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         if event.get('kind') == 'tool' and event.get('label') == 'todo' and 'statusPlan' in event:
             from .status_protocol.hook import accepted_plan
             public['statusPlan'] = accepted_plan({'todos': event['statusPlan']})
+        if (event.get('kind') == 'tool' and event.get('label') == 'todo'
+                and event.get('phase') == 'completed' and 'reportedPlan' in event
+                and event.get('sessionId') == event.get('rootSessionId') == session_id):
+            from .chat_plan import accepted_report
+            reported = accepted_report({'todos': event['reportedPlan']})
+            if reported is not None:
+                public['reportedPlan'] = reported
         if event.get('kind') == 'tool' and event.get('label') in {'image_generate', 'nano-banana'}:
             from .image_generation import metadata
             image = metadata(event.get('imageGeneration'))
@@ -607,7 +629,7 @@ class RuntimeManager:
                             extra_paths=current.get('configurationInputs', ())) != baseline:
                         if (not self.retention.eligible(current) or self.retention.protected(sid)
                                 or sid in self._ephemeral_mcp):
-                            raise RuntimeError("Saved configuration changed. Finish active work and held resources before replacing its worker; no input was sent.")
+                            raise RuntimeStartupError(_PREVIOUS_SETTINGS_IN_USE)
                         pending = self.retention.schedule(sid, current)
                     else:
                         pending = None
@@ -619,7 +641,7 @@ class RuntimeManager:
                     return
             await asyncio.wait_for(asyncio.shield(pending), self.retention.reply_timeout)
             if self.workers.get(sid) is current:
-                raise RuntimeError("Saved configuration changed, but the worker still owns pending work or resources. No input was sent.")
+                raise RuntimeStartupError(_PREVIOUS_SETTINGS_IN_USE)
 
     @asynccontextmanager
     async def _admission(self, sid):
@@ -839,6 +861,8 @@ class RuntimeManager:
                 await emit("runtime.status", {"sessionId": sid, "status": "stopped",
                     "phase": "runtime-setup", "detail": "Preparation cancelled before input admission."})
                 raise
+            if isinstance(exc, UpdateDeferred):
+                raise  # The saved input belongs to the updater. No worker failed.
             # Qualification and spawn failures happen before a worker/readers
             # exist. Settle every caller (input, controls and background warmup)
             # here, not just send(), and retain the sanitized probe facts.
@@ -904,7 +928,7 @@ class RuntimeManager:
         row["heartbeat"] = asyncio.create_task(self._progress(sid, row))
         # The worker restores normal history from its checkpoint. Sending the
         # browser's execution logs, catalogs and attachment history is redundant.
-        config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','interruptionRevision','bundle','selection','forkContext','replaceSavedSelection','bundleReplacement') if key in session}
+        config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','interruptionRevision','bundle','selection','forkContext','replaceSavedSelection','bundleReplacement','composerImageReferences') if key in session}
         config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
         config['configurationPendingRevision'] = session.get('configurationPendingRevision', 0)
         config['ownerSessionId'] = sid  # Identity only; workers read current standing policy themselves.
@@ -941,11 +965,15 @@ class RuntimeManager:
                     "This attempt did not send your message."
                 ) from exc
             await asyncio.wait_for(asyncio.shield(row["ready"]), self.startup_timeout)
+        except UpdateDeferred:
+            # Replacement overtook spawn. Retiring this unused child is maintenance, not a user Stop.
+            await self.stop(sid, reason='update')
+            raise
         except TimeoutError as exc:
-            await self.stop(sid)
+            await self.stop(sid, reason='startup')
             raise RuntimeError(f"Amplifier preparation exceeded {self.startup_timeout:g} seconds and was stopped before accepting your message. Check the configured bundle, then retry.") from exc
         except BaseException as exc:
-            await self.stop(sid, reason='shutdown' if self._closed else 'stopped')
+            await self.stop(sid, reason='shutdown' if self._closed else 'startup')
             if (isinstance(exc, asyncio.CancelledError) and self._closed
                     and row.get('stop_reason') == 'shutdown' and not asyncio.current_task().cancelling()):
                 # close() cancelled this owner's readiness future, not the
@@ -1585,7 +1613,7 @@ class RuntimeManager:
                                     -(2**31) <= reader_exit < 2**32 else None,
                                 'closing': row.get('closing') is True,
                                 'stopReason': (row['stop_reason'] if type(row.get('stop_reason')) is str
-                                    and row['stop_reason'] in {'stopped', 'configuration', 'shutdown', 'retention'}
+                                    and row['stop_reason'] in {'stopped', 'configuration', 'shutdown', 'retention', 'startup', 'update'}
                                     else 'none' if row.get('stop_reason') is None else 'other'),
                                 'cleanup': reader_cleanup}}
                         future.set_exception(error)
@@ -1733,19 +1761,18 @@ class RuntimeManager:
             await self.start(session, emit)
 
     async def send(self, session, text, input_id, emit, *, admission_check=None):
+        update_gate = getattr(self, 'update_input_gate', lambda *args: None)
         def current_input():
             current = self._check_execution(session['id'], session)
             if current is not None and current.get('interruptionRevision', 0) != session.get('interruptionRevision', 0):
                 raise RuntimeStartupError('This input was stopped before admission. Nothing was sent.')
             if admission_check:
                 admission_check()
+            update_gate(session['id'], input_id)
         current_input()
-        update_gate = getattr(self, 'update_input_gate', lambda *args: None)
-        update_gate(session['id'], input_id)
         configuration_guard = None
         def guard():
             current_input()
-            update_gate(session['id'], input_id)
             message = next((m for m in session.get('messages', []) if m.get('inputId') == input_id), {})
             getattr(self, 'update_message_guard', lambda sid, message: None)(session['id'], message)
             if configuration_guard:
@@ -1809,7 +1836,6 @@ class RuntimeManager:
     async def collaboration_input(self, session, arguments, guard, emit):
         """Explicit idle start plus guarded ordinary native admission."""
         update_gate = getattr(self, 'update_input_gate', lambda: None)
-        from .update_drain import UpdateDeferred
         try:
             update_gate()
         except UpdateDeferred:
@@ -1930,7 +1956,7 @@ class RuntimeManager:
                         # Bind the resolved key, including a verified historical key migration.
                         # The worker compares its native controls again on actual Send admission.
                         fork_choice['connection'] = session['modelConnectionKey']
-                except (SessionInUseError, RuntimeStartupError, RuntimeHostClosingError):
+                except (SessionInUseError, RuntimeStartupError, RuntimeHostClosingError, UpdateDeferred):
                     raise
                 except Exception as exc:
                     raise RuntimeStartupError(
@@ -1951,7 +1977,7 @@ class RuntimeManager:
             elif requested:
                 await emit('runtime.modelSelectionApplied',{'sessionId':session['id'],'selection':requested})
             return guard
-        except (SessionInUseError, RuntimeStartupError, RuntimeHostClosingError):
+        except (SessionInUseError, RuntimeStartupError, RuntimeHostClosingError, UpdateDeferred):
             raise
         except Exception as exc:
             failure = RuntimeStartupError('The conversation worker could not start. This attempt did not send your message.')
@@ -1963,6 +1989,10 @@ class RuntimeManager:
             from .module_failures import ConfiguredModuleError
             if isinstance(exc, ConfiguredModuleError):
                 failure.failures = exc.failures
+            elif isinstance(exc, OSError) and not getattr(failure, 'startupFailureFacts', None):
+                from .worker_diagnostics import _startup_exception_facts
+                failure.startupAttemptId = str(uuid.uuid4())
+                failure.startupFailureFacts = _startup_exception_facts(exc)
             raise failure from exc
 
     async def delivery(self, session, input_id):
@@ -1979,8 +2009,13 @@ class RuntimeManager:
         return await asyncio.to_thread(saved_delivery, session, input_id)
 
     async def retry(self, session, text, input_id, emit, *, admission_check=None):
-        guard = await self._start_for_input(session, emit,
-            **({'admission_check': admission_check} if admission_check else {}))
+        def retry_admission():
+            if admission_check:
+                admission_check()
+            if update_gate := getattr(self, 'update_input_gate', None):
+                update_gate(session['id'], input_id)
+        retry_admission()
+        guard = await self._start_for_input(session, emit, admission_check=retry_admission)
         return await self._request(session['id'], 'retry', guard=guard, text=text, input_id=input_id,
             reply_context=next((m.get('replyTo') for m in session.get('messages',[]) if m.get('inputId')==input_id),None),
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
@@ -2524,9 +2559,10 @@ class RuntimeManager:
                 task.cancel()
         await asyncio.gather(row["reader"], row["stderr_task"], row["heartbeat"], *row["bridge_tasks"], return_exceptions=True)
         await self._execution_ended(session_id, row, "stopped")
-        cold = row.get('stop_reason') in {'configuration', 'shutdown', 'retention'}
+        cold = row.get('stop_reason') in {'configuration', 'shutdown', 'retention', 'update'}
         await row["emit"]("runtime.warmth" if cold else "runtime.status",
-                          {"sessionId": session_id, "status": "cold" if cold else "stopped"})
+                          {"sessionId": session_id, "status": "cold" if cold else "stopped",
+                           **({'phase': 'worker_startup'} if row.get('stop_reason') == 'startup' else {})})
         if self.workers.get(session_id) is row:
             self.workers.pop(session_id, None)
             if row.get('generation_lease'):

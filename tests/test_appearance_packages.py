@@ -289,7 +289,7 @@ def test_notice_comment_and_style_terminators_remain_text_and_roundtrip():
     '', ' \n\t',
     '#amp-one{color:' + '(' * 70 + 'red' + ')' * 70 + '}',
     '#amp-one{' + '--large:a;' * 100_001 + '}',
-])
+], ids=['empty', 'whitespace', 'excessive-nesting', 'oversized-stylesheet'])
 def test_empty_deep_or_oversized_stylesheet_is_rejected(css):
     with pytest.raises(AppError):
         packages.load(raw_zip(contents(css)))
@@ -533,7 +533,9 @@ def test_local_name_mismatch_overlapping_member_and_truncated_local_header_are_r
             packages.load(bytes(patched))
 
 
-@pytest.mark.parametrize('value', ['', 'not base64', 'a' * (packages.PACKAGE_BASE64_LIMIT + 1), '====', None])
+@pytest.mark.parametrize('value', [
+    '', 'not base64', 'a' * (packages.PACKAGE_BASE64_LIMIT + 1), '====', None,
+], ids=['empty', 'invalid-alphabet', 'over-encoded-limit', 'padding-only', 'non-string'])
 def test_base64_input_is_strict_and_bounded(value):
     with pytest.raises(AppError):
         packages.decode_input(value)

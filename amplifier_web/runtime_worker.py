@@ -145,9 +145,13 @@ class Worker:
                 timeout = max(timeout, wait_ms / 1000 + 5)
         # These fields are host-produced, never accepted from tool arguments.
         args = {key: value for key, value in args.items()
-                if key not in {'_handoffSnapshot', '_handoffDrain', '_nativeChild'}}
+                if key not in {'_handoffSnapshot', '_handoffDrain', '_nativeChild', '_settledCompaction'}}
         if operation == 'capacity.admit':
             from amplifier_web.handoff_drain import witness, native_child
+            from amplifier_web.settled_compaction import origin_for
+            settled = origin_for(args.get('call') or {})
+            if settled:
+                args.update(_settledCompaction=True, _generationId=settled)
             args.update(_handoffDrain=witness(self, args.get('call') or {}),
                         _nativeChild=native_child(self, args.get('call') or {}))
         elif isinstance(args.get('_childOrigin'), dict):
@@ -784,7 +788,7 @@ class Worker:
         coordinator.register_capability("live.checkpoint", observed_checkpoint)
         coordinator.register_capability("web.collaboration.checkpoint", True)
 
-    def install_activity(self, coordinator):
+    def install_activity(self, coordinator, *, observe_providers=True):
         from amplifier_core import HookResult
         from amplifier_web.host.media import registration_hooks, replace_adapter
         hooks = registration_hooks(coordinator)
@@ -792,10 +796,13 @@ class Worker:
         # though this worker has no terminal. This advertises transport only;
         # each request still waits for its own explicit client response.
         coordinator.register_capability("approval.interactive", True)
+        if self.telemetry and self.session and coordinator is self.session.coordinator:
+            from amplifier_web.settled_compaction import bind_scheduler
+            bind_scheduler(coordinator.get("context"), self.telemetry)
         if coordinator.get_capability("web.activity"):
             # Live provider edits may mount a new immutable instance after the
             # hooks were installed. Preserve its admission wrapper as well.
-            if self.telemetry:
+            if self.telemetry and observe_providers:
                 providers = coordinator.get("providers") or {}
                 for name, provider in list(providers.items()):
                     replace_adapter(coordinator, "providers", name, provider,
@@ -867,11 +874,12 @@ class Worker:
             registry = coordinator.get_capability("live.children")
             if registry and coordinator.session_id in registry.rows:
                 self.telemetry.lifecycle({"type":"child.updated", **registry.rows[coordinator.session_id]})
-            providers = coordinator.get("providers") or {}
-            for name, provider in list(providers.items()):
-                replace_adapter(coordinator, "providers", name, provider,
-                    self.telemetry.instrument_provider(coordinator.session_id, provider,
-                        run_id=coordinator.get_capability("web.worker_run")))
+            if observe_providers:
+                providers = coordinator.get("providers") or {}
+                for name, provider in list(providers.items()):
+                    replace_adapter(coordinator, "providers", name, provider,
+                        self.telemetry.instrument_provider(coordinator.session_id, provider,
+                            run_id=coordinator.get_capability("web.worker_run")))
         async def activity(event, data):
             identity = coordinator.session_id
             if data.get("session_id", identity) != identity:
@@ -953,6 +961,71 @@ class Worker:
                     "detail": "Loading the configured providers, tools, and worker agents."})
                 return
             await asyncio.sleep(2)
+
+    def execution_host(self, original_host):
+        """Observe the loop's maintained construction phase, not its execution."""
+        host = self
+        class ObservedHost:
+            def __init__(self):
+                self.registrations = {}
+            def __getattr__(self, name):
+                return getattr(original_host, name)
+            def execution_registration(self, coordinator, hooks):
+                """Loop-owned late registrations use this finite root view."""
+                from amplifier_web.host.media import hook_configuration, registration_coordinator, seal_hook_graph
+                @contextmanager
+                def construction():
+                    view = None
+                    try:
+                        with hook_configuration(coordinator):
+                            view = registration_coordinator(coordinator)
+                            self.registrations[id(view)] = (view, coordinator)
+                            yield view, view.hooks
+                        seal_hook_graph(coordinator)
+                    finally:
+                        if view is not None:
+                            self.registrations.pop(id(view), None)
+                return construction()
+            async def prepare_execution(self, loop, coordinator, providers):
+                entry = self.registrations.get(id(coordinator))
+                issued = entry is not None and entry[0] is coordinator
+                if issued:
+                    coordinator = entry[1]
+                result = await original_host.prepare_execution(loop, coordinator, providers)
+                if coordinator:
+                    native = coordinator.get_capability("web.native_provider")
+                    if issued and entry[0] is not coordinator and native and native.provider:
+                        native.bind_execution(loop, entry[0])
+                    host.install_activity(coordinator)
+                    host.install_collaboration_checkpoint(coordinator)
+                    from amplifier_web.app_guidance import install_app_access
+                    await install_app_access(coordinator, host.app_access_bridge(coordinator),
+                        execution_role='root' if coordinator is host.session.coordinator else 'native_child')
+                    host.computer_episodes.install(coordinator, lambda: host.computer_execution(coordinator))
+                    from amplifier_web.host.session import SelectedProvider
+                    transform = coordinator.get_capability('web.provider_transform')
+                    if isinstance(getattr(loop,'root_provider',None), SelectedProvider):
+                        loop.root_provider.execution_adapter = transform
+                    runtime, selected, scope = result
+                    from amplifier_web.host.media import flush_adapters
+                    await flush_adapters(coordinator)
+                    return runtime, {name: transform(value) for name, value in selected.items()}, scope
+                return result
+        return ObservedHost()
+
+    def install_execution_observation(self):
+        coordinator = self.session.coordinator
+        original = coordinator.get_capability("live.host")
+        observed = self.execution_host(original)
+        # Children installs its explicit adapter ahead of the loop's inherited
+        # ContextVar. Keep the registry on the same observed preparation path.
+        children = coordinator.get_capability("live.children")
+        if children is not None and children.host_adapter is original:
+            children.host_adapter = observed
+        coordinator.register_capability("live.host", observed)
+        coordinator.register_capability("web.activity.install",
+            lambda current: self.install_activity(current,
+                observe_providers=current.get_capability("live.child_mode") != "persistent"))
 
     async def commit_replacement(self, replacement, *, deferred, stop_revision):
         if deferred:
@@ -1071,8 +1144,8 @@ class Worker:
                         and source_captures[0].same(source_captures[1])):
                     self.tool_sources = source_captures[1]
             self.config_inputs = tuple(report.get("config_inputs", ()))
-            from amplifier_web.attachments import encode
-            self.session.coordinator.register_capability('live.attachments.encode',encode)
+            from amplifier_web.attachments import encode, encoder_for_session
+            self.session.coordinator.register_capability('live.attachments.encode', encoder_for_session(config))
             with startup_timing.phase('worker.controls.restore'):
                 self.controls = RuntimeControls(self.session, self.runtime, self.telemetry,
                     preserve_configuration=config.get('_preserveConfiguration') is True,
@@ -1101,7 +1174,6 @@ class Worker:
                 if messages:
                     await self.session.coordinator.get("context").set_messages(messages)
                 report["fork_context_messages"] = len(messages)
-            host = self
             from amplifier_web.write_policy_refresh import install as install_write_policy
             policy_session, policy_runtime = self.session, self.runtime
             policy_gate, policy_epoch = self.activation_gate, self.stop_revision
@@ -1126,64 +1198,23 @@ class Worker:
                 root_coordinator = self.session.coordinator
                 self.computer_episodes.install(root_coordinator, lambda: self.computer_execution(root_coordinator))
                 self.install_collaboration_checkpoint(self.session.coordinator)
-            original_host = self.session.coordinator.get_capability("live.host")
-            class ObservedHost:
-                registrations = {}
-                def __getattr__(self, name):
-                    return getattr(original_host, name)
-                def execution_registration(self, coordinator, hooks):
-                    """Loop-owned late registrations use this finite root view."""
-                    from contextlib import contextmanager
-                    from amplifier_web.host.media import hook_configuration, registration_coordinator, seal_hook_graph
-                    @contextmanager
-                    def construction():
-                        view = None
-                        try:
-                            with hook_configuration(coordinator):
-                                view = registration_coordinator(coordinator)
-                                self.registrations[id(view)] = (view, coordinator)
-                                yield view, view.hooks
-                            seal_hook_graph(coordinator)
-                        finally:
-                            if view is not None:
-                                self.registrations.pop(id(view), None)
-                    return construction()
-                async def prepare_execution(self, loop, coordinator, providers):
-                    entry = self.registrations.get(id(coordinator))
-                    if entry is not None and entry[0] is coordinator:
-                        coordinator = entry[1]
-                    result = await original_host.prepare_execution(loop, coordinator, providers)
-                    if coordinator:
-                        host.install_activity(coordinator)
-                        host.install_collaboration_checkpoint(coordinator)
-                        await install_app_access(coordinator, host.app_access_bridge(coordinator),
-                            execution_role='root' if coordinator is host.session.coordinator else 'native_child')
-                        host.computer_episodes.install(coordinator, lambda: host.computer_execution(coordinator))
-                        from amplifier_web.host.session import SelectedProvider
-                        transform = coordinator.get_capability('web.provider_transform')
-                        if isinstance(getattr(loop,'root_provider',None), SelectedProvider):
-                            loop.root_provider.execution_adapter = transform
-                        runtime, selected, scope = result
-                        from amplifier_web.host.media import flush_adapters
-                        await flush_adapters(coordinator)
-                        return runtime, {name: transform(value) for name, value in selected.items()}, scope
-                    return result
             # loop-live propagates this host through its existing ContextVar to
             # delegated sessions. Observe their public lifecycle without changing
             # spawning, provider routing, approvals, or execution ownership.
-            self.session.coordinator.register_capability("live.host", ObservedHost())
-            self.session.coordinator.register_capability("web.activity.install", self.install_activity)
+            self.install_execution_observation()
             self.session.coordinator.register_capability("live.activation", self.activation_gate)
             self.session.coordinator.register_capability("web.context_recovery.epoch", lambda: self.stop_revision)
             self.session.coordinator.register_capability("web.context_transition.input", self.transition_input)
             from amplifier_web.host.naming import LiveSessionNaming
             completed=[identity for event in config.get('generations',[]) if event.get('event')=='generation.finished' for identity in event.get('input_ids',[]) if identity in {t['id'] for t in config.get('execution',{}).get('turns',[])}]
             self.naming=LiveSessionNaming(self.session.coordinator,self.home,publish,completed)
-            # All actual Worker observers participate before the first turn.
-            # The loop subsequently owns its execution_registration phase.
+            # Register hooks before the first turn, but leave provider methods
+            # intact until prepare_execution installs the native adapter. That
+            # phase then observes the actual mounted provider, without adding
+            # another hook chain.
             from amplifier_web.host.media import flush_adapters
             if self.session.coordinator.get_capability("web.media.construction") is not None:
-                self.install_activity(self.session.coordinator)
+                self.install_activity(self.session.coordinator, observe_providers=False)
                 await flush_adapters(self.session.coordinator)
             from amplifier_web.loaded_provenance import capture_mount
             self.provenance_mount = capture_mount(self.session)

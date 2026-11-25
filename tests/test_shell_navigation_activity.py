@@ -312,3 +312,15 @@ async def test_activity_context_uses_only_visible_admitted_metadata(
     assert result['navigationActivityById']['alpha']['kind'] == expected
     assert set(result['navigationActivityById']['alpha']) == {'kind', 'label'}
     assert not dict.__contains__(service.state['sessions'][0], 'messages')
+
+
+async def test_model_progress_reaches_details_without_reordering_chat(service):
+    alpha = service.state['sessions'][0]
+    alpha.update(status='working', navigationActivityAt=7, activity={'startedAt': 10})
+    service._ingest_runtime_execution(alpha, {'id': 'request', 'kind': 'llm', 'phase': 'running',
+        'rootSessionId': alpha['id'], 'sessionId': alpha['id'], 'startedAt': 20})
+    service._activity(alpha, 'model', 'Waiting')
+    prepare(service)
+    current = await settle(service)
+    assert activity_context(current)['alpha']['step'] == {'label': 'Model request started', 'at': 20}
+    assert alpha['navigationActivityAt'] == 7

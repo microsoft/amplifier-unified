@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -204,7 +204,7 @@ wheels = [
 [[package]]
 name = "amplifier-foundation"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#134abaee59bb1ab408834f0029949350d790ef99" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#f1b35493ab563932d39b35288eb758871f1d4f59" }
 dependencies = [
     { name = "amplifier-core" },
     { name = "filelock" },
@@ -223,7 +223,7 @@ dependencies = [
 [[package]]
 name = "amplifier-module-context-managed"
 version = "0.1.0"
-source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=main#6e77ea5673930bc70f8e5b8327e791237a44668f" }
+source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=main#b3ce1a88108ecf1ad5d057edba54a641a7aae755" }
 dependencies = [
     { name = "amplifier-module-context-simple" },
 ]
@@ -236,7 +236,7 @@ source = { git = "https://github.com/microsoft/amplifier-module-context-simple?r
 [[package]]
 name = "amplifier-module-hooks-session-naming"
 version = "0.2.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=main#134abaee59bb1ab408834f0029949350d790ef99" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=main#f1b35493ab563932d39b35288eb758871f1d4f59" }
 
 [[package]]
 name = "amplifier-module-loop-live"
@@ -250,12 +250,12 @@ dependencies = [
 [[package]]
 name = "amplifier-module-loop-streaming"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-module-loop-streaming?rev=main#1419062987b6b0a601f5cec60f9ce8d8afe7e470" }
+source = { git = "https://github.com/microsoft/amplifier-module-loop-streaming?rev=main#594d63eb38cf9dadc7bee1930d25178db4199250" }
 
 [[package]]
 name = "amplifier-module-provider-anthropic"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-module-provider-anthropic?rev=main#498d20d6caebb45d7493888b38c5358be02ac595" }
+source = { git = "https://github.com/microsoft/amplifier-module-provider-anthropic?rev=main#b4762db1ee14c07daad7f20dac6a9534ebaed1b6" }
 dependencies = [
     { name = "anthropic" },
 ]
@@ -263,7 +263,7 @@ dependencies = [
 [[package]]
 name = "amplifier-module-provider-openai"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main#2d30e5fd1dfa963bc75045eccfe0a4f54f10371f" }
+source = { git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main#903b37c05d0ac1214dc801ba02d9af07986e06d2" }
 dependencies = [
     { name = "httpx" },
     { name = "openai" },
@@ -271,13 +271,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "amplifier-module-provider-openai-chatgpt"
+version = "0.1.0"
+source = { git = "https://github.com/microsoft/amplifier-module-provider-openai-chatgpt?rev=b6473e56a3f73a297cc139fd5414baec1722bc8c#b6473e56a3f73a297cc139fd5414baec1722bc8c" }
+dependencies = [
+    { name = "amplifier-core" },
+    { name = "filelock" },
+    { name = "httpx" },
+    { name = "pyjwt", extra = ["crypto"] },
+]
+
+[[package]]
 name = "amplifier-module-tool-transcript"
 version = "0.1.0"
-source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Ftool-transcript&rev=main#6e77ea5673930bc70f8e5b8327e791237a44668f" }
+source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Ftool-transcript&rev=main#b3ce1a88108ecf1ad5d057edba54a641a7aae755" }
 
 [[package]]
 name = "amplifier-unified"
-version = "0.112.0"
+version = "0.127.0"
 source = { directory = "../../" }
 dependencies = [
     { name = "agent-client-protocol" },
@@ -350,13 +361,14 @@ artifacts = [
     { name = "reportlab", specifier = ">=4,<5" },
 ]
 dev = [
-    { name = "amplifier-module-context-managed", git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=6e77ea5673930bc70f8e5b8327e791237a44668f" },
+    { name = "amplifier-module-context-managed", git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=b3ce1a88108ecf1ad5d057edba54a641a7aae755" },
     { name = "amplifier-module-context-simple", git = "https://github.com/microsoft/amplifier-module-context-simple?rev=main" },
     { name = "amplifier-module-hook-context-intelligence", git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?subdirectory=modules%2Fhook-context-intelligence&rev=a80ce69d0e96e9a343501f238dcd867350dd9aa2" },
     { name = "amplifier-module-hooks-candidate-guard", git = "https://github.com/microsoft/amplifier-bundle-converge?subdirectory=modules%2Fhooks-candidate-guard&rev=da7dd8878c9e7b672e86151b32d59c0cce68bcb6" },
     { name = "amplifier-module-loop-live", git = "https://github.com/microsoft/amplifier-module-loop-live?rev=ddc44d50352c5015c7e27617de5eb389168b3f32" },
-    { name = "amplifier-module-provider-anthropic", git = "https://github.com/microsoft/amplifier-module-provider-anthropic?rev=498d20d6caebb45d7493888b38c5358be02ac595" },
+    { name = "amplifier-module-provider-anthropic", git = "https://github.com/microsoft/amplifier-module-provider-anthropic?rev=1bb74ede28ce734363f93f0fe499c6dd62c03d84" },
     { name = "amplifier-module-provider-openai", extras = ["native"], git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main" },
+    { name = "amplifier-module-provider-openai-chatgpt", git = "https://github.com/microsoft/amplifier-module-provider-openai-chatgpt?rev=b6473e56a3f73a297cc139fd5414baec1722bc8c" },
     { name = "amplifier-module-tool-apply-patch", git = "https://github.com/microsoft/amplifier-bundle-filesystem?subdirectory=modules%2Ftool-apply-patch&rev=515599f0d0763a946aa96ed1d0110db723f5c386" },
     { name = "amplifier-module-tool-delegate", git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Ftool-delegate&rev=05082c89a171758f8d0fb9d8df630ea581e5bdb5" },
     { name = "amplifier-module-tool-exec", git = "https://github.com/microsoft/amplifier-module-tool-exec?rev=f267548ccd1b38a236a46afb96252bb6dd474dcd" },
@@ -379,7 +391,7 @@ work-media = [
     { name = "amplifier-module-tool-context-intelligence-transcript", git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?subdirectory=modules%2Ftool-context-intelligence-transcript&rev=main" },
     { name = "amplifier-module-tool-mode", git = "https://github.com/microsoft/amplifier-bundle-modes?subdirectory=modules%2Ftool-mode&rev=a29ebceb72f02f4340290346d5a4fe0cf486dfec" },
     { name = "amplifier-module-tool-search", git = "https://github.com/microsoft/amplifier-module-tool-search?rev=ccd11795f6bb47853cfd1761b126f3b40d95a517" },
-    { name = "amplifier-module-tool-transcript", git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Ftool-transcript&rev=c18eb0c68d609d3471549f148f2e36f77d59a336" },
+    { name = "amplifier-module-tool-transcript", git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Ftool-transcript&rev=b3ce1a88108ecf1ad5d057edba54a641a7aae755" },
     { name = "amplifier-module-tool-web", git = "https://github.com/microsoft/amplifier-module-tool-web?rev=2a58cf71f6f941f5b5ef28d59564f5d47af5f294" },
 ]
 
@@ -394,6 +406,7 @@ dependencies = [
     { name = "amplifier-module-loop-live" },
     { name = "amplifier-module-provider-anthropic" },
     { name = "amplifier-module-provider-openai" },
+    { name = "amplifier-module-provider-openai-chatgpt" },
     { name = "amplifier-module-tool-transcript" },
     { name = "amplifier-unified" },
 ]
@@ -415,6 +428,7 @@ requires-dist = [
     { name = "amplifier-module-loop-live", git = "https://github.com/microsoft/amplifier-module-loop-live?rev=main" },
     { name = "amplifier-module-provider-anthropic", git = "https://github.com/microsoft/amplifier-module-provider-anthropic?rev=main" },
     { name = "amplifier-module-provider-openai", git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main" },
+    { name = "amplifier-module-provider-openai-chatgpt", git = "https://github.com/microsoft/amplifier-module-provider-openai-chatgpt?rev=b6473e56a3f73a297cc139fd5414baec1722bc8c" },
     { name = "amplifier-module-tool-transcript", git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Ftool-transcript&rev=main" },
     { name = "amplifier-unified", directory = "../../" },
 ]

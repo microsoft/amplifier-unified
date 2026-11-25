@@ -85,6 +85,11 @@ The target AHP/ACP boundary follows [HP](host-protocol.v1.md) and [AP](agent-pro
    Disclosure is not hover-only or icon-only without an accessible name. Readable
    text, usable targets and responsive reflow are required; neither excessive
    whitespace nor shrinking text substitutes for a coherent hierarchy.
+   When naming the product in consumer-facing UI and copy, use **Amplifier**,
+   not **Amplifier Unified** or **Unified**. This includes setup, pairing,
+   status and recovery; for example, “Link another Amplifier.” Keep user-chosen
+   instance names intact. Technical identifiers such as the `amplifier-unified`
+   command and repository name remain unchanged.
    Broken: two clicks to choose between two finishes, an unnecessary Save after a
    harmless preference, a scope selector beside every everyday setting, or a
    crowded screen that makes the shortest path harder to find.
@@ -118,6 +123,7 @@ Which existing names should be normalized without making platform commands unfam
 
 | Date | Change | Basis |
 | --- | --- | --- |
+| 2026-11-23 | Clarify CX8's consumer-facing product name: Amplifier. | Product-owner direction during linked-instance design. |
 | 2026-11-10 | Clarify CX8's consumer-accessible defaults, secondary exception controls and readable hierarchy. | Product-owner appearance review; observable UX requirements, not implementation acceptance. |
 | 2026-10-20 | Identify desktop consumers and DC; preserve CX1–8. | [Desktop coordination record](../docs/clients/desktop-clients.md). |
 | 2026-10-20 | Apply the accepted Home/sidebar UX amendment. | [Product-owner decision](../docs/ux/decisions/20261020.md). |

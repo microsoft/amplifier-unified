@@ -6,6 +6,7 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Mapping
 
 from .task_binding import continuation_epoch, dependency_blocked
 
@@ -15,11 +16,16 @@ PROJECTION_BYTES = 9 * 1024
 CONTROL_BYTES = 32 * 1024 * 1024
 CURRENT_FIELDS = ("objective", "constraints", "blockedReason", "questionIds",
                   "operationIds", "artifactRefs", "completionEvidence", "corrections")
-DETAIL_FIELDS = (*CURRENT_FIELDS, "originalObjective", "change")
+DETAIL_FIELDS = (*CURRENT_FIELDS, "originalObjective", "change", "sourceInputIds")
 
 
 def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def command_fingerprint(operation, args):
+    """Existing native task receipt identity, shared with passive reconciliation."""
+    return hashlib.sha256(json.dumps([operation, args], sort_keys=True).encode()).hexdigest()
 
 
 def _size(value):
@@ -66,6 +72,9 @@ def _project(task, history, goal, sid, *, continuity=None, supported=None):
     summary = {key: copy.deepcopy(task.get(key)) for key in (
         "id", "revision", "appliedRevision", "status", "continuationEpoch",
         "createdAt", "updatedAt", "completedAt", "maxTurns", "blockProvenance")}
+    if "sourceInputIds" in task:
+        summary["sourceInputCount"] = len(task["sourceInputIds"])
+        summary["sourceInputRef"] = _detail_ref(task, sid, "sourceInputIds")
     summary.update(continuationEpoch=continuation_epoch(task),
                    correctionCount=len(task.get("corrections", [])),
                    originalObjectiveAvailable=isinstance(task.get("originalObjective"), str),
@@ -255,7 +264,10 @@ def _saved_receipt(receipts, identity):
 def _read(operation, args, *, task, history, receipts, sid, goal=None,
           continuity=None, supported=None):
     if operation == "task.get":
-        return _project(task, history, goal, sid, continuity=continuity, supported=supported)
+        result = _project(task, history, goal, sid, continuity=continuity, supported=supported)
+        if args.get("sourceInputId") is not None:
+            result["sourceInputAssociated"] = bool(task and args["sourceInputId"] in task.get("sourceInputIds", []))
+        return result
     if operation == "task.receipt":
         return _saved_receipt(receipts, args.get("commandId"))
     if operation == "task.history" and not args.get("taskId"):
@@ -266,7 +278,13 @@ def _read(operation, args, *, task, history, receipts, sid, goal=None,
 
 def definitions(schema, string):
     sid = {"sessionId": string(200)}
-    revision = {"expectedRevision": {"type": "integer", "minimum": 0}}
+    revision = {"expectedRevision": {"type": "integer", "minimum": 0},
+                "expectedTaskId": {**string(200), "minLength": 1}}
+    profile_stop = {"expectedExecution": {
+        **schema({"interruptionRevision": {"type": "integer", "minimum": 0},
+                  "inputId": {"type": ["string", "null"], "maxLength": 200}},
+                 ["interruptionRevision", "inputId"]),
+        "description": "Internal Agent Instance Stop receipt binding; accepted only by its source-guarded task.pause dispatch, not ordinary task controls."}}
     strings = {"type": "array", "maxItems": 100, "items": {**string(4000), "minLength": 1}}
     fields = {"objective": {**string(16000), "minLength": 1}, "constraints": strings,
               "correction": {**string(8000), "minLength": 1}, "questionIds": strings,
@@ -274,7 +292,7 @@ def definitions(schema, string):
               "maxTurns": {"type": ["integer", "null"], "minimum": 1,
                            "description": "Optional enforced turn limit, not a planning estimate. Omit unless a hard limit is required. Changing an authorized limit retains turns already used; preserve explicit user and owner limits."}}
     return {
-        "task.get": ("Read the saved task, applied revision, goal controller, and compaction checkpoint status. Reading never starts model work.", schema(sid)),
+        "task.get": ("Read the saved task, applied revision, goal controller, and compaction checkpoint status. Optional sourceInputId checks creation-time association without returning the input list. Reading never starts model work.", schema({**sid, "sourceInputId": string(200)}, ["sessionId"])),
         "task.history": ("Read bounded retained task identities, or changes for an exact taskId. Historical corrections remain required detail; reading does not grant authority.", schema({
             **sid, "taskId": string(200), "after": string(2048),
             "limit": {"type": "integer", "minimum": 1, "maximum": 50}}, ["sessionId"])),
@@ -288,7 +306,7 @@ def definitions(schema, string):
             **sid, "commandId": string(200)}, ["sessionId", "commandId"])),
         "task.create": ("Set an authorized durable objective with dependencies and constraints, reusing this session's goal controller. An authorized follow-up preserves the completed objective in history. Does not send a message or schedule work.", schema({**sid, **revision, **fields}, ["sessionId", "expectedRevision", "objective"])),
         "task.update": ("Revise the task at its exact revision within existing authority. Managers may revise their own plans; preserve explicit user and owner limits. Corrections and used turns are retained; running work applies changes at the next request boundary.", schema({**sid, **revision, **fields}, ["sessionId", "expectedRevision"])),
-        "task.pause": ("Pause future goal continuation at the exact task revision when the user asks. Current work may finish; no side effect is rolled back.", schema({**sid, **revision}, ["sessionId", "expectedRevision"])),
+        "task.pause": ("Pause future goal continuation at the exact task revision when the user asks. Current work may finish; no side effect is rolled back.", schema({**sid, **revision, **profile_stop}, ["sessionId", "expectedRevision"])),
         "task.resume": ("Deliberately re-enable a paused or blocked task. Never infer resume from elapsed time or an unanswered question. Does not automatically send input.", schema({**sid, **revision}, ["sessionId", "expectedRevision"])),
         "task.waitForUpdate": ("Yield only this active task at its saved native checkpoint for the exact staged app update. Finish this turn; do not block or pause the task. One guarded continuation follows verified adoption, preserving its objective and used budget. Stop, changed task/settings, new input or a different update suppress it. Does not install, restart or interrupt other work. Read updates.drain for settlement; never replay an unknown request.", schema({
             **sid, **revision, "target": schema({
@@ -316,6 +334,11 @@ class TaskController:
 
     def record(self):
         return self.coordinator.session_state.get("task")
+
+    def _generation_record(self):
+        # Some runtimes expose only an activity marker, without input provenance.
+        generation = getattr(self.controls.runtime, "generation", None)
+        return generation if isinstance(generation, Mapping) else {}
 
     def continuity(self):
         getter = self.coordinator.get_capability("web.continuity.status")
@@ -433,7 +456,7 @@ class TaskController:
         proof = task.get("followupOf")
         if not proof:
             return False
-        generation = getattr(self.controls.runtime, "generation", None) or {}
+        generation = self._generation_record()
         if (task.get("status") != "active" or goal is not self.coordinator.session_state.get("goal")
                 or goal.get("task_id") != task.get("id") or goal.get("task_revision") != task.get("revision")
                 or generation.get("id") != proof["generationId"]
@@ -505,7 +528,7 @@ class TaskController:
         identity = args.get("commandId")
         if not isinstance(identity, str) or not identity or len(identity) > 200:
             raise ValueError("Task mutations require a stable commandId")
-        fingerprint = hashlib.sha256(json.dumps([operation, args], sort_keys=True).encode()).hexdigest()
+        fingerprint = command_fingerprint(operation, args)
         if identity in self.receipts:
             receipt = self.receipts[identity]
             if receipt["fingerprint"] != fingerprint:
@@ -534,6 +557,13 @@ class TaskController:
                     "appliedRevision": None, "status": "active", "constraints": [], "corrections": [],
                     "questionIds": [], "operationIds": [], "artifactRefs": [], "completionEvidence": [], "goalState": {},
                     "originalObjective": args["objective"], "changes": [], "changesRecordedFromRevision": revision + 1}
+            # Native generation provenance, not a caller-supplied work link.
+            # Legacy/offline tasks without an active generation stay unlinked.
+            generation = self._generation_record()
+            inputs = generation.get("input_ids")
+            if isinstance(inputs, list) and inputs and all(
+                    isinstance(value, str) and 0 < len(value) <= 200 for value in inputs):
+                task["sourceInputIds"] = list(dict.fromkeys(inputs))
         elif previous is None:
             raise ValueError("Create a durable task first")
         else:
@@ -544,7 +574,7 @@ class TaskController:
         if task["status"] == "completed" and operation != "task.create" and not manager_limit:
             raise ValueError("This task is complete; create a new objective explicitly")
         if operation == "task.create" and previous:
-            generation = getattr(self.controls.runtime, "generation", None) or {}
+            generation = self._generation_record()
             identity_input = previous.get("lastCompletedInputId")
             origin = previous.get("followupOf") or {}
             fresh = identity_input and identity_input in generation.get("input_ids", [])
@@ -665,6 +695,9 @@ def _valid_saved_task(task):
             or not isinstance(task.get("status"), str)
             or task["status"] not in {"active", "paused", "blocked", "completed"}
             or not isinstance(task.get("objective"), str) or not task["objective"].strip()):
+        return False
+    if "sourceInputIds" in task and (not isinstance(task["sourceInputIds"], list) or any(
+            not isinstance(value, str) or not 0 < len(value) <= 200 for value in task["sourceInputIds"])):
         return False
     for field in ("constraints", "questionIds", "operationIds", "artifactRefs", "completionEvidence"):
         if (not isinstance(task.get(field), list)
@@ -802,6 +835,9 @@ async def dispatch(service, operation, args, origin, command_id, include_state, 
     """Shared UI/agent path. Worker owns CAS and persists before acknowledging."""
     from .errors import AppError
     sid = args["sessionId"]
+    if "expectedExecution" in args and not (
+            operation == "task.pause" and origin == "acp-instance-stop" and guard is not None):
+        raise AppError("expectedExecution belongs only to the source-guarded Agent Instance Stop pause.", 400)
     if operation == "task.waitForUpdate":
         from .update_drain import wait_for_update
         return await wait_for_update(service, args, command_id, origin=origin, guard=guard)

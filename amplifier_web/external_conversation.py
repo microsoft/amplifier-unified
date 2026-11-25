@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from dataclasses import dataclass
 import hashlib
 import json
 import time
 import uuid
 
-from .acp_participant import ACPParticipant, endpoint
+from .acp_participant import ACPParticipant, ProjectWorkspaceError, endpoint
 from .errors import AppError
 from .execution import finish
 from .shared_conversation import SharedConversations, is_shared
@@ -63,7 +64,7 @@ def shared_context(session, input_id):
 
 
 def source_identity(selected):
-    source = {key: value for key, value in selected.items() if key != 'label'}
+    source = {key: value for key, value in selected.items() if key not in {'label', 'includeChatWorkspace'}}
     return hashlib.sha256(json.dumps(source, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
@@ -86,6 +87,7 @@ class ExternalConversations:
         self.participants = {}
         self.turns = {}
         self.retirements = {}
+        self.editing = set()
         self.closing = False
         self.shared = SharedConversations(self)
         self.approvals = ExternalApprovals(self)
@@ -99,7 +101,7 @@ class ExternalConversations:
 
     def _can_retire(self, session, identity, participant):
         sid, key = session['id'], (session['id'], identity)
-        if (self.closing or self.participants.get(key) is not participant
+        if (key in self.editing or self.closing or self.participants.get(key) is not participant
                 or sid in self.turns or key in self.shared.turns
                 or not getattr(participant, 'supports_retirement', False)):
             return False
@@ -163,8 +165,12 @@ class ExternalConversations:
         selected = [endpoint(getattr(self.service, 'server_config', {}), identity) for identity in identities]
         rows = [{'id': row['id'], 'label': row['label'], 'status': 'idle',
                  'capabilities': {'text': True, 'stop': True, 'nativeControls': False}} for row in selected]
-        sources = {row['id']: {'fingerprint': source_identity(row),
-                              'cwd': row.get('sessionCwd', workspace)} for row in selected}
+        sources = {}
+        for row in selected:
+            binding = {'fingerprint': source_identity(row), 'cwd': row.get('sessionCwd', workspace)}
+            if row.get('includeChatWorkspace') and binding['cwd'] != workspace:
+                binding['projectDirectory'] = workspace
+            sources[row['id']] = binding
         external = rows[0] if len(rows) == 1 else {
             'label': ', '.join(row['label'] for row in rows), 'status': 'idle',
             'participants': rows, 'participation': 'shared', 'capabilities': {'text': True, 'stop': True, 'nativeControls': False}}
@@ -228,6 +234,8 @@ class ExternalConversations:
                 or action == 'session.naming' and args.get('regenerate')):
             raise AppError('This operation is not supported by the external ACP participant.', 409)
         if action == 'conversation.send':
+            if not is_shared(session) and (session['id'], addressed(session, args.get('recipientAgentId'))['id']) in self.editing:
+                raise AppError('Agent settings are being saved. Send again when ready.', 409)
             if not is_shared(session):
                 self.selected(session, args.get('recipientAgentId'))
             if args.get('attachmentIds') or args.get('document') or args.get('replyId') or args.get('expectedGenerationId'):
@@ -268,7 +276,7 @@ class ExternalConversations:
             key = (sid, binding['id'])
             participant = self.participants.get(key)
             if participant is None:
-                participant = ACPParticipant(selected, source['cwd'],
+                participant = ACPParticipant(selected, source['cwd'], project=source.get('projectDirectory'),
                     update=lambda update: self._update(sid, binding['id'], update),
                     permission=lambda tool, options: self._permission(sid, binding['id'], options, tool))
                 self.participants[key] = participant
@@ -283,6 +291,69 @@ class ExternalConversations:
         # The host has accepted the message; ACP has no early prompt acknowledgement.
         return {'delivery': 'sending', 'inputId': input_id}
 
+    async def configure_participant(self, args, origin, admission_check):
+        from .participant_options import require_choice, revision, visible_options
+        from .agent_instance import room_source
+        if origin not in {'ui', 'user'}:
+            raise AppError('Only the user can edit participant settings.', 403)
+        sid, identity = key = args['sessionId'], args['participantId']
+
+        def current():
+            if admission_check:
+                admission_check()
+            session = self.service._session(sid)
+            if not is_external(session) or self.closing or session.get('archived') or session.get('historyReadOnlyReason') or session.get('ownership', {}).get('status') in {'blocked','yielding','yielded','yield-failed','taking-over'}:
+                raise AppError('This conversation cannot change participant settings.', 409)
+            return session, *self.selected(session, identity)
+
+        def validate(binding):
+            if not binding.get('sessionId') or binding.get('optionRevision') != args['expectedRevision']:
+                raise AppError('This agent’s choices changed. Review its current settings.', 409)
+            require_choice(binding.get('configOptions', []), args['configId'], args['value'])
+
+        async with self.service.lock:
+            session, binding, endpoint, source = current()
+            validate(binding)
+            if key in self.editing or key in self.shared.turns or sid in self.turns or key in self.retirements:
+                raise AppError('Wait for this agent to finish before changing its settings.', 409)
+            participant = self.participants.get(key)
+            room = self.shared if is_shared(session) else self
+            if participant is None:
+                participant = ACPParticipant(endpoint, source['cwd'], project=source.get('projectDirectory'),
+                    update=lambda update: room._update(sid, identity, update),
+                    permission=lambda tool, options: room._permission(sid, identity, options, tool))
+                self.participants[key] = participant
+                self.watch_retirement(sid, identity, participant)
+            origins = getattr(self.service, 'server_config', {}).get('public_origins', [])
+            options = {'source': copy.deepcopy(binding.get('instanceSource') or room_source(sid, origins[0] if origins else None))}
+            if is_shared(session) and getattr(self.service, 'room_context', None):
+                options['room_context'] = lambda: self.service.room_context.descriptor(sid, identity)
+            saved = dict(binding)
+            self.editing.add(key)
+        try:
+            await asyncio.wait_for(participant.connect(saved, lambda value: self._binding(sid, identity, value), **options), 30)
+            async with self.service.lock:
+                _, binding, _, _ = current()
+                validate(binding)
+                if binding['sessionId'] != participant.session_id or participant.session_id != saved['sessionId']:
+                    raise AppError('The agent session changed. Reopen its settings.', 409)
+            try:
+                response = await asyncio.wait_for(participant.connection.set_config_option(
+                    session_id=participant.session_id, config_id=args['configId'], value=args['value']), 30)
+            except Exception as error:
+                # A lost reply may have applied. Never repeat it to discover the outcome.
+                raise AppError('The agent could not confirm the change. Review its settings after its next connection.', 409) from error
+            options = visible_options(response.config_options)
+            await self._binding(sid, identity, {'configOptions': options, 'optionRevision': revision(options)})
+            return {'accepted': True, 'result': {'revision': revision(options)}}
+        finally:
+            async with self.service.lock:
+                self.editing.discard(key)
+                session = self.service._session(sid)
+                if is_shared(session):
+                    self.shared._schedule(session)
+                self.consider_retirement(session, identity, participant)
+
     async def _binding(self, sid, identity, value):
         async with self.service.lock:
             session = self.service._session(sid)
@@ -295,18 +366,32 @@ class ExternalConversations:
             if retirement is not None:
                 await asyncio.shield(retirement)
             session = self.service._session(sid)
+            binding = addressed(session, turn.agent_id)
+            from .agent_instance import room_source
+            origins = getattr(self.service, 'server_config', {}).get('public_origins', [])
+            source_ref = copy.deepcopy(binding.get('instanceSource') or room_source(sid, origins[0] if origins else None))
+            original = next(row for row in reversed(session['messages'])
+                            if row.get('inputId') == turn.input_id and row['role'] == 'user')
+            source_proof = copy.deepcopy(original)
             await asyncio.wait_for(turn.participant.connect(
-                dict(addressed(session, turn.agent_id)), lambda value: self._binding(sid, turn.agent_id, value)), 30)
+                dict(binding), lambda value: self._binding(sid, turn.agent_id, value),
+                source=source_ref), 30)
             async with self.service.lock:
                 session = self.service._session(sid)
                 if turn.stop or session.get('interruptionRevision', 0) != turn.revision:
                     raise asyncio.CancelledError()
+                self.selected(session, turn.agent_id)
+                current_source = next(row for row in reversed(session['messages'])
+                                      if row.get('inputId') == turn.input_id and row['role'] == 'user')
+                if current_source != source_proof:
+                    raise ValueError('The original source changed before external dispatch.')
                 session['externalAgent']['status'] = 'working'
                 addressed(session, turn.agent_id)['status'] = 'working'
                 self.service._publish_changes(sessions={sid})
                 turn.dispatched = True
             context = shared_context(session, turn.input_id)
-            response = await turn.participant.prompt(text, context=context)
+            response = await turn.participant.prompt(text, context=context,
+                metadata=turn.participant.source_metadata(turn.input_id, self.shared._actor(source_proof)[0], sid))
             await self._settle(sid, turn, 'accepted',
                                'stopped' if response.stop_reason == 'cancelled' else 'idle',
                                stop_reason=response.stop_reason)
@@ -320,12 +405,15 @@ class ExternalConversations:
                     and not getattr(turn.participant, '_retirement_uncertain', False)):
                 await turn.participant.close()
             raise
-        except Exception:
+        except Exception as error:
             turn.stop = True
+            message = 'The external agent could not connect or resume. Its binding was preserved.'
+            if turn.dispatched:
+                message = 'External delivery could not be confirmed. Work was not replayed.'
+            elif isinstance(error, ProjectWorkspaceError):
+                message = str(error)
             await self._settle(sid, turn, 'unknown' if turn.dispatched else 'failed',
-                               'unknown' if turn.dispatched else 'error',
-                               error=('External delivery could not be confirmed. Work was not replayed.'
-                                      if turn.dispatched else 'The external agent could not connect or resume. Its binding was preserved.'))
+                               'unknown' if turn.dispatched else 'error', error=message)
             if not getattr(turn.participant, '_retirement_uncertain', False):
                 await turn.participant.close()
         finally:

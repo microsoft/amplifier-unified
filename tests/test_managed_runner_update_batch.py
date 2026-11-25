@@ -35,7 +35,7 @@ async def test_waiting_runner_tick_still_checks_availability(app, monkeypatch):
     monkeypatch.setattr(runner, 'advance', AsyncMock(return_value={'complete': False, 'waiting': 'waiting'}))
     monkeypatch.setattr(manager, 'check', AsyncMock())
     await manager.tick()
-    manager.check.assert_awaited_once_with(fresh=False)
+    manager.check.assert_awaited_once_with(fresh=True, automatic=True)
 
 
 @pytest.mark.parametrize('automatic', [False, True])
@@ -92,7 +92,7 @@ async def test_runner_wait_preserves_continuation_after_manager_reload(app, monk
         observed.append(kwargs)
     monkeypatch.setattr(manager, '_check', check)
     await manager.tick()
-    assert observed == [{'tier': tier, 'install': True}]
+    assert observed == [{'tier': tier, 'install': True, 'fresh': True, 'automatic': True}]
     assert app.state['updates']['sequence']['stage'] == 'complete'
     assert app.state['updates']['pendingSmartTools'][0]['runnerUpdate'] == pending[0]['runnerUpdate']
 
@@ -131,23 +131,41 @@ async def test_components_activate_with_runner_pending_and_keep_owned_attempt(ap
     assert app.state['updates']['sequence']['nextStage'] == 'other'
 
 
-async def test_continuing_component_check_retains_install_intent_and_excludes_owned_runner(app, monkeypatch):
-    from amplifier_web import update_checks
+@pytest.mark.parametrize('selection', ['current', 'missing', 'mismatch'])
+async def test_continuing_component_check_retains_install_intent_and_excludes_owned_runner(app, monkeypatch, selection):
+    from amplifier_web import update_checks, update_sequence
     manager = app.update_manager
+    # Put both rows in the exercised tier: a later-tier short circuit must not
+    # make the owned-runner exclusion assertions pass without that exclusion.
     source = {'id': 'runner', 'kind': 'smart tool', 'runnerKind': runner.KIND,
-              'url': 'https://example.invalid/runner', 'ref': 'main', 'eligible': True}
+              'url': 'https://example.invalid/runner', 'ref': 'main', 'eligible': True,
+              'updateTier': 'included'}
     pending = [{**item(), 'runnerSource': source}]
     component = {'id': 'component', 'kind': 'runtime dependency', 'label': 'component',
                  'url': 'https://example.invalid/component', 'ref': 'main', 'current': 'a' * 40,
                  'eligible': True, 'updateTier': 'included'}
+    witness = update_sequence.app_selection(manager.home)['witness']
+    if selection != 'missing':
+        component['appSelection'] = witness if selection == 'current' else 'not-' + witness
     await manager.publish(pendingSmartTools=pending, phase='installed')
     monkeypatch.setattr(manager, 'inventory_sources', AsyncMock(return_value=[source, component]))
     monkeypatch.setattr(update_checks, 'ref_policy', AsyncMock(return_value={'kind': 'branch', 'revision': 'b' * 40}))
     monkeypatch.setattr(update_checks, 'git_revision', AsyncMock(side_effect=AssertionError('Owned runner rediscovered')))
     await manager.check(tier='included', install=True)
     assert app.state['updates']['sequence']['install'] is True
-    assert [row['id'] for row in manager.inventory] == ['component']
     assert app.state['updates']['pendingSmartTools'] == pending
+    update_checks.git_revision.assert_not_called()
+    update_checks.ref_policy.assert_awaited_once()
+    if selection == 'current':
+        assert [row['id'] for row in manager.inventory] == ['component']
+        assert manager.inventory[0]['appSelection'] == witness
+        assert manager.inventory[0]['status'] == 'update'
+        assert app.state['updates']['phase'] == 'available'
+        assert app.state['updates']['error'] is None
+    else:
+        assert manager.inventory == []
+        assert app.state['updates']['phase'] == 'error'
+        assert app.state['updates']['error'] == 'Update check failed. Your installed sources are unchanged.'
 
 
 async def test_ordinary_tool_batch_keeps_its_existing_admission_gate(app, monkeypatch):

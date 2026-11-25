@@ -14,6 +14,12 @@ try{
  browser=await chromium.launch({headless:true,...(process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}:{})});const context=await browser.newContext({locale:'en-US',timezoneId:'Asia/Tokyo',viewport:{width:1280,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')actions.push(request.postDataJSON())});
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const call=(action,args)=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
+ const openAutomations=async()=>{
+  const navigation=page.getByRole('button',{name:'Open navigation',exact:true});
+  if(await navigation.isVisible())await navigation.click();
+  await page.getByRole('button',{name:'App options',exact:true}).click();
+  await page.getByRole('group',{name:'App options',exact:true}).getByRole('button',{name:'Automations',exact:true}).click();
+ };
  const get=async()=>{const value=await page.request.get(info.url+'/fixture/inspect');assert.equal(value.status(),200);return value.json()};
  const post=async path=>{const value=await page.request.post(info.url+path);assert.equal(value.status(),200,await value.text());return value.json()};
  const assertRowLayout=async(target,width)=>{
@@ -31,8 +37,7 @@ try{
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.fill('Keep my automation test draft');await expect(composer).toHaveDraft('Keep my automation test draft');
  const other=await page.context().newPage();await other.goto(info.url);await other.waitForFunction(()=>window.amplifier?.getState()?.client?.id);await other.evaluate(async id=>{await window.amplifier.dispatch('session.select',{id});await window.amplifier.dispatch('view.update',{patch:{draft:'Other client draft',panel:null}})},info.ownerId);
  const otherView=()=>other.evaluate(()=>{const s=window.amplifier.getState();return {client:s.client.id,selected:s.selectedSessionId,draft:s.view.draft,panel:s.view.panel}});const otherBefore=await otherView();assert.notEqual(otherBefore.client,(await state()).client.id);
- if(await page.getByRole('button',{name:'Open navigation',exact:true}).count())await page.getByRole('button',{name:'Open navigation',exact:true}).click();
- const baseline=await get();const opened=Date.now();await page.getByRole('button',{name:'Automation',exact:true}).click();
+ const baseline=await get();const opened=Date.now();await openAutomations();
  const hub=page.getByRole('region',{name:'Automation overview'}),row=hub.locator(`[data-automation-id="${info.scheduleId}"]`);
  await expect(row).toBeVisible();timings.openToRowsMs=Date.now()-opened;await expect(row).toContainText('Exited report owner');await expect(row).toContainText('Needs review');
  assert.equal(await hub.locator('[data-automation-id]').count(),30);
@@ -66,11 +71,11 @@ try{
  phase='held-navigation';let release,seen;const held=new Promise(resolve=>seen=resolve),gate=new Promise(resolve=>release=resolve);
  const intercept=async route=>{const body=route.request().postDataJSON();if(body.action!=='session.select'||body.args?.id!==info.ownerId)return route.continue();const response=await route.fetch();seen();await gate;await route.fulfill({response})};
  await page.route('**/api/actions',intercept);await row.getByRole('button',{name:'Open owning chat',exact:true}).click();await held;await page.getByRole('button',{name:'Close panel',exact:true}).click();await expect(hub).toHaveCount(0);const opens=actions.filter(item=>item.action==='view.update'&&item.args?.patch?.panel==='chat-work').length;release();await page.waitForTimeout(250);assert.equal(actions.filter(item=>item.action==='view.update'&&item.args?.patch?.panel==='chat-work').length,opens);await expect(hub).toHaveCount(0);await page.unroute('**/api/actions',intercept);
- await call('session.select',{id:info.sessionId});await page.getByRole('button',{name:'Automation',exact:true}).click();await expect(row).toBeVisible();
+ await call('session.select',{id:info.sessionId});await openAutomations();await expect(row).toBeVisible();
  phase='owner-navigation';await row.getByRole('button',{name:'Open owning chat',exact:true}).click();await expect.poll(async()=>(await state()).selectedSessionId).toBe(info.ownerId);await expect(page.getByRole('region',{name:'Scheduled work'})).toBeVisible();
  await call('session.select',{id:info.sessionId});await call('view.update',{patch:{panel:null}});await expect(composer).toHaveDraft('Keep my automation test draft');assert.deepEqual(await otherView(),otherBefore);assert.deepEqual(errors,[]);
  phase='empty-create-review';
- await post('/fixture/empty');await page.getByRole('button',{name:'Automation',exact:true}).click();
+ await post('/fixture/empty');await openAutomations();
  await expect(hub.getByRole('heading',{name:'Give a routine a schedule'})).toBeVisible();
  await expect(hub.getByRole('button',{name:'Previous schedules'})).toHaveCount(0);
  await page.screenshot({path:output+'/empty-desktop.png',animations:'disabled'});
@@ -121,7 +126,7 @@ try{
  await expect(editor.getByLabel('Local time',{exact:true})).toHaveValue('08:30');
  await page.keyboard.press('Escape');await expect(editor).toHaveCount(0);
  await expect(composer).toHaveDraft('Keep my automation test draft');
- await page.getByRole('button',{name:'Automation',exact:true}).click();await hub.getByRole('button',{name:'Create schedule',exact:true}).click();
+ await openAutomations();await hub.getByRole('button',{name:'Create schedule',exact:true}).click();
  await expect(prompt).toHaveValue('Summarize weekday decisions and open risks. Keep originals unchanged.');
  // Ordinary keyboard traversal remains inside the existing panel.
  await prompt.focus();await page.keyboard.press('Tab');

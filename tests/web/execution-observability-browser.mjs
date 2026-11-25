@@ -22,14 +22,14 @@ try{
  const page=await context.newPage(),errors=[],requests=[];page.on('pageerror',e=>errors.push(e.message));page.on('request',request=>{if(request.method()==='POST'){try{const body=request.postDataJSON();if((body.name||body.action)==='capacity.read'||body.args?.name==='capacity.read')requests.push(body)}catch{}}});
  await page.goto(base);await showFixtureConversation(page);await page.locator('#amp-one').waitFor();
  await openSettingsPage(page,'appearance');
- const prefs=page.locator('.a-observability-preferences');await prefs.locator('summary').click();
- await prefs.getByLabel('Individual steps',{exact:true}).uncheck();await prefs.getByLabel('Work summaries',{exact:true}).check();await prefs.getByLabel('Compact conversation status',{exact:true}).check();
+ const prefs=page.locator('.a-appearance-more');await prefs.locator(':scope > summary').click();
+ await prefs.getByLabel('Each step',{exact:true}).uncheck();await prefs.getByLabel('After each turn',{exact:true}).check();await prefs.getByLabel('Show conversation status',{exact:true}).check();
  // Save each selection through the real shared shell action; disabled state fences racing writes.
  await prefs.getByLabel('Cost',{exact:true}).uncheck();
  await expect(prefs.getByLabel('Cost',{exact:true})).not.toBeChecked();await expect(prefs.getByLabel('Cost',{exact:true})).toBeEnabled();
- await page.reload();await openSettingsPage(page,'appearance');await prefs.locator('summary').click();
- await expect(prefs.getByLabel('Individual steps',{exact:true})).not.toBeChecked();await expect(prefs.getByLabel('Work summaries',{exact:true})).toBeChecked();await expect(prefs.getByLabel('Cost',{exact:true})).not.toBeChecked();
- await prefs.getByLabel('Individual steps',{exact:true}).check();await expect(prefs.getByLabel('Individual steps',{exact:true})).toBeEnabled();
+ await page.reload();await openSettingsPage(page,'appearance');await prefs.locator(':scope > summary').click();
+ await expect(prefs.getByLabel('Each step',{exact:true})).not.toBeChecked();await expect(prefs.getByLabel('After each turn',{exact:true})).toBeChecked();await expect(prefs.getByLabel('Cost',{exact:true})).not.toBeChecked();
+ await prefs.getByLabel('Each step',{exact:true}).check();await expect(prefs.getByLabel('Each step',{exact:true})).toBeEnabled();
  await page.locator('[data-part=dialog]:visible').getByRole('button',{name:/^Close (panel|settings)$/i}).click();
  const status=page.getByRole('region',{name:'Conversation status',exact:true});await expect(status).toBeVisible();assert.equal(requests.length,0,'status strip cannot silently load usage/history');
  const readStarted=Date.now();await status.getByRole('button',{name:'Read usage',exact:true}).click();await status.locator('summary').first().click();
@@ -42,9 +42,14 @@ try{
  // Optional status remains a snapshot even when another render occurs.
  const readCount=requests.length;await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{draft:'Keep this draft'}}));await expect(status.getByRole('button',{name:'Refresh usage'})).toBeVisible();assert.equal(requests.length,readCount);
  for(const id of ['inspect@question','inspect@long-answer']){const group=page.locator(`[data-group-id="${id}"] > button.a-execution-turn-line`);await group.waitFor();if(await group.getAttribute('aria-expanded')==='false')await group.click()}
- const model=page.locator('[data-kind="llm"]').first();await model.locator(':scope > button').click();await expect(model.getByRole('region',{name:'Model call usage'})).toBeVisible();await expect(model.getByText('Call cost (USD)',{exact:true})).toHaveCount(0);
- await model.scrollIntoViewIfNeeded();await page.screenshot({path:join(output,'metrics-desktop.png'),animations:'disabled'});
- await page.setViewportSize({width:390,height:844});await model.scrollIntoViewIfNeeded();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:join(output,'metrics-mobile.png'),animations:'disabled'});
+ const model=page.locator('[data-kind="llm"]').first(),inspector=page.locator('#work-step-inspector');
+ await expect(model).toContainText('In 100');
+ await expect(model.locator('.a-model-call-metrics')).not.toContainText('$');
+ await model.locator(':scope > button').click();
+ await expect(inspector.getByRole('region',{name:'Model call usage'})).toBeVisible();
+ await expect(inspector.getByText('Call cost (USD)',{exact:true})).toHaveCount(0);
+ await inspector.scrollIntoViewIfNeeded();await page.screenshot({path:join(output,'metrics-desktop.png'),animations:'disabled'});
+ await page.setViewportSize({width:390,height:844});await inspector.scrollIntoViewIfNeeded();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:join(output,'metrics-mobile.png'),animations:'disabled'});
  assert.deepEqual(errors,[]);await writeFile(join(output,'result.json'),JSON.stringify({passed:true,source:'production UI + synthetic canonical events',elapsedMs:Date.now()-started,readMs,requests:requests.length,exportedMetrics:Object.keys(data.metrics),errors},null,2)+'\n');
  console.log('Observability passed: persisted independent preferences, selected-only copy/export, optional no-poll snapshot, actual model rows, narrow layout.');
 }finally{await writeFile(join(output,'fixture.log'),log);await browser?.close();fixture.kill('SIGTERM');await new Promise(resolve=>{if(fixture.exitCode!==null||fixture.signalCode!==null)return resolve();const timer=setTimeout(()=>{fixture.kill('SIGKILL');resolve()},5000);fixture.once('exit',()=>{clearTimeout(timer);resolve()})})}

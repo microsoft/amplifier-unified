@@ -8,6 +8,28 @@ from amplifier_web.service import AppError
 from test_automatic_history import app_factory, native_session, native_rows, select, finish_actions
 
 
+async def entered_or_failed(entered, action):
+    """Report an early action error instead of waiting forever for its stub."""
+    waiting = asyncio.create_task(entered.wait())
+    try:
+        done, _ = await asyncio.wait({waiting, action}, timeout=5,
+                                     return_when=asyncio.FIRST_COMPLETED)
+        if action in done:
+            await action
+        assert waiting in done, 'Action did not enter the delayed history read'
+    finally:
+        waiting.cancel()
+        await asyncio.gather(waiting, return_exceptions=True)
+
+
+async def test_lazy_load_wait_propagates_early_action_failure():
+    async def fails():
+        raise TypeError('fixture failed before entering history')
+    action = asyncio.create_task(fails())
+    with pytest.raises(TypeError, match='before entering history'):
+        await asyncio.wait_for(entered_or_failed(asyncio.Event(), action), 1)
+
+
 async def test_workspace_chat_deletion_refuses_without_changing_selection(tmp_path, app_factory):
     native_session(tmp_path/'first', 'one')
     native_session(tmp_path/'first', 'two')
@@ -28,14 +50,20 @@ async def test_selection_change_during_lazy_load_cannot_send_to_other_chat(tmp_p
     app.state['selectedSessionId']=one['id']
     entered=asyncio.Event(); release=asyncio.Event()
     original=app.history.ensure_loaded
-    async def delayed(sid):
-        entered.set(); await release.wait(); await original(sid)
+    async def delayed(sid, *, hydrate=True):
+        assert hydrate is False
+        entered.set(); await release.wait(); await original(sid, hydrate=hydrate)
     monkeypatch.setattr(app.history,'ensure_loaded',delayed)
     action=asyncio.create_task(app.dispatch('conversation.send',{'text':'Do not send this to another chat'}))
-    await entered.wait()
-    app.state['selectedSessionId']=two['id']; release.set()
-    with pytest.raises(AppError,match='selected chat changed'):
-        await action
+    try:
+        await entered_or_failed(entered, action)
+        app.state['selectedSessionId']=two['id']; release.set()
+        with pytest.raises(AppError,match='selected chat changed'):
+            await asyncio.wait_for(action, 5)
+    finally:
+        release.set()
+        action.cancel()
+        await asyncio.gather(action, return_exceptions=True)
     assert not app.runtime.sent
     assert all(row.get('historyManaged') for row in app.state['sessions'] if row.get('nativeIdentity'))
 

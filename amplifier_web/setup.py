@@ -250,10 +250,13 @@ class SetupManager:
         try:yield
         finally:self._config_snapshot=previous
 
-    def provider_rows(self,workspace):
+    def provider_rows(self,workspace,*,ordinary_only=False):
         config=self.config(workspace)
         rows=[]
-        for value in config.saved_connections:
+        # Settings lists every account; inference utilities must use the same
+        # ordinary inventory as catalog_key/probe_snapshot, before projection.
+        # Filtering public aliases afterwards can conflate distinct namespaces.
+        for value in config.configured_connections if ordinary_only else config.saved_connections:
             identity=value.get('id') or value.get('instance_id') or value['module'].removeprefix('provider-')
             raw=value.get('config',{})
             refs=[]
@@ -278,7 +281,7 @@ class SetupManager:
                 'authenticationRequired':needs_auth,'account':account,'accountConnected':connected,'credentialsConfigured':configured,'keySource':'environment' if (not refs and credential['available']) or any(isinstance(v,str) and v.startswith('${') for v in refs) else ('configuration' if refs else 'provider-managed'), 'enabled':value.get('enabled',True) and identity not in config.settings.get('configurator',{}).get('disabled',{}).get('providers',[])})
         return rows
 
-    async def discover_catalog(self, workspace, *, refresh=False, instance=None, selected_only=False):
+    async def discover_catalog(self, workspace, *, refresh=False, instance=None, selected_only=False, cache_only=False):
         """Configured connections only; all consumers share the host cache.
 
         A session's mounted/default/saved selection is not an inventory source.
@@ -303,6 +306,8 @@ class SetupManager:
                 return row['sharedCatalogKey'], {'sharedCatalogKey':key[1], 'models':[],
                     'phase':'invalidated','supported':False,
                     'error':'This connection needs sign-in. Cached models are not available until it is reconnected.'}
+            if cache_only and not (refresh and (instance is None or instance == row['id'])):
+                return row['sharedCatalogKey'], self.catalog.entry(key)
             try:
                 await self.cached_probe('providers.models', {
                     'id': row['id'], 'refresh': refresh and (instance is None or instance == row['id'])
@@ -441,7 +446,37 @@ class SetupManager:
         snapshot=self.probe_snapshot(action,args,workspace)
         module,raw,config,env=(snapshot[name] for name in ('module','raw','config','env'))
         credential_generation=snapshot['credentialGeneration']
-        command=self.probe_command or RuntimeManager()._command()[:-1]+[str(Path(__file__).with_name('provider_probe.py'))]
+        if action == 'suggestion.complete' and self.probe_command is None:
+            from .updates import active_release
+            from .runtime_environment import project_path, receipt_directory
+            from .suggestion_provider import qualified_source_matches
+            generation_id = active_release(self.home).get('current')
+            receipts = receipt_directory(self.home, generation_id)
+            if not (receipts / 'runtime-project.json').is_file():
+                return {'status': 'unsupported', 'suggestion': None, 'usage': None, 'cost': None,
+                        'reason': 'runtime_not_prepared'}
+            project = project_path(self.home, generation_id)
+            executable = project / '.venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+            if not executable.is_file():
+                return {'status': 'unsupported', 'suggestion': None, 'usage': None, 'cost': None,
+                        'reason': 'runtime_not_prepared'}
+            if snapshot['source']:
+                try:
+                    matches = qualified_source_matches(module, snapshot['source'],
+                        json.loads((receipts / 'runtime-installed.json').read_text()),
+                        json.loads((receipts / 'runtime-sources.json').read_text()),
+                        (receipts / 'runtime.toml').read_bytes())
+                except (OSError, ValueError, TypeError):
+                    matches = False
+                if not matches:
+                    return {'status': 'unsupported', 'suggestion': None, 'usage': None, 'cost': None,
+                            'reason': 'qualified_source_mismatch'}
+            # Already qualified interpreter and matching installed source only:
+            # unlike the setup command, this cannot run uv sync or prepare files.
+            command = [str(executable), str(Path(__file__).with_name('provider_probe.py'))]
+            snapshot['source'] = None
+        else:
+            command=self.probe_command or RuntimeManager()._command()[:-1]+[str(Path(__file__).with_name('provider_probe.py'))]
         probe_workspace=Path(workspace)
         while not probe_workspace.is_dir() and probe_workspace.parent!=probe_workspace:
             probe_workspace=probe_workspace.parent
@@ -451,7 +486,26 @@ class SetupManager:
         stderr_task=asyncio.create_task(stderr_tail(process.stderr))
         try:
             try:
-                output,stderr=await asyncio.wait_for(asyncio.gather(communicate(process,json.dumps({'action':action,'model':args.get('model'),**({'prompt':args['prompt']} if action=='naming.complete' else {}),'module':module,'config':config,'source':snapshot['source'],'fallbackSource':KNOWN_PROVIDER_SOURCES.get(module),'registryHome':snapshot['registryHome']}).encode()),stderr_task),90)
+                if action == 'suggestion.complete' and not args['_admit']():
+                    raise ValueError('Suggestion source changed before provider preparation.')
+                payload = json.dumps({'action':action,'model':args.get('model'),**({'prompt':args['prompt']} if action=='naming.complete' else {}),**({'transcript':args['transcript'], 'effort':args.get('effort'), **({'prompt':args['prompt']} if 'prompt' in args else {})} if action=='suggestion.complete' else {}),'module':module,'config':config,'source':snapshot['source'],'fallbackSource':KNOWN_PROVIDER_SOURCES.get(module),'registryHome':snapshot['registryHome']}).encode()
+                if action == 'suggestion.complete':
+                    # Keep stdin open for the final currentness handshake. No
+                    # provider call is authorized by the preparation payload.
+                    process.stdin.write(payload + b'\n')
+                    await process.stdin.drain()
+                    ready = await process.stdout.readline()
+                    if ready == b'{"suggestionReady":true}\n':
+                        output, stderr = await asyncio.gather(
+                            communicate(process, json.dumps({'admitted': bool(args['_admit']())}).encode() + b'\n'),
+                            stderr_task)
+                    else:
+                        # Unsupported setup can finish without requesting a
+                        # transport grant. Preserve its terminal typed result.
+                        remainder, stderr = await asyncio.gather(communicate(process, b''), stderr_task)
+                        output = ready + remainder
+                else:
+                    output,stderr=await asyncio.wait_for(asyncio.gather(communicate(process,payload),stderr_task),90)
             except TimeoutError:
                 raise HostProbeFailure('timeout') from None
             try:result=json.loads(output)
@@ -459,6 +513,9 @@ class SetupManager:
                 raise ProbeProcessFailure(process.returncode, stderr) from None
             if action!='providers.schema' and generation(module,raw)==credential_generation:
                 api_observation = action!='providers.models' or result.get('modelsProvenance')=='provider-api'
+                if action == 'suggestion.complete':
+                    # A typed utility failure is not an authenticated success.
+                    api_observation = result.get('suggestion', {}).get('status') in {'ready', 'empty'}
                 if (not result.get('error') and api_observation) or result.get('authenticationRequired') is True:
                     record(self.home,args['id'],credential_generation,authentication_required=result.get('authenticationRequired') is True)
             if result.get('error'):
@@ -468,6 +525,8 @@ class SetupManager:
                 error.diagnostic = result.get('diagnostic', {'stage':'probe','category':'ProviderError'})
                 raise error
             if process.returncode:raise ProbeProcessFailure(process.returncode, stderr)
+            if action=='suggestion.complete':
+                return result['suggestion']
             if action=='naming.complete':
                 if result.get('naming',{}).get('error'):raise ValueError(result['naming']['error'])
                 return {'text':result.get('naming',{}).get('text','')}
@@ -797,6 +856,17 @@ class SetupManager:
             return {'decisionModels': describe(effective.settings, effective.providers), 'decisionModelsError': None}
         if action=='providers.configureDecisions':
             from .decision_settings import configure
+            return configure(self, args, workspace, scope)
+        if action=='providers.suggestionModels':
+            from .suggestion_settings import describe, recommendation
+            with self.read_snapshot(workspace):
+                rows = self.provider_rows(workspace, ordinary_only=True)
+                for row in rows:
+                    row['sharedCatalogKey'] = self.catalog_key({'id': row['id']}, workspace)
+                    row['suggestionRecommendation'] = recommendation(self, row)
+                return {'suggestionModels': describe(self, workspace), 'providers': rows}
+        if action=='providers.configureSuggestions':
+            from .suggestion_settings import configure
             return configure(self, args, workspace, scope)
         if action=='providers.list':
             return {'providers':self.provider_rows(workspace),'providersWorkspace':str(workspace),'providersLoadedAt':time.time()}

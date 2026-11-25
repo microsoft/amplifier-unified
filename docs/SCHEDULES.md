@@ -50,6 +50,20 @@ input. It releases the lock after input admission, never after model execution o
 permission waits. The public runtime.control action cannot invoke this internal
 path. Normal tool approval hooks still run on every execution.
 
+While due work waits for worker startup, the host periodically renews its
+current, unexpired lease. If renewal misses the deadline or another host takes
+over, admission checks still prevent further effects. A startup rejection that
+leaves the schedule needing review qualifies for a failure notification.
+Ordinary missed occurrences skipped by their saved policy stay quiet.
+
+When the saved configuration for a new task changes, the due occurrence appears
+in run history as skipped before start. The schedule enters review. Its notice
+names the changed configuration categories when those are known and asks the
+owner to review the schedule. It retains the existing notification preferences.
+No worker is started and the blocked occurrence is never replayed. If the
+missed-run policy already skips that occurrence, it remains quiet. A recurring
+schedule still holds future work for review. A missed one-time schedule finishes.
+
 For `new_task`, preview also binds a hash of the source's effective configuration,
 provider/model/effort selection, budget settings, bundle, and execution workspace.
 The UI displays the workspace, bundle, model and turn cap before activation.
@@ -96,8 +110,9 @@ claim. Its source is labelled `compared_reported_values`; without values the
 source remains `agent_report`/`system_report`/`user_report`, which is not proof. Unchanged reports
 stay quiet under the changes policy. Initial compared values, confirmed changes,
 or failures notify according to the saved intent; normal app notification/privacy
-settings still govern delivery. Notification decisions persist before delivery
-attempts, so a crash may lose a notification rather than send it twice. Ordinary
+settings still govern delivery. The in-app notice is saved under the occurrence's
+stable ID before its decision is committed. Optional external delivery follows the
+commit, so an interruption may prevent an external alert without duplicating it. Ordinary
 assistant blocks from scheduled inputs do not emit separate generic notifications.
 Mixed generations containing a manual input retain normal completion notifications.
 A monitor temporarily suspends the goal continuation loop through delegated

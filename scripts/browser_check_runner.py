@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -472,6 +473,9 @@ def retire_group(group, token, preexisting=None, *, drain=None):
                 'failure': {**detail, 'phase': phase}, 'signalAttempts': attempts}
 
 
+LOG_EOF_GRACE_SECONDS = .5
+
+
 class BoundedLog:
     """Binary head + disk ring tail. Memory/read work is bounded per poll.
 
@@ -495,6 +499,7 @@ class BoundedLog:
         self.pipe = None
         self.error = None
         self.discarded = 0
+        self.settlement = None
 
     def attach(self, pipe):
         self.pipe = pipe
@@ -549,6 +554,31 @@ class BoundedLog:
             except OSError:
                 pass  # Retain first error; drain/discard so cleanup can proceed.
 
+    def settle(self, deadline, cancelled):
+        """Observe EOF after leader exit, with one non-renewing bounded wait."""
+        started = time.monotonic()
+        end = min(deadline, started + LOG_EOF_GRACE_SECONDS)
+        before, polls, expired = self.observed, 0, False
+        while not self.eof and not self.error and not cancelled() and time.monotonic() < end:
+            self.drain()  # Keep the per-poll read/work quantum unchanged.
+            polls += 1
+            if time.monotonic() >= end:
+                expired = True  # A read/write quantum can itself use the remaining time.
+                break
+            if self.eof or self.error or cancelled():
+                break
+            remaining = end - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(.01, remaining))
+        status = ('cancelled' if cancelled() else 'capture_error' if self.error else
+                  'deadline' if expired or not self.eof else 'eof')
+        self.settlement = {
+            'status': status, 'polls': polls, 'bytesBefore': before,
+            'bytesDuring': self.observed - before,
+            'budgetSeconds': max(0, end - started),
+            'elapsedSeconds': round(time.monotonic() - started, 6),
+        }
+
     def receipt(self):
         return {'limitBytes': self.limit, 'bytesObserved': self.observed,
                 'bytesRetained': None if self.error else self.head_bytes + self.tail_bytes,
@@ -557,11 +587,13 @@ class BoundedLog:
                 'format': 'head-tail' if self.finalized else 'head-ring-tail',
                 'tailCheckpointMayLag': not self.finalized,
                 'headBytes': self.head_bytes, 'tailBytes': self.tail_bytes,
-                'tailStart': self.cursor if self.tail_bytes == self.tail_limit else 0}
+                'tailStart': self.cursor if self.tail_bytes == self.tail_limit else 0,
+                **({'settlement': self.settlement} if self.settlement is not None else {})}
 
-    def close(self):
+    def close(self, *, drain=True):
         try:
-            self.drain()
+            if drain:
+                self.drain()
             if self.error:
                 return
             start = self.cursor if self.tail_bytes == self.tail_limit else 0
@@ -633,20 +665,25 @@ def load_plan(root, path):
             raise ValueError('Prepare the selected repository client before reading its registry')
         client_path = client / 'tests/browser-checks.json'
         client_plan = json.loads(client_path.read_text())
-        rows = [*validate_plan(plan),
-                *[{**row, 'cwd': str(Path('.build/web-client') / row.get('cwd', '.'))}
-                  for row in validate_plan(client_plan)]]
-        order = plan['scenarioOrder']
-        if len(order) != len(rows) or len(set(order)) != len(order) or set(order) != {row['id'] for row in rows}:
-            raise ValueError('Assembly scenario order must include each owned scenario exactly once')
-        validate_plan({'schemaVersion': 1, 'scenarios': rows})
-        by_id = {row['id']: row for row in rows}
-        plan = {'schemaVersion': 1, 'scenarios': [by_id[name] for name in order]}
+        plan = compose_browser_plan(plan, client_plan)
         provenance.update(browserLayout='separate-owners',
                           registrySha256={'unified': digest(path), 'client': digest(client_path)},
                           clientSelectionSha256=digest(selection_path))
     validate_plan(plan)
     return plan, provenance
+
+
+def compose_browser_plan(host_plan, client_plan):
+    """Compose the host and client scenarios in Unified's declared order."""
+    rows = [*validate_plan(host_plan),
+            *[{**row, 'cwd': str(Path('.build/web-client') / row.get('cwd', '.'))}
+              for row in validate_plan(client_plan)]]
+    order = host_plan['scenarioOrder']
+    if len(order) != len(rows) or len(set(order)) != len(order) or set(order) != {row['id'] for row in rows}:
+        raise ValueError('Assembly scenario order must include each owned scenario exactly once')
+    validate_plan({'schemaVersion': 1, 'scenarios': rows})
+    by_id = {row['id']: row for row in rows}
+    return {'schemaVersion': 1, 'scenarios': [by_id[name] for name in order]}
 
 
 def validate_plan(plan):
@@ -670,147 +707,19 @@ def initial_report(plan, provenance):
                           for row in validate_plan(plan)]}
 
 
-APP004_UNIT_NAMES = (
-    'chat reference metadata is a fixed bounded data shape',
-    *(f'chat reference rejects {name}' for name in (
-        'action', 'URL', 'foreign source', 'foreign message', 'missing target',
-        'wrong version', 'invalid revision', 'unbounded label', 'control character',
-        'missing availability')),
-    'chat reference rejects duplicate, oversized and expanded envelopes',
-    'copy uses an available message without another request',
-    'copy reads an explicitly addressed off-page chat without changing selection',
-    'missing scoped message reports failure instead of copying unrelated content',
-    'copy retains prose and appends only the host-supplied inert reference fallback',
-    'held route stays blocked through exercise and drains once before unregistration',
-    'drain includes concurrent callbacks and waiting unroute joins a final protocol arrival',
-    'callback errors become an awaited failure, not ignored or retried',
-    'primary assertion survives successful release and cleanup',
-    'primary error is retained with callback and teardown errors as secondary',
-    'early-started action rejection stays observable until it is awaited',
-    'cleanup failure alone fails and cannot replace a prior primary failure',
-)
-APP004_BOUNDARY = 'app004-same-document'
-
-
-def initial_app004(provenance):
-    # Fixed commands, not a second user-programmable plan or scenario selector.
-    report = {'schemaVersion': 1, 'source': provenance or {}, 'complete': False, 'passed': False,
-            'checks': [
-                {'id': 'units', 'status': 'unrun', 'reason': 'not_started', 'timeoutSeconds': 60,
-                 'command': ['node', '--test', '--test-reporter=tap',
-                             'tests/chat-reference.test.mjs', 'tests/message-copy.test.mjs',
-                             '../../tests/web/chat-reference-harness.test.mjs'], 'cwd': '.build/web-client'},
-                {'id': 'reload-negative', 'status': 'unrun', 'reason': 'not_started',
-                 'timeoutSeconds': 300, 'command': ['node', 'tests/web/chat-reference-browser.mjs']},
-            ]}
-    if (provenance or {}).get('browserLayout') == 'legacy-frontend':
-        report['checks'][0].update(cwd='frontend', command=[
-            'node', '--test', '--test-reporter=tap', 'tests/chat-reference.test.mjs',
-            'tests/message-copy.test.mjs', 'tests/chat-reference-harness.test.mjs'])
-        report['checks'][1].update(cwd='frontend', command=['node', 'tests/chat-reference-browser.mjs'])
-    return report
+def chat_reference_checks():
+    """The standalone supervisor needs the feature checks only for the APP004 opt-in."""
+    path = Path(__file__).resolve().parents[1] / 'tests/web/chat_reference_qualification.py'
+    spec = importlib.util.spec_from_file_location('chat_reference_qualification', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def save_app004(output, report):
     folder = output / 'app004-qualification'
     ensure_evidence_directory(folder)
     save(folder, report)
-
-
-def app004_units(log):
-    """Require the exact 23 flat Node test identities, not just process exit zero."""
-    text = log.read_text()
-    names = re.findall(r'^ok \d+ - (.+)$', text, re.M)
-    counts = {key: re.findall(rf'^# {key} (\d+)$', text, re.M)
-              for key in ('tests', 'pass', 'fail', 'cancelled', 'skipped', 'todo')}
-    expected = {key: [str(23 if key in ('tests', 'pass') else 0)] for key in counts}
-    if (counts != expected or len(names) != 23 or set(names) != set(APP004_UNIT_NAMES)
-            or re.search(r'^not ok\b|^Bail out!', text, re.M)):
-        raise ValueError('unit_identity_or_count_mismatch')
-
-
-def app004_negative(folder, token):
-    """Only the deliberately broken genuine click at the exact assertion qualifies."""
-    def read(name):
-        path = folder / name
-        if path.stat().st_size > 1024 * 1024:
-            raise ValueError('oversized_negative_evidence')
-        return json.loads(path.read_text())
-    outcome, routes = read('outcome.json'), read('route-lifecycle.json')
-    proof, primary = outcome.get('identityBoundary', {}), outcome.get('primary', {})
-    exit_state = outcome.get('fixtureExit', {})
-    if (not token or outcome.get('qualificationToken') != token
-            or outcome.get('negativeReload') is not True
-            or proof.get('id') != APP004_BOUNDARY
-            or not all(proof.get(key) is True for key in
-                       ('attachmentAccepted', 'cardVisible', 'draftHeld', 'clickCompleted', 'attempted'))
-            or proof.get('verdict') != 'failed'
-            or not isinstance(proof.get('targetSessionId'), str) or not proof['targetSessionId']
-            or proof.get('selectedSessionId') != proof['targetSessionId']
-            or primary.get('name') != 'AssertionError' or primary.get('code') != 'ERR_ASSERTION'
-            or primary.get('boundary') != APP004_BOUNDARY
-            or outcome.get('browserErrors') != []
-            or outcome.get('secondary') != [] or exit_state != {'code': 0, 'signal': None}
-            or type(exit_state.get('code')) is not int):
-        raise ValueError('wrong_negative_boundary_or_cleanup')
-    before, after = proof.get('before', {}), proof.get('after', {})
-    for marker in (before, after):
-        if (set(marker) != {'document', 'timeOrigin', 'client'}
-                or any(not isinstance(marker.get(key), str) or not marker[key]
-                       for key in ('document', 'client'))
-                or type(marker.get('timeOrigin')) not in (int, float)
-                or not math.isfinite(marker['timeOrigin']) or marker['timeOrigin'] <= 0):
-            raise ValueError('missing_identity_markers')
-    if before['document'] == after['document'] or before['timeOrigin'] == after['timeOrigin']:
-        raise ValueError('reload_not_observed')
-    # The negative stops at the FIRST boundary, so only held-draft routing exists.
-    if not isinstance(routes, list) or not routes or len(routes) > 10000:
-        raise ValueError('missing_route_lifecycle')
-    phases, started, completed = [], [], []
-    for row in routes:
-        if (not isinstance(row, dict) or row.get('route') != 'held-draft' or 'error' in row
-                or row.get('phase') not in
-                ('registered', 'started', 'completed', 'gate-released', 'drained', 'unregistered')):
-            raise ValueError('failed_or_unexpected_route')
-        phase = row['phase']
-        if phase in ('started', 'completed'):
-            if type(row.get('id')) is not int or row['id'] < 1:
-                raise ValueError('invalid_route_identity')
-            if phase == 'completed' and row['id'] not in started:
-                raise ValueError('route_completed_without_start')
-            (started if phase == 'started' else completed).append(row['id'])
-        else:
-            if row.get('id') is not None:
-                raise ValueError('invalid_route_phase')
-            phases.append(phase)
-    if (phases != ['registered', 'gate-released', 'drained', 'unregistered']
-            or routes[0]['phase'] != 'registered' or routes[-1]['phase'] != 'unregistered'
-            or not started or len(set(started)) != len(started)
-            or sorted(started) != sorted(completed)):
-        raise ValueError('unfinished_route_lifecycle')
-
-
-def app004_verdict(row, folder):
-    """Preserve raw exits and failure diagnostics alongside the separate verdict."""
-    try:
-        if (row['reason'] or row['cleanup'] != {'remaining': [], 'terminated': 0}
-                or type(row.get('exitCode')) is not int):
-            raise ValueError('process_or_cleanup_failure')
-        if row['id'] == 'units':
-            if row.get('exitCode') != 0:
-                raise ValueError('unit_process_failed')
-            app004_units(folder / row['log'])
-            files = [row['log']]
-        else:
-            if row.get('exitCode') != 1:
-                raise ValueError('negative_exit_not_one')
-            app004_negative(folder / 'negative', row['executionToken'])
-            files = [row['log'], 'negative/outcome.json', 'negative/route-lifecycle.json']
-        row['evidenceSha256'] = {name: digest(folder / name) for name in files}
-        row['status'], row['verdict'] = 'passed', 'exact_units' if row['id'] == 'units' else 'expected_identity_failure'
-    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-        row['status'], row['verdict'] = 'failed', 'rejected'
-        row['verdictReason'] = str(exc)
 
 
 def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenance=None,
@@ -820,7 +729,8 @@ def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenan
     report = initial_report(plan, provenance)
     report.update(report_fields or {})
     save(output, report)  # Even a killed job leaves its complete intended coverage.
-    qualification = initial_app004(provenance) if app004_qualification else None
+    checks = chat_reference_checks() if app004_qualification else None
+    qualification = checks.initial_report(provenance) if checks else None
     if qualification:
         save_app004(output, qualification)
     deadline = time.monotonic() + budget if deadline is None else deadline
@@ -869,9 +779,8 @@ def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenan
                 # Read lineage from this runner, not row overrides: a scenario
                 # cannot drop the outer owner through its configured environment.
                 env.update(child_ownership(os.environ, token))
-                if extra and row['id'] == 'reload-negative':
-                    env.update(CHAT_REFERENCE_NEGATIVE_RELOAD='1', APP004_QUALIFICATION_TOKEN=token,
-                               CHAT_REFERENCE_EVIDENCE_DIR=str(folder / 'negative'))
+                if extra:
+                    env.update(checks.environment(row, folder, token))
                 preexisting = process_identities()
                 command = row['command']
                 inherited = {}
@@ -961,16 +870,32 @@ def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenan
                         row['exitCode'] = process.returncode
                 if capture:
                     try:
-                        capture.close()
+                        if not cleanup['remaining'] and not row['reason'] and not stopped:
+                            capture.settle(min(deadline, started + case_timeout), lambda: stopped)
+                        else:
+                            capture.drain()  # No extra wait on interruption/unsafe cleanup.
                     except OSError as exc:
                         row['reason'] = row['reason'] or 'log_capture_failed'
                         row['logError'] = type(exc).__name__
+                    finally:
+                        # Do not take another read quantum after the finalization
+                        # deadline, or turn a late EOF into an untested success.
+                        try:
+                            capture.close(drain=False)
+                        except OSError as exc:
+                            row['reason'] = row['reason'] or 'log_capture_failed'
+                            row['logError'] = type(exc).__name__
+                    row['reason'] = row['reason'] or stopped
                     row['logCapture'] = capture.receipt()
                     if capture.error:
                         row['logError'] = capture.error
                         row['reason'] = row['reason'] or 'log_capture_failed'
                     if not capture.eof:
                         row['reason'] = row['reason'] or 'log_incomplete'
+                    elif capture.settlement and capture.settlement['status'] == 'deadline':
+                        # Retain the true EOF observation without accepting it
+                        # as evidence completed within the allowed interval.
+                        row['reason'] = row['reason'] or 'log_capture_timeout'
                 if junit_file:
                     try:
                         junit_file.check()
@@ -984,7 +909,7 @@ def run_scenarios(root, plan, output, *, budget=1500, case_timeout=300, provenan
                 row['status'] = ('passed' if row.get('exitCode') == 0 and not row['reason']
                                  and cleanup['terminated'] == 0 and not cleanup['remaining'] else 'failed')
                 if extra:
-                    app004_verdict(row, folder)
+                    checks.apply_verdict(row, folder)
                 if cleanup['remaining']:
                     stopped = 'unsafe_cleanup'
                 (save_app004(output, qualification) if extra else save(output, report))
@@ -1401,7 +1326,7 @@ def main():
         ensure_evidence_directory(args.output)
         save(args.output, initial_report(plan, provenance))
         if args.app004_qualification:
-            save_app004(args.output, initial_app004(provenance))
+            save_app004(args.output, chat_reference_checks().initial_report(provenance))
         return 0
     return run_scenarios(root, plan, args.output.absolute(),
                          budget=args.budget_seconds, provenance=provenance,

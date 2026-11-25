@@ -5,7 +5,10 @@ import pytest
 from amplifier_web.service import AppError
 from amplifier_web.shell_modules import DEFAULT
 from amplifier_web.shell_components import PROFILE
-from test_shell_modules import service as base_service, command, prepare, stage, record_validation
+from test_shell_modules import (
+    service as base_service, command, prepare, stage, record_validation,
+    attached_browser, appearance_ack,
+)
 
 
 @pytest.fixture
@@ -108,18 +111,34 @@ async def test_dirty_swap_defers_and_stale_component_commands_are_rejected(servi
         await command(service, 'shell.view.update', **target, patch={'choice':'late edit'})
 
 
-async def test_shared_presentation_path_is_idempotent_and_preserves_draft(service):
+async def test_shared_presentation_path_is_idempotent_and_preserves_draft(service, attached_browser):
     digest = await component(service, capabilities=['shell.read','presentation.update'])
     await install(service, digest)
     observed = await query(service)
     arguments = {'clientId':'browser-one','instanceId':'demo','generation':observed['generation'],
                  'action':'presentation.update','args':{'expectedRevision':1,'patch':{'scheme':'light','decorations':False}}}
+    before = service.appearance.read(attached_browser)
+    drafts = deepcopy(service.clients.records[attached_browser]['drafts'])
     first = await service.dispatch('shell.command', arguments, command_id='component-change')
     second = await service.dispatch('shell.command', arguments, command_id='component-change')
     assert first == second
+    assert first['result']['status'] == 'awaiting-storage'
+    assert not first['result']['stored'] and not first['result']['activated']
+    assert service.shell.client(attached_browser)['revision'] == 1
+    assert service.appearance.read(attached_browser)['effective'] == before['effective']
+    stored = await appearance_ack(service, client=attached_browser)
+    assert stored['stored'] and stored['activated'] and not stored['rendered']
     assert service.shell.client('browser-one')['revision'] == 2
-    assert service.shell.client('browser-one')['composition']['presentation']['decorations'] is False
+    assert service.shell.client('browser-one')['composition']['presentation'] == {}
+    assert service.appearance.read(attached_browser)['effective'] == {
+        **before['effective'], 'scheme': 'light', 'decorations': False}
+    assert service.appearance.read(attached_browser)['shared'] == before['shared']
+    assert service.clients.records[attached_browser]['drafts'] == drafts
+    assert service.clients.records[attached_browser]['view']['draft'] == 'Keep this unsent message'
     assert service.state['view']['draft'] == 'Keep this unsent message'
+    assert await service.dispatch('shell.command', arguments, command_id='component-change') == first
+    assert service.appearance.read(attached_browser)['command']['id'] == first['result']['commandId']
+    assert service.appearance.read(attached_browser)['command']['status'] == 'stored'
     with pytest.raises(AppError, match='revision'):
         await act(service, 'presentation.update', arguments['args'])
 

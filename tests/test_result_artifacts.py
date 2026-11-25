@@ -434,6 +434,9 @@ async def test_later_reply_keeps_each_exact_file_version_after_source_deletion(a
     file.unlink()
     assert (first['responseRevision'], second['responseRevision']) == (1, 2)
     assert first['artifacts'][0]['outputId'] != second['artifacts'][0]['outputId']
+    # Output records, not duplicated command bodies, own retained-file roots.
+    from amplifier_web.resource_files import collect
+    collect(app.db, app.state)
     old = await read(app, source, args, responseRevision=1)
     new = await read(app, source, second_args, responseRevision=2)
     assert old['qualified'] and old['text'] == 'First retained version'

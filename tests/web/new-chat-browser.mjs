@@ -3,11 +3,14 @@ import {composerOptionsPanel,showComposerOption} from './composer-options-helper
 // Real packaged UI, isolated storage, and synthetic runtime. No model calls.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {mkdir} from 'node:fs/promises';
+import {mkdir,writeFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls'],{stdio:['ignore','pipe','inherit']});
-let browser;
+const stopFixture=ownFixture(fixture,{label:'New chat fixture'});
+let browser,primary;
+const panelFrames=[];
 const out=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/amplifier-chat-controls';
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
@@ -59,13 +62,39 @@ try{
  await action('view.update',{patch:{navPinned:false,navExpanded:false}});
  for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:out+`/new-chat-${width}.png`});
  await page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true}).click();const panel=composerOptionsPanel(page);await expect(panel).toBeVisible();
- const assertPanelFits=async()=>{const geometry=await panel.evaluate(el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom}});
+ const assertPanelFits=async()=>{
+ // Observe the ResizeObserver positioner over successive animation frames.
+ // Settlement is geometry equality, never polling until overflow disappears.
+ const frames=await panel.evaluate(async el=>{
+  const frames=[];let stable=0;
+  for(let frame=0;frame<12;frame++){
+   const r=el.getBoundingClientRect(),box={x:r.x,y:r.y,right:r.right,bottom:r.bottom};
+   stable=frames.length&&JSON.stringify(box)===JSON.stringify(frames.at(-1))?stable+1:0;
+   frames.push(box);if(stable>=3)break;
+   await new Promise(resolve=>requestAnimationFrame(resolve));
+  }
+  return {frames,stable};
+ });
+ panelFrames.push({width,...frames});
+ await writeFile(out+'/panel-frames.json',JSON.stringify(panelFrames,null,2)+'\n');
+ assert.ok(frames.stable>=3,'Popover geometry did not settle: '+JSON.stringify(frames));
+ const geometry=frames.frames.at(-1);
  assert.ok(geometry.x>=0&&geometry.y>=0&&geometry.right<=width&&geometry.bottom<=844,JSON.stringify(geometry))};
  await assertPanelFits();
  await showComposerOption(page,'model');await expect(panel.getByRole('combobox',{name:'Conversation model',exact:true})).toBeVisible();await assertPanelFits();
  await showComposerOption(page,'bundle');await expect(panel.getByLabel('Registered root bundles',{exact:true})).toBeVisible();await assertPanelFits();
  await panel.getByText('Advanced',{exact:true}).click();await expect(panel.locator('details')).toHaveJSProperty('open',false);await expect(panel.getByLabel('Registered root bundles',{exact:true})).toBeHidden();
- for(const [role,name] of [['combobox','Connection'],['combobox','Conversation model'],['slider','Reasoning effort high']])await expect(panel.getByRole(role,{name,exact:true})).toBeVisible();await expect(panel.getByRole('combobox',{name:'Conversation model',exact:true})).toHaveValue('chosen-model');await expect(panel.getByRole('slider',{name:'Reasoning effort high',exact:true})).toHaveAttribute('aria-valuetext','high');await expect(composer).toHaveDraft('Do the planned work');await assertPanelFits();await page.screenshot({path:out+`/compact-options-${width}.png`});await panel.getByRole('button',{name:'Close chat options',exact:true}).click();
+ for(const name of ['Connection','Conversation model'])await expect(panel.getByRole('combobox',{name,exact:true})).toBeVisible();
+ await expect(panel.getByRole('combobox',{name:'Conversation model',exact:true})).toHaveValue('chosen-model');
+ const effort=panel.getByRole('slider',{name:'Effort high',exact:true});
+ await expect(effort).toBeVisible();await expect(effort).toHaveAttribute('aria-valuetext','high');
+ await panel.getByText('Advanced',{exact:true}).press('Enter');
+ await expect(panel.getByLabel('Registered root bundles',{exact:true})).toBeVisible();
+ await expect(effort).toBeVisible();await expect(effort).toHaveAttribute('aria-valuetext','high');
+ await effort.scrollIntoViewIfNeeded();await expect(effort).toBeInViewport({ratio:1});await assertPanelFits();
+ await panel.getByText('Advanced',{exact:true}).click();
+ await expect(panel.getByLabel('Registered root bundles',{exact:true})).toBeHidden();
+ await expect(effort).toBeVisible();await expect(composer).toHaveDraft('Do the planned work');await assertPanelFits();await page.screenshot({path:out+`/compact-options-${width}.png`});await panel.getByRole('button',{name:'Close chat options',exact:true}).click();
  }
  await page.setViewportSize({width:1280,height:900});await action('view.update',{patch:{navPinned:true}});
  await page.getByRole('button',{name:'Send message',exact:true}).click();await page.getByText('Synthetic first response',{exact:true}).waitFor();
@@ -87,4 +116,5 @@ try{
  await composer.fill('Keep this existing chat draft');await launcher.click();await expect(page.getByRole('region',{name:'New chat',exact:true})).toBeVisible();await expect(composer).toHaveDraft('');await expectCatalog([sid]);await composer.fill('A different new draft');await action('session.select',{id:sid});await expect(composer).toHaveDraft('Keep this existing chat draft');await launcher.click();await expect(composer).toHaveDraft('A different new draft');
  assert.deepEqual(errors,[]);assert.equal(calls.filter(row=>row.action==='session.create').length,1);
  console.log('New chat browser passed: one launcher, uncommitted configurable draft, reload and attachments, exact first submission, composer controls, header identity/export, send/stop transitions, damaged canvas, draft isolation, desktop/mobile.');
-}finally{await browser?.close();fixture.kill()}
+}catch(error){primary=error;throw error}
+finally{await finishFixture({label:'New chat fixture',close:[['browser',()=>browser?.close()]],stop:stopFixture,originalError:primary})}

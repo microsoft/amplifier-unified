@@ -634,6 +634,10 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
         validated = [row for row in mounted if row['validation'] is not None]
         assert Counter(row['sessionId'] for row in actual) == Counter(expected)
         assert len({row['pid'] for row in actual}) == len(expected)
+        for row in actual:
+            owner = report['preparedOwners'][row['sessionId']]
+            assert row['pid'] == owner['nativeWorkerPid'], row
+            assert owner['runtimeOwnerId'], owner
         assert Counter(row['pid'] for row in actual) == Counter(row['pid'] for row in validated)
         assert len({row['validation']['id'] for row in validated}) == len(expected)
         validator_hash = hashlib.sha256(inspect.getsource(ProviderValidator._check_protocol_compliance).encode()).hexdigest()
@@ -734,6 +738,16 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
             await mode(app, app._session(source_id))
         await app.management.ensure_runtime(app._session(source_id))
         await runtime.control(source_id, 'task.get', {})
+        if inherited_source or disabled_agent:
+            worker = runtime.workers[source_id]
+            report['preparedOwners'] = {source_id: {
+                'runtimeOwnerId': worker['runtimeOwnerId'],
+                'nativeWorkerPid': worker['native_worker_pid']}}
+            report['calls'] = read_calls()
+            # Establish what the original actually mounted before previewing
+            # inheritance. Saved selectors alone are not adoption evidence.
+            assert_sources()
+            report['sourceMountVerifiedBeforePreview'] = True
         if disabled_agent:
             catalog = await runtime.control(source_id, 'catalog.inspect', {})
             assert catalog['agents'][AGENT_NAME] == AGENT_DEFINITION
@@ -747,7 +761,8 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
         source_summary = template(app, app._session(source_id))[1]
         if inherited_source:
             source_config = template(app, app._session(source_id))[0]
-            assert source_config['plan']['providers'][0]['source'] == str(source_paths['A'])
+            assert json.loads(bundle.read_text())['providers'][0]['source'] == str(source_paths['A'])
+            assert source_config['plan']['providers'][0]['source'] == str(source_paths['B'])
             assert source_config['sourceSettings'] == {'sources': {'modules': {'provider-fixture': str(source_paths['B'])}}}
             report['sourceSelection'] = {'authored': 'A', 'reviewed': 'B', 'materialChange': 'C'}
         fields = {'sessionId': source_id, **config(now[0], 'task'), 'destination': 'new_task',
@@ -786,6 +801,10 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
             report['calls'] = read_calls()
             assert_execution(report)
             if inherited_source or disabled_agent:
+                worker = runtime.workers[target]
+                report['preparedOwners'][target] = {
+                    'runtimeOwnerId': worker['runtimeOwnerId'],
+                    'nativeWorkerPid': worker['native_worker_pid']}
                 assert_sources()
                 if disabled_agent:
                     await assert_agent(target)
@@ -896,14 +915,27 @@ async def prepared_occurrences(tmp_path, monkeypatch, selection, authorization, 
                         report['negativeControls'].append(mutation)
                 if inherited_source or disabled_agent:
                     assert_sources()
-                    for mutation in ('extra_validation_mount', 'missing_validation_binding', 'wrong_source'):
+                    for mutation in ('extra_validation_mount', 'missing_validation_binding', 'wrong_source',
+                                     'wrong_source_path', 'wrong_source_hash', 'wrong_native_owner'):
                         bad = copy.deepcopy(report['sourceMounts'])
                         if mutation == 'extra_validation_mount':
                             bad.append(copy.deepcopy(next(row for row in bad if row['validation'])))
                         elif mutation == 'missing_validation_binding':
                             next(row for row in bad if row['validation'])['validation'] = None
-                        else:
+                        elif mutation == 'wrong_source':
                             bad[-1]['label'] = 'A'
+                        elif mutation == 'wrong_source_path':
+                            bad[-1]['moduleFile'] = str(tmp_path / 'unrelated-module.py')
+                        elif mutation == 'wrong_source_hash':
+                            bad[-1]['sha256'] = '0' * 64
+                        else:
+                            # Keep the validator/actual pair internally sound;
+                            # only the independently captured native owner differs.
+                            old_pid = next(row for row in bad if row['validation'] is None)['pid']
+                            foreign_pid = max(row['pid'] for row in bad) + 1
+                            for row in bad:
+                                if row['pid'] == old_pid:
+                                    row['pid'] = foreign_pid
                         with pytest.raises(AssertionError):
                             assert_sources(bad)
                         report['negativeControls'].append(mutation)

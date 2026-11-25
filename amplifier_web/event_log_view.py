@@ -26,6 +26,7 @@ from .history_read_retry import retry_indexed_read
 from .performance_diagnostics import measured, measure, count, TimedLock
 from .execution import LIVE_PHASES, refresh_usage
 from .execution_events import public_usage
+from .model_outcome import public_outcome
 from .session_files import amplifier_home, project_slug
 
 logger = logging.getLogger(__name__)
@@ -482,7 +483,8 @@ class EventIndex:
             node = self.nodes.setdefault(key, {'id': key, 'kind': 'llm', 'label': 'Model call', 'canonicalHistory': True,
                                               'eventOrder': reference['offset'], '_appModel': True})
             node.update({key: data[key] for key in ('sessionId', 'parentId', 'turnId', 'label', 'provider',
-                'model', 'startedAt', 'endedAt', 'phase', 'usage', 'lifecycle') if key in data})
+                'model', 'startedAt', 'endedAt', 'phase', 'usage', 'lifecycle', 'purpose') if key in data})
+            node.update(public_outcome(data.get('modelOutcome')))
             node.setdefault('sessionId', sid)
             return
         if name not in {'llm:request', 'llm:response', 'llm:error'}:
@@ -598,7 +600,8 @@ class EventIndex:
                     # Pair with its latest state, retaining native session IDs
                     # here; full accounting metadata is joined later by ID.
                     row.update({key: copy.deepcopy(binding[key]) for key in
-                                ('provider', 'model', 'startedAt', 'endedAt', 'phase', 'usage') if key in binding})
+                                ('provider', 'model', 'startedAt', 'endedAt', 'phase', 'usage', 'purpose') if key in binding})
+                    row.update(public_outcome(binding.get('modelOutcome')))
         return merge_model_observations(rows) if coalesce else rows
 
 
@@ -1256,9 +1259,6 @@ class EventLogView:
         tree = {'nodes': nodes, 'turns': list(turns.values()), 'currentTurnId': live.get('currentTurnId'), 'source': 'events.jsonl',
                 'retiredUsageNodes': accounting}
         refresh_turn_lifecycle(tree, session, host_turns=host_turns)
-        stage('events.plan')
-        from .chat_plan import latest_plan
-        tree['plan'] = latest_plan(nodes, aliases, read_field)
         stage('events.usage')
         refresh_usage(tree)
         stage('events.retain')

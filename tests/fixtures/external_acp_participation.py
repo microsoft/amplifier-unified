@@ -1,11 +1,8 @@
 """Synthetic participation peer using the public ACP SDK; no model or tools."""
 import asyncio
-import json
 import sys
 
 from acp import RequestError, run_agent
-from acp.schema import (AgentMessageChunk, AgentThoughtChunk, PermissionOption,
-                        PromptResponse, TextContentBlock, ToolCallUpdate)
 from external_acp_agent import Fixture
 
 ATTENTION = 'com.microsoft.amplifier.attention'
@@ -40,27 +37,6 @@ class ParticipationFixture(Fixture):
             if kwargs[ATTENTION]['ticket'] == 'expired':
                 raise RequestError(-32002, 'Offer expired; no input was forwarded.',
                                    {ATTENTION: {'version': 1, 'outcome': 'not_forwarded'}})
-        text = prompt[-1].text
-        if text.startswith('Decide quietly whether'):
-            projection = json.loads(text.split('Latest conversation projection:\n', 1)[1])
-            self.record('decision', sessionId=session_id, context=projection)
-            permission = await self.client.request_permission(session_id=session_id,
-                tool_call=ToolCallUpdate(tool_call_id='quiet', title='Must remain private'),
-                options=[PermissionOption(option_id='allow', name='Allow', kind='allow_once')])
-            self.record('permission', outcome=permission.outcome.model_dump(mode='json', by_alias=True))
-            await self.client.session_update(session_id=session_id,
-                update=AgentThoughtChunk(content=TextContentBlock(text='Private decision reasoning')))
-            if projection.get('choice') == 'wait':
-                await self.cancelled.wait()
-                return PromptResponse(stop_reason='cancelled')
-            output = ('not a decision' if projection.get('choice') == 'malformed'
-                      else json.dumps({'decision': projection.get('choice', 'speak'), 'reason': 'fixture'}))
-            if projection.get('choice') == 'oversized':
-                output = json.dumps({'decision': 'speak', 'reason': 'x' * 65536})
-            for chunk in (output[:10], output[10:]):
-                await self.client.session_update(session_id=session_id,
-                    update=AgentMessageChunk(content=TextContentBlock(text=chunk)))
-            return PromptResponse(stop_reason='end_turn')
         return await super().prompt(session_id, prompt, **kwargs)
 
     async def ext_method(self, method, params):

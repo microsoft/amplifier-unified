@@ -64,7 +64,7 @@ async def test_catalog_discovery_does_not_hold_the_command_queue(app,monkeypatch
     await asyncio.gather(*app.management.conversation_catalog_requests.values())
 
 
-async def test_mounted_connection_cache_miss_resolves_and_hit_does_not_probe(app,monkeypatch):
+async def test_picker_reads_local_cache_until_explicit_refresh(app,monkeypatch):
     import yaml
     from amplifier_web.host.config import write_private
     from amplifier_web.session_files import amplifier_home
@@ -81,6 +81,8 @@ async def test_mounted_connection_cache_miss_resolves_and_hit_does_not_probe(app
                 'providerMetadata':{'info':{},'configSchema':{'fields':[]}}}
     monkeypatch.setattr(SetupManager,'probe',probe)
     await browse(app.management,session)
+    assert calls == []
+    await browse(app.management, session, refresh=True, instance='one')
     assert len(calls)==1
     def no_write(*args):raise AssertionError('Cache hits must not rewrite catalog files')
     monkeypatch.setattr(app.management.provider_catalog,'put',no_write)
@@ -192,3 +194,60 @@ async def test_unpinned_display_and_refresh_never_prepare_bundle_defaults(app, m
     assert app.state['modelCatalogs']['key']['models']==[{'id':'real'}]
     assert calls==[True,True,True]
     assert not app._session().get('selection')
+
+
+async def test_cost_hint_follows_completed_turn_and_current_connections(app, monkeypatch):
+    from amplifier_web import draft_defaults
+    from amplifier_web.next_message_impact import MODEL_SCOPE
+    session = app._session(app.state['selectedSessionId'])
+    state = {'root': {'id': 'root', 'provider': 'openai', 'sharedCatalogKey': 'k1'},
+             'destination': {'id': 'destination', 'provider': 'anthropic', 'sharedCatalogKey': 'k2'}}
+    session['runtimeReport'] = {'provider_choices': [
+        {**choice, 'promptCacheTraits': [MODEL_SCOPE]} for choice in state.values()]}
+
+    async def catalog(*args, **options):
+        assert options['cache_only'] and not options['refresh']
+        return {'providers': list(state.values()), 'catalogs': {}}
+
+    monkeypatch.setattr(draft_defaults, 'resolve_defaults', catalog)
+    sid = session['id']
+
+    async def complete(identity, count, when):
+        await app.on_runtime_event('execution.event', {
+            'id': identity, 'kind': 'llm', 'phase': 'completed', 'sessionId': sid, 'rootSessionId': sid,
+            'startedAt': when, 'model': 'sol', 'provider': 'openai', 'usage': {'inputTokens': count},
+            'promptCostBasis': {'instance': 'root', 'traits': [MODEL_SCOPE]}})
+
+    await complete('large', 80_000, 2)
+    await browse(app.management, session)
+    assert session['nextMessageImpact']['coldConnections'] == ['destination']
+    # A custom gateway reassigned to the same alias has a new config key.
+    state['destination']['sharedCatalogKey'] = 'gateway'
+    await browse(app.management, session)
+    assert 'coldConnections' not in session['nextMessageImpact']
+    state['new'] = {'id': 'new', 'module': 'provider-anthropic', 'sharedCatalogKey': 'k3',
+                    'info': {'id': 'anthropic', 'capabilities': [MODEL_SCOPE]}}
+    await browse(app.management, session)
+    assert session['nextMessageImpact']['coldConnections'] == ['new']
+    await complete('small', 300, 3)
+    await complete('late-delivery', 90_000, 1)
+    await browse(app.management, session)
+    assert session.get('nextMessageImpact') is None
+
+
+async def test_unreadable_old_cost_receipt_does_not_block_picker(app, monkeypatch):
+    from amplifier_web import draft_defaults
+    from amplifier_web.context_inspection_store import InspectionStore
+    from amplifier_web.next_message_impact import observation
+
+    def malformed(*args, **kwargs):
+        raise AttributeError('Malformed historical receipt index')
+    monkeypatch.setattr(InspectionStore, 'index', malformed)
+
+    async def catalog(*args, **kwargs):
+        return {'providers': [], 'catalogs': {}}
+    monkeypatch.setattr(draft_defaults, 'resolve_defaults', catalog)
+    session = app._session(app.state['selectedSessionId'])
+    await browse(app.management, session)
+    assert app.state['runtimeControl'][session['id']]['configuration.catalog']['phase'] == 'ready'
+    assert observation({'usage': 12, 'promptCostBasis': []}) == {}

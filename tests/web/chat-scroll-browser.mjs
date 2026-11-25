@@ -175,7 +175,31 @@ try{
  assert.equal(requests.filter(path=>path==='/api/state').length,0,'stream supplies the initial baseline without a duplicate GET');
  // The rail previews one turn, keeps bookmarks across reload, and jumps without
  // enabling scroll-follow. Metadata is quiet until hover/focus in Balanced.
- const marks=page.locator('.a-rail-mark');assert.equal(await marks.count(),15);
+ // The initial transcript is a bounded recent page, not all 30 saved rows.
+ // Load the earlier page through its real control before asserting all 15 turns.
+ const marks=page.locator('.a-rail-mark');
+ const historyIds=()=>pane.locator('[data-message-id^="history-"]').evaluateAll(rows=>rows.map(row=>row.dataset.messageId));
+ const allHistoryIds=Array.from({length:30},(_,index)=>`history-${index}`);
+ const loadEarlier=async()=>{
+  await expect(pane).toHaveAttribute('aria-busy','false');
+  await Promise.all([
+   page.waitForResponse(response=>{const url=new URL(response.url());return url.pathname==='/api/conversation/detail'&&url.searchParams.get('part')==='messages'&&response.ok()}),
+   page.getByRole('button',{name:'Load earlier conversation',exact:true}).click(),
+  ]);
+  await expect(pane).toHaveAttribute('aria-busy','false');
+ };
+ await expect.poll(historyIds).toEqual(allHistoryIds.slice(-20));
+ await expect.poll(()=>marks.evaluateAll(rows=>rows.map(row=>row.dataset.turnId))).toEqual(allHistoryIds.slice(-20).filter((_,index)=>index%2===0));
+ await loadEarlier();
+ await expect.poll(historyIds).toEqual(allHistoryIds);
+ await expect(marks).toHaveCount(15);
+ // Paging preserves the reading position at the earlier-page control. Restore
+ // this rail scenario's bottom-visible setup without discarding the page via
+ // the Latest action, which deliberately switches back to the recent window.
+ await pane.evaluate(element=>{element.scrollTop=element.scrollHeight;element.dispatchEvent(new Event('scroll'))});
+ await atBottom();
+ await expect.poll(historyIds).toEqual(allHistoryIds);
+ await expect(marks).toHaveCount(15);
  await expect(page.getByRole('navigation',{name:'Chat navigator'})).not.toHaveAttribute('title');
  await expect(marks.last()).toHaveAttribute('data-visible','true');
  // Preview geometry follows the actual mark, including the short marks list
@@ -537,13 +561,23 @@ try{
  await page.reload();await page.waitForSelector('#amp-one');await page.waitForTimeout(500);
  const afterReload=await pane.evaluate((element,id)=>[...element.querySelectorAll('[data-message-id]')].find(n=>n.dataset.messageId===id).getBoundingClientRect().top-element.getBoundingClientRect().top,anchorBefore.id);
  assert.ok(Math.abs(afterReload-anchorBefore.offset)<3,'tab reload restores reading position');
- assert.equal(await page.locator('.a-rail-mark').nth(3).getAttribute('data-bookmarked'),'true');
- await page.locator('.a-rail-mark').nth(3).hover();
+ // Bookmark identity is stable; its index in a reloaded recent page is not.
+ const bookmark=page.locator('.a-rail-mark[data-turn-id="history-6"]');
+ if(await bookmark.count()===0)await loadEarlier();
+ await expect(bookmark).toHaveAttribute('data-bookmarked','true');
+ await bookmark.hover();
  await page.screenshot({path:process.env.AMPLIFIER_READING_SCREENSHOT||'/tmp/unified-reading-preview.png'});
  // Returning without a state change must not fetch another navigation snapshot.
  await page.waitForTimeout(700);const shellRequests=requests.filter(path=>path==='/api/shell').length;
  await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
  await page.waitForTimeout(350);assert.equal(requests.filter(path=>path==='/api/shell').length,shellRequests);
+ // The bookmark check deliberately loaded a frozen older page. Visibility
+ // alone must not abandon that reading window. Explicitly return to the live
+ // recent page before exercising foreground rendering of a new reply.
+ const latest=page.getByRole('button',{name:'Return to latest',exact:true});
+ await expect(latest).toBeVisible();await latest.click();
+ await expect(latest).toHaveCount(0);await workReady();
+ assert.equal(await readComposerDraft(input),'Keep this draft while I check another chat');
  // Hidden documents process live state but defer rendering until visible.
  const messageText=()=>pane.locator('.a-detail-text').allTextContents();
  const rendered=await messageText();
@@ -553,6 +587,8 @@ try{
  assert.deepEqual(await messageText(),rendered);
  await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'))});
  await expect.poll(messageText).not.toEqual(rendered);
+ await expect(pane.getByText('Fresh reply received while this tab was hidden.',{exact:true})).toHaveCount(1);
+ assert.equal(await readComposerDraft(input),'Keep this draft while I check another chat');
  assert.deepEqual(errors,[]);
  console.log('Streaming reading positions:',JSON.stringify(readingChecks));
  console.log('Chat navigator tooltip removal, visible turns, preview placement/resize and scroll browser checks passed: delayed send receipt, reply start anchoring, jump button, streaming scrollback, draft preservation and reading position on chat switch/reload.');

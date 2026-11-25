@@ -118,6 +118,8 @@ def template(service, source):
     if not path.exists():
         raise ValueError('Prepare the source configuration before previewing a new-task schedule')
     plan = json.loads(path.read_text())
+    from .host.hook_config import omit_inherited_literals
+    diagnostics = omit_inherited_literals(plan)
     state_path = directory / 'control-state.json'
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
     # Never inherit task/goal/history, usage, receipts, active jobs or approvals.
@@ -140,19 +142,19 @@ def template(service, source):
     categories.update({'plan.' + key: plan.get(key) for key in PLAN_KEYS})
     categories['plan.other'] = {key: value for key, value in plan.items() if key not in PLAN_KEYS}
     categories.update({'controls.' + key: value for key, value in config['controls'].items()})
-    return config, {**location, 'workspace': config['workspace'], 'bundle': config['bundle'],
+    return config, {**location, **diagnostics, 'workspace': config['workspace'], 'bundle': config['bundle'],
                     'selection': public_config(selection), 'configurationHash': fingerprint(config),
                     'legacyConfigurationHash': legacy,
                     'configurationParts': {key: fingerprint(value) for key, value in categories.items()}}
 
 
-def prepare(service, args, origin, caller_session_id):
+def prepare(service, args, origin, caller_session_id, *, prepared_identity=None):
     from .collaboration import CREATION
     if creation := CREATION.get():
         receipt = service.collaboration.receipt(creation[4]['requestId'])
         if reason := service.collaboration.creation_guard(receipt):
             raise ValueError(reason)
-    identity = args.get('id')
+    identity = args.get('id') or prepared_identity
     from .managed_deletion import removed
     if removed(service.db, identity, args.get('workspace')):
         raise ValueError('This conversation was permanently deleted. Start a new chat instead.')

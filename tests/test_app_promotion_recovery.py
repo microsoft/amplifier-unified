@@ -379,7 +379,11 @@ async def test_restore_retains_terminal_configuration_hold_and_releases_only_uns
     original_runtime = service.runtime
     service.runtime = RuntimeManager()
     # Real absent-writer boundary; only delivery to the unrelated chat is synthetic.
-    monkeypatch.setattr(service.runtime, "send", original_runtime.send)
+    async def send(session, text, input_id, emit, *, admission_check):
+        admission_check()
+        return await original_runtime.send(session, text, input_id, emit)
+
+    monkeypatch.setattr(service.runtime, "send", send)
     service.runtime.sent = original_runtime.sent
     monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(service.data_dir))
     monkeypatch.setenv("AMPLIFIER_HOME", str(service.data_dir / "native"))
@@ -424,7 +428,13 @@ async def test_restore_retains_terminal_configuration_hold_and_releases_only_uns
             return await original_process(*args, **kwargs)
 
         monkeypatch.setattr(app_updates, "process", process)
-        assert not promoted.manager.app_busy() and promoted.manager.busy()
+        # Both update gates share the same assessment: this retained operation
+        # needs native-writer exclusion, but no configuration work is running.
+        assert promoted.manager.app_busy() is promoted.manager.busy() is False
+        with monkeypatch.context() as active:
+            active.setitem(held, "status", "working")
+            assert promoted.manager.app_busy() is promoted.manager.busy() is True
+        assert originals(fixture) == before
         await app_updates.activate(promoted.manager)
         assert len(probes) == 2 and probes[-1] == promoted.old_python
         assert generations.active(promoted.manager.home) == getattr(promoted, "previous_pointer", None)

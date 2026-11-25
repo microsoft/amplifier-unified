@@ -6,10 +6,10 @@ from pathlib import Path
 import sys
 import uuid
 
-from acp import run_agent
+from acp import RequestError, run_agent
 from acp.schema import (AgentCapabilities, AgentMessageChunk, InitializeResponse,
                         NewSessionResponse, PromptResponse, ResumeSessionResponse,
-                        SessionCapabilities, SessionResumeCapabilities, TextContentBlock,
+                        SessionAdditionalDirectoriesCapabilities, SessionCapabilities, SessionResumeCapabilities, TextContentBlock,
                         ToolCallUpdate, ToolCallProgress, PermissionOption)
 
 
@@ -30,21 +30,37 @@ class Fixture:
         assert protocol_version == 1
         assert not client_capabilities.terminal
         assert not client_capabilities.fs.read_text_file and not client_capabilities.fs.write_text_file
-        return InitializeResponse(protocol_version=1, agent_capabilities=AgentCapabilities(
+        result = InitializeResponse(protocol_version=1, agent_capabilities=AgentCapabilities(
             session_capabilities=SessionCapabilities(
                 resume=SessionResumeCapabilities() if self.resume else None)),
             field_meta={'com.microsoft.amplifier.approval-policy': {
                 'version': 1, 'owner': 'instance', 'producer': 'fixture/v1', 'reusableRequests': True}})
+        if (self.home / 'allowed-project').exists():
+            result.agent_capabilities.session_capabilities.additional_directories = SessionAdditionalDirectoriesCapabilities()
+        if (self.home / 'advertise-instance').exists():
+            namespace = 'com.microsoft.amplifier.agent-instance'
+            self.record('instance-offer', offered=kwargs.get(namespace))
+            result.field_meta[namespace] = {'version': 1, 'agentId': 'public:upgraded-peer'}
+        return result
 
-    async def new_session(self, cwd, mcp_servers=None, **kwargs):
+    def activate(self, roots):
+        self.project = None
+        if roots:
+            if roots != [(self.home / 'allowed-project').read_text()]:
+                raise RequestError(-32602, 'Fixture root not allowed')
+            self.project = Path(roots[0])
+        return {'additionalDirectories': roots} if roots else {}
+
+    async def new_session(self, cwd, mcp_servers=None, additional_directories=None, **kwargs):
+        scope = self.activate(additional_directories)
         identity = str(uuid.uuid4())
         (self.home / identity).write_text(cwd)
-        self.record('new', sessionId=identity, cwd=cwd)
+        self.record('new', sessionId=identity, cwd=cwd, **scope)
         return NewSessionResponse(session_id=identity)
 
-    async def resume_session(self, session_id, cwd, mcp_servers=None, **kwargs):
+    async def resume_session(self, session_id, cwd, mcp_servers=None, additional_directories=None, **kwargs):
         assert self.resume and (self.home / session_id).read_text() == cwd
-        self.record('resume', sessionId=session_id)
+        self.record('resume', sessionId=session_id, **self.activate(additional_directories))
         return ResumeSessionResponse()
 
     async def prompt(self, session_id, prompt, **kwargs):
@@ -52,6 +68,8 @@ class Fixture:
         self.record('prompt', sessionId=session_id, text=text,
                     **({'context': [block.text for block in prompt[:-1]]} if len(prompt) > 1 else {}))
         self.cancelled.clear()
+        if text == 'read project marker':
+            text = (self.project / 'marker.txt').read_text() if self.project else 'no project'
         if text == 'drop-after-effect':
             os._exit(7)
         if text.startswith('permission'):

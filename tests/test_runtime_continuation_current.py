@@ -1,4 +1,5 @@
 """Current-host regressions: maintenance and failed app replacement must admit work."""
+import copy
 import pytest
 from amplifier_web.service import AppService
 from amplifier_web.runtime import RuntimeManager
@@ -58,7 +59,9 @@ async def test_runtime_replacement_preserves_execution_handoff_authority(tmp_pat
             message = 'execution host differs'
         else:
             session['worktreeHandoffs'] = [{'phase': restriction}]
-            message = 'handoff is pending or unknown'
+            message = 'handoff is pending or unconfirmed'
+        boundary = copy.deepcopy({key: session.get(key) for key in
+            ('worktreeHandoffs', 'executionHost', 'executionRevision', 'interruptionRevision')})
         with pytest.raises(ValueError, match=message):
             service.runtime._check_execution(session['id'])
         candidate = service.runtime_candidate()
@@ -66,5 +69,8 @@ async def test_runtime_replacement_preserves_execution_handoff_authority(tmp_pat
             await service.replace_runtime(candidate)
         with pytest.raises(ValueError, match=message):
             candidate._check_execution(session['id'])
+        assert {key: session.get(key) for key in boundary} == boundary
+        assert not service.runtime.workers and not candidate.workers
+        assert not candidate.pending_session_ids()
     finally:
         await service.close()

@@ -120,10 +120,10 @@ async def test_durable_stop_before_callback_delivery_blocks_old_always(app_facto
     card = await offer(app, session)
     entered, release = asyncio.Event(), asyncio.Event()
     original = app._stop
-    async def held(sid):
+    async def held(sid, boundary):
         entered.set()
         await release.wait()
-        await original(sid)
+        await original(sid, boundary)
     monkeypatch.setattr(app, '_stop', held)
     stop = asyncio.create_task(app.dispatch('conversation.stop', {'sessionId': session['id']}))
     try:

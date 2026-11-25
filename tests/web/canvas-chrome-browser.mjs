@@ -551,7 +551,10 @@ try{
     await panel.getByRole('button',{name:'Focus canvas',exact:true}).click();
     await expect(panel).toHaveAttribute('data-focused','true');await page.keyboard.press('Escape');
     await expect(panel).toHaveAttribute('data-focused','false');
-    await expect(panel.getByRole('button',{name:'Close canvas panel',exact:true})).toBeVisible();
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAccessibleName('Hide canvas');
+    await expect(toggle).toHaveAttribute('aria-controls','workspace-canvas');
+    await expect(toggle).toHaveAttribute('data-action','canvas.visibility');
     await expect(panel.getByRole('button',{name:'Back to canvas',exact:true})).toHaveCount(0);
     return {...bounds,navigation,details:{closed:closedInspector,open:openInspector}};
    });

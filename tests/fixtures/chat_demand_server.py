@@ -33,7 +33,12 @@ async def main(home):
     # Catalog browsing after a successful save checks the real configured
     # roster. Advertise the same synthetic connections that this home contains.
     (home/'native'/'settings.yaml').write_text(json.dumps({'config': {'providers': providers}}))
-    SetupManager.provider_rows = lambda self, workspace: copy.deepcopy(providers)
+    def provider_rows(self, workspace, *, ordinary_only=False):
+        # Both synthetic connections are ordinary chat accounts. The real
+        # suggestion-read path requests this filter without starting a model.
+        assert type(ordinary_only) is bool
+        return copy.deepcopy(providers)
+    SetupManager.provider_rows = provider_rows
     # Discovery and saved connection bindings have separate identities. Match
     # the real keyword contract, including validation of an already-saved choice.
     original_catalog_key = SetupManager.catalog_key

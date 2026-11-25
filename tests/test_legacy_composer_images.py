@@ -57,6 +57,24 @@ class LegacySDK:
                 if block.get("type") == "image"]
 
 
+def assert_anthropic_image_capture(root, prompt, encoded):
+    [capture] = list((root / "shared" / "projects").rglob("events.jsonl"))
+    text = capture.read_text()
+    assert encoded not in text and "data:image/" not in text
+    events = [json.loads(line) for line in text.splitlines()]
+    assert any(row["event"] == "llm:response" for row in events)
+    request = next(row["data"] for row in reversed(events) if row["event"] == "llm:request")
+    assert request["provider"] == "anthropic"
+    [content] = [
+        message["content"] for message in request["raw"]["messages"]
+        if message["role"] == "user" and isinstance(message["content"], list)
+        and {"type": "text", "text": prompt} in message["content"]
+    ]
+    # Anthropic omits the image before Unified receives the diagnostic copy.
+    assert {"type": "text", "text": "[Image payload omitted from diagnostics]"} in content
+    return request["request_id"]
+
+
 @pytest.mark.parametrize("format", ["PNG", "JPEG", "GIF", "WEBP"])
 async def test_legacy_composer_live_sdk_wire_capture_and_reload(tmp_path, monkeypatch, format):
     from amplifier_module_loop_live.runtime import Input
@@ -98,13 +116,8 @@ async def test_legacy_composer_live_sdk_wire_capture_and_reload(tmp_path, monkey
         # diagnostics and UI events must not duplicate its pixel payload.
         assert encoded not in json.dumps(runtime.events)
         assert encoded not in json.dumps(host.emitted)
-        [capture] = list((tmp_path / "shared" / "projects").rglob("events.jsonl"))
-        text = capture.read_text()
-        names = {json.loads(line)["event"] for line in text.splitlines()}
-        assert {"llm:request", "llm:response"} <= names
         assert session.coordinator.get_capability("web.provider_request_redaction") is True
-        assert encoded not in text and "data:image/" not in text
-        assert "__unified_image_transport__" in text
+        first_request = assert_anthropic_image_capture(tmp_path, command.text, encoded)
         path.unlink()
         file_path(tmp_path / "app", upload["id"])[0].unlink()
     finally:
@@ -128,8 +141,8 @@ async def test_legacy_composer_live_sdk_wire_capture_and_reload(tmp_path, monkey
         sends = [body for endpoint, body in cold.wire if endpoint == "/v1/messages"]
         assert LegacySDK.pixels(sends[-1]) == [("user", original)]
         assert host.sealed and not checks
-        [capture] = list((tmp_path / "shared" / "projects").rglob("events.jsonl"))
-        assert encoded not in capture.read_text()
+        resumed_request = assert_anthropic_image_capture(tmp_path, command.text, encoded)
+        assert resumed_request != first_request
     finally:
         await resumed.cleanup()
 
