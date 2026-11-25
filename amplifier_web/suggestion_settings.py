@@ -16,9 +16,9 @@ def _values(manager, workspace):
     saved = effective.settings.get('prompt_suggestions') or {}
     value = {key: saved.get(key, default) for key, default in {
         'enabled': False, 'provider': None, 'model': None,
-        'effort': None, 'prompt': INSTRUCTION,
-        'transcriptMode': 'last_n', 'humanTurns': 6}.items()}
-    value.update(revision=digest([saved, value, INSTRUCTION, OUTPUT_CONTRACT]),
+        'effort': None, 'prompt': INSTRUCTION}.items()}
+    value['enabled'] = value['enabled'] is True and saved.get('shareRecentConversation') is True
+    value.update(revision=digest(['plain-transcript-v1', saved, value, INSTRUCTION, OUTPUT_CONTRACT]),
                  defaultPrompt=INSTRUCTION, takesEffect='next_request')
     return value
 
@@ -28,14 +28,24 @@ def selected(manager, workspace):
     rows = manager.provider_rows(workspace, ordinary_only=True)
     row = next((row for row in rows if row['id'] == value['provider'] and row['enabled']), None)
     # Include the actual connection implementation/config/credential witness.
-    revision = digest([value['revision'], manager.catalog_key({'id': row['id']}, workspace)
-                       if row else None])
+    catalog_key = manager.catalog_key({'id': row['id']}, workspace) if row else None
+    if row:
+        row = {**row, 'sharedCatalogKey': catalog_key}
+    revision = digest([value['revision'], catalog_key])
     value['revision'] = revision
     return value, row, revision
 
 
 def describe(manager, workspace):
     return selected(manager, workspace)[0]
+
+
+def input_budget(manager, row, model, prompt):
+    from .provider_catalog import model_key
+    from .suggestion_provider import transcript_budget
+    limits = manager.catalog.suggestion_model_limits(
+        model_key(row['sharedCatalogKey']), row['module'], model)
+    return transcript_budget(prompt, *limits)
 
 
 def recommendation(manager, row):
@@ -66,16 +76,18 @@ def configure(manager, args, workspace, scope):
                 if ('expectedSuggestionModelsRevision' in args
                         and args['expectedSuggestionModelsRevision'] != describe(manager, workspace)['revision']):
                     from .errors import AppError
-                    raise AppError('Suggestion settings changed. Review the current sharing choice before saving.',
+                    raise AppError('Suggestion settings changed. Review the current settings before saving.',
                                    409, code='suggestion_configuration_changed')
                 previous = _values(manager, workspace)
-                # Merge omitted fields from the locked current settings, never
-                # overwrite newer sharing with the form's stale private draft.
+                saved = manager.config(workspace).settings.get('prompt_suggestions') or {}
+                consent = saved.get('shareRecentConversation') is True
                 value = {key: args.get(key, previous[key]) for key in (
-                    'enabled', 'provider', 'model', 'effort', 'prompt', 'transcriptMode', 'humanTurns')}
+                    'enabled', 'provider', 'model', 'effort', 'prompt')}
                 validate_options(value['effort'], value['prompt'])
-                if value['transcriptMode'] not in {'full', 'last_n'} or type(value['humanTurns']) is not int or not 1 <= value['humanTurns'] <= 20:
-                    raise ValueError('Choose full transcript or 1 to 20 recent human turns.')
+                if value['enabled'] and not consent and args.get('shareRecentConversation') is not True:
+                    raise ValueError('Review and confirm recent conversation sharing before enabling suggestions.')
+                value['shareRecentConversation'] = consent or (
+                    args.get('enabled') is True and args.get('shareRecentConversation') is True)
                 if value['enabled']:
                     if not any(row['id'] == value['provider'] and row['enabled']
                                for row in manager.provider_rows(workspace, ordinary_only=True)):
@@ -113,9 +125,8 @@ def definitions(schema, string):
             'Sends only bounded display transcript on a later interested-client request; never drafts or native model context.',
             schema({**owner, 'enabled': {'type': 'boolean'}, 'provider': string(100),
                     'expectedSuggestionModelsRevision': {**string(64), 'pattern': '^[0-9a-f]{64}$'},
-                    'model': string(200), 'transcriptMode': {'enum': ['full', 'last_n']},
+                    'model': string(200), 'shareRecentConversation': {'const': True},
                     'effort': {'type': ['string', 'null'], 'pattern': r'^[A-Za-z0-9_-]{1,100}$'},
                     'prompt': {**string(MAX_PROMPT_BYTES), 'minLength': 1},
-                    'humanTurns': {'type': 'integer', 'minimum': 1, 'maximum': 20},
                     'scope': {'const': 'global'}}, ['scope'])),
     }

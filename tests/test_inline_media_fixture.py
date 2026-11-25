@@ -66,7 +66,6 @@ async def test_saved_suggestion_read_is_disabled_deterministic_and_has_no_probes
     expected = {'suggestionModels': {
         'enabled': False, 'provider': None, 'model': None, 'effort': None,
         'prompt': INSTRUCTION, 'defaultPrompt': INSTRUCTION,
-        'transcriptMode': 'last_n', 'humanTurns': 6,
         'revision': hashlib.sha256(b'inline-media-disabled-suggestions-v1').hexdigest(),
         'takesEffect': 'next_request',
     }, 'providers': []}

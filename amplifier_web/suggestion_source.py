@@ -1,10 +1,12 @@
 """Bounded display-only transcript selection and fresh currentness witnesses."""
 import json
 
+from .suggestion_provider import INSTRUCTION, estimate_tokens, format_message, transcript_budget
 from .suggestion_settings import digest
+from .transcript_window import RAW_LIMIT
 
-MAX_ROWS = 100
-MAX_BYTES = 24 * 1024
+UNSETTLED_DELIVERY = {'pending', 'sending', 'failed', 'unknown', 'queued', 'queued_for_update'}
+UNSETTLED_INPUT = {'queued', 'working', 'waiting', 'failed', 'unknown'}
 SOURCE_COMPONENTS = (
     'owner_native', 'runtime_session', 'created', 'status', 'stop', 'archive', 'deleting',
     'storage_mode', 'cold_resource', 'cold_stamp', 'rows_count', 'rows_id', 'rows_role',
@@ -42,7 +44,7 @@ def speaker(row):
     if origin in {'agent', 'peer', 'scheduler', 'approval', 'observation', 'system'}:
         return {'kind': 'agent' if origin in {'agent', 'peer'} else 'system',
                 'id': origin}
-    if row.get('scheduledRunId') or row.get('approvalId') or row.get('questionId'):
+    if row.get('scheduledRunId') or row.get('approvalId') or row.get('questionId') or row.get('taskInput'):
         return {'kind': 'system'}
     metadata = row.get('metadata') or {}
     marker = metadata.get('amplifier_input') if isinstance(metadata, dict) else None
@@ -65,21 +67,36 @@ def speaker(row):
 
 def display_inputs(service, session, rows):
     """Native progress and external conversation acceptance are different facts."""
-    from .input_status import annotate
+    from .input_status import annotate, identity
     require_settled_tail(rows)
     result = []
     external = bool(session.get('externalAgent'))
+    replies, settled_rows = set(), set()
+    for row in reversed(rows):
+        if row.get('role') == 'assistant' and public_text(row) and text_of(row):
+            if exact := identity(row.get('inputId')):
+                replies.add(exact)
+        elif row.get('role') == 'user' and identity(row.get('inputId')) in replies:
+            # Positive evidence requires a complete later reply to this exact
+            # input ID. A failed/unknown observed phase is not rewritten.
+            settled_rows.add(id(row))
     for row in rows:
         item = row
         if row.get('role') == 'user':
             if external:
                 # ACP/shared human inputs do not have native generation events.
                 # Their canonical conversation acceptance is the display proof.
-                if (row.get('delivery') or {}).get('status') != 'accepted':
-                    continue
                 item = {key: value for key, value in row.items() if key != 'inputStatus'}
+                if (row.get('delivery') or {}).get('status') != 'accepted':
+                    item['_nonpublicInput'] = True
             elif row.get('inputId') or row.get('nativeInputId'):
                 item = annotate(session, row)
+                # An older native checkpoint can establish public user history
+                # without a retained host progress annotation. Explicit phases
+                # (including an observed UNKNOWN) still apply.
+                if ((row.get('source') == 'native' or id(row) in settled_rows)
+                        and (item.get('inputStatus') or {}).get('basis') == 'no_evidence'):
+                    item.pop('inputStatus', None)
             if row.get('source') == 'native' and row.get('nativeInputId'):
                 # Native role=user/source=user can also carry a peer delivery.
                 # Resolve only its exact local receipt; never scan history or
@@ -91,7 +108,9 @@ def display_inputs(service, session, rows):
                         receipt = json.loads(saved[0])
                     except (ValueError, TypeError):
                         receipt = {}
-                    if isinstance(receipt, dict) and receipt.get('commandAction') == 'coordination.send':
+                    if isinstance(receipt, dict) and (
+                            str(receipt.get('commandAction', '')).startswith(('coordination.', 'task.', 'assignment.'))
+                            or receipt.get('origin') in ('agent', 'system', 'scheduler')):
                         actor = {'kind': 'system' if receipt.get('origin') == 'system' else 'agent'}
                         item = {**item, 'inputActor': actor}
         result.append(item)
@@ -106,68 +125,85 @@ def require_settled_tail(rows):
     a completed public assistant are not a permanent hold on later work.
     """
     for row in reversed(rows):
-        if (row.get('ephemeral') or row.get('private') or row.get('observation')
-                or row.get('visibility') in {'internal', 'developer'}):
+        if not public_text(row):
             continue
-        if row.get('role') == 'assistant' and public_rows([row], bounded=False):
+        if row.get('role') == 'assistant' and text_of(row):
             return
-        if row.get('role') == 'user' and (
-                (row.get('delivery') or {}).get('status') in {
-                    'pending', 'sending', 'failed', 'unknown', 'queued', 'queued_for_update'}
-                or (row.get('inputStatus') or {}).get('phase') in {
-                    'queued', 'working', 'waiting', 'failed', 'unknown'}):
+        if row.get('role') == 'user' and unsettled(row):
             raise Unavailable('input_not_settled')
 
 
-def public_rows(rows, *, bounded=True):
-    result, size = [], 0
+def unsettled(row):
+    return ((row.get('delivery') or {}).get('status') in UNSETTLED_DELIVERY
+            or (row.get('inputStatus') or {}).get('phase') in UNSETTLED_INPUT)
+
+
+def public_text(row):
+    metadata = row.get('metadata') or {}
+    if not isinstance(metadata, dict):
+        return False
+    marker = metadata.get('amplifier_input')
+    return not (
+        (isinstance(marker, dict) and marker.get('kind') == 'service')
+        or any(row.get(key) for key in ('partial', 'ephemeral', 'private', 'observation',
+                                     'observation_id', '_nonpublicInput', 'draft'))
+        or row.get('visibility') in {'internal', 'developer'}
+        or row.get('via') in {'observation', 'schedule'}
+        or any(metadata.get(key) for key in (
+            'ephemeral', 'private', 'live_recovery_job', 'amplifier_visible_reference',
+            'amplifier_recovery_reference')))
+
+
+def text_of(row):
+    text = row.get('text')
+    return text if isinstance(text, str) and text.strip() else ''
+
+
+def public_rows(rows):
+    """Classify in source order. Exact reply linkage outranks adjacency."""
+    result = []
+    anchors = {}
+    previous_human = False
     for row in rows:
-        if (row.get('role') not in {'user', 'assistant'} or row.get('partial')
-                or row.get('ephemeral') or row.get('private')
-                or row.get('visibility') in {'internal', 'developer'}
-                or row.get('observation')
-                or row.get('delivery', {}).get('status') in {
-                    'pending', 'sending', 'failed', 'unknown', 'queued', 'queued_for_update'}
-                or row.get('inputStatus', {}).get('phase') in {
-                    'queued', 'working', 'waiting', 'failed', 'unknown'}):
+        role = row.get('role')
+        if role not in {'user', 'assistant'}:
             continue
-        metadata = row.get('metadata') or {}
-        if not isinstance(metadata, dict) or any(metadata.get(key) for key in
-                ('ephemeral', 'private', 'amplifier_visible_reference', 'amplifier_recovery_reference')):
+        actor = speaker(row)
+        visible = public_text(row) and not unsettled(row)
+        if role == 'user':
+            human = visible and actor['kind'] == 'human'
+            if not unsettled(row):
+                # An unlinked reply inherits only the adjacent input's
+                # provenance, not a human label from farther back in history.
+                previous_human = human
+        else:
+            source = row.get('sourceMessageId')
+            exact_input = row.get('inputId')
+            if isinstance(source, str) and source:
+                human = anchors.get(('message', source), False)
+            elif isinstance(exact_input, str) and exact_input:
+                human = anchors.get(('input', exact_input), False)
+            else:
+                human = previous_human
+            human = human and visible and actor['kind'] not in {'system', 'unknown'}
+        keys = [('message', row.get('id'), role == 'user')]
+        if role == 'user':
+            keys.extend(('input', identity, True) for identity in
+                        (row.get('inputId'), row.get('nativeInputId')) if identity)
+        for scope, identity, is_input in set(key for key in keys if isinstance(key[1], str)):
+            key = scope, identity
+            anchors[key] = key not in anchors and is_input and human
+        if not human or not (text := text_of(row)):
             continue
-        text = row.get('text')
-        if not isinstance(text, str) or not text.strip():
-            continue
-        from .voice_input_projection import public_input
-        voice = public_input(text, metadata.get('amplifier_input'))
-        if voice:
-            text = voice['text']
-        from .naming_context import clean_text, MAX_TEXT_BYTES
-        # Refuse overlong individual text rather than silently using the naming
-        # helper's clipped prefix as a complete conversation message.
-        if len(text) > MAX_TEXT_BYTES or len(text.encode()) > MAX_TEXT_BYTES:
-            raise Unavailable('transcript_limit')
-        text = clean_text(text)
-        if not text:
-            continue
-        # Check chars before encoding: a giant row never allocates a giant copy.
-        if bounded and len(text) > MAX_BYTES:
-            raise Unavailable('transcript_limit')
-        item = {key: row[key] for key in ('id', 'role', 'text', 'agentId', 'agentLabel')
+        item = {key: row[key] for key in ('id', 'role', 'agentId', 'agentLabel')
                 if isinstance(row.get(key), str)}
         item['text'] = text
-        item['inputActor'] = speaker(row)
-        if row['role'] == 'user' and item['inputActor']['kind'] != 'human':
-            item['agentId'] = item['inputActor'].get('id') or item['inputActor']['kind']
-            item.setdefault('agentLabel', 'Input from ' + item['inputActor']['kind'])
-        if not bounded:
-            result.append(item)
-            continue
-        size += len(text.encode()) + sum(len(item.get(key, '').encode())
-                                        for key in ('id', 'role', 'agentId', 'agentLabel'))
-        size += sum(len(value.encode()) for value in item['inputActor'].values())
-        if size > MAX_BYTES or len(result) >= MAX_ROWS:
-            raise Unavailable('transcript_limit')
+        item['inputActor'] = actor
+        if role == 'user':
+            from .voice_input_projection import public_input
+            voice = public_input(text, (row.get('metadata') or {}).get('amplifier_input'))
+            if voice:
+                item['text'] = voice['text']
         result.append(item)
     return result
 
@@ -180,20 +216,34 @@ def eligible(service, session):
             and not work_paused(getattr(service, '_state', {})) and not held(service))
 
 
-def select(rows, config, has_earlier):
-    if config['transcriptMode'] == 'full':
-        if has_earlier:
-            raise Unavailable('full_transcript_exceeds_bound')
-        return rows
-    human = [index for index, row in enumerate(rows)
-             if row['role'] == 'user' and speaker(row)['kind'] == 'human']
-    if len(human) < config['humanTurns'] and has_earlier:
-        raise Unavailable('human_turn_window_exceeds_bound')
-    return rows[human[max(0, len(human) - config['humanTurns'])]:] if human else rows
+def select(rows, budget):
+    from .naming_context import strip_context_payloads
+    selected = []
+    for row in reversed(rows):
+        text = strip_context_payloads(row['text'])
+        if not text.strip() or text.strip() == '[omitted payload]':
+            if not selected and row['role'] == 'assistant':
+                return []
+            continue
+        # Charge separators and the fixed role label, not internal IDs or labels.
+        cost = estimate_tokens(format_message(row['role'], text) + '\n\n', ceiling=budget)
+        if cost > budget:
+            break
+        budget -= cost
+        selected.append({**row, 'text': text})
+    # Trim leading orphan replies, not the newest whole reply or messages
+    # inside the retained suffix. At least one actual exchange is required.
+    while selected and selected[-1]['role'] != 'user':
+        selected.pop()
+    return list(reversed(selected)) if selected and selected[0]['role'] == 'assistant' else []
 
 
 def witness(service, sid, config=None, *, components=None):
-    """No cold hydration or prefix traversal. Resident witness is <=100 rows."""
+    return _snapshot(service, sid, config, components=components)[2]
+
+
+def _snapshot(service, sid, config, *, components=None):
+    """One authorized bounded suffix, with identical capture/currentness selection."""
     windows = service.history.windows
     session = service._session(sid, hydrate=False)
     from .transcript_windows import _source
@@ -220,13 +270,13 @@ def witness(service, sid, config=None, *, components=None):
         if cold is not None:
             values.update(cold_resource=cold.identity, cold_stamp=stamp)
         components.update({key: digest(values.get(key)) for key in SOURCE_COMPONENTS})
-    cold, stamp = None, None
+    cold, stamp, gaps = None, None, []
     if session.get('historyManaged') is True:
         # Accepted-but-unsubmitted host inputs need not have entered native
         # history yet. Fence that bounded resident suffix before reading the
         # older native public tail; never send these rows to the utility.
         resident = dict.get(session, 'messages', ())
-        require_settled_tail(resident[max(0, len(resident) - MAX_ROWS):])
+        display_inputs(service, session, resident[-RAW_LIMIT:])
         page = windows.public_native_tail(session)
     else:
         cold = windows._cold_source(session)
@@ -234,43 +284,36 @@ def witness(service, sid, config=None, *, components=None):
         if cold is not None:
             page, stamp = windows.public_saved_tail(session, cold)
     if page is not None:
-        if page.get('unavailableRanges'):
-            raise Unavailable('transcript_unavailable')
-        projected = public_rows(display_inputs(service, session, page['items']), bounded=False)
-        if config is not None:
-            projected = select(projected, config, page['hasEarlier'])
-        projected = public_rows(projected)
-        observed(projected=projected, cold=cold, stamp=stamp)
-        return digest([owner, projected])
-    rows = dict.get(session, 'messages', ())
-    tail = rows[max(0, len(rows) - MAX_ROWS):]
-    projected = public_rows(display_inputs(service, session, tail), bounded=False)
-    if config is not None:
-        projected = select(projected, config, len(rows) > MAX_ROWS)
-    projected = public_rows(projected)
-    observed(projected=projected)
-    return digest([owner, projected])
+        rows, gaps = page['items'], page.get('unavailableRanges') or []
+        if gaps and cold is None:
+            cutoff = max(gap['end'] for gap in gaps)
+            rows = [row for row in rows if row['sourceReference']['byteOffset'] >= cutoff]
+    else:
+        from .saved_message_window import resident_rows
+        rows = dict.get(session, 'messages', ())
+        rows, gaps, _ = resident_rows(rows, len(rows), RAW_LIMIT, contiguous=True)
+    rows = display_inputs(service, session, rows)
+    tail = next((row for row in reversed(rows) if row.get('role') in {'user', 'assistant'}
+                 and public_text(row) and not unsettled(row) and text_of(row)), None)
+    projected = public_rows(rows)
+    # Keep the true selected display tail separate from eligibility and payload.
+    # A peer-only/latest ineligible reply cannot be replaced by an older reply.
+    matching_tail = (tail and tail['role'] == 'assistant' and projected
+                     and projected[-1]['id'] == tail['id'])
+    config = config or {}
+    budget = config.get('_inputBudget')
+    if budget is None:
+        budget = transcript_budget(config.get('prompt', INSTRUCTION))
+    selected = select(projected, budget) if matching_tail else []
+    if gaps and not any(row['role'] == 'user' for row in projected):
+        raise Unavailable('transcript_unavailable')
+    observed(projected=selected, cold=cold, stamp=stamp)
+    return selected, tail and tail['id'], digest([owner, tail and (tail['id'], tail['role']), selected])
 
 
 async def capture(service, sid, config, expected_last):
-    before = witness(service, sid, config)
-    windows = service.history.windows
-    page = await windows.read(sid, limit=MAX_ROWS, public_only=True)
-    retained = windows.pages.get((sid, page['windowKey']))
-    if retained is None or page.get('unavailableRanges'):
-        raise Unavailable('transcript_unavailable')
-    # Borrow only this bounded, maintained display page. Do not read raw native
-    # context or expand textDetail into an unrelated history read.
-    session = service._session(sid, hydrate=False)
-    rows = public_rows(display_inputs(service, session, retained[0]['items']), bounded=False)
-    if not rows or rows[-1]['role'] != 'assistant':
-        raise Unavailable('no_completed_assistant')
-    if rows[-1]['id'] != expected_last:
+    async with service.lock:
+        rows, tail, key = _snapshot(service, sid, config)
+    if tail is not None and tail != expected_last:
         raise Unavailable('source_changed')
-    selected = public_rows(select(rows, config, page['hasEarlier']))
-    if not any(row['role'] == 'user' and speaker(row)['kind'] == 'human' for row in selected):
-        raise Unavailable('no_human_turn')
-    after = witness(service, sid, config)
-    if before != after:
-        raise Unavailable('source_changed')
-    return selected, after
+    return rows, key

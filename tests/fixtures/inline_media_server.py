@@ -51,7 +51,6 @@ async def readonly_setup(self, action, args):
         return {'suggestionModels': {
             'enabled': False, 'provider': None, 'model': None, 'effort': None,
             'prompt': INSTRUCTION, 'defaultPrompt': INSTRUCTION,
-            'transcriptMode': 'last_n', 'humanTurns': 6,
             'revision': hashlib.sha256(b'inline-media-disabled-suggestions-v1').hexdigest(),
             'takesEffect': 'next_request',
         }, 'providers': []}

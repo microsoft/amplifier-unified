@@ -7,7 +7,7 @@ import copy
 import hashlib
 import json
 
-from .transcript_window import TranscriptWindowReader
+from .transcript_window import TranscriptWindowReader, RAW_LIMIT
 
 MAX_PAGES = 32
 MAX_BYTES = 32 * 1024 * 1024
@@ -35,7 +35,7 @@ def _visible(value):
             and bool(text_content(value)))
 
 
-def _native_page(reader, source, before, limit, *, public_only=False):
+def _native_page(reader, source, before, limit, *, public_only=False, utility=False):
     from collections import Counter
     from .automatic_history import directory, native_input_id
     from .shared_state_probe import text_content
@@ -45,12 +45,14 @@ def _native_page(reader, source, before, limit, *, public_only=False):
         exact_input = native_input_id(value)
         if exact_input:
             counts[exact_input] += 1
-        return _visible(value)
+        # Even a hidden/media-only user input can establish what a later
+        # assistant was answering. Its body is never projected into the utility.
+        return (utility and value.get('role') == 'user') or _visible(value)
 
     result = reader.read_window(directory(source), {
         'project': source['nativeProject'],
         'nativeId': source.get('nativeIdentity') or source.get('runtimeSessionId') or source['id']},
-        before=before, limit=limit, visible=visible)
+        before=before, limit=limit, visible=visible, utility=utility)
     if result['status'] != 'ready':
         raise ValueError('Saved message window is unavailable: ' + result['reason'])
     window = result['messageWindow']
@@ -68,21 +70,22 @@ def _native_page(reader, source, before, limit, *, public_only=False):
         if public_only:
             from .native_message_projection import _public_blocks
             from .voice_input_projection import public_input
-            from .suggestion_source import speaker
+            from .suggestion_source import public_text, speaker
             metadata = value.get('metadata') or {}
-            # Host-service recovery and peer inputs are not the current human.
             provenance = metadata.get('amplifier_input') or {}
-            if (provenance.get('kind') == 'service' or metadata.get('live_recovery_job')
-                    or metadata.get('private') or value.get('private') or value.get('partial')
-                    or value.get('visibility') in {'internal', 'developer'}):
-                continue
-            text = text_content({'content': _public_blocks(value, text_only=True)['blocks']})
+            visible_text = public_text(value)
+            text = (text_content({'content': _public_blocks(value, text_only=True)['blocks']})
+                    if visible_text else '')
             voice = public_input(text, provenance)
             if voice:
                 text = voice['text']
             utility_fields['inputActor'] = speaker(value)
-            if not text:
+            if utility and value['role'] == 'assistant' and isinstance(value.get('inputId'), str):
+                utility_fields['inputId'] = value['inputId']
+            if not text and not (utility and value['role'] == 'user'):
                 continue
+            if not visible_text:
+                utility_fields['_nonpublicInput'] = True
         else:
             text = text_content(value)
         exact_input = native_input_id(value)
@@ -263,13 +266,13 @@ class TranscriptWindows:
             'nativeId': source.get('nativeIdentity') or source.get('runtimeSessionId') or source['id']})
         for page, _ in reversed(self.pages.values()):
             if (page.get('_publicUtility') and page.get('_owner') == source
-                    and page.get('revision') == revision and page.get('_utilityTail')):
+                    and page.get('revision') == revision and page.get('_suggestionTail')):
                 return page
-        page = _native_page(self.reader, source, None, 100, public_only=True)
+        page = _native_page(self.reader, source, None, RAW_LIMIT, public_only=True, utility=True)
         if page['revision'] != revision:
             raise ValueError('The public transcript source changed during reading.')
-        page.update(_publicUtility=True, _utilityTail=True)
-        page['windowKey'] = _digest([page['windowKey'], 'public-utility'])
+        page.update(_publicUtility=True, _suggestionTail=True)
+        page['windowKey'] = _digest([page['windowKey'], 'suggestion-tail'])
         size = len(json.dumps(page, ensure_ascii=False, separators=(',', ':')).encode())
         self._retain(session['id'], page, size)
         return page
@@ -290,7 +293,8 @@ class TranscriptWindows:
         for page, _ in reversed(self.pages.values()):
             if page.get('_savedUtilityBinding') == binding:
                 return page, signature
-        page = read_saved_window(cold, self.reader, session_id=session['id'], fence=0, limit=100)
+        page = read_saved_window(cold, self.reader, session_id=session['id'], fence=0,
+                                 limit=RAW_LIMIT, contiguous=True)
         if list(detached_signature(cold)) != signature:
             raise ValueError('The public saved source changed during reading.')
         page['_savedUtilityBinding'] = binding
