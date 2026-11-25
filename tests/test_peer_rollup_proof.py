@@ -193,7 +193,7 @@ async def test_suggestion_capture_preserves_peer_windows_across_cooling(app, cou
     sid = receiving['id']
     originals = copy.deepcopy(receiving['messages'])
     receiving.update(status='idle', historyManaged=False, messages=[
-        {'id': f'prefix-{i}', 'role': 'assistant', 'text': f'Earlier {i} ' + 'x' * 1100}
+        {'id': f'prefix-{i}', 'role': 'assistant', 'text': f'Earlier {i}'}
         for i in range(count - len(originals) - 2)
     ] + originals + [
         {'id': 'human-tail', 'role': 'user', 'inputOrigin': 'ui',
@@ -202,6 +202,7 @@ async def test_suggestion_capture_preserves_peer_windows_across_cooling(app, cou
          'text': 'The complete answer.'},
     ])
     del originals  # Retirement must not strand an issued mutable peer-row alias.
+    assert sum(len(row.get('text', '')) for row in receiving['messages']) < 16_000
     service._publish_changes(sessions={sid})
     expected_ids = [row['id'] for row in receiving['messages']]
     host, windows = service.prompt_suggestions, service.history.windows
