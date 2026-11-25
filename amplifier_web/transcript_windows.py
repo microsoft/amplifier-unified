@@ -121,7 +121,8 @@ class TranscriptWindows:
     def peer_save_failed(self, identities):
         entries = getattr(getattr(self.service, '_message_preparation', None), 'entries', {})
         for identity in identities:
-            self.initial.pop(identity, None)
+            if self.initial.get(identity, {}).get('inlinePeerPage'):
+                self.initial.pop(identity, None)
         self._peer_failed.intersection_update(entries)
         self._peer_failed.update(set(identities).intersection(entries))
 
@@ -615,6 +616,7 @@ class TranscriptWindows:
                 return
             self.initial[session_id] = {'status': 'ready', 'stamp': stamp,
                 'source': source, 'savedSource': saved_source,
+                'inlinePeerPage': bool(legacy_peer_page),
                 **({'key': (session_id, page['windowKey'])} if page else {}),
                 'continuation': {'status': 'current' if stamp is not None and stamp == previous_native else
                                  'available' if stamp is not None else 'unknown'}}
@@ -664,7 +666,7 @@ class TranscriptWindows:
                 committed = self._committed_messages(session)
                 raw_page = self._saved_page(session, None, INITIAL_MESSAGES)
                 wanted = self._peer_wanted(raw_page['items'])
-                if wanted and committed is None and session['id'] not in self._peer_failed:
+                if wanted and committed is None and entry.get('inlinePeerPage') and session['id'] not in self._peer_failed:
                     # A newly opened inline history can predate snapshot preparation.
                     # Reuse only its observed read page for passive display.
                     retained = self.pages.get(entry.get('key'))
