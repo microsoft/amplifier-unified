@@ -135,8 +135,9 @@ if __name__ != "__main__":
         assert inventory_dir.is_relative_to(Path("/artifacts"))
         assert os.environ.get("AMPLIFIER_TEST_CONTRACT"), "Parent's prepared guest only"
         diagnostics = tmp_path
-        if "KISS502_CONNECTOR_RESULTS" in os.environ:
-            diagnostics = inventory_dir / "joined-results" / connector
+        if inventory_dir != inputs:
+            # Keep the original per-case report paths when pytest runs outside /artifacts.
+            diagnostics = inventory_dir / "joined" / tmp_path.name
             diagnostics.mkdir(parents=True)
         # These are the same maintained native-runtime prerequisites/provider
         # used by test_acp_native_execution; no fallback provider graph is installed.
@@ -223,15 +224,17 @@ if __name__ != "__main__":
                         str(inputs), str(endpoint), str(result_file), str(inventory_dir), env=env, stdout=log, stderr=log)
                     try:
                         assert await asyncio.wait_for(process.wait(), 180) == 0, (
-                            tmp_path / "minecraft-client.log").read_text()
+                            diagnostics / "minecraft-client.log").read_text()
                     finally:
                         if process.returncode is None:
                             process.kill()
                             await process.wait()
                 connector_result = json.loads(result_file.read_text())
             else:
-                connector_result = await slack_client(inputs, inventory_dir, relay, workspace, tmp_path / "slack", env,
-                                                      diagnostics / "service.log")
+                if diagnostics != tmp_path:
+                    (diagnostics / "slack").mkdir()
+                connector_result = await slack_client(inputs, inventory_dir, relay, workspace, tmp_path / "slack",
+                                                      env, diagnostics / "slack/service.log")
             sid = connector_result["session"]
             assert service._session(sid)["title"] == "Native ACP effect 2"
             rows = [json.loads(line) for line in audit.read_text().splitlines()]
