@@ -3,7 +3,8 @@
 The foreground owner launcher reads existing private credentials only.
 Listener authentication and grant exchange remain separate from that local read.
 A browser on another device signs in with a one-use code that the owner makes
-on this computer and types on that device.
+on this computer and types on that device, or with the sign-in key that the
+owner made on this computer and saved.
 """
 from __future__ import annotations
 
@@ -27,6 +28,9 @@ CODE_REDEEM_PATH = "/api/browser-entry/code/redeem"
 CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"  # 32 symbols: no 0, 1, I or O.
 CODE_LENGTH = 10
 _CODE = re.compile(f"[{CODE_ALPHABET}]{{{CODE_LENGTH}}}")
+KEY_REDEEM_PATH = "/api/browser-entry/key/redeem"
+KEY_LENGTH = 25  # 125 bits, in the symbols of a code.
+_KEY = re.compile(f"[{CODE_ALPHABET}]{{{KEY_LENGTH}}}")
 # What a person does when the browser on this computer is not signed in
 # (`next_step`). A text says only what this host knows. On Windows no text names
 # a command: `amplifier-unified` is on the PATH only of an installation by hand,
@@ -58,6 +62,8 @@ OPENED = "Amplifier opened in your browser."
 HOST_WAIT = 60.0
 NEW_CODE = "Make sure that Amplifier is running on this PC. Then run this again: amplifier-unified browsers code."
 RELOAD = "Could not sign in. Open the sign-in page again and type the code."
+RELOAD_KEY = "Could not sign in. Open the sign-in page again and type the key."
+NEW_KEY = "Then run this again: amplifier-unified browsers key."
 GUIDE = ("https://github.com/microsoft/amplifier-unified/blob/main/docs/DEPLOYMENT.md"
          "#windows-host-reach-unified-from-another-device")
 NOT_IN_USE = ("The running Amplifier does not use this address yet. Stop Amplifier and start it again. "
@@ -338,8 +344,7 @@ class CodeStore:
         `binding` may be a function that returns the current binding. It runs
         only for a live code, so a wrong code costs no private-file read.
         """
-        code = (text.upper().replace(" ", "").replace("-", "")
-                if isinstance(text, str) and text.isascii() else "")
+        code = _typed(text)
         key = hashlib.sha256(code.encode("ascii")).digest() if _CODE.fullmatch(code) else None
         with self._lock:
             record = self._codes.get(key)
@@ -355,6 +360,108 @@ class CodeStore:
                 return False
             del self._codes[key]
             return True
+
+
+def _typed(text) -> str:
+    """What a person typed, without case, spaces and hyphens; never a mapped look-alike."""
+    return text.upper().replace(" ", "").replace("-", "") if isinstance(text, str) and text.isascii() else ""
+
+
+class SavedKey:
+    """The running host's view of the sign-in key that the owner saved.
+
+    The owner's command saves one private record: the second in which the key
+    was made and the SHA-256 of the key. The key itself is shown once, to the
+    owner, and is kept nowhere. A hundred and twenty-five bits carry the guess
+    resistance, so there is no lockout and no delay, as for a code: a wrong
+    key is counted, and nobody can keep the owner out by guessing.
+
+    The host reads the record again only when the file changed. So a wrong
+    key costs one look at the file and no private read, and a new or removed
+    key counts from the next request.
+    """
+
+    _UNREAD = object()
+
+    def __init__(self):
+        self.failures = 0
+        self._hint, self._record = self._UNREAD, None
+
+    @staticmethod
+    def display(key: str) -> str:
+        return "-".join(key[index:index + 5] for index in range(0, len(key), 5))
+
+    def _saved(self, data_dir):
+        from . import auth
+        hint = auth.sign_in_key_hint(data_dir)
+        if hint is auth._UNSEEN:
+            return None                                     # A look that failed never finds a key.
+        if self._hint is self._UNREAD or hint != self._hint:
+            try:
+                record = auth.read_sign_in_key(data_dir)
+            except (OSError, ValueError):
+                return None                                 # Not kept: the record is read again next time.
+            self._hint, self._record = hint, record
+        return self._record
+
+    def accepts(self, app, text) -> bool:
+        """The typed text is the saved key, and no sign-out of all browsers ended that key."""
+        from .auth import sign_in_key_is_current
+        key = _typed(text)
+        record = self._saved(app["service"].data_dir) if _KEY.fullmatch(key) else None
+        if (record is None
+                or not hmac.compare_digest(hashlib.sha256(key.encode("ascii")).hexdigest(), record[1])
+                or not sign_in_key_is_current(app, record[0])):
+            self.failures += 1
+            return False
+        return True
+
+
+def make_key(data_dir: Path) -> tuple[str, bool]:
+    """Save the record of a new sign-in key; return the key, and whether it replaced a working one.
+
+    Authority is the owner's own private folder, as for the sign-out of all
+    browsers: no network request and no credential are involved. Only the
+    caller shows the key, once, and only to the owner; never log it.
+
+    The key is made in a second after the saved sign-out, so that this
+    sign-out does not end it (see `auth.sign_in_key_is_current`).
+    """
+    from . import auth
+    signed_out = auth.saved_sign_out(data_dir)
+    try:
+        earlier = auth.read_sign_in_key(data_dir)
+        replaced = earlier is not None and earlier[0] > signed_out
+    except (OSError, ValueError):
+        replaced = False                                    # A record that nobody could read opened nothing.
+    for _ in range(5):
+        made = int(time.time())
+        if made > signed_out:
+            break
+        time.sleep(0.25)                                    # The second of a sign-out that was just saved.
+    else:
+        raise BrowserEntryUnavailable("The clock of this PC is earlier than the last sign-out of all browsers. "
+                                      "Set the clock. " + NEW_KEY)
+    key = "".join(secrets.choice(CODE_ALPHABET) for _ in range(KEY_LENGTH))
+    record = (made, hashlib.sha256(key.encode("ascii")).hexdigest())
+    auth.write_sign_in_key(data_dir, record)
+    if auth.read_sign_in_key(data_dir) != record:
+        raise OSError("The sign-in key was not saved.")
+    return key, replaced
+
+
+def remove_key(data_dir: Path) -> bool:
+    """End the saved sign-in key; True when a record was there. Browsers that are signed in stay signed in."""
+    from . import auth
+    try:
+        if auth.read_sign_in_key(data_dir) is None:
+            return False
+    except (OSError, ValueError):
+        pass                                                # A record that cannot be read is replaced as well.
+    auth.write_sign_in_key(data_dir, None)
+    if auth.read_sign_in_key(data_dir) is not None:
+        raise OSError("The sign-in key was not removed.")
+    return True
 
 
 def loopback_host(host: str | None) -> bool:
@@ -408,7 +515,7 @@ def remote_origin(request) -> str | None:
 
 
 def initialize(app) -> None:
-    app["browser_entry"] = app["browser_codes"] = None
+    app["browser_entry"] = app["browser_codes"] = app["browser_key"] = None
     if not is_windows():
         return
     try:
@@ -417,7 +524,7 @@ def initialize(app) -> None:
             return
     except BrowserEntryUnavailable:
         return
-    app["browser_entry"], app["browser_codes"] = GrantStore(), CodeStore()
+    app["browser_entry"], app["browser_codes"], app["browser_key"] = GrantStore(), CodeStore(), SavedKey()
 
 
 def _binding(request, origin):
@@ -578,6 +685,51 @@ async def code_redeem(request):
     raise response
 
 
+def _said(text) -> None:
+    try:  # A log fault changes nothing.
+        print(text, flush=True)
+    except (OSError, ValueError):
+        pass
+
+
+async def key_redeem(request):
+    """Public: the typed key is the proof. No lockout and no delay (see SavedKey).
+
+    The address check is the one of a typed code (see remote_origin), and the
+    session is marked remote as well. The key is not used up.
+    """
+    from aiohttp import web
+    from .auth import CSRF_COOKIE, SESSION_COOKIE, sign_in
+    origin = remote_origin(request)
+    saved = request.app["browser_key"]
+    if not origin or not is_windows() or saved is None or request.content_type != "application/x-www-form-urlencoded":
+        return web.Response(text=RELOAD_KEY, status=403)
+    key = await _signed_form(request, "key")
+    if key is None:
+        return web.Response(text=RELOAD_KEY, status=403)
+    if not saved.accepts(request.app, key):
+        if saved.failures == 1 or saved.failures % 100 == 0:
+            _said(f"Remote sign-in: {saved.failures} wrong keys since start.")   # The count only; never the typed text.
+        raise web.HTTPSeeOther("/login?error=key", headers=_PRIVATE)
+    try:
+        # As for a live code: the owner credential and the host identity are confirmed before a session opens.
+        _binding(request, origin)
+        session = sign_in(request.app, remote=True)
+    except BrowserEntryUnavailable:
+        session = None
+    if session is None:
+        # The host cannot be confirmed now, or a saved sign-out waits for this host.
+        # Nothing opens; this is not counted as a wrong key.
+        raise web.HTTPSeeOther("/login?error=key", headers=_PRIVATE)
+    _said("Remote sign-in: a browser signed in with the saved key.")
+    response = web.HTTPSeeOther("/", headers=_PRIVATE)
+    response.set_cookie(SESSION_COOKIE, session,
+                        max_age=request.app["server_config"]["session_ttl_seconds"],
+                        httponly=True, samesite="Strict", secure=True, path="/")
+    response.del_cookie(CSRF_COOKIE, path="/")
+    raise response
+
+
 _CODE_PAGE = f"""<!doctype html>
 <html lang="en"><head>
 <meta charset="UTF-8">
@@ -593,16 +745,24 @@ _CODE_PAGE = f"""<!doctype html>
 <input id="code" name="code" autocomplete="one-time-code" autocapitalize="characters" autocorrect="off" spellcheck="false" aria-describedby="code-help" autofocus required>
 <button type="submit">Sign in</button>
 </form>
+<form method="post" action="{KEY_REDEEM_PATH}">
+<input type="hidden" name="csrf" value="__CSRF__">
+<label for="key">Sign-in key</label>
+<input id="key" name="key" type="password" autocomplete="current-password" autocapitalize="characters" autocorrect="off" spellcheck="false" aria-describedby="key-help" required>
+<button type="submit">Sign in with key</button>
+</form>
 <p id="code-help">To get a code, run this on the Windows PC that runs Amplifier: <code>amplifier-unified browsers code</code>.
 Type the code here within two minutes.</p>
-<p>If Windows does not find that command, use the full command from the
+<p id="key-help">To make a key that you can save, for example in a password manager, run this on that PC:
+<code>amplifier-unified browsers key</code>. The key works until you make a new one, remove it or sign out all browsers.</p>
+<p>If Windows does not find a command, use the full command from the
 <a href="{GUIDE}" target="_blank" rel="noopener noreferrer">Windows steps of the deployment guide</a>.</p>
 </main></body></html>
 """
 
 
 def remote_login_page(request):
-    """Code form for a browser on another device: no script, nothing reflected.
+    """Code form and key form for a browser on another device: no script, nothing reflected.
 
     Referrer-Policy is same-origin, not no-referrer: from a no-referrer page a
     browser sends "Origin: null" with the form, and the redeem check refuses it.
@@ -614,8 +774,11 @@ def remote_login_page(request):
     # Preserve valid issuance for favicon redirects and concurrent login forms.
     if not _verified(secret, csrf, 900, "csrf"):
         csrf = new_csrf(secret)
-    error = ("That code did not work. Check it and type it again. A code works for two minutes "
-             "and only once. After that, make a new code on the PC.") if request.query.get("error") else ""
+    kind = request.query.get("error")
+    error = ("That key did not work. Check it and type it again. A key stops working when you make a new key, "
+             "remove it or sign out all browsers on the PC.") if kind == "key" else (
+             "That code did not work. Check it and type it again. A code works for two minutes "
+             "and only once. After that, make a new code on the PC.") if kind else ""
     page = _CODE_PAGE.replace("__ERROR__", error).replace("__CSRF__", csrf)
     page = request.app['service'].instance_branding.document(page, login=True)
     response = web.Response(text=page,

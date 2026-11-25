@@ -310,7 +310,7 @@ The obsolete Edge root-store policy is not a workaround.
 
 A Windows host has no password sign-in. On the PC, the launcher opens the
 browser. A browser on another device signs in with a one-use code that you make
-at the PC. Remote access is off until you do the steps below, and you can turn
+at the PC, or with a sign-in key that you made at the PC and saved. Remote access is off until you do the steps below, and you can turn
 it off again. Local use on the PC needs none of this.
 
 The steps use Tailscale. Amplifier listens only on this PC's own address,
@@ -419,6 +419,35 @@ type it again. After two minutes, or after one use, make a new code.
 If more than one address for other devices is configured, name the one that the
 other device opens: `amplifier-unified browsers code --origin https://<address>`.
 
+### Sign in with a saved key
+
+A code needs you at the PC each time. A sign-in key does not: you make it once
+at the PC, save it, and type it on any device, also when you are not at the PC.
+
+1. On the PC, make a key.
+
+   ```
+   amplifier-unified browsers key
+   ```
+
+   The command shows a key such as `ABCDE-FGHJK-LMNPQ-RSTUV-WXYZ2`, once.
+   Amplifier saves only a hash of the key and cannot show the key again.
+2. Save the key, for example in a password manager.
+3. On the other device, open the address of the PC. Type or paste the key in
+   the field **Sign-in key**. Select **Sign in with key**.
+
+The key works at every address for other devices, as often as you need it. A
+typing mistake does not end it. It is a password for your Amplifier: everyone
+who has the key and can reach one of those addresses can sign in. Treat it as
+one.
+
+- To replace the key, run the command again. The earlier key stops working.
+  Browsers that are signed in stay signed in.
+- To remove the key without a new one, run
+  `amplifier-unified browsers key --remove`.
+- [Sign out all browsers from the PC](#sign-out-all-browsers-from-the-pc) also
+  ends the key.
+
 ### Sign out all browsers from the PC
 
 1. On the PC, sign out every browser, on the PC and on other devices.
@@ -430,11 +459,11 @@ other device opens: `amplifier-unified browsers code --origin https://<address>`
 2. Wait a few seconds. Until then, a new sign-in on the PC or a new code
    opens nothing.
 3. To use Amplifier again, open it on the PC. For another device, make a new
-   code.
+   code or a new key.
 
 If the command says that it could not confirm the sign-out, run it again.
-The command also drops every code that is not used yet. There is no sign-out
-for one device. More: [Sign out all browsers](#sign-out-all-browsers).
+The command also drops every code that is not used yet, and it ends a saved
+sign-in key. There is no sign-out for one device. More: [Sign out all browsers](#sign-out-all-browsers).
 
 ### Turn remote access off
 
@@ -615,10 +644,14 @@ calls behind it are measured on a private test list of certificates).
 - Each code is for one address, lasts two minutes and works once. Wrong codes
   do not lock anyone out; see the
   [design](design/native-windows-installation.md#remote-browser-sign-in-on-a-windows-host).
-- The code command has no Start-menu entry and no button in the app. It needs
-  a terminal.
-- Linux, macOS and WSL hosts do not use codes. Sign in there with the host
-  account password on the sign-in page.
+- The code command and the key command have no Start-menu entry and no button
+  in the app. They need a terminal.
+- A sign-in lasts seven days (`session_ttl_seconds`). After that, the device
+  signs in again with a code or with the key.
+- The key was not tried with a password manager. The key field is a password
+  field, so that a password manager can save and fill the key.
+- Linux, macOS and WSL hosts do not use codes or keys. Sign in there with the
+  host account password on the sign-in page.
 
 ## Sign out all browsers
 
@@ -636,7 +669,8 @@ network request: the ability to write that private folder is the authority.
 A running host applies the change within a few seconds. It then refuses every
 session from before that time, drops pending sign-in tickets and codes, and ends open
 live-update connections so that a signed-out browser cannot keep watching.
-A sign-in ticket or code that is made or used during those few seconds opens
+On a Windows host it also refuses a saved sign-in key from before that time.
+A sign-in ticket, code or key that is made or used during those few seconds opens
 no session, so that one from before the sign-out cannot outlast it. Wait a few
 seconds after the command. Then open Amplifier again on the PC, or make a new
 code for another device.
