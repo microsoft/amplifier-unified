@@ -550,25 +550,26 @@ def _save(data_dir: Path, value: str, again: str) -> bool:
 def _swap(data_dir: Path, owner, value) -> bool:
     """The owner's page puts a record in place, or none for `value` None; True when a record was there before.
 
-    `owner` is what the page knew when it last checked its session, in one
-    step and before any wait: the second of that session, and the look at the
-    sign-out record that the host had applied (`Sessions.hint`). The sender
-    of a form decides how long its request takes, a hash takes time, and the
-    owner can sign out all browsers at any moment of it. Three things keep a
-    session that such a sign-out ended from a change that counts, and from
-    undoing what the owner did after the sign-out.
+    `owner` is what the page knows of its session: the second of that
+    session, and the look at the sign-out record that the host had applied
+    (`Sessions.hint`) when the page first checked the request's session,
+    before it waited for the form. The sender of a form decides how long its
+    request takes, a hash takes time, and the owner can sign out all
+    browsers at any moment of it. Three things keep a session that such a
+    sign-out ended from a change that counts, and from undoing what the
+    owner did after the sign-out.
 
     The sign-out record must still be the one that the host had applied
-    then. A sign-out that was saved later, whatever its second and whether
+    then. A sign-out that was saved after it, whatever its second and whether
     the host applied it meanwhile or not, refuses the change. No clock is
     read for this: it is the test of `auth.sign_in`. It is made before the
-    record goes in place and again after it; the second time, this call
-    removes its own record, by its exact bytes, and no other.
+    record goes in place and again after it. When the second test refuses,
+    this call removes its own record, by its exact bytes, and no other.
 
     The record gets the second of that session, not the present second. So
     the rule that ends a session ends its record (`auth.sign_in_key_is_current`):
     between the two tests there is no moment with a record that opens a
-    session for a session that is ended.
+    session for a session that the rule ended.
 
     The record goes in place only where the file still holds the bytes that
     this call read first of all (`auth.swap_sign_in_key`). A record that came
@@ -1135,7 +1136,11 @@ async def password_page(request):
         return page(_NOT_WINDOWS, 200 if request.method == "GET" else 403)
     if saved is None:
         return page(_NOT_NOW, 503)                          # The host could not confirm its owner credential at its start.
+    from .auth import _UNSEEN, session_issued
     session = _session_here(request)
+    # With this first check, before any wait: the look at the sign-out record that the host has applied,
+    # which the session was checked against. A change of this request is bound to it (see `_swap`).
+    applied = getattr(request.app.get("sessions"), "hint", _UNSEEN)
     if session is None:
         return page(_NOT_HERE, 403)
     if request.method == "GET":
@@ -1148,12 +1153,10 @@ async def password_page(request):
         return page(_NOT_HERE, 403)
     form = await request.clone(client_max_size=16384).post()
     # Again, after the wait for the form: its sender decides how long that wait is, and a sign-out of all
-    # browsers can end the session meanwhile.
-    # In one step, with no wait between: the session's second and the sign-out record that the host
-    # applied, which that session was checked against. The change is bound to both (see `_swap`).
-    from .auth import _UNSEEN, session_issued
+    # browsers can end the session meanwhile. The look from before that wait stays: a sign-out that the
+    # host applied during the wait must not become the starting state of this change.
     session = _session_here(request)
-    owner = (session_issued(request.app, session), getattr(request.app.get("sessions"), "hint", _UNSEEN))
+    owner = (session_issued(request.app, session), applied)
     if session is None or owner[0] is None:
         return page(_NOT_HERE, 403)
     if (not hmac.compare_digest(str(form.get("csrf", "")).encode(), _owner_csrf(request, session).encode())

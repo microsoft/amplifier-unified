@@ -2525,6 +2525,47 @@ def test_record_that_the_page_saves_has_the_second_of_its_session(host, monkeypa
     assert auth.read_sign_in_key(home)[0] == 1_900_000_500
 
 
+@pytest.mark.parametrize("replacement", [True, False], ids=["the-owner-set-a-new-password", "the-owner-set-nothing"])
+def test_held_form_is_refused_also_when_the_clock_went_back_and_the_session_counts_again(host, monkeypatch, replacement):
+    """The form is held back; the clock goes back; the owner signs out; the clock catches up; the form arrives.
+
+    The session counts again then: that is the limit of a session for a clock that was set back. The
+    request is still bound to the sign-out record that the host had applied when the request began.
+    """
+    home = host["service"].data_dir
+    now = clock(monkeypatch, 1_900_000_500)
+    session = auth.new_session(SECRET)
+    make, raw = held_form(host, session, set_form())
+
+    async def late():
+        request, handler = await make()
+        answer = asyncio.create_task(auth.auth_required(request, handler))
+        await asyncio.sleep(0.05)                           # The page waits for the form.
+        assert not answer.done()
+        now[0] -= 100                                       # The clock of the PC is set back.
+        auth.sign_out_all(home)
+        entry.remove_key(home)
+        assert auth.refresh_sessions(host) is True
+        if replacement:
+            now[0] += 2
+            assert entry.set_password(home, "the replacement password") is False
+        now[0] = 1_900_000_600                              # The clock reaches the session's second again.
+        assert auth.valid_session(host, session)
+        request.content.feed_data(raw)
+        request.content.feed_eof()
+        try:
+            return await answer
+        except web.HTTPException as response:
+            return response
+    page = asyncio.run(late())
+    assert page.status == 403 and "A sign-out of all browsers ended this sign-in." in page.text
+    assert wrong_key(with_key(host, PASSWORD))
+    if replacement:
+        assert signed_in(with_key(host, "the replacement password"))
+    else:
+        assert auth.read_sign_in_key(home) is None
+
+
 @pytest.mark.parametrize("applied", [True, False], ids=["the-host-applied-the-sign-out", "the-host-did-not-apply-it-yet"])
 @pytest.mark.parametrize("earlier", [True, False], ids=["a-password-was-set-before", "nothing-was-set-before"])
 def test_sign_out_after_the_page_looked_leaves_no_moment_with_a_password_that_counts(host, monkeypatch, applied, earlier):

@@ -383,8 +383,9 @@ def read_sign_in_key(data_dir: Path):
     The record is a second, and the SHA-256 of the key or the scrypt
     parameters, salt and hash of the password; never the key or the password.
     The second is that of the making by a command, or that of the session
-    that set the record on the owner's page (see `browser_entry._swap`). A record that cannot be read or is malformed is an error: it is
-    not "none", and it is not a key or password that works.
+    that set the record on the owner's page (see `browser_entry._swap`). A
+    record that cannot be read or is malformed is an error: it is not "none",
+    and it is not a key or password that works.
     """
     try:
         if _WINDOWS:

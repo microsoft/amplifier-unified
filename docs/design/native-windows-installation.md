@@ -4617,22 +4617,24 @@ has a terminal.
   request takes, the hash takes time, and the owner can sign out all
   browsers at any moment of it. A session that such a sign-out ended must
   not finish a change that it began before, and it must not undo what the
-  owner did after the sign-out. The page checks the session again after it
-  read the form. In the same step, before the hash and with no wait in
-  between, it takes the second of that session and the look at the
-  sign-out record that the host has applied, which the session was checked
-  against. The change is bound to both (`browser_entry._swap`).
+  owner did after the sign-out. At its first check of the request's
+  session, before it waits for the form, the page takes the look at the
+  sign-out record that the host has applied, which that session was checked
+  against. After it read the form, it checks the session again and takes
+  its second (`browser_entry.password_page`). The change is bound to both
+  (`browser_entry._swap`).
   - The sign-out record must still be that one. A sign-out that was saved
-    later refuses the change, whatever its second, and whether the host
-    applied it meanwhile or not. No clock is read for this; it is the test
-    that keeps a ticket or a code from a session while a saved sign-out
-    waits (`auth.sign_in`). The change makes this test before its record
-    goes in place and again after it. The second time, it removes its own
-    record, by its exact bytes, and no other.
+    after that first check refuses the change, whatever its second, and
+    whether the host applied it meanwhile or not. No clock is read for
+    this; it is the test that keeps a ticket or a code from a session while
+    a saved sign-out waits (`auth.sign_in`). The change makes this test
+    before its record goes in place and again after it. When the second
+    test refuses, it removes its own record, by its exact bytes, and no
+    other.
   - A record that the page saves gets the second of its session, not the
     present second. So the rule that ends a session ends its record, and
     between the two tests there is no moment with a record that opens a
-    session for a session that is ended. A cleanup after the write alone
+    session for a session that the rule ended. A cleanup after the write alone
     could not give that: the record would count until the cleanup. The
     owner's commands keep the present second; their authority is the
     private folder, not a session.
@@ -4643,8 +4645,9 @@ has a terminal.
     never replaces or removes a record that came later, for example the
     owner's new password after the sign-out. The page then says that
     another change came first.
-  A look at the sign-out record that fails is not a sign-out. The change is
-  then not made, or its own record is removed again, and the page says that
+  A look at the sign-out record that fails is not a sign-out. Before the
+  record goes in place, the change is then not made. After it, a new record
+  is removed again, and a removal stays. In both cases the page says that
   it could not confirm the change.
 - **The page.** Server-rendered, with no script, and it shows nothing from
   the request. Its texts are fixed; a notice comes from a fixed list
@@ -4692,10 +4695,13 @@ from a second that the clock has not reached again counts again when the
 clock reaches it, and a sign-out in that time does not end it. Such a
 session can then set a password on the page, as it can do everything else,
 and that password has no lifetime; `browsers key --remove` ends it at any
-clock time. A change that was under way when a sign-out was saved is
-refused without a clock, also in that case. On a host that is not a
-Windows host the swap of the record is two steps; only a Windows host has
-the page. Not measured: the page in a real browser
+clock time. From the first check of a request's session on, a sign-out
+that is saved refuses that request's change, without a clock, also in that
+case; a request that begins after the clock reached that second again is
+a request of a session that counts. When the second test refuses in that
+case, only a failed removal of the change's own record leaves that record.
+On a host that is not a Windows host the swap of the record is two steps;
+only a Windows host has the page. Not measured: the page in a real browser
 on a Windows PC by a person, a password manager, a phone browser.
 
 #### The next step for a browser on the PC that is not signed in
