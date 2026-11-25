@@ -132,12 +132,8 @@ def test_the_decision_catalog_helper_is_read_from_the_app_and_started_as_the_app
         probe.catalog_helper_times((command, settings), 'another-python', starts=1)
 
 
-def test_the_ci_job_finds_the_lines_that_the_chat_setup_case_prints_for_the_helper():
-    """The line of a measured start, and the two places of the workflow that read it.
-
-    PowerShell's ``-match`` takes a regular expression and ignores case. The job keeps a line that begins
-    with ``HELPER_LINE`` and warns for one that holds ``HELPER_LONGER``.
-    """
+def test_the_chat_setup_helper_formatter_preserves_its_printed_precision():
+    """Private diagnostic formatting remains useful; CI consumes closed JSON now."""
     inside = probe.catalog_helper_line('prepare-' + 'a' * 32, 3.44, 0.92, 0, 674, 10)
     longer = probe.catalog_helper_line('q-' + 'b' * 32, 10.04, 1.0, 12, 755, 10)
     assert inside == (
@@ -156,17 +152,76 @@ def test_the_ci_job_finds_the_lines_that_the_chat_setup_case_prints_for_the_help
     assert "first start took 10.00 s;" in printed_as_the_limit and probe.HELPER_LONGER not in printed_as_the_limit
     printed_over_the_limit = probe.catalog_helper_line('q-' + 'c' * 32, 10.006, 1.0, 0, 743, 10)
     assert "first start took 10.01 s;" in printed_over_the_limit and printed_over_the_limit.endswith(probe.HELPER_LONGER)
-    workflow = (probe.ROOT / '.github' / 'workflows' / 'windows-path-length.yml').read_text(encoding='utf-8')
-    patterns = re.findall(r"-match '([^']+)'", workflow)
-    keeps, warns = '^' + probe.HELPER_LINE, probe.HELPER_LONGER
-    assert patterns.count(keeps) == 1 and patterns.count(warns) == 1, patterns
-    # Both texts are plain text for a regular expression: no character of them has a meaning there.
-    assert not set(probe.HELPER_LINE + probe.HELPER_LONGER) & set('.^$*+?{}[]()|\\')
-    for line, warned in ((inside, False), (longer, True)):
-        assert re.search(keeps, line, re.IGNORECASE) and bool(re.search(warns, line, re.IGNORECASE)) is warned
-    # pytest's report of a failure shows source lines, indented. The job takes none of them for a measurement.
-    assert not re.search(keeps, '        print(update_stage_probe.' + inside, re.IGNORECASE)
-    assert not re.search(keeps, 'E   ' + inside, re.IGNORECASE)
+
+
+def closed_helper_reader():
+    import textwrap
+    import yaml
+    workflow = yaml.safe_load((probe.ROOT / '.github/workflows/windows-path-length.yml').read_text())
+    step = next(s for s in workflow['jobs']['windows-chat-setup']['steps']
+                if s.get('name', '').startswith("Prepare and check a chat's own setup"))
+    body = step['run']
+    code = body.split("$check = @'\n", 1)[1].split("\n'@", 1)[0]
+    return body, compile(textwrap.dedent(code), '<closed-helper-reader>', 'exec')
+
+
+@pytest.mark.parametrize('first,warning', [(3.44, False), (10, False), (10.04, True), (10.004, True)])
+def test_chat_ci_reads_closed_helper_timings_at_full_precision(tmp_path, monkeypatch, capsys, first, warning):
+    body, code = closed_helper_reader()
+    path = tmp_path / 'provenance.json'
+    path.write_text(json.dumps({'schema': 1, 'status': 'PASS', 'selected': [{}, {}],
+        'helperTimings': [{'ordinal': 0, 'firstSeconds': first, 'secondSeconds': 0.92,
+                          'bytecodeBefore': 0, 'bytecodeAfter': 674, 'limitSeconds': 10}]}))
+    monkeypatch.setenv('AMPLIFIER_CHAT_SETUP_PROVENANCE', str(path))
+    exec(code, {})
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == f'MEASURED helper first/second seconds: {first} 0.92'
+    assert lines[1:] == ([
+        '::warning title=Slow first helper start::The measured first start exceeded the app limit.'
+    ] if warning else [])
+    # The warning is not a failed preparation. Equality and a value rounded to
+    # equality by the old text formatter remain distinct in the JSON reader.
+    assert '-I -B -c $check' in body and 'if ($LASTEXITCODE -ne 0)' in body
+    assert 'if ($status -ne 0)' in body and 'Test-Path -LiteralPath $env:AMPLIFIER_CHAT_SETUP_TREE' in body
+    assert '*> "$env:RUNNER_TEMP/private-chat-setup.log"' in body
+    assert 'Tee-Object' not in body and '-match' not in body
+
+
+@pytest.mark.parametrize('fault', [
+    'failed', 'schema', 'selection', 'missing-rows', 'empty', 'too-many',
+    'missing-key', 'extra-key', 'string', 'boolean', 'infinite', 'nan',
+    'negative', 'huge-number', 'same-bytecode', 'less-bytecode', 'malformed', 'oversize',
+])
+def test_chat_ci_closed_helper_reader_rejects_missing_or_invalid_evidence(tmp_path, monkeypatch, capsys, fault):
+    _, code = closed_helper_reader()
+    row = {'ordinal': 0, 'firstSeconds': 1.0, 'secondSeconds': 0.5,
+           'bytecodeBefore': 0, 'bytecodeAfter': 1, 'limitSeconds': 10}
+    receipt = {'schema': 1, 'status': 'PASS', 'selected': [{}, {}], 'helperTimings': [row]}
+    if fault == 'failed': receipt['status'] = 'FAIL'
+    elif fault == 'schema': receipt['schema'] = 2
+    elif fault == 'selection': receipt['selected'].pop()
+    elif fault == 'missing-rows': receipt.pop('helperTimings')
+    elif fault == 'empty': receipt['helperTimings'] = []
+    elif fault == 'too-many': receipt['helperTimings'] *= 17
+    elif fault == 'missing-key': row.pop('ordinal')
+    elif fault == 'extra-key': row['PRIVATE'] = 'PRIVATE'
+    elif fault == 'string': row['firstSeconds'] = 'PRIVATE'
+    elif fault == 'boolean': row['firstSeconds'] = True
+    elif fault == 'infinite': row['firstSeconds'] = float('inf')
+    elif fault == 'nan': row['firstSeconds'] = float('nan')
+    elif fault == 'negative': row['firstSeconds'] = -1
+    elif fault == 'huge-number': row['firstSeconds'] = 10**9 + 1
+    elif fault == 'same-bytecode': row['bytecodeAfter'] = 0
+    elif fault == 'less-bytecode': row['bytecodeBefore'] = 2
+    raw = json.dumps(receipt)
+    if fault == 'malformed': raw = '{'
+    elif fault == 'oversize': raw += ' ' * (524289 - len(raw))
+    path = tmp_path / 'provenance.json'
+    path.write_text(raw)
+    monkeypatch.setenv('AMPLIFIER_CHAT_SETUP_PROVENANCE', str(path))
+    with pytest.raises((AssertionError, KeyError, json.JSONDecodeError)):
+        exec(code, {})
+    assert capsys.readouterr().out == ''
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='On Windows the switch is the subject: tests/test_windows_long_paths_off.py')
