@@ -53,6 +53,51 @@ async def test_passive_read_does_no_scan_or_retirement(app, monkeypatch):
     assert not app.db.execute('SELECT * FROM commands').fetchall()
 
 
+async def test_passive_read_distinguishes_online_artifacts_from_policy_cleanup(app, monkeypatch):
+    from amplifier_web.performance_diagnostics import PerformanceDiagnostics
+
+    app.performance_diagnostics = PerformanceDiagnostics()
+    app.performance_diagnostics.record_storage_collection(
+        outcome='completed', reason=None, elapsed_ms=12, catchups=1,
+        indexedPruned=3, indexedFilesRemoved=2, indexedBytesRemoved=8192)
+    monkeypatch.setattr(retention, 'reclaim', AsyncMock(side_effect=AssertionError('scan')))
+    # The read needs only bounded collector facts, not a whole diagnostics snapshot.
+    monkeypatch.setattr(app.performance_diagnostics, 'snapshot',
+                        lambda: pytest.fail('unrelated diagnostics snapshot'))
+    original = app.db.execute('SELECT * FROM commands').fetchall()
+
+    result = (await cleanup.dispatch(app, 'storage.cleanup.read', {}, 'ui', None))['result']
+    artifacts = result['artifacts']
+    assert artifacts['automatic'] is True and artifacts['requiresIdle'] is False
+    assert artifacts['lastCollection']['outcome'] == 'completed'
+    assert artifacts['lastCollection']['indexedBytesRemoved'] == 8192
+    assert artifacts['lastCollection']['removalCountsComplete'] is True
+    assert 'not filesystem free space' in artifacts['measurementNote']
+    assert result['lastCleanup'] is None  # Different owners and receipts.
+    assert app.db.execute('SELECT * FROM commands').fetchall() == original
+
+    artifacts['lastCollection']['indexedBytesRemoved'] = -1
+    assert cleanup.read(app)['artifacts']['lastCollection']['indexedBytesRemoved'] == 8192
+
+
+@pytest.mark.parametrize('outcome', ['deferred', 'cancelled', 'interrupted'])
+def test_artifact_collection_read_preserves_incomplete_outcomes(app, outcome):
+    from amplifier_web.performance_diagnostics import PerformanceDiagnostics
+
+    app.performance_diagnostics = PerformanceDiagnostics()
+    app.performance_diagnostics.record_storage_collection(
+        outcome=outcome, reason='root-catchup-limit', elapsed_ms=12, catchups=3)
+    result = cleanup.read(app)['artifacts']['lastCollection']
+    assert result['outcome'] == outcome and result['reason'] == 'root-catchup-limit'
+    assert result['removalCountsComplete'] is False
+
+
+def test_artifact_collection_read_without_diagnostics_does_not_invent_a_pass(app):
+    result = cleanup.read(app)['artifacts']
+    assert result['lastCollection'] is None
+    assert result['automatic'] is True and result['requiresIdle'] is False
+
+
 async def test_save_is_global_cas_and_reuses_exact_acknowledgement(app):
     args = {'expectedRevision':0, 'enabled':False, 'keepDays':2, 'maxUnusedBytes':123}
     first = await cleanup.dispatch(app, 'storage.cleanup.save', args, 'ui', 'original-save')
