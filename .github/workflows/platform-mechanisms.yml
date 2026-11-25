@@ -15,6 +15,26 @@ on:
         description: Run only deterministic native event-publication sharing controls; no cold worker or full trial
         type: boolean
         default: false
+      remaining_runtime_only:
+        description: Five locked-host Windows cases then one unchanged cold declared-worker case, on one runner
+        type: boolean
+        default: false
+      cold_only:
+        description: Only the unchanged cold declared-worker case with a fresh locked host; no five-case rerun or receipt reuse
+        type: boolean
+        default: false
+      native_prefix_only:
+        description: Only native catalog console, app-home junction and optional AppService reload on the locked host
+        type: boolean
+        default: false
+      readiness_only:
+        description: Only the original native restart-confirmation loop measurement on a fresh locked host; no storage rerun
+        type: boolean
+        default: false
+      candidate_ref:
+        description: Full immutable application SHA required for an explicit native scope; workflow and product sources stay distinct
+        type: string
+        default: ''
   pull_request:
     paths:
       - 'components/web-client.source.json'
@@ -137,7 +157,7 @@ permissions:
   contents: read
 jobs:
   instance-branding-storage:
-    if: ${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -171,7 +191,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   passive-process-check:
-    if: ${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -224,7 +244,7 @@ jobs:
           print('native replaced-while-read cases:', count, 'run:', result.testsRun, 'skipped:', len(result.skipped));
           sys.exit(not (result.wasSuccessful() and count and count == result.testsRun and not result.skipped))"
   windows-private-config-tls:
-    if: ${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
     runs-on: windows-latest
     timeout-minutes: 5
     env:
@@ -300,7 +320,7 @@ jobs:
     # disposable runner's MACHINE store, because a hosted runner cannot answer
     # the question Windows asks for a person's own store. The product never uses
     # the machine store. The test removes the root in every case.
-    if: ${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}
     runs-on: windows-latest
     timeout-minutes: 12
     env:
@@ -484,7 +504,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows uninstall delete-choice checks failed.' }
           if (($log -join "`n") -match '\d+ skipped') { throw 'A native uninstall case was skipped on this lane.' }
   windows-user-trial:
-    if: ${{ inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only) }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only && !inputs.candidate_ref && (inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only)) }}
     # Candidate-only combined boundary, not a universal suite/release gate.
     # The existing 5-minute stdlib/PowerShell and private-config lanes are unchanged.
     runs-on: windows-latest
@@ -583,7 +603,7 @@ jobs:
     # Public dependency setup is intentional ONLY here. Do not relax the
     # separate offline qualifier or supply a preinstalled replacement command.
     needs: windows-user-trial
-    if: ${{ !inputs.bootstrap_only && !inputs.storage_only && !cancelled() && (inputs.foreground_only || needs.windows-user-trial.result == 'success') }}
+    if: ${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && (inputs.remaining_runtime_only || inputs.cold_only || inputs.native_prefix_only || inputs.readiness_only || inputs.candidate_ref != '')) || (!inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.storage_only && (inputs.foreground_only || needs.windows-user-trial.result == 'success'))) }}
     runs-on: windows-latest
     # 6-minute setup + 2-minute metadata check + unchanged 21-minute cold check
     # + 4-minute CLI cell + overhead. The step budgets stay below this budget.
@@ -594,9 +614,47 @@ jobs:
       UV_NO_BUILD_PACKAGE: amplifier-core
       UV_PYTHON_DOWNLOADS: never
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      REMAINING_RUNTIME_ONLY: ${{ inputs.remaining_runtime_only && 'true' || 'false' }}
+      COLD_ONLY: ${{ inputs.cold_only && 'true' || 'false' }}
+      NATIVE_PREFIX_ONLY: ${{ inputs.native_prefix_only && 'true' || 'false' }}
+      READINESS_ONLY: ${{ inputs.readiness_only && 'true' || 'false' }}
     steps:
+      - name: Validate the isolated remaining-runtime selection before setup
+        env:
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+          BOOTSTRAP_ONLY: ${{ inputs.bootstrap_only && 'true' || 'false' }}
+          FOREGROUND_ONLY: ${{ inputs.foreground_only && 'true' || 'false' }}
+          STORAGE_ONLY: ${{ inputs.storage_only && 'true' || 'false' }}
+        shell: pwsh
+        run: |
+          $check = @'
+          import os, re
+          def validate_selection(env):
+              selected = env['REMAINING_RUNTIME_ONLY'] == 'true'
+              cold = env['COLD_ONLY'] == 'true'
+              prefix = env['NATIVE_PREFIX_ONLY'] == 'true'
+              readiness = env['READINESS_ONLY'] == 'true'
+              candidate = env['CANDIDATE_REF']
+              assert sum((selected, cold, prefix, readiness)) <= 1, 'native scopes are mutually exclusive'
+              if selected or cold or prefix or readiness:
+                  assert env['GITHUB_EVENT_NAME'] == 'workflow_dispatch'
+                  assert re.fullmatch('[a-f0-9]{40}', candidate)
+                  assert all(env[key] == 'false' for key in ('BOOTSTRAP_ONLY', 'FOREGROUND_ONLY', 'STORAGE_ONLY'))
+              else:
+                  assert candidate == '', 'candidate_ref belongs only to an explicit native scope'
+          validate_selection(os.environ)
+          '@
+          python -I -S -B -c $check
+          if ($LASTEXITCODE -ne 0) { throw 'Invalid remaining-runtime selection; no candidate setup started.' }
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
+      - name: Read the exact remaining-runtime application candidate
+        if: ${{ inputs.remaining_runtime_only || inputs.cold_only || inputs.native_prefix_only || inputs.readiness_only }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.candidate_ref }}
+          path: .ci/remaining-candidate
           persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
@@ -604,6 +662,7 @@ jobs:
           architecture: x64
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - name: Build and install candidate host for cold default-command setup
+        if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only }}
         timeout-minutes: 6
         shell: pwsh
         run: |
@@ -611,6 +670,7 @@ jobs:
           $base = Join-Path $env:RUNNER_TEMP 'dr-ci'
           New-Item -ItemType Directory -Path "$base/evidence" -ErrorAction Stop | Out-Null
           "DEFAULT_TRIAL_BASE=$base" >> $env:GITHUB_ENV
+          "DEFAULT_CANDIDATE_SOURCE=$env:GITHUB_WORKSPACE" >> $env:GITHUB_ENV
           python -I -B tests/fixtures/windows_user_trial_probe.py --candidate . --receipt "$base/candidate.json"
           if ($LASTEXITCODE -ne 0) { throw 'Default-command candidate identity check failed.' }
           python -I -S -B -c "import sys,sysconfig,struct; assert sys.platform=='win32'; assert sys.implementation.name=='cpython'; assert sys.version_info[:2]==(3,13); assert struct.calcsize('P')==8; assert not sysconfig.get_config_var('Py_GIL_DISABLED')"
@@ -625,7 +685,502 @@ jobs:
           if ($wheel.Count -ne 1) { throw 'Expected exactly one default-command candidate wheel.' }
           uv pip install --python "$base/env/Scripts/python.exe" --only-binary amplifier-core $wheel[0].FullName "pytest>=8,<10" "pytest-asyncio>=1.4,<2" "pytest-aiohttp>=1.1,<2" @modules
           if ($LASTEXITCODE -ne 0) { throw 'Default-command candidate host installation failed.' }
+      - name: Build and install the locked host for the remaining native cases
+        if: ${{ inputs.remaining_runtime_only || inputs.cold_only || inputs.native_prefix_only || inputs.readiness_only }}
+        timeout-minutes: 6
+        shell: pwsh
+        env:
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $env:GITHUB_WORKSPACE '.ci/remaining-candidate'
+          $base = Join-Path $env:RUNNER_TEMP 'dr-ci'
+          New-Item -ItemType Directory -Path "$base/evidence" -ErrorAction Stop | Out-Null
+          "DEFAULT_TRIAL_BASE=$base" >> $env:GITHUB_ENV
+          "DEFAULT_CANDIDATE_SOURCE=$source" >> $env:GITHUB_ENV
+          python -I -S -B -c "import sys,sysconfig,struct; assert sys.platform=='win32'; assert sys.implementation.name=='cpython'; assert sys.version_info[:2]==(3,13); assert struct.calcsize('P')==8; assert not sysconfig.get_config_var('Py_GIL_DISABLED'); assert sys._base_executable"
+          if ($LASTEXITCODE -ne 0) { throw 'Ordinary native Python preflight failed.' }
+          foreach ($hostSpec in @(@('powershell.exe', '5.1'), @('pwsh.exe', '7'))) {
+            $hostCommand = Get-Command $hostSpec[0] -CommandType Application -ErrorAction Stop
+            & $hostCommand.Source -NoProfile -NonInteractive -Command "`$version = `$PSVersionTable.PSVersion; if (-not `$version.ToString().StartsWith('$($hostSpec[1])')) { exit 1 }"
+            if ($LASTEXITCODE -ne 0) { throw 'A required PowerShell host is unavailable.' }
+          }
+          python -I -B "$source/tests/fixtures/windows_user_trial_probe.py" --candidate $source --receipt "$base/candidate.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Selected candidate identity check failed.' }
+          python -I -S -B -c "import json,os,pathlib,sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8')); assert r['candidate']['head']==os.environ['CANDIDATE_REF']" "$base/candidate.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Selected candidate differs from the immutable input.' }
+          $lockBefore = (Get-FileHash "$source/uv.lock" -Algorithm SHA256).Hash
+          $env:UV_PROJECT_ENVIRONMENT = "$base/env"
+          try {
+            uv sync --project $source --locked --group dev --no-install-project --python (Get-Command python).Source
+            if ($LASTEXITCODE -ne 0) { throw 'Locked host preparation failed.' }
+          } finally {
+            Remove-Item Env:UV_PROJECT_ENVIRONMENT -ErrorAction SilentlyContinue
+          }
+          uv build --project $source --wheel --out-dir "$base/wheels"
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate wheel build failed.' }
+          $wheel = @(Get-ChildItem "$base/wheels/*.whl")
+          if ($wheel.Count -ne 1) { throw 'Expected one candidate wheel.' }
+          uv pip install --python "$base/env/Scripts/python.exe" --no-deps $wheel[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Noneditable candidate installation failed.' }
+          uv pip check --python "$base/env/Scripts/python.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Locked installed host dependency check failed.' }
+          if ((Get-FileHash "$source/uv.lock" -Algorithm SHA256).Hash -ne $lockBefore) { throw 'Candidate lock changed during setup.' }
+      - name: Require the exact locked-host native selection
+        if: ${{ inputs.remaining_runtime_only || inputs.native_prefix_only || inputs.readiness_only }}
+        timeout-minutes: ${{ inputs.readiness_only && 4 || 3 }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $check = @'
+          import contextlib, hashlib, importlib, importlib.metadata as metadata, importlib.util, json, math, os, pathlib, re, shutil, sys, tomllib
+          from urllib.parse import parse_qs, urlsplit, urlunsplit
+          source, base, workflow = map(pathlib.Path, sys.argv[1:])
+          prefix = os.environ.get('NATIVE_PREFIX_ONLY') == 'true'
+          readiness = os.environ.get('READINESS_ONLY') == 'true'
+          nodes = (
+              "tests/test_runtime.py::test_native_windows_runtime_worker_identity_pipes_and_job_cleanup[False]",
+              "tests/test_runtime.py::test_native_windows_runtime_worker_identity_pipes_and_job_cleanup[True]",
+              "tests/test_runtime.py::test_native_windows_runtime_cancel_before_identity_reaps_job",
+              "tests/test_remote_test_origins.py::test_windows_junction_parent_is_not_followed",
+              "tests/test_remote_test_origins.py::test_windows_shared_write_acl_cannot_authorize_retained_records",
+          )
+          if prefix:
+              nodes = (
+                  "tests/test_decision_accounts.py::test_real_catalog_child_does_not_allocate_console",
+                  "tests/test_host_config.py::NativeHomeBoundaryTests::test_app_home_through_read_config_rejects_junction_without_changing_target",
+                  "tests/test_optional_controller_availability.py::test_native_default_selection_full_app_chat_save_reload",
+              )
+          NODE = 'tests/test_update_readiness.py::test_native_windows_the_loop_runs_during_the_real_owner_questions_of_a_restart_confirmation'
+          if readiness:
+              nodes = (NODE,)
+          stem = 'readiness' if readiness else 'prefix' if prefix else 'five'
+          def host_graph():
+              rows = []
+              for dist in metadata.distributions():
+                  name = re.sub(r'[-_.]+', '-', dist.metadata['Name']).lower()
+                  if name == 'amplifier-unified':
+                      continue  # Independently byte-bound to the selected wheel.
+                  direct = json.loads(dist.read_text('direct_url.json') or '{}')
+                  rows.append({'name': name, 'version': dist.version, 'direct': direct})
+              assert len({row['name'] for row in rows}) == len(rows)
+              return sorted(rows, key=lambda row: row['name'])
+          def verify_locked_graph(rows, lock):
+              for row in rows:
+                  choices = [p for p in lock['package'] if p['name'] == row['name'] and p['version'] == row['version']]
+                  assert len(choices) == 1
+                  selected, direct = choices[0]['source'], row['direct']
+                  if 'git' in selected:
+                      url = urlsplit(selected['git'])
+                      assert direct == {'url': urlunsplit((url.scheme, url.netloc, url.path, '', '')),
+                          'vcs_info': {'vcs': 'git', 'commit_id': url.fragment,
+                                       'requested_revision': parse_qs(url.query)['rev'][0]},
+                          **({'subdirectory': parse_qs(url.query)['subdirectory'][0]}
+                             if 'subdirectory' in parse_qs(url.query) else {})}
+                  else:
+                      assert set(selected) == {'registry'} and not direct
+              required = {'amplifier-core', 'amplifier-foundation', 'amplifier-module-loop-live',
+                          'pytest', 'pytest-asyncio', 'pytest-aiohttp', 'filelock', 'pyyaml'}
+              assert required <= {row['name'] for row in rows}
+          def safe_failure(error, paths, depth=0):
+              # Never format an exception, pytest longrepr, source text or locals.
+              # Unknown types/paths are explicit omissions, not arbitrary strings.
+              kind = type(error)
+              allowed = {'AssertionError', 'RuntimeError', 'TimeoutError', 'PermissionError',
+                         'OSError', 'FileNotFoundError', 'ValueError', 'TypeError', 'KeyError',
+                         'ImportError', 'ModuleNotFoundError', 'CancelledError', 'Failed',
+                         'ExceptionGroup', 'BaseExceptionGroup', 'SystemExit'}
+              name = kind.__name__ if kind.__module__ in {
+                  'builtins', 'asyncio.exceptions', '_pytest.outcomes'} and kind.__name__ in allowed else 'other'
+              if (kind.__module__, kind.__name__) in {
+                  ('amplifier_web.runtime', 'RuntimeStartupError'),
+                  ('amplifier_web.windows_jobs', 'CleanupError'),
+                  ('json.decoder', 'JSONDecodeError')}:
+                  name = kind.__name__
+              category = {'AssertionError': 'assertion', 'Failed': 'assertion',
+                          'TimeoutError': 'timeout', 'PermissionError': 'permission',
+                          'ImportError': 'import', 'ModuleNotFoundError': 'import',
+                          'CancelledError': 'cancellation'}.get(name, 'error')
+              frames, omitted, seen = [], 0, 0
+              trace = error.__traceback__
+              while trace is not None and seen < 128:
+                  seen += 1
+                  location = paths.get(os.path.normcase(os.path.abspath(trace.tb_frame.f_code.co_filename)))
+                  if location is not None and 0 < trace.tb_lineno <= location[1] and len(frames) < 16:
+                      frames.append({'file': location[0], 'line': trace.tb_lineno})
+                  else:
+                      omitted += 1
+                  trace = trace.tb_next
+              cause = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
+              return {'type': name, 'category': category, 'frames': frames,
+                      'omittedFrames': omitted, 'traceTruncated': trace is not None,
+                      'chain': [safe_failure(cause, paths, depth + 1)] if cause is not None and depth < 3 else [],
+                      'chainTruncated': cause is not None and depth >= 3,
+                      'groupMembersOmitted': len(error.exceptions) if isinstance(error, BaseExceptionGroup) else 0}
+          def safe_lease_witness(value, paths):
+              # Only the fixed test-local schema leaves private pytest capture.
+              # Never include rejected input, exception text or descriptors.
+              invalid = {'status': 'invalid'}
+              if type(value) is not dict or set(value) != {
+                      'version', 'acquisitions', 'failure', 'observerError', 'restored'}:
+                  return invalid
+              if (type(value['version']) is not int or value['version'] != 1 or
+                      type(value['acquisitions']) is not int or not 0 <= value['acquisitions'] <= 4 or
+                      type(value['observerError']) is not bool or type(value['restored']) is not bool):
+                  return invalid
+              failure = value['failure']
+              if failure is not None:
+                  if type(failure) is not dict or set(failure) != {
+                          'role', 'private', 'owner', 'daclPresent', 'daclNonNull',
+                          'beforeAcquisition', 'firstOpen', 'observation', 'stage', 'validatorLine'}:
+                      return invalid
+                  choices = {
+                      'role': ('ancestor', 'app-root', 'updates', 'worker-leases', 'non-directory', 'other', 'unknown'),
+                      'owner': ('current-user', 'OS-authority', 'other', 'unknown'),
+                      'beforeAcquisition': ('not-observed',),
+                      'firstOpen': ('returned', 'missing', 'error', 'not-observed'),
+                      'observation': ('in-call-read-results',),
+                      'stage': ('validator-entry', 'security-info', 'descriptor-control', 'owner-read', 'acl-entries')}
+                  if any(type(failure[key]) is not str or failure[key] not in options for key, options in choices.items()):
+                      return invalid
+                  if type(failure['private']) is not bool or any(
+                          failure[key] is not None and type(failure[key]) is not bool
+                          for key in ('daclPresent', 'daclNonNull')):
+                      return invalid
+                  line = failure['validatorLine']
+                  bounds = [size for name, size in paths.values() if name == 'amplifier_web/windows_files.py']
+                  if line is not None and (type(line) is not int or not bounds or not 0 < line <= min(bounds)):
+                      return invalid
+                  failure = dict(failure)
+              return {'status': 'observed', 'version': 1, 'acquisitions': value['acquisitions'],
+                      'failure': failure, 'observerError': value['observerError'], 'restored': value['restored']}
+          class Results:
+              def __init__(self, paths=None):
+                  self.paths = paths or {}
+                  self.collected, self.phases, self.failures = [], [], []
+                  self.invalid, self.collection_seen = False, False
+                  self.collected_count = self.phase_count = self.failure_count = 0
+                  self.unavailable_failures = 0
+                  self.collect_failed = self.collect_skipped = self.xfailed = 0
+                  self.unexpected_collected = self.unexpected_phases = 0
+                  self.unknown_nodes = {}
+                  self.lease_witnesses = []
+              def node(self, value):
+                  if value in nodes:
+                      return value
+                  if value not in self.unknown_nodes:
+                      if len(self.unknown_nodes) >= 32:
+                          self.invalid = True
+                          return '<unrecognized-overflow>'
+                      self.unknown_nodes[value] = '<unrecognized-' + str(len(self.unknown_nodes) + 1) + '>'
+                  return self.unknown_nodes[value]
+              def pytest_collection_finish(self, session):
+                  self.invalid |= self.collection_seen
+                  self.collection_seen = True
+                  for item in session.items:
+                      self.collected_count += 1
+                      self.unexpected_collected += int(item.nodeid not in nodes)
+                      if len(self.collected) < 32:
+                          self.collected.append(self.node(item.nodeid))
+                      else:
+                          self.invalid = True
+              def pytest_collectreport(self, report):
+                  self.invalid |= report.failed or report.skipped
+                  self.collect_failed += int(report.failed)
+                  self.collect_skipped += int(report.skipped)
+              def pytest_runtest_makereport(self, item, call):
+                  # Observe after pytest's unittest bridge has transferred its
+                  # caught exception to call.excinfo and made the real report.
+                  # Never replace that report, render longrepr or read subtest
+                  # parameters (which may contain private paths).
+                  outcome = yield
+                  report = outcome.get_result()
+                  witness = getattr(item, '_native_lease_witness', None)
+                  if witness is not None:
+                      if len(self.lease_witnesses) < 15:
+                          safe = safe_lease_witness(witness, self.paths)
+                          self.invalid |= safe['status'] == 'invalid'
+                          self.lease_witnesses.append({'node': self.node(item.nodeid),
+                              'phase': call.when if call.when in ('setup', 'call', 'teardown') else 'other', **safe})
+                      else:
+                          self.invalid = True
+                  if call.excinfo is not None or report.failed:
+                      self.failure_count += 1
+                      unavailable = call.excinfo is None
+                      self.unavailable_failures += int(unavailable)
+                      if len(self.failures) < 16:
+                          facts = safe_failure(call.excinfo.value, self.paths) if not unavailable else {
+                              'type': 'unavailable', 'category': 'error', 'frames': [],
+                              'omittedFrames': 0, 'traceTruncated': False, 'chain': [],
+                              'chainTruncated': False, 'groupMembersOmitted': 0}
+                          self.failures.append({'node': self.node(item.nodeid),
+                              'phase': call.when if call.when in ('setup', 'call', 'teardown') else 'other',
+                              'exceptionAvailable': not unavailable, **facts})
+                      else:
+                          self.invalid = True
+                  # No force_result/force_exception: preserve pytest's outcome.
+              def pytest_runtest_logreport(self, report):
+                  self.phase_count += 1
+                  xfail = hasattr(report, 'wasxfail')
+                  self.xfailed += int(xfail)
+                  self.unexpected_phases += int(report.nodeid not in nodes)
+                  if (report.nodeid not in nodes or xfail or
+                          report.when not in ('setup', 'call', 'teardown') or
+                          report.outcome not in ('passed', 'failed', 'skipped')):
+                      self.invalid = True
+                  if len(self.phases) < 96:
+                      self.phases.append((self.node(report.nodeid),
+                          report.when if report.when in ('setup', 'call', 'teardown') else 'other',
+                          report.outcome if report.outcome in ('passed', 'failed', 'skipped') else 'other'))
+                  else:
+                      self.invalid = True
+              def passed(self, code):
+                  return (code == 0 and not self.invalid and self.collection_seen and
+                      self.collected_count == len(nodes) and self.phase_count == len(nodes) * 3 and
+                      not self.failure_count and self.collected == list(nodes) and self.phases == [
+                      (node, phase, 'passed') for node in nodes for phase in ('setup', 'call', 'teardown')])
+              def snapshot(self, code):
+                  # Retain extras/duplicates instead of expected-only filtering.
+                  # Private unexpected IDs stay redacted, with exact event counts.
+                  return {'collected': self.collected, 'collectedCount': self.collected_count,
+                      'collectionObserved': self.collection_seen, 'collectionExact': self.collected == list(nodes)
+                          and self.collected_count == len(nodes) and self.collection_seen,
+                      'collectionFailures': self.collect_failed, 'collectionSkips': self.collect_skipped,
+                      'unexpectedCollected': self.unexpected_collected, 'unexpectedPhases': self.unexpected_phases,
+                      'phases': [list(row) for row in self.phases], 'phaseCount': self.phase_count,
+                      'wasxfailCount': self.xfailed, 'invalid': self.invalid,
+                      'exitCode': int(code) if isinstance(code, int) and 0 <= code <= 255 else None,
+                      'failures': self.failures, 'failureCount': self.failure_count,
+                      'unavailableFailureCount': self.unavailable_failures,
+                      'leaseWitnesses': self.lease_witnesses,
+                      'omittedCollected': self.collected_count - len(self.collected),
+                      'omittedPhases': self.phase_count - len(self.phases),
+                      'omittedFailures': self.failure_count - len(self.failures),
+                      'passed': self.passed(code)}
+          # Measurement and its acceptance remain separate. These three definitions
+          # retain the accepted storage/readiness route's closed failure evidence.
+          def measurement(raw):
+              # The test's output is private until every nested public field is closed.
+              def keys(value, names):
+                  assert type(value) is dict and set(value) == set(names)
+              def number(value):
+                  assert type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 10**9
+              keys(raw, ('confirmation', 'result', 'alone', 'runner'))
+              c = raw['confirmation']
+              keys(c, ('seconds', 'longestLoopPause', 'longestLoopPauseBeforeIt', 'longestHttpWait',
+                  'httpRequests', 'httpNot200', 'ownerQuestions', 'otherWorkOnTheLoop', 'installedPackagesRead'))
+              for name in ('seconds', 'longestLoopPause', 'longestLoopPauseBeforeIt', 'longestHttpWait',
+                           'httpRequests', 'httpNot200'):
+                  number(c[name])
+              assert type(c['ownerQuestions']) is list and len(c['ownerQuestions']) <= 16
+              for q in c['ownerQuestions']:
+                  keys(q, ('seconds', 'startedAfter', 'onLoopThread', 'realAnswer', 'loopTicksDuring', 'httpAnswersDuring'))
+                  for name in ('seconds', 'startedAfter', 'loopTicksDuring', 'httpAnswersDuring'):
+                      number(q[name])
+                  assert type(q['onLoopThread']) is bool and q['realAnswer'] in ('no task', 'a task')
+              assert type(c['otherWorkOnTheLoop']) is list and len(c['otherWorkOnTheLoop']) <= 256
+              for row in c['otherWorkOnTheLoop']:
+                  keys(row, ('what', 'seconds', 'startedAfter'))
+                  assert row['what'] in ('installed packages read', 'acknowledge', 'diagnostic record', 'publish')
+                  number(row['seconds']); number(row['startedAfter'])
+              keys(c['installedPackagesRead'], ('graph', 'extras'))
+              assert all(v in ('complete', 'ValueError') for v in c['installedPackagesRead'].values())
+              keys(raw['result'], ('phase', 'pendingRestart', 'record'))
+              assert raw['result']['phase'] in ('installed', 'activating', 'error', 'failed', None)
+              assert raw['result']['record'] in ('prepared', 'acknowledged', 'failed', None)
+              keys(raw['runner'], ('python', 'cpus'))
+              assert type(raw['runner']['python']) is str and re.fullmatch(r'3\.13\.[0-9]{1,3}', raw['runner']['python'])
+              assert type(raw['runner']['cpus']) is int and 0 < raw['runner']['cpus'] <= 4096
+              keys(raw['alone'], ('ownerQuestion', 'saveToSqlite', 'installedGraphAndExtras',
+                                  'handOverRecordWrite', 'runRecordRead'))
+              result = json.loads(json.dumps(raw))
+              # Pending replacement records can contain private installation data.
+              result['result'] = {'phase': raw['result']['phase'], 'record': raw['result']['record'],
+                                  'pendingRestartPresent': raw['result']['pendingRestart'] is not None}
+              for rows in result['alone'].values():
+                  assert type(rows) is list and len(rows) == 3
+                  for row in rows:
+                      if type(row) is dict:
+                          keys(row, ('seconds', 'error')); number(row['seconds'])
+                          # Never expose an arbitrary exception class name.
+                          row['error'] = row['error'] if row['error'] in (
+                              'ValueError', 'OSError', 'PermissionError', 'RuntimeError', 'TimeoutError') else 'other'
+                      else:
+                          number(row)
+              return result
+          def measurement_passed(value):
+              c = value['confirmation']
+              return (value['result'] == {'phase': 'installed', 'pendingRestartPresent': False, 'record': 'acknowledged'}
+                  and c['httpNot200'] == 0 and len(c['ownerQuestions']) == 2
+                  and all(not q['onLoopThread'] and q['loopTicksDuring'] >= 1 and q['httpAnswersDuring'] >= 1
+                          for q in c['ownerQuestions']))
+          class Readiness:
+              def __init__(self):
+                  self.collected, self.phases, self.measurements = [], [], []
+                  self.invalid = False
+              def pytest_collection_finish(self, session):
+                  self.collected = [i.nodeid for i in session.items]
+              def pytest_collectreport(self, report):
+                  self.invalid |= report.failed or report.skipped
+              def pytest_runtest_logreport(self, report):
+                  self.invalid |= report.nodeid != NODE or hasattr(report, 'wasxfail')
+                  self.phases.append((report.when, report.outcome))
+                  if report.nodeid == NODE and report.when == 'call':
+                      for line in report.capstdout.splitlines():
+                          if line.startswith('HOST-LOOP-MEASUREMENT '):
+                              self.measurements.append(line[len('HOST-LOOP-MEASUREMENT '):])
+              def evidence(self):
+                  if not self.measurements:
+                      return {'status': 'absent', 'value': None}
+                  if len(self.measurements) != 1:
+                      return {'status': 'duplicate', 'value': None}
+                  try:
+                      assert len(self.measurements[0].encode()) <= 65536
+                      value = measurement(json.loads(self.measurements[0]))
+                  except (AssertionError, ValueError, TypeError, KeyError, RecursionError):
+                      return {'status': 'invalid', 'value': None}
+                  return {'status': 'valid', 'value': value}
+              def cleanup(self):
+                  if not any(phase == 'call' for phase, _ in self.phases):
+                      return 'not-run'
+                  if self.evidence()['status'] == 'valid':
+                      # This fixed test prints inside its try; a returned call report
+                      # then proves it traversed finally, not that cleanup completed.
+                      return 'attempted-unverified'
+                  return 'unknown'
+              def finish(self, code):
+                  assert code == 0 and not self.invalid and self.collected == [NODE]
+                  assert self.phases == [(p, 'passed') for p in ('setup', 'call', 'teardown')]
+                  observation = self.evidence()
+                  assert observation['status'] == 'valid' and measurement_passed(observation['value'])
+                  return observation['value']
+          result = {'schema': 1, 'status': 'FAIL', 'publicAcceptance': False,
+                    'qualification': 'prefix-three-locked-host-native-cases' if prefix else 'five-locked-host-native-cases',
+                    'nodes': list(nodes),
+                    'postTestAudit': 'not-run', 'stage': 'installed'}
+          if readiness:
+              result.update(qualification='readiness-one-locked-host-native-case',
+                  storageScope='not-selected-not-requalified', cleanup='not-run',
+                  cleanupScope='not-independent-thread-or-scratch-absence',
+                  packageReadScope='measurement-attempts-not-replacement-matching')
+          paths, selected, measured, code = {}, None, None, None
+          try:
+              with (base / ('private-' + stem + '.log')).open('x', encoding='utf-8') as logs:
+                  with contextlib.redirect_stdout(logs), contextlib.redirect_stderr(logs):
+                      spec = importlib.util.spec_from_file_location('installed_audit', source / 'tests/fixtures/windows_user_trial_probe.py')
+                      audit = importlib.util.module_from_spec(spec); spec.loader.exec_module(audit)
+                      if readiness:
+                          audit.require_ci()
+                      wheel, = (base / 'wheels').glob('*.whl')
+                      before = audit.installed(wheel, result)
+                      graph = host_graph()
+                      lock_bytes = (source / 'uv.lock').read_bytes()
+                      verify_locked_graph(graph, tomllib.loads(lock_bytes.decode()))
+                      candidate = json.loads((base / 'candidate.json').read_text(encoding='utf-8'))['candidate']
+                      assert audit.candidate(source) == candidate
+                      result.update(candidate=candidate, workflow=audit.candidate(workflow),
+                          lockSha256=hashlib.sha256(lock_bytes).hexdigest(), installed=before)
+                      # This private witness includes PEP610 URLs. Only its digest and
+                      # already audited public graph leave this runner.
+                      (base / 'locked-host.json').write_text(json.dumps(graph, sort_keys=True), encoding='utf-8')
+                      result['hostGraphSha256'] = hashlib.sha256(json.dumps(graph, sort_keys=True).encode()).hexdigest()
+                      members = ('runtime', 'runtime_worker', 'windows_jobs', 'windows_launch_guard',
+                                 'test_origin_files', 'test_origin_storage', 'test_origin_snapshot', 'windows_files')
+                      if prefix:
+                          members = ('decision_accounts', 'host.config', 'deployment', 'windows_files',
+                                     'service', 'publishing', 'portability')
+                      if readiness:
+                          members = ('service', 'host.storage', 'resource_files', 'windows_read_files', 'windows_files',
+                                     'shared_state', 'update_readiness', 'windows_app_recovery', 'windows_service',
+                                     'windows_task_runtime', 'app_replacement', 'app_updates', 'app_component_graph', 'updates')
+                      result['sourceImports'] = {}
+                      for name in members:
+                          path = pathlib.Path(importlib.import_module('amplifier_web.' + name).__file__).resolve()
+                          expected = source / 'amplifier_web' / (name.replace('.', '/') + '.py')
+                          assert path.is_relative_to(pathlib.Path(sys.prefix).resolve()) and path.read_bytes() == expected.read_bytes()
+                          result['sourceImports'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
+                          paths[os.path.normcase(os.path.abspath(path))] = (
+                              'amplifier_web/' + name.replace('.', '/') + '.py', len(expected.read_bytes().splitlines()))
+                      # Additional known startup frames, byte-bound without importing
+                      # more product modules merely for diagnostics.
+                      app_root = pathlib.Path(importlib.import_module('amplifier_web').__file__).resolve().parent
+                      result['diagnosticSources'] = {}
+                      for name in ('generation_leases.py', 'host/config.py'):
+                          actual = app_root / name
+                          expected = source / 'amplifier_web' / name
+                          assert actual.read_bytes() == expected.read_bytes()
+                          result['diagnosticSources']['amplifier_web/' + name] = hashlib.sha256(actual.read_bytes()).hexdigest()
+                          paths[os.path.normcase(os.path.abspath(actual))] = (
+                              'amplifier_web/' + name, len(expected.read_bytes().splitlines()))
+                      target = base / (stem + '-tests')
+                      files = ('tests/conftest.py', 'tests/test_runtime.py', 'tests/test_remote_test_origins.py')
+                      if prefix:
+                          files = ('tests/conftest.py', 'tests/test_decision_accounts.py',
+                                   'tests/test_runtime_controls.py', 'tests/test_host_config.py',
+                                   'tests/test_optional_controller_availability.py', 'tests/test_service.py')
+                      if readiness:
+                          files = ('tests/conftest.py', 'tests/test_update_readiness.py', 'tests/test_service.py',
+                                   'tests/fixtures/manual_app_handoff_native.py')
+                      result['testFiles'] = {}
+                      result['testAuthoring'] = {}
+                      for name in files:
+                          # Only the reviewed native runtime fixture is authored with
+                          # this workflow. Product, locks and other fixtures stay at
+                          # candidate_ref; never label changed tests as product bytes.
+                          origin = workflow if name == 'tests/test_runtime.py' else source
+                          path = target / name; path.parent.mkdir(parents=True, exist_ok=True)
+                          shutil.copyfile(origin / name, path)
+                          assert path.read_bytes() == (origin / name).read_bytes()
+                          result['testFiles'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
+                          result['testAuthoring'][name] = (result['workflow'] if origin == workflow else candidate)
+                          paths[os.path.normcase(os.path.abspath(path))] = (name, len(path.read_bytes().splitlines()))
+                      assert {p.name for p in target.iterdir()} == {'tests'}
+                      import pytest
+                      pytest.hookimpl(hookwrapper=True, tryfirst=True)(Results.pytest_runtest_makereport)
+                      result['stage'] = 'pytest'
+                      selected = Results(paths)
+                      plugins = [selected]
+                      if readiness:
+                          measured = Readiness()
+                          result['cleanup'] = 'unknown'
+                          plugins.append(measured)
+                      code = pytest.main(['-q', '-p', 'no:cacheprovider', '-p', 'pytest_asyncio.plugin',
+                          '-p', 'aiohttp.pytest_plugin', '-o', 'asyncio_mode=auto',
+                          '--rootdir', str(target), '--confcutdir', str(target),
+                          '--basetemp', str(base / (stem + '-temp')), *(str(target / node) for node in nodes)], plugins=plugins)
+                      if measured is not None:
+                          result['measurement'] = measured.evidence()
+                          result['cleanup'] = measured.cleanup()
+                          measured.finish(code)
+                      assert selected.passed(code)
+                      result['stage'] = 'post-test-audit'
+                      result['postTestAudit'] = 'started'
+                      assert audit.installed(wheel, result) == before and host_graph() == graph
+                      assert (source / 'uv.lock').read_bytes() == lock_bytes and audit.candidate(source) == candidate
+                      assert audit.candidate(workflow) == result['workflow']
+                      for name in files:
+                          origin = workflow if name == 'tests/test_runtime.py' else source
+                          assert (target / name).read_bytes() == (origin / name).read_bytes()
+                      result['postTestAudit'] = 'passed'
+                      result['stage'] = 'complete'
+                      result['status'] = 'PASS'
+          except Exception as error:
+              result['wrapperFailure'] = safe_failure(error, paths)
+              if result['postTestAudit'] == 'started':
+                  result['postTestAudit'] = 'failed'
+          finally:
+              result['selection'] = selected.snapshot(code) if selected is not None else None
+              if measured is not None:
+                  result['measurement'] = measured.evidence()
+                  result['cleanup'] = measured.cleanup() if code is not None else 'unknown'
+          assert len(json.dumps(result).encode()) <= 131072
+          (base / ('evidence/' + stem + '-native.json')).write_text(json.dumps(result, sort_keys=True), encoding='utf-8')
+          raise SystemExit(0 if result['status'] == 'PASS' else 1)
+          '@
+          & "$env:DEFAULT_TRIAL_BASE/env/Scripts/python.exe" -I -B -c $check $env:DEFAULT_CANDIDATE_SOURCE $env:DEFAULT_TRIAL_BASE $env:GITHUB_WORKSPACE
+          if ($LASTEXITCODE -ne 0) { throw 'Selected locked-host native cases failed; later work was not started.' }
       - name: Check closed metadata observation and original-outcome preservation
+        if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only }}
         timeout-minutes: 2
         shell: pwsh
         run: |
@@ -669,7 +1224,7 @@ jobs:
           & "$env:DEFAULT_TRIAL_BASE/env/Scripts/python.exe" -B -c $check $env:DEFAULT_TRIAL_BASE
           if ($LASTEXITCODE -ne 0) { throw 'Closed metadata observation tests failed; inspect bounded summary.' }
       - name: Require one native cold default-command call PASS with no skip
-        if: ${{ !inputs.foreground_only }}
+        if: ${{ !inputs.foreground_only && !inputs.native_prefix_only && !inputs.readiness_only }}
         # The maintained node has a finite 1200-second subprocess deadline.
         # Leave one minute for collection, safe evidence and cleanup handling.
         timeout-minutes: 21
@@ -682,10 +1237,105 @@ jobs:
           $env:AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_PYTHON = "$base/env/Scripts/python.exe"
           $env:AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_WHEEL = $wheel[0].FullName
           $env:AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_REPORT = "$base/probe-result.json"
+          if ($env:REMAINING_RUNTIME_ONLY -eq 'true') {
+            # Only this invocation's scratch can be inspected after confirmed
+            # cleanup. This does not supply a worker project, lock or command.
+            New-Item -ItemType Directory -Path "$base/cold-temp" -ErrorAction Stop | Out-Null
+            $env:TEMP = "$base/cold-temp"
+            $env:TMP = "$base/cold-temp"
+          }
           $check = @'
-          import contextlib, hashlib, importlib.util, json, os, pathlib, shutil, sys
+          import contextlib, hashlib, importlib.metadata as metadata, importlib.util, json, os, pathlib, re, shutil, sys, tomllib
+          from urllib.parse import parse_qs, urlsplit, urlunsplit
           source, base = map(pathlib.Path, sys.argv[1:])
           node = "tests/test_runtime.py::test_native_windows_default_runtime_command_cold_prepare_turn_and_stop"
+          focused = os.environ.get('REMAINING_RUNTIME_ONLY') == 'true'
+          cold_only = os.environ.get('COLD_ONLY') == 'true'
+          assert not (focused and cold_only)
+          def prepare_cold_parent(base):
+              import tempfile, uuid
+              from amplifier_web.windows_files import address, directory
+              # Refuse an earlier cached/fallback TEMP; never reset the cache.
+              assert tempfile.tempdir is None
+              parent = address(pathlib.Path.home() / ('.drt-' + uuid.uuid4().hex[:12]))
+              assert not parent.exists()
+              # Private custody before creation, not part of the public upload.
+              with (base / 'private-cold-parent.json').open('x', encoding='utf-8') as record:
+                  json.dump({'root': str(parent), 'custody': 'retained-for-runner-owner'}, record)
+              with directory(parent, owned_root=parent, create=True):
+                  pass
+              os.environ.update(TEMP=str(parent), TMP=str(parent), TMPDIR=str(parent))
+              assert pathlib.Path(tempfile.gettempdir()) == parent
+              return parent  # No dr-* root/worker project is prepared here.
+          def cold_root(parent):
+              roots = list(parent.glob('dr-*'))
+              assert len(roots) == 1 and re.fullmatch('dr-[a-f0-9]{12}', roots[0].name)
+              return roots[0]
+          def host_graph():
+              rows = []
+              for dist in metadata.distributions():
+                  name = re.sub(r'[-_.]+', '-', dist.metadata['Name']).lower()
+                  if name == 'amplifier-unified':
+                      continue  # Independently byte-bound to the selected wheel.
+                  direct = json.loads(dist.read_text('direct_url.json') or '{}')
+                  rows.append({'name': name, 'version': dist.version, 'direct': direct})
+              assert len({row['name'] for row in rows}) == len(rows)
+              return sorted(rows, key=lambda row: row['name'])
+          def verify_locked_graph(rows, lock):
+              for row in rows:
+                  choices = [p for p in lock['package'] if p['name'] == row['name'] and p['version'] == row['version']]
+                  assert len(choices) == 1
+                  selected, direct = choices[0]['source'], row['direct']
+                  if 'git' in selected:
+                      url = urlsplit(selected['git'])
+                      assert direct == {'url': urlunsplit((url.scheme, url.netloc, url.path, '', '')),
+                          'vcs_info': {'vcs': 'git', 'commit_id': url.fragment,
+                                       'requested_revision': parse_qs(url.query)['rev'][0]},
+                          **({'subdirectory': parse_qs(url.query)['subdirectory'][0]}
+                             if 'subdirectory' in parse_qs(url.query) else {})}
+                  else:
+                      assert set(selected) == {'registry'} and not direct
+              required = {'amplifier-core', 'amplifier-foundation', 'amplifier-module-loop-live',
+                          'pytest', 'pytest-asyncio', 'pytest-aiohttp', 'filelock', 'pyyaml'}
+              assert required <= {row['name'] for row in rows}
+          def worker_lock_graph(raw):
+              rows = []
+              for package in tomllib.loads(raw.decode())['package']:
+                  name, version, origin = package['name'], package['version'], package['source']
+                  assert re.fullmatch('[A-Za-z0-9_.-]{1,100}', name)
+                  assert re.fullmatch('[A-Za-z0-9_.+!-]{1,100}', version)
+                  row = {'name': name, 'version': version}
+                  if set(origin) == {'registry'}:
+                      assert origin['registry'] == 'https://pypi.org/simple'
+                      row['kind'] = 'registry'
+                  elif set(origin) == {'git'}:
+                      url = urlsplit(origin['git'])
+                      assert url.scheme == 'https' and url.netloc == 'github.com'
+                      assert re.fullmatch('/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', url.path)
+                      assert re.fullmatch('[a-f0-9]{40}', url.fragment)
+                      sub = parse_qs(url.query).get('subdirectory', [''])[0]
+                      assert re.fullmatch('[A-Za-z0-9_./-]{0,200}', sub) and '..' not in sub.split('/')
+                      row.update(kind='git', url=urlunsplit((url.scheme, url.netloc, url.path, '', '')),
+                                 commit=url.fragment, subdirectory=sub)
+                  else:
+                      assert origin == {'virtual': '.'} and name == 'amplifier-web-runtime'
+                      row['kind'] = 'virtual'
+                  rows.append(row)
+              assert len(rows) <= 1000 and len({row['name'] for row in rows}) == len(rows)
+              return sorted(rows, key=lambda row: row['name'])
+          def read_worker_lock(root, manifest_sha256, lock_sha256):
+              assert re.fullmatch('dr-[a-f0-9]{12}', root.name)
+              assert re.fullmatch('[a-f0-9]{64}', manifest_sha256)
+              assert re.fullmatch('[a-f0-9]{64}', lock_sha256)
+              # uv creates an ordinary file, which can have TokenOwner rather
+              # than TokenUser on an elevated runner. Observe bytes, NOT private
+              # receipt authority: the maintained source reader pins parents,
+              # refuses reparse traversal and bounds a stable regular-file read.
+              from amplifier_web.test_origin_files import source_file
+              mode, raw = source_file(root, 'app/runtime/' + manifest_sha256[:16] + '/uv.lock',
+                                      '', 1024 * 1024)
+              assert mode == '100644' and hashlib.sha256(raw).hexdigest() == lock_sha256
+              return raw
           def load(name, path):
               spec = importlib.util.spec_from_file_location(name, path)
               module = importlib.util.module_from_spec(spec)
@@ -708,17 +1358,51 @@ jobs:
           result = {"schema": 1, "status": "FAIL", "publicAcceptance": False,
                     "qualification": "cold-default-command-scripted-provider",
                     "selection": {"collected": 0, "callPassed": False, "noSkips": False}}
+          if cold_only:
+              result.update(qualification='cold-only-declared-worker-with-locked-host',
+                  workerGraphScope='fresh-shipped-manifest-not-host-lock',
+                  fiveCaseScope='not-selected-not-requalified')
           try:
               with (base / "private-check.log").open("x", encoding="utf-8") as logs:
                   with contextlib.redirect_stdout(logs), contextlib.redirect_stderr(logs):
+                      if cold_only:
+                          cold_parent = prepare_cold_parent(base)
                       audit = load("installed_candidate_audit", source / "tests/fixtures/windows_user_trial_probe.py")
                       wheel = pathlib.Path(os.environ["AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_WHEEL"])
                       assert pathlib.Path(sys.executable).samefile(os.environ["AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_PYTHON"])
                       before = audit.installed(wheel, result)
+                      if cold_only:
+                          # This invocation proves its own host. Never consume or
+                          # manufacture a five-case receipt from this or an old run.
+                          graph = host_graph()
+                          lock_bytes = (source / 'uv.lock').read_bytes()
+                          verify_locked_graph(graph, tomllib.loads(lock_bytes.decode()))
+                          workflow_identity = audit.candidate(pathlib.Path(os.environ['GITHUB_WORKSPACE']))
+                          result.update(qualification='cold-only-declared-worker-with-locked-host',
+                              workerGraphScope='fresh-shipped-manifest-not-host-lock',
+                              hostGraphSha256=hashlib.sha256(json.dumps(graph, sort_keys=True).encode()).hexdigest(),
+                              hostLockSha256=hashlib.sha256(lock_bytes).hexdigest(),
+                              workflow=workflow_identity,
+                              fiveCaseScope='not-selected-not-requalified')
+                      if focused:
+                          five = json.loads((base / 'evidence/five-native.json').read_text(encoding='utf-8'))
+                          assert five['status'] == 'PASS' and five['installed'] == before
+                          graph = json.loads((base / 'locked-host.json').read_text(encoding='utf-8'))
+                          assert host_graph() == graph
+                          assert hashlib.sha256(json.dumps(graph, sort_keys=True).encode()).hexdigest() == five['hostGraphSha256']
+                          result.update(qualification='cold-declared-worker-with-locked-host',
+                              workerGraphScope='fresh-shipped-manifest-not-host-lock',
+                              workflow=five['workflow'], hostGraphSha256=five['hostGraphSha256'],
+                              hostLockSha256=five['lockSha256'])
                       candidate = json.loads((base / "candidate.json").read_text(encoding="utf-8"))["candidate"]
                       assert set(candidate) == {"head", "tree"} and all(
                           audit.re.fullmatch(r"[0-9a-f]{40,64}", value) for value in candidate.values())
                       result["candidate"] = candidate
+                      if cold_only:
+                          assert candidate == audit.candidate(source)
+                      if focused:
+                          assert candidate == five['candidate'] == audit.candidate(source)
+                          assert hashlib.sha256((source / 'uv.lock').read_bytes()).hexdigest() == five['lockSha256']
                       target = base / "selected-tests"
                       files = ("tests/conftest.py", "tests/test_runtime.py", "tests/fixtures/windows_default_runtime_probe.py")
                       for name in files:
@@ -737,22 +1421,39 @@ jobs:
                           "callPassed": selected.phases.count(("call", "passed")) == 1,
                           "noSkips": not any(outcome == "skipped" for _, outcome in selected.phases)}
                       assert audit.installed(wheel, result) == before
+                      if cold_only:
+                          assert host_graph() == graph and (source / 'uv.lock').read_bytes() == lock_bytes
+                          assert candidate == audit.candidate(source)
+                          assert audit.candidate(pathlib.Path(os.environ['GITHUB_WORKSPACE'])) == workflow_identity
+                          for name in files:
+                              assert (target / name).read_bytes() == (source / name).read_bytes()
+                      if focused:
+                          assert host_graph() == graph
                       probe = load("default_command_report", target / "tests/fixtures/windows_default_runtime_probe.py")
                       report = json.loads(pathlib.Path(os.environ["AMPLIFIER_WINDOWS_DEFAULT_RUNTIME_REPORT"]).read_text(encoding="utf-8"))
                       probe.validate_report(report)
                       result["probe"] = report
                       assert report["wheelSha256"] == hashlib.sha256(wheel.read_bytes()).hexdigest()
                       assert selected.passed(code) and report["status"] == "PASS"
+                      if focused or cold_only:
+                          # Read ONLY the one new private root in this invocation's
+                          # TEMP, after the unchanged probe proved both owned Jobs
+                          # settled. Never delete scratch or inspect another run.
+                          root = cold_root(cold_parent if cold_only else base / 'cold-temp')
+                          raw = read_worker_lock(root, report['manifestSha256'], report['lockSha256'])
+                          result['workerLockPackages'] = worker_lock_graph(raw)
+                          result['workerImportsScope'] = 'probe-observed-imports-only-not-every-locked-package'
                       result["status"] = "PASS"
           except Exception:
               pass  # Fixed FAIL facts only. Never publish exception or subprocess prose.
           (base / "evidence/publicresult.json").write_text(json.dumps(result, sort_keys=True), encoding="utf-8")
           raise SystemExit(0 if result["status"] == "PASS" else 1)
           '@
-          & "$base/env/Scripts/python.exe" -I -B -c $check $env:GITHUB_WORKSPACE $base
+          & "$base/env/Scripts/python.exe" -I -B -c $check $env:DEFAULT_CANDIDATE_SOURCE $base
           if ($LASTEXITCODE -ne 0) { throw 'Native default-command check failed; inspect bounded publicresult.json.' }
       - name: Require installed foreground CLI TLS, public open and graceful cleanup
-        # Default success() sequencing: never run this cell after cold failure.
+        if: ${{ success() && !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only }}
+        # Preserve success sequencing explicitly: never run after cold failure.
         timeout-minutes: 4
         shell: pwsh
         run: |
@@ -764,7 +1465,7 @@ jobs:
           & "$base/env/Scripts/python.exe" -I -B $probe --cli-run $wheel[0].FullName --candidate-receipt "$base/candidate.json" --receipt "$base/evidence/foreground.json"
           if ($LASTEXITCODE -ne 0) { throw 'Native foreground CLI check failed; inspect bounded foreground.json.' }
       - name: Upload only the bounded default-runtime result
-        if: always()
+        if: ${{ always() && !inputs.native_prefix_only && !inputs.readiness_only }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-default-runtime
@@ -774,15 +1475,39 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Upload only bounded foreground CLI facts
-        if: always()
+        if: ${{ always() && !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-foreground-cli
           path: ${{ runner.temp }}/dr-ci/evidence/foreground.json
           if-no-files-found: warn
           retention-days: 7
+      - name: Upload only bounded five-case locked-host facts
+        if: ${{ always() && inputs.remaining_runtime_only }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-remaining-locked-host
+          path: ${{ runner.temp }}/dr-ci/evidence/five-native.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload only bounded three-case locked-host facts
+        if: ${{ always() && inputs.native_prefix_only }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-native-prefix
+          path: ${{ runner.temp }}/dr-ci/evidence/prefix-native.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload only bounded readiness measurement and locked-host facts
+        if: ${{ always() && inputs.readiness_only }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-readiness-only
+          path: ${{ runner.temp }}/dr-ci/evidence/readiness-native.json
+          if-no-files-found: warn
+          retention-days: 7
   windows-bootstrap-offline:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap_only }}
+    if: ${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only && !inputs.candidate_ref && github.event_name == 'workflow_dispatch' && inputs.bootstrap_only }}
     runs-on: windows-latest
     timeout-minutes: 12
     env:

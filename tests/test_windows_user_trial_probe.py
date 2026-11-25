@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import io
+import os
 from pathlib import Path
 import socket
 import subprocess
@@ -2251,7 +2252,7 @@ def test_workflow_keeps_old_lane_commands_and_bounded_installed_candidate_job():
     left_out = " and not stop_reads_the_receipt_while_the_host_writes_its_phases"
     for name, expected in golden.items():
         job = copy.deepcopy(workflow["jobs"][name])
-        assert job.pop("if") == "${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}"
+        assert job.pop("if") == "${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}"
         accepted = [step for step in job["steps"] if step.get("name") in added[name]]
         assert [step["name"] for step in accepted] == list(added[name])
         for step in accepted:
@@ -2295,10 +2296,23 @@ def test_default_command_job_is_separate_finite_and_requires_real_native_node():
     workflow, job, runner = cold_ci_runner()
     assert job["needs"] == "windows-user-trial" and job["runs-on"] == "windows-latest"
     assert job["timeout-minutes"] == 34
-    assert sum(step.get("timeout-minutes", 0) for step in job["steps"]) < job["timeout-minutes"]
+    # Setup/metadata/CLI and locked setup/five are mutually exclusive paths.
+    for focused in (False, True):
+        excluded = ({"${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only }}",
+                     "${{ success() && !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only }}"} if focused else
+                    {"${{ inputs.remaining_runtime_only || inputs.native_prefix_only || inputs.readiness_only }}",
+                     "${{ inputs.remaining_runtime_only || inputs.cold_only || inputs.native_prefix_only || inputs.readiness_only }}"})
+        selected_steps = [step for step in job["steps"] if step.get("if") not in excluded]
+        def budget(step):
+            value = step.get("timeout-minutes", 0)
+            if isinstance(value, str):
+                assert value == "${{ inputs.readiness_only && 4 || 3 }}"
+                return 3  # This loop checks the original combined/default paths.
+            return value
+        assert sum(budget(step) for step in selected_steps) < job["timeout-minutes"]
     offline = workflow["jobs"]["windows-user-trial"]
     preserved_offline = copy.deepcopy(offline)
-    assert preserved_offline.pop("if") == "${{ inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only) }}"
+    assert preserved_offline.pop("if") == "${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only && !inputs.candidate_ref && (inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only)) }}"
     # Remove only the new opt-in diagnostic steps/conditions before comparing
     # every default-path byte to the frozen accepted candidate.
     added = {
@@ -2353,7 +2367,7 @@ def test_default_command_job_is_separate_finite_and_requires_real_native_node():
     assert any(isinstance(part, ast.Call) and isinstance(part.func, ast.Attribute)
                and part.func.attr == "validate_report" for part in ast.walk(runner))
     upload = next(step for step in job["steps"] if step.get("name") == "Upload only the bounded default-runtime result")
-    assert upload["if"] == "always()" and upload["with"]["name"] == "windows-default-runtime"
+    assert upload["if"] == "${{ always() && !inputs.native_prefix_only && !inputs.readiness_only }}" and upload["with"]["name"] == "windows-default-runtime"
     # Exactly two named files, no pattern: the public result and the count
     # summary of the metadata observation tests (fd77d428). That summary is a
     # closed set of four counts and a status; its raw log stays private.
@@ -2752,12 +2766,19 @@ def test_foreground_cli_source_and_workflow_preserve_entry_cleanup_budget_and_co
     cold = next(i for i, s in enumerate(steps) if s.get("name", "").startswith("Require one native cold"))
     foreground = next(i for i, s in enumerate(steps) if s.get("name", "").startswith("Require installed foreground"))
     step = steps[foreground]
-    assert foreground == cold + 1 and step.get("if", "success()") == "success()"
+    assert foreground == cold + 1
+    # Adding a scoped lane must not let the normal CLI cell run after cold
+    # failure/cancellation, or run at all in remaining-runtime-only work.
+    assert step["if"] == "${{ success() && !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only }}"
     assert step["timeout-minutes"] == 4 and "--cli-run" in step["run"]
     assert '"$base/env/Scripts/python.exe" -I -B $probe' in step["run"]
     assert "--candidate-receipt" in step["run"] and "uv " not in step["run"]
-    upload = steps[-1]
-    assert upload["if"] == "always()" and upload["with"]["name"] == "windows-foreground-cli"
+    upload, = [s for s in steps if s.get("name") == "Upload only bounded foreground CLI facts"]
+    assert upload["uses"] == "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+    # Failure evidence still uploads for the normal/foreground-only lane, not
+    # for the separate five-case lane. Its position is not its identity.
+    assert upload["if"] == "${{ always() && !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only }}"
+    assert upload["with"]["name"] == "windows-foreground-cli"
     assert upload["with"]["path"] == "${{ runner.temp }}/dr-ci/evidence/foreground.json"
     source = Path(SPEC.origin).read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -2782,6 +2803,64 @@ def test_foreground_cli_source_and_workflow_preserve_entry_cleanup_budget_and_co
     compile(tree, SPEC.origin, "exec")
 
 
+@pytest.mark.parametrize("fault", [
+    "missing-success", "always-run", "run-on-failure", "missing-scope", "detached-cold",
+    "missing-upload", "duplicate-upload", "success-only-upload", "wrong-upload-scope",
+    "wrong-upload-action", "wrong-upload-path",
+])
+def test_foreground_boundary_guard_rejects_unsafe_conditions_and_wrong_upload(monkeypatch, fault):
+    """Exercise the actual maintained guard, without invoking any CLI/native job."""
+    workflow, original, tree = cold_ci_runner()
+    job = copy.deepcopy(original)
+    steps = job["steps"]
+    foreground = next(s for s in steps if s.get("name", "").startswith("Require installed foreground"))
+    upload = next(s for s in steps if s.get("name") == "Upload only bounded foreground CLI facts")
+    if fault == "missing-success": foreground["if"] = "${{ !inputs.remaining_runtime_only }}"
+    elif fault == "always-run": foreground["if"] = "${{ always() && !inputs.remaining_runtime_only }}"
+    elif fault == "run-on-failure": foreground["if"] = "${{ failure() && !inputs.remaining_runtime_only }}"
+    elif fault == "missing-scope": foreground["if"] = "${{ success() }}"
+    elif fault == "detached-cold": steps.insert(steps.index(foreground), {"name": "unrelated"})
+    elif fault == "missing-upload": steps.remove(upload)
+    elif fault == "duplicate-upload": steps.append(copy.deepcopy(upload))
+    elif fault == "success-only-upload": upload["if"] = "${{ success() && !inputs.remaining_runtime_only }}"
+    elif fault == "wrong-upload-scope": upload["if"] = "always()"
+    elif fault == "wrong-upload-action": upload["uses"] = "unrelated/action@main"
+    elif fault == "wrong-upload-path": upload["with"]["path"] = "${{ runner.temp }}/dr-ci/**"
+    monkeypatch.setitem(globals(), "cold_ci_runner", lambda: (workflow, job, tree))
+    with pytest.raises((AssertionError, KeyError, ValueError)):
+        test_foreground_cli_source_and_workflow_preserve_entry_cleanup_budget_and_cold_boundary()
+
+
+@pytest.mark.parametrize("mode", ["default", "foreground-only", "remaining-runtime", "cold-only", "native-prefix", "readiness-only"])
+@pytest.mark.parametrize("prior", ["success", "failure", "cancelled"])
+def test_foreground_run_and_evidence_conditions_cover_scope_and_prior_outcome(mode, prior):
+    """Finite expression model, not evidence that a hosted step executed."""
+    _, job, _ = cold_ci_runner()
+    focused = mode == "remaining-runtime"
+    cold_only = mode == "cold-only"
+    prefix = mode == "native-prefix"
+    readiness = mode == "readiness-only"
+    cold = next(s for s in job["steps"] if s.get("name", "").startswith("Require one native cold"))
+    assert cold["if"] == "${{ !inputs.foreground_only && !inputs.native_prefix_only && !inputs.readiness_only }}"
+    # foreground-only intentionally skips cold; that is not a failed job.
+    # 'prior' is the accumulated job status, not an individual skipped step.
+    foreground = next(s for s in job["steps"] if s.get("name", "").startswith("Require installed foreground"))
+    upload = next(s for s in job["steps"] if s.get("name") == "Upload only bounded foreground CLI facts")
+    for step, function, permitted in (
+        (foreground, "success()", prior == "success" and not focused and not cold_only and not prefix and not readiness),
+        (upload, "always()", not focused and not cold_only and not prefix and not readiness),
+    ):
+        # Assert the complete expression before translating only these fixed
+        # boolean tokens. A missing status/scope guard cannot enter this model.
+        assert step["if"] == "${{ " + function + " && !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only }}"
+        expression = step["if"][4:-3].replace(function, str(function == "always()" or prior == "success"))
+        expression = expression.replace("!inputs.remaining_runtime_only", str(not focused))
+        expression = expression.replace("!inputs.cold_only", str(not cold_only))
+        expression = expression.replace("!inputs.native_prefix_only", str(not prefix)).replace("&&", "and")
+        expression = expression.replace("!inputs.readiness_only", str(not readiness))
+        assert eval(expression, {"__builtins__": {}}, {}) is permitted
+
+
 def test_foreground_cli_only_dispatch_preserves_accepted_cells_and_normal_admission():
     workflow, job, _ = cold_ci_runner()
     event = workflow.get("on", workflow.get(True))  # YAML 1.1 treats 'on' as True.
@@ -2789,14 +2868,14 @@ def test_foreground_cli_only_dispatch_preserves_accepted_cells_and_normal_admiss
         "description": "Run only installed foreground CLI diagnosis; reuses accepted public/cold evidence, does not requalify it",
         "type": "boolean", "default": False}
     for name in ("passive-process-check", "windows-private-config-tls"):
-        assert workflow["jobs"][name]["if"] == "${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}"
-    assert workflow["jobs"]["windows-user-trial"]["if"] == "${{ inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only) }}"
+        assert workflow["jobs"][name]["if"] == "${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}"
+    assert workflow["jobs"]["windows-user-trial"]["if"] == "${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only && !inputs.candidate_ref && (inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only)) }}"
     assert job["needs"] == "windows-user-trial"
-    assert job["if"] == "${{ !inputs.bootstrap_only && !inputs.storage_only && !cancelled() && (inputs.foreground_only || needs.windows-user-trial.result == 'success') }}"
+    assert job["if"] == "${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && (inputs.remaining_runtime_only || inputs.cold_only || inputs.native_prefix_only || inputs.readiness_only || inputs.candidate_ref != '')) || (!inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only && !inputs.candidate_ref && !inputs.bootstrap_only && !inputs.storage_only && (inputs.foreground_only || needs.windows-user-trial.result == 'success'))) }}"
     cold = next(s for s in job["steps"] if s.get("name", "").startswith("Require one native cold"))
-    assert cold["if"] == "${{ !inputs.foreground_only }}" and cold["timeout-minutes"] == 21
+    assert cold["if"] == "${{ !inputs.foreground_only && !inputs.native_prefix_only && !inputs.readiness_only }}" and cold["timeout-minutes"] == 21
     cli = next(s for s in job["steps"] if s.get("name", "").startswith("Require installed foreground"))
-    assert "if" not in cli and cli["timeout-minutes"] == 4
+    assert cli["if"] == "${{ success() && !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only }}" and cli["timeout-minutes"] == 4
     # Ordinary PR/manual-default behavior is unchanged; isolated diagnosis never
     # treats skipped accepted cells as newly passing checks.
     for requested, public_result, cancelled, expected in (
@@ -3037,6 +3116,1581 @@ def test_storage_controls_require_sixteen_exact_calls_no_skips_or_collection_err
             probe.validate_storage_public(report)
         report["status"] = "FAIL"
     assert probe.validate_storage_public(report) is report
+
+
+def remaining_ci_code(step_name):
+    """Read the maintained inline runner; never invoke its native/setup effects."""
+    workflow = yaml.safe_load((ROOT / ".github/workflows/platform-mechanisms.yml").read_text())
+    job = workflow["jobs"]["windows-default-runtime"]
+    step = next(s for s in job["steps"] if s.get("name") == step_name)
+    code = step["run"].split("$check = @'\n", 1)[1].split("\n'@", 1)[0]
+    return workflow, job, ast.parse(code)
+
+
+FIVE_STEP = "Require the exact locked-host native selection"
+VALIDATE_STEP = "Validate the isolated remaining-runtime selection before setup"
+FIVE_NODES = (
+    "tests/test_runtime.py::test_native_windows_runtime_worker_identity_pipes_and_job_cleanup[False]",
+    "tests/test_runtime.py::test_native_windows_runtime_worker_identity_pipes_and_job_cleanup[True]",
+    "tests/test_runtime.py::test_native_windows_runtime_cancel_before_identity_reaps_job",
+    "tests/test_remote_test_origins.py::test_windows_junction_parent_is_not_followed",
+    "tests/test_remote_test_origins.py::test_windows_shared_write_acl_cannot_authorize_retained_records",
+)
+
+
+def inline_definitions(tree, names, namespace):
+    selected = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in names]
+    assert {n.name for n in selected} == set(names)
+    exec(compile(ast.Module(body=selected, type_ignores=[]), "<maintained-ci-controls>", "exec"), namespace)
+    return namespace
+
+
+@pytest.mark.parametrize("focused,candidate,old_flags,event,passes", [
+    (False, "", (False, False, False), "pull_request", True),
+    (False, "", (True, False, False), "workflow_dispatch", True),
+    (False, "", (False, True, False), "workflow_dispatch", True),
+    (False, "", (False, False, True), "workflow_dispatch", True),
+    (True, "a" * 40, (False, False, False), "workflow_dispatch", True),
+    (True, "", (False, False, False), "workflow_dispatch", False),
+    (True, "main", (False, False, False), "workflow_dispatch", False),
+    (True, "A" * 40, (False, False, False), "workflow_dispatch", False),
+    (True, "a" * 39, (False, False, False), "workflow_dispatch", False),
+    (True, "a" * 40, (True, False, False), "workflow_dispatch", False),
+    (True, "a" * 40, (False, True, False), "workflow_dispatch", False),
+    (True, "a" * 40, (False, False, True), "workflow_dispatch", False),
+    (True, "a" * 40, (False, False, False), "pull_request", False),
+    (False, "a" * 40, (False, False, False), "workflow_dispatch", False),
+])
+def test_remaining_selector_is_explicit_immutable_and_conflict_checked(focused, candidate, old_flags, event, passes):
+    import re
+    _, _, tree = remaining_ci_code(VALIDATE_STEP)
+    function = inline_definitions(tree, ["validate_selection"], {"re": re})["validate_selection"]
+    env = {"REMAINING_RUNTIME_ONLY": str(focused).lower(), "COLD_ONLY": "false", "NATIVE_PREFIX_ONLY": "false", "READINESS_ONLY": "false", "CANDIDATE_REF": candidate,
+           "GITHUB_EVENT_NAME": event, **dict(zip(
+               ("BOOTSTRAP_ONLY", "FOREGROUND_ONLY", "STORAGE_ONLY"), map(lambda v: str(v).lower(), old_flags)))}
+    if passes:
+        function(env)
+    else:
+        with pytest.raises(AssertionError):
+            function(env)
+
+
+def test_remaining_route_uses_one_existing_job_and_no_unrelated_cells():
+    workflow, job, tree = remaining_ci_code(FIVE_STEP)
+    event = workflow.get("on", workflow.get(True))
+    assert event["workflow_dispatch"]["inputs"]["remaining_runtime_only"]["default"] is False
+    assert event["workflow_dispatch"]["inputs"]["candidate_ref"]["default"] == ""
+    assert workflow["permissions"] == {"contents": "read"}
+    assert set(workflow["jobs"]) == {
+        "instance-branding-storage", "passive-process-check", "windows-private-config-tls",
+        "windows-local-connection", "windows-user-trial", "windows-default-runtime", "windows-bootstrap-offline"}
+    for name, other in workflow["jobs"].items():
+        if name != "windows-default-runtime":
+            assert other["if"].startswith("${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only && !inputs.candidate_ref && ")
+    assert job["needs"] == "windows-user-trial" and "!cancelled()" in job["if"]
+    assert "github.event_name == 'workflow_dispatch' && (inputs.remaining_runtime_only || inputs.cold_only || inputs.native_prefix_only || inputs.readiness_only || inputs.candidate_ref != '')" in job["if"]
+    assert job["steps"][0]["name"] == VALIDATE_STEP  # Before checkout/build/install.
+    setups = {s["name"]: s for s in job["steps"] if "name" in s}
+    assert setups["Read the exact remaining-runtime application candidate"]["with"] == {
+        "ref": "${{ inputs.candidate_ref }}", "path": ".ci/remaining-candidate", "persist-credentials": False}
+    for name in ("Build and install candidate host for cold default-command setup",
+                 "Check closed metadata observation and original-outcome preservation"):
+        assert setups[name]["if"] == "${{ !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only }}"
+    assert setups["Require installed foreground CLI TLS, public open and graceful cleanup"]["if"] == (
+        "${{ success() && !inputs.remaining_runtime_only && !inputs.cold_only && !inputs.native_prefix_only && !inputs.readiness_only }}")
+    locked = setups["Build and install the locked host for the remaining native cases"]
+    assert locked["if"] == "${{ inputs.remaining_runtime_only || inputs.cold_only || inputs.native_prefix_only || inputs.readiness_only }}"
+    assert setups[FIVE_STEP]["if"] == "${{ inputs.remaining_runtime_only || inputs.native_prefix_only || inputs.readiness_only }}"
+    assert 'uv sync --project $source --locked --group dev --no-install-project --python' in locked["run"]
+    assert 'uv pip install --python "$base/env/Scripts/python.exe" --no-deps $wheel[0].FullName' in locked["run"]
+    assert 'uv pip check --python "$base/env/Scripts/python.exe"' in locked["run"]
+    assert 'Remove-Item Env:UV_PROJECT_ENVIRONMENT' in locked["run"]
+    assert "pytest>=" not in locked["run"] and "--upgrade" not in locked["run"]
+    assert locked["timeout-minutes"] == 6 and setups[FIVE_STEP]["timeout-minutes"] == "${{ inputs.readiness_only && 4 || 3 }}"
+    assert job["timeout-minutes"] == 34
+    assignment = next(n for n in tree.body if isinstance(n, ast.Assign) and
+                      any(isinstance(t, ast.Name) and t.id == "nodes" for t in n.targets))
+    assert ast.literal_eval(assignment.value) == FIVE_NODES
+    upload = setups["Upload only bounded five-case locked-host facts"]
+    assert upload["with"]["path"] == "${{ runner.temp }}/dr-ci/evidence/five-native.json"
+    assert upload["if"] == "${{ always() && inputs.remaining_runtime_only }}"
+    assert "*" not in upload["with"]["path"]
+
+
+@pytest.mark.parametrize("fault", [
+    None, "combined", "no-ref", "branch", "uppercase", "pull-request",
+    "bootstrap", "foreground", "storage", "native_prefix", "readiness",
+])
+def test_cold_only_admission_is_distinct_immutable_and_exclusive(fault):
+    import re
+    _, _, tree = remaining_ci_code(VALIDATE_STEP)
+    validate = inline_definitions(tree, ["validate_selection"], {"re": re})["validate_selection"]
+    env = {"COLD_ONLY": "true", "REMAINING_RUNTIME_ONLY": "false", "NATIVE_PREFIX_ONLY": "false", "READINESS_ONLY": "false", "CANDIDATE_REF": "a" * 40,
+           "GITHUB_EVENT_NAME": "workflow_dispatch",
+           "BOOTSTRAP_ONLY": "false", "FOREGROUND_ONLY": "false", "STORAGE_ONLY": "false"}
+    if fault == "combined": env["REMAINING_RUNTIME_ONLY"] = "true"
+    elif fault == "no-ref": env["CANDIDATE_REF"] = ""
+    elif fault == "branch": env["CANDIDATE_REF"] = "main"
+    elif fault == "uppercase": env["CANDIDATE_REF"] = "A" * 40
+    elif fault == "pull-request": env["GITHUB_EVENT_NAME"] = "pull_request"
+    elif fault: env[fault.upper() + "_ONLY"] = "true"
+    if fault:
+        with pytest.raises(AssertionError):
+            validate(env)
+    else:
+        validate(env)
+
+
+@pytest.mark.parametrize("fault", [None, "cached", "exists", "custody-write", "unsafe-parent", "temp-mismatch"])
+def test_cold_only_private_parent_keeps_probe_root_absent_and_refuses_fallback(tmp_path, monkeypatch, fault):
+    import tempfile
+    import uuid
+    from contextlib import contextmanager
+    from amplifier_web import windows_files
+    _, _, tree = cold_ci_runner()
+    env = {}
+    function = inline_definitions(tree, ["prepare_cold_parent"], {
+        "pathlib": types.SimpleNamespace(Path=Path), "json": json,
+        "os": types.SimpleNamespace(environ=env)})["prepare_cold_parent"]
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    parent = profile / (".drt-" + "a" * 12)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: profile))
+    monkeypatch.setattr(uuid, "uuid4", lambda: types.SimpleNamespace(hex="a" * 32))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path) if fault == "cached" else None)
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path if fault == "temp-mismatch" else parent))
+    monkeypatch.setattr(windows_files, "address", lambda value: value)
+    calls = []
+    refusal = PermissionError("synthetic private-parent refusal")
+    record = tmp_path / "private-cold-parent.json"
+    if fault == "exists": parent.mkdir()
+    if fault == "custody-write": record.write_text("older custody")
+
+    @contextmanager
+    def directory(path, *, owned_root, create):
+        assert json.loads(record.read_text()) == {"root": str(parent), "custody": "retained-for-runner-owner"}
+        assert not path.exists() and path == owned_root == parent and create is True
+        calls.append(path)
+        if fault == "unsafe-parent":
+            raise refusal
+        path.mkdir()  # Portable stand-in only; no native API.
+        yield
+
+    monkeypatch.setattr(windows_files, "directory", directory)
+    if fault:
+        with pytest.raises((AssertionError, FileExistsError, PermissionError)) as caught:
+            function(tmp_path)
+        if fault == "unsafe-parent": assert caught.value is refusal
+    else:
+        assert function(tmp_path) == parent
+    assert len(calls) == (0 if fault in {"cached", "exists", "custody-write"} else 1)
+    assert env == (dict(TEMP=str(parent), TMP=str(parent), TMPDIR=str(parent))
+                   if fault in {None, "temp-mismatch"} else {})
+    if fault in {None, "temp-mismatch"}:
+        assert list(parent.iterdir()) == []  # No dr-root, manifest, lock or worker preseed.
+    if fault == "custody-write":
+        assert record.read_text() == "older custody"
+
+
+@pytest.mark.parametrize("names, accepted", [
+    ([], False), (["dr-" + "a" * 12], True),
+    (["dr-" + "a" * 12, "dr-" + "b" * 12], False), (["dr-wrong"], False),
+])
+def test_cold_only_readback_is_bound_to_one_exact_parent(names, accepted):
+    import re
+    _, _, tree = cold_ci_runner()
+    locate = inline_definitions(tree, ["cold_root"], {"re": re})["cold_root"]
+    calls = []
+    rows = [Path("/fixture-parent") / name for name in names]
+    parent = types.SimpleNamespace(glob=lambda pattern: calls.append(pattern) or rows)
+    if accepted:
+        assert locate(parent) is rows[0]
+    else:
+        with pytest.raises(AssertionError):
+            locate(parent)
+    assert calls == ["dr-*"]
+
+
+def test_cold_only_scope_keeps_combined_receipts_out_of_its_fresh_host_proof():
+    workflow, job, tree = cold_ci_runner()
+    inputs = workflow.get("on", workflow.get(True))["workflow_dispatch"]["inputs"]
+    assert inputs["cold_only"]["default"] is False
+    steps = {s["name"]: s for s in job["steps"] if "name" in s}
+    assert steps[FIVE_STEP]["if"] == "${{ inputs.remaining_runtime_only || inputs.native_prefix_only || inputs.readiness_only }}"
+    assert steps["Build and install the locked host for the remaining native cases"]["if"] == (
+        "${{ inputs.remaining_runtime_only || inputs.cold_only || inputs.native_prefix_only || inputs.readiness_only }}")
+    assert steps["Read the exact remaining-runtime application candidate"]["if"] == (
+        "${{ inputs.remaining_runtime_only || inputs.cold_only || inputs.native_prefix_only || inputs.readiness_only }}")
+    assert job["env"]["COLD_ONLY"] == "${{ inputs.cold_only && 'true' || 'false' }}"
+    for name, other in workflow["jobs"].items():
+        if name != "windows-default-runtime":
+            assert "!inputs.cold_only" in other["if"]
+    body = ast.unparse(tree)
+    assert "cold-only-declared-worker-with-locked-host" in body
+    assert "fiveCaseScope='not-selected-not-requalified'" in body
+    assert body.index("cold_parent = prepare_cold_parent(base)") < body.index("audit = load(")
+    assert body.index("root = cold_root(") > body.index("assert selected.passed(code)")
+    assert "cold_root(cold_parent if cold_only else base / 'cold-temp')" in body
+    # The exact old same-run receipt checks remain reachable only in combined mode.
+    combined = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+                and isinstance(n.test, ast.Name) and n.test.id == "focused"]
+    assert any("five-native.json" in ast.unparse(n) and "five['installed'] == before" in ast.unparse(n)
+               for n in combined)
+    private = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "prepare_cold_parent")
+    assert not any(isinstance(n, ast.ExceptHandler) for n in ast.walk(private))
+    assert not any(isinstance(n, ast.Attribute) and n.attr in {
+        "rmtree", "unlink", "chmod", "resolve"} for n in ast.walk(private))
+    assert not any(isinstance(n, ast.Assign) and any(
+        isinstance(t, ast.Attribute) and t.attr == "tempdir" for t in n.targets) for n in ast.walk(private))
+    # Both scopes use the same strict lock/PEP610 oracle, not a weaker cold clone.
+    _, _, five = remaining_ci_code(FIVE_STEP)
+    definition = lambda code: next(n for n in code.body if isinstance(n, ast.FunctionDef) and n.name == "verify_locked_graph")
+    assert ast.dump(definition(tree)) == ast.dump(definition(five))
+    assert body.count("verify_locked_graph(graph, tomllib.loads(lock_bytes.decode()))") == 1
+    assert "assert host_graph() == graph and (source / 'uv.lock').read_bytes() == lock_bytes" in body
+    assert "audit.candidate(pathlib.Path(os.environ['GITHUB_WORKSPACE'])) == workflow_identity" in body
+    assert "shutil.copyfile(source / name, path)" in body  # No authored cold fixture substitution.
+    upload = steps["Upload only the bounded default-runtime result"]["with"]["path"]
+    assert "private-cold-parent" not in upload and "*" not in upload
+
+
+PREFIX_NODES = (
+    "tests/test_decision_accounts.py::test_real_catalog_child_does_not_allocate_console",
+    "tests/test_host_config.py::NativeHomeBoundaryTests::test_app_home_through_read_config_rejects_junction_without_changing_target",
+    "tests/test_optional_controller_availability.py::test_native_default_selection_full_app_chat_save_reload",
+)
+
+
+@pytest.mark.parametrize("fault", [None, "cold", "combined", "branch", "no-ref", "event", "bootstrap", "foreground", "storage", "readiness"])
+def test_native_prefix_selector_is_exact_and_never_combines_scopes(fault):
+    import re
+    _, _, tree = remaining_ci_code(VALIDATE_STEP)
+    validate = inline_definitions(tree, ["validate_selection"], {"re": re})["validate_selection"]
+    env = {"NATIVE_PREFIX_ONLY": "true", "COLD_ONLY": "false", "REMAINING_RUNTIME_ONLY": "false", "READINESS_ONLY": "false",
+           "CANDIDATE_REF": "a" * 40, "GITHUB_EVENT_NAME": "workflow_dispatch",
+           "BOOTSTRAP_ONLY": "false", "FOREGROUND_ONLY": "false", "STORAGE_ONLY": "false"}
+    if fault == "cold": env["COLD_ONLY"] = "true"
+    elif fault == "combined": env["REMAINING_RUNTIME_ONLY"] = "true"
+    elif fault == "branch": env["CANDIDATE_REF"] = "main"
+    elif fault == "no-ref": env["CANDIDATE_REF"] = ""
+    elif fault == "event": env["GITHUB_EVENT_NAME"] = "pull_request"
+    elif fault: env[fault.upper() + "_ONLY"] = "true"
+    if fault:
+        with pytest.raises(AssertionError): validate(env)
+    else:
+        validate(env)
+
+
+def test_native_prefix_route_uses_only_fixed_three_and_its_own_evidence():
+    workflow, job, tree = remaining_ci_code(FIVE_STEP)
+    inputs = workflow.get("on", workflow.get(True))["workflow_dispatch"]["inputs"]
+    assert inputs["native_prefix_only"]["default"] is False
+    steps = {s["name"]: s for s in job["steps"] if "name" in s}
+    assert steps[FIVE_STEP]["if"] == "${{ inputs.remaining_runtime_only || inputs.native_prefix_only || inputs.readiness_only }}"
+    assert steps[FIVE_STEP]["timeout-minutes"] == "${{ inputs.readiness_only && 4 || 3 }}"  # Prefix keeps3.
+    assert steps["Require one native cold default-command call PASS with no skip"]["if"] == (
+        "${{ !inputs.foreground_only && !inputs.native_prefix_only && !inputs.readiness_only }}")
+    assert "!inputs.native_prefix_only" in steps["Check closed metadata observation and original-outcome preservation"]["if"]
+    assert "!inputs.native_prefix_only" in steps["Require installed foreground CLI TLS, public open and graceful cleanup"]["if"]
+    for name, other in workflow["jobs"].items():
+        if name != "windows-default-runtime":
+            assert "!inputs.native_prefix_only" in other["if"]
+    selection = next(n for n in tree.body if isinstance(n, ast.If) and
+                     isinstance(n.test, ast.Name) and n.test.id == "prefix")
+    assert ast.literal_eval(selection.body[0].value) == PREFIX_NODES
+    body = ast.unparse(tree)
+    assert "'prefix-three-locked-host-native-cases' if prefix else 'five-locked-host-native-cases'" in body
+    assert "'evidence/' + stem + '-native.json'" in body
+    assert "target = base / (stem + '-tests')" in body
+    assert "str(base / (stem + '-temp'))" in body
+    assert "origin = workflow if name == 'tests/test_runtime.py' else source" in body
+    # Prefix files contain no runtime fixture; every one remains candidate-bound.
+    files = next(n for n in ast.walk(tree) if isinstance(n, ast.If) and
+                 isinstance(n.test, ast.Name) and n.test.id == "prefix" and
+                 any(isinstance(c, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "files" for t in c.targets)
+                     for c in n.body))
+    assert ast.literal_eval(files.body[0].value) == (
+        "tests/conftest.py", "tests/test_decision_accounts.py", "tests/test_runtime_controls.py",
+        "tests/test_host_config.py", "tests/test_optional_controller_availability.py", "tests/test_service.py")
+    upload = steps["Upload only bounded three-case locked-host facts"]
+    assert upload["if"] == "${{ always() && inputs.native_prefix_only }}"
+    assert upload["with"]["name"] == "windows-native-prefix"
+    assert upload["with"]["path"] == "${{ runner.temp }}/dr-ci/evidence/prefix-native.json"
+    assert "*" not in upload["with"]["path"]
+    assert "assert selected.passed(code)" in body and "result['postTestAudit'] = 'passed'" in body
+
+
+@pytest.mark.parametrize("missing_helper", [False, True])
+def test_native_prefix_staging_never_substitutes_authoring_or_product_tree(tmp_path, missing_helper):
+    import shutil
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    block = next(n.body for n in ast.walk(tree) if isinstance(n, ast.With) and any(
+        isinstance(c, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "target" for t in c.targets)
+        for c in n.body))
+    first = next(i for i, n in enumerate(block) if isinstance(n, ast.Assign) and any(
+        isinstance(t, ast.Name) and t.id == "target" for t in n.targets))
+    last = next(i for i in range(first, len(block)) if isinstance(block[i], ast.Import))
+    source, workflow, base = (tmp_path / name for name in ("product", "authoring", "output"))
+    names = ("tests/conftest.py", "tests/test_decision_accounts.py", "tests/test_runtime_controls.py",
+             "tests/test_host_config.py", "tests/test_optional_controller_availability.py", "tests/test_service.py")
+    for root, label in ((source, "candidate"), (workflow, "unselected-authoring")):
+        for name in names:
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not (missing_helper and root == source and name == "tests/test_runtime_controls.py"):
+                path.write_text(label + name)
+    candidate = {"head": "a" * 40, "tree": "b" * 40}
+    namespace = {"source": source, "workflow": workflow, "base": base, "candidate": candidate,
+                 "prefix": True, "readiness": False, "stem": "prefix", "result": {"workflow": {"head": "c" * 40, "tree": "d" * 40}},
+                 "paths": {}, "shutil": shutil, "hashlib": hashlib, "os": os}
+    code = compile(ast.Module(body=block[first:last], type_ignores=[]), "<prefix-copy>", "exec")
+    if missing_helper:
+        with pytest.raises(FileNotFoundError):
+            exec(code, namespace)
+        return
+    exec(code, namespace)
+    result = namespace["result"]
+    assert tuple(result["testFiles"]) == names
+    assert set(path.name for path in (base / "prefix-tests").iterdir()) == {"tests"}
+    for name in names:
+        copied = (base / "prefix-tests" / name).read_bytes()
+        assert copied == (source / name).read_bytes() != (workflow / name).read_bytes()
+        assert result["testFiles"][name] == hashlib.sha256(copied).hexdigest()
+        assert result["testAuthoring"][name] == candidate
+    assert not (base / "prefix-tests/tests/test_runtime.py").exists()
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "extra", "duplicate", "skip", "xfail", "failed", "exit"])
+def test_native_prefix_existing_collector_requires_exact_nine_phases(fault):
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    result = inline_definitions(tree, ["Results"], {"nodes": PREFIX_NODES})["Results"]()
+    selected = list(PREFIX_NODES)
+    if fault == "missing": selected.pop()
+    elif fault == "extra": selected.append("private/unselected")
+    elif fault == "duplicate": selected.append(selected[0])
+    result.pytest_collection_finish(types.SimpleNamespace(items=[types.SimpleNamespace(nodeid=n) for n in selected]))
+    for n in selected:
+        for phase in ("setup", "call", "teardown"):
+            bad = n == PREFIX_NODES[0] and phase == "call"
+            row = types.SimpleNamespace(nodeid=n, when=phase,
+                outcome="skipped" if bad and fault == "skip" else "failed" if bad and fault == "failed" else "passed")
+            if bad and fault == "xfail": row.wasxfail = "synthetic"
+            result.pytest_runtest_logreport(row)
+    report = result.snapshot(1 if fault == "exit" else 0)
+    assert report["passed"] is (fault is None)
+    assert report["phaseCount"] == len(selected) * 3
+    assert "private/unselected" not in json.dumps(report)
+
+
+READINESS_NODE = "tests/test_update_readiness.py::test_native_windows_the_loop_runs_during_the_real_owner_questions_of_a_restart_confirmation"
+
+
+@pytest.mark.parametrize("fault", [None, "cold", "remaining-runtime", "native-prefix", "storage",
+                                  "foreground", "bootstrap", "no-ref", "branch", "uppercase", "event"])
+def test_readiness_only_is_exclusive_immutable_and_manual(fault):
+    import re
+    _, _, tree = remaining_ci_code(VALIDATE_STEP)
+    validate = inline_definitions(tree, ["validate_selection"], {"re": re})["validate_selection"]
+    env = {"REMAINING_RUNTIME_ONLY": "false", "COLD_ONLY": "false", "NATIVE_PREFIX_ONLY": "false",
+           "READINESS_ONLY": "true", "BOOTSTRAP_ONLY": "false", "FOREGROUND_ONLY": "false",
+           "STORAGE_ONLY": "false", "CANDIDATE_REF": "a" * 40, "GITHUB_EVENT_NAME": "workflow_dispatch"}
+    if fault == "no-ref": env["CANDIDATE_REF"] = ""
+    elif fault == "branch": env["CANDIDATE_REF"] = "main"
+    elif fault == "uppercase": env["CANDIDATE_REF"] = "A" * 40
+    elif fault == "event": env["GITHUB_EVENT_NAME"] = "pull_request"
+    elif fault: env[fault.replace("-", "_").upper() + "_ONLY"] = "true"
+    if fault:
+        with pytest.raises(AssertionError):
+            validate(env)
+    else:
+        validate(env)
+
+
+def test_readiness_only_reuses_locked_host_and_original_case_without_storage_receipt():
+    workflow, job, tree = remaining_ci_code(FIVE_STEP)
+    inputs = workflow.get("on", workflow.get(True))["workflow_dispatch"]["inputs"]
+    assert inputs["readiness_only"]["default"] is False
+    assert workflow["permissions"] == {"contents": "read"}
+    assert len(workflow["jobs"]) == 7 and job["needs"] == "windows-user-trial"
+    assert "!cancelled()" in job["if"] and "inputs.readiness_only" in job["if"]
+    for name, other in workflow["jobs"].items():
+        if name != "windows-default-runtime":
+            assert "!inputs.readiness_only" in other["if"]
+    steps = {s["name"]: s for s in job["steps"] if "name" in s}
+    assert job["env"]["READINESS_ONLY"] == "${{ inputs.readiness_only && 'true' || 'false' }}"
+    assert steps[FIVE_STEP]["if"] == "${{ inputs.remaining_runtime_only || inputs.native_prefix_only || inputs.readiness_only }}"
+    assert steps[FIVE_STEP]["timeout-minutes"] == "${{ inputs.readiness_only && 4 || 3 }}"
+    assert 6 + 4 < job["timeout-minutes"] == 34
+    assert "inputs.readiness_only" in steps["Build and install the locked host for the remaining native cases"]["if"]
+    assert steps["Read the exact remaining-runtime application candidate"]["with"]["ref"] == "${{ inputs.candidate_ref }}"
+    for name in ("Build and install candidate host for cold default-command setup",
+                 "Check closed metadata observation and original-outcome preservation",
+                 "Require one native cold default-command call PASS with no skip",
+                 "Require installed foreground CLI TLS, public open and graceful cleanup"):
+        assert "!inputs.readiness_only" in steps[name]["if"]
+    upload = steps["Upload only bounded readiness measurement and locked-host facts"]
+    assert upload["if"] == "${{ always() && inputs.readiness_only }}"
+    assert upload["uses"] == "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+    assert upload["with"]["path"] == "${{ runner.temp }}/dr-ci/evidence/readiness-native.json"
+    assert "*" not in upload["with"]["path"]
+    body = ast.unparse(tree)
+    assigned = next(n for n in tree.body if isinstance(n, ast.Assign)
+                    and any(isinstance(t, ast.Name) and t.id == "NODE" for t in n.targets))
+    assert ast.literal_eval(assigned.value) == READINESS_NODE
+    assert "nodes = (NODE,)" in body and "'readiness-one-locked-host-native-case'" in body
+    assert "storageScope='not-selected-not-requalified'" in body
+    assert all(word not in body for word in ("storage_pass", "storage.json", "phase1-witness", "--storage-run"))
+    assert "audit.require_ci()" in body and "plugins.append(measured)" in body
+    assert body.index("result['measurement'] = measured.evidence()") < body.index("measured.finish(code)")
+    assert body.index("measured.finish(code)") < body.index("assert selected.passed(code)")
+    assert body.index("assert selected.passed(code)") < body.index("result['postTestAudit'] = 'started'")
+    assert "audit.installed(wheel, result) == before and host_graph() == graph" in body
+    assert "audit.candidate(workflow) == result['workflow']" in body
+    assert "(target / name).read_bytes() == (origin / name).read_bytes()" in body
+    assert "measurement-attempts-not-replacement-matching" in body
+    assert "not-independent-thread-or-scratch-absence" in body
+    assert "measured.cleanup() if code is not None else 'unknown'" in body
+
+
+def test_readiness_measurement_and_failure_oracles_match_accepted_phase1():
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    # Exact reviewed4fda definitions, whose65 portable cases remain accepted.
+    # Changing one requires reviewing/rechecking its affected behavior, not a new
+    # hash merely to hide a difference.
+    expected = {
+        "measurement": "9e7d9fe8efd2c991f903b5366876d5a85be9898ac6c3b433b16f720433cd8e32",
+        "measurement_passed": "27a09cbddf8e91b970221d1601b6f989d8d6962d003d6ad2fa81b193fa194620",
+        "Readiness": "19b00c6d82490aad13869b1bfdd0ee65211ae9668796f6ca24e769052e7d53be",
+    }
+    for name, fingerprint in expected.items():
+        node = next(n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name == name)
+        assert hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest() == fingerprint
+
+
+@pytest.mark.parametrize("missing_helper", [False, True])
+def test_readiness_only_stages_candidate_case_and_helpers_without_authoring_substitution(tmp_path, missing_helper):
+    import shutil
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    block = next(n.body for n in ast.walk(tree) if isinstance(n, ast.With) and any(
+        isinstance(c, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "target" for t in c.targets)
+        for c in n.body))
+    first = next(i for i, n in enumerate(block) if isinstance(n, ast.Assign)
+                 and any(isinstance(t, ast.Name) and t.id == "target" for t in n.targets))
+    last = next(i for i in range(first, len(block)) if isinstance(block[i], ast.Import))
+    source, workflow, base = (tmp_path / name for name in ("product", "authoring", "output"))
+    names = ("tests/conftest.py", "tests/test_update_readiness.py", "tests/test_service.py",
+             "tests/fixtures/manual_app_handoff_native.py")
+    for root, label in ((source, "candidate"), (workflow, "unselected")):
+        for name in names:
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not (missing_helper and root == source and name == names[-1]):
+                path.write_text(label + name)
+    candidate = {"head": "a" * 40, "tree": "b" * 40}
+    namespace = {"source": source, "workflow": workflow, "base": base, "candidate": candidate,
+                 "prefix": False, "readiness": True, "stem": "readiness",
+                 "result": {"workflow": {"head": "c" * 40, "tree": "d" * 40}},
+                 "paths": {}, "shutil": shutil, "hashlib": hashlib, "os": os}
+    code = compile(ast.Module(body=block[first:last], type_ignores=[]), "<readiness-copy>", "exec")
+    if missing_helper:
+        with pytest.raises(FileNotFoundError):
+            exec(code, namespace)
+        return
+    exec(code, namespace)
+    assert tuple(namespace["result"]["testFiles"]) == names
+    for name in names:
+        copied = (base / "readiness-tests" / name).read_bytes()
+        assert copied == (source / name).read_bytes() != (workflow / name).read_bytes()
+        assert namespace["result"]["testAuthoring"][name] == candidate
+    assert {p.name for p in (base / "readiness-tests").iterdir()} == {"tests"}
+    assert not (base / "readiness-tests/tests/test_windows_read_files.py").exists()
+
+
+@pytest.mark.parametrize("mode", ["pass", "failed", "duplicate-output", "skip"])
+def test_readiness_only_real_pytest_composes_selection_and_safe_measurement(tmp_path, mode):
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    names = {"safe_failure", "safe_lease_witness", "Results", "measurement", "measurement_passed", "Readiness"}
+    definitions = ast.unparse(ast.Module(body=[n for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in names], type_ignores=[]))
+    (tmp_path / "collector.py").write_text(definitions, encoding="utf-8")
+    value = {
+        "confirmation": {
+            "seconds": 1.0, "longestLoopPause": .1, "longestLoopPauseBeforeIt": .1,
+            "longestHttpWait": .2, "httpRequests": 4, "httpNot200": 0,
+            "ownerQuestions": [{"seconds": .5, "startedAfter": 0, "onLoopThread": False,
+                "realAnswer": "no task", "loopTicksDuring": 2, "httpAnswersDuring": 1} for _ in range(2)],
+            "otherWorkOnTheLoop": [{"what": "installed packages read", "seconds": .1, "startedAfter": 0}],
+            "installedPackagesRead": {"graph": "ValueError", "extras": "complete"},
+        },
+        "result": {"phase": "installed", "pendingRestart": None, "record": "acknowledged"},
+        "runner": {"python": "3.13.17", "cpus": 4},
+        "alone": {name: [0.1, {"seconds": .2, "error": "ValueError"}, .3] for name in
+            ("ownerQuestion", "saveToSqlite", "installedGraphAndExtras", "handOverRecordWrite", "runRecordRead")},
+    }
+    body = "import pytest\n\ndef test_readiness():\n"
+    if mode == "skip":
+        body += "    pytest.skip('PRIVATE-SKIP')\n"
+    body += "    print('HOST-LOOP-MEASUREMENT ' + " + repr(json.dumps(value)) + ")\n"
+    if mode == "duplicate-output":
+        body += "    print('HOST-LOOP-MEASUREMENT ' + " + repr(json.dumps(value)) + ")\n"
+    elif mode == "failed":
+        body += "    raise AssertionError('PRIVATE-FAILURE')\n"
+    (tmp_path / "test_readiness.py").write_text(body, encoding="utf-8")
+    child = '''
+import json, math, os, pathlib, re, sys
+import pytest
+root = pathlib.Path(sys.argv[1])
+os.chdir(root)
+NODE = "test_readiness.py::test_readiness"
+nodes = (NODE,)
+exec(compile((root / "collector.py").read_text(), "<maintained-readiness>", "exec"))
+pytest.hookimpl(hookwrapper=True, tryfirst=True)(Results.pytest_runtest_makereport)
+selected, measured = Results(), Readiness()
+code = pytest.main(["-q", "-p", "no:cacheprovider", "--rootdir", str(root),
+    "--confcutdir", str(root), NODE], plugins=[selected, measured])
+accepted = False
+try:
+    measured.finish(code)
+    assert selected.passed(code)
+    accepted = True
+except AssertionError:
+    pass
+(root / "result.json").write_text(json.dumps({
+    "selection": selected.snapshot(code), "measurement": measured.evidence(),
+    "cleanup": measured.cleanup(), "accepted": accepted}), encoding="utf-8")
+'''
+    done = subprocess.run([sys.executable, "-I", "-B", "-c", child, str(tmp_path)],
+        env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+        capture_output=True, text=True, timeout=30)
+    assert done.returncode == 0, done.stdout + done.stderr
+    report = json.loads((tmp_path / "result.json").read_text())
+    assert report["accepted"] is (mode == "pass")
+    assert report["selection"]["collectedCount"] == 1 and report["selection"]["phaseCount"] == 3
+    assert report["selection"]["passed"] is (mode in {"pass", "duplicate-output"})
+    assert "PRIVATE" not in json.dumps(report) and str(tmp_path) not in json.dumps(report)
+    if mode in {"pass", "failed"}:
+        assert report["measurement"]["status"] == "valid"
+        assert report["measurement"]["value"]["confirmation"]["installedPackagesRead"] == value["confirmation"]["installedPackagesRead"]
+        assert report["measurement"]["value"]["alone"] == value["alone"]
+        assert report["cleanup"] == "attempted-unverified"
+    else:
+        assert report["measurement"] == {"status": "absent" if mode == "skip" else "duplicate", "value": None}
+        assert report["cleanup"] == "unknown"
+    if mode == "failed":
+        assert report["selection"]["exitCode"] == 1 and report["selection"]["failureCount"] == 1
+    else:
+        assert report["selection"]["exitCode"] == 0
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "extra", "duplicate", "reordered", "wrong-node",
+                                  "no-call", "skip", "xfail", "setup-failed", "call-failed",
+                                  "teardown-failed", "collect-failed", "collect-skipped", "exit-code"])
+def test_remaining_five_phase_accounting_refuses_any_missing_native_proof(fault):
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    cls = inline_definitions(tree, ["Results"], {"nodes": FIVE_NODES})["Results"]
+    result = cls()
+    collected = list(FIVE_NODES)
+    if fault == "missing": collected.pop()
+    elif fault == "extra": collected.append("tests/private_customer.py::private")
+    elif fault == "duplicate": collected[-1] = collected[0]
+    elif fault == "reordered": collected.reverse()
+    result.pytest_collection_finish(types.SimpleNamespace(items=[
+        types.SimpleNamespace(nodeid=n) for n in collected]))
+    result.pytest_collectreport(types.SimpleNamespace(failed=fault == "collect-failed", skipped=fault == "collect-skipped"))
+    for node in FIVE_NODES:
+        for phase in ("setup", "call", "teardown"):
+            if node == FIVE_NODES[-1] and phase == "call" and fault == "no-call":
+                continue
+            outcome = "failed" if node == FIVE_NODES[-1] and fault == phase + "-failed" else "passed"
+            if node == FIVE_NODES[-1] and phase == "call" and fault == "skip": outcome = "skipped"
+            row = types.SimpleNamespace(nodeid="unrelated" if fault == "wrong-node" else node,
+                                        when=phase, outcome=outcome)
+            if node == FIVE_NODES[-1] and fault == "xfail": row.wasxfail = "not a pass"
+            result.pytest_runtest_logreport(row)
+    assert result.passed(1 if fault == "exit-code" else 0) is (fault is None)
+    snapshot = result.snapshot(1 if fault == "exit-code" else 0)
+    assert snapshot["collectedCount"] == len(collected)
+    assert snapshot["phaseCount"] == (14 if fault == "no-call" else 15)
+    assert snapshot["exitCode"] == (1 if fault == "exit-code" else 0)
+    assert snapshot["wasxfailCount"] == (3 if fault == "xfail" else 0)
+    assert snapshot["passed"] is (fault is None)
+    if fault == "extra":
+        assert snapshot["collected"][-1] == "<unrecognized-1>" and snapshot["unexpectedCollected"] == 1
+    elif fault == "duplicate":
+        assert snapshot["collected"].count(FIVE_NODES[0]) == 2
+    assert "private_customer" not in json.dumps(snapshot)
+
+
+@pytest.mark.parametrize("fault", [
+    "pass", "three-call-failures", "extra", "duplicate", "xfail", "setup-error",
+    "teardown-error", "collection-error", "nonzero-exit", "lease-witness",
+])
+def test_remaining_real_pytest_evidence_keeps_failures_and_invalid_selection(tmp_path, fault):
+    """Run the actual inline collector with real portable pytest reports, not native mocks."""
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    definitions = ast.unparse(ast.Module(body=[n for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in {"safe_failure", "safe_lease_witness", "Results"}],
+        type_ignores=[]))
+    (tmp_path / "collector.py").write_text(definitions, encoding="utf-8")
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    runtime = tests / "test_runtime.py"
+    runtime.write_text('''import os, pytest
+FAULT = os.environ["CAPTURE_FAULT"]
+@pytest.fixture(autouse=True)
+def lifecycle(request):
+    if FAULT == "setup-error": raise PermissionError("PRIVATE-SETUP")
+    if FAULT == "lease-witness":
+        request.node._native_lease_witness = {
+            "version": 1, "acquisitions": 1, "failure": None,
+            "observerError": False, "restored": False}
+    yield
+    if FAULT == "lease-witness": request.node._native_lease_witness["restored"] = True
+    if FAULT == "teardown-error": raise OSError("PRIVATE-TEARDOWN")
+@pytest.mark.parametrize("forced", [False, True])
+def test_native_windows_runtime_worker_identity_pipes_and_job_cleanup(forced):
+    if FAULT == "xfail": pytest.xfail("PRIVATE-XFAIL")
+    if FAULT in {"three-call-failures", "lease-witness"}:
+        if forced: raise RuntimeError("PRIVATE-MESSAGE", "/PRIVATE-PATH")
+        raise AssertionError("PRIVATE-MESSAGE")
+def test_native_windows_runtime_cancel_before_identity_reaps_job():
+    if FAULT in {"three-call-failures", "lease-witness"}: raise TimeoutError("PRIVATE-TIMEOUT")
+''', encoding="utf-8")
+    (tests / "test_remote_test_origins.py").write_text('''def test_windows_junction_parent_is_not_followed(): pass
+def test_windows_shared_write_acl_cannot_authorize_retained_records(): pass
+def test_PRIVATE_CUSTOMER(): pass
+''', encoding="utf-8")
+    if fault == "collection-error":
+        (tests / "test_broken.py").write_text('raise ValueError("PRIVATE-COLLECTION")\n', encoding="utf-8")
+    runner = '''
+import json, os, pathlib, sys
+import pytest
+root, fault = pathlib.Path(sys.argv[1]), sys.argv[2]
+os.chdir(root)
+os.environ["CAPTURE_FAULT"] = fault
+nodes = tuple(json.loads(sys.argv[3]))
+exec(compile((root / "collector.py").read_text(), "<collector>", "exec"))
+paths = {os.path.normcase(str(p)): ("tests/" + p.name, len(p.read_bytes().splitlines()))
+         for p in (root / "tests").glob("test_*.py") if p.name != "test_broken.py"}
+pytest.hookimpl(hookwrapper=True, tryfirst=True)(Results.pytest_runtest_makereport)
+selected = Results(paths)
+class Injection:
+    def pytest_collection_modifyitems(self, items):
+        if fault == "duplicate": items.append(items[0])
+    def pytest_sessionfinish(self, session, exitstatus):
+        if fault == "nonzero-exit": session.exitstatus = 4
+args = ["-q", "--rootdir", str(root), "--confcutdir", str(root), "-p", "no:cacheprovider", *nodes]
+if fault == "extra": args.append("tests/test_remote_test_origins.py::test_PRIVATE_CUSTOMER")
+if fault == "collection-error": args.append("tests/test_broken.py")
+code = pytest.main(args, plugins=[selected, Injection()])
+result = selected.snapshot(code)
+(root / "result.json").write_text(json.dumps(result), encoding="utf-8")
+'''
+    env = {**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}
+    child = subprocess.run([sys.executable, "-I", "-B", "-c", runner,
+        str(tmp_path), fault, json.dumps(FIVE_NODES)], env=env,
+        capture_output=True, text=True, timeout=30)
+    assert child.returncode == 0, child.stdout + child.stderr
+    report = json.loads((tmp_path / "result.json").read_text())
+    serialized = json.dumps(report)
+    assert "PRIVATE-" not in serialized and "PRIVATE_CUSTOMER" not in serialized and str(tmp_path) not in serialized
+    assert report["passed"] is (fault == "pass")
+    assert report["omittedCollected"] == report["omittedPhases"] == report["omittedFailures"] == 0
+    if fault in {"three-call-failures", "lease-witness"}:
+        assert report["exitCode"] == 1 and report["failureCount"] == 3
+        assert [f["node"] for f in report["failures"]] == list(FIVE_NODES[:3])
+        assert [f["type"] for f in report["failures"]] == ["AssertionError", "RuntimeError", "TimeoutError"]
+        lines = runtime.read_text().splitlines()
+        for failure in report["failures"]:
+            assert failure["phase"] == "call" and failure["frames"]
+            last = failure["frames"][-1]
+            assert last["file"] == "tests/test_runtime.py"
+            assert "raise " + failure["type"] in lines[last["line"] - 1]
+        assert sum(row[2] == "failed" for row in report["phases"]) == 3
+        if fault == "lease-witness":
+            assert len(report["leaseWitnesses"]) == 9
+            for node in FIVE_NODES[:3]:
+                rows = [row for row in report["leaseWitnesses"] if row["node"] == node]
+                assert [row["phase"] for row in rows] == ["setup", "call", "teardown"]
+                assert [row["restored"] for row in rows] == [False, False, True]
+                assert all(row["status"] == "observed" for row in rows)
+    elif fault in {"extra", "duplicate"}:
+        assert report["collectedCount"] == 6 and report["phaseCount"] == 18
+        if fault == "extra":
+            assert report["unexpectedCollected"] == 1 and report["unexpectedPhases"] == 3
+        else:
+            assert report["collected"].count(FIVE_NODES[0]) == 2
+    elif fault == "xfail":
+        assert report["wasxfailCount"] == 2 and report["invalid"]
+    elif fault in {"setup-error", "teardown-error"}:
+        assert report["exitCode"] == 1 and report["failureCount"] == 3
+        assert {f["phase"] for f in report["failures"]} == {fault.split("-")[0]}
+    elif fault == "collection-error":
+        assert report["collectionFailures"] == 1 and report["invalid"] and report["exitCode"] != 0
+    elif fault == "nonzero-exit":
+        assert report["exitCode"] == 4 and report["phaseCount"] == 15
+
+
+@pytest.mark.parametrize("fault", ["pass", "call", "chain", "setup", "teardown", "cleanup", "subtest", "unavailable"])
+def test_remaining_real_unittest_failures_survive_report_bridge_without_private_text(tmp_path, fault):
+    """Exercise pytest's real unittest adapter; never run the native junction case."""
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    definitions = ast.unparse(ast.Module(body=[n for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in {
+            "safe_failure", "safe_lease_witness", "Results"}], type_ignores=[]))
+    (tmp_path / "collector.py").write_text(definitions, encoding="utf-8")
+    test = tmp_path / "test_unittest.py"
+    test.write_text('''import os, unittest
+FAULT = os.environ["CAPTURE_FAULT"]
+class Boundary(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(self.cleanup)
+        if FAULT == "setup": raise PermissionError("PRIVATE-SETUP")
+    def tearDown(self):
+        if FAULT == "teardown": raise OSError("PRIVATE-TEARDOWN")
+    def cleanup(self):
+        if FAULT == "cleanup": raise ValueError("PRIVATE-CLEANUP")
+    def test_boundary(self):
+        if FAULT in {"call", "unavailable"}: self.fail("PRIVATE-ASSERTION")
+        if FAULT == "chain":
+            try: raise PermissionError("PRIVATE-CAUSE")
+            except PermissionError as cause: raise RuntimeError("PRIVATE-OUTER") from cause
+        if FAULT == "subtest":
+            with self.subTest(explicit_home="/PRIVATE-SUBTEST-PATH"):
+                self.fail("PRIVATE-SUBTEST-ASSERTION")
+''', encoding="utf-8")
+    node = "test_unittest.py::Boundary::test_boundary"
+    runner = '''
+import json, os, pathlib, sys
+import pytest
+root, fault, node = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+os.chdir(root)
+os.environ["CAPTURE_FAULT"] = fault
+nodes = (node,)
+exec(compile((root / "collector.py").read_text(), "<collector>", "exec"))
+path = root / "test_unittest.py"
+paths = {os.path.normcase(str(path)): ("test_unittest.py", len(path.read_bytes().splitlines()))}
+pytest.hookimpl(hookwrapper=True, tryfirst=True)(Results.pytest_runtest_makereport)
+selected = Results(paths)
+early, actual = [], []
+class Early:
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_runtest_makereport(self, item, call):
+        early.append([call.when, call.excinfo is not None])
+    def pytest_runtest_logreport(self, report):
+        actual.append([report.nodeid, report.when, report.outcome])
+class MissingException:
+    @pytest.hookimpl(hookwrapper=True, trylast=True)
+    def pytest_runtest_makereport(self, item, call):
+        outcome = yield
+        report = outcome.get_result()
+        if fault == "unavailable" and report.failed:
+            call.excinfo = None  # Synthetic negative control; do not alter the actual report.
+code = pytest.main(["-q", "-p", "no:cacheprovider", "--rootdir", str(root),
+                    "--confcutdir", str(root), node], plugins=[selected, Early(), MissingException()])
+(root / "result.json").write_text(json.dumps({
+    "selection": selected.snapshot(code), "early": early, "actual": actual}), encoding="utf-8")
+'''
+    child = subprocess.run([sys.executable, "-I", "-B", "-c", runner, str(tmp_path), fault, node],
+        env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+        capture_output=True, text=True, timeout=30)
+    assert child.returncode == 0, child.stdout + child.stderr
+    raw = json.loads((tmp_path / "result.json").read_text())
+    report = raw["selection"]
+    assert report["collected"] == [node] and report["collectedCount"] == 1
+    assert report["phases"] == raw["actual"]
+    assert report["passed"] is (fault == "pass")
+    assert report["omittedCollected"] == report["omittedPhases"] == report["omittedFailures"] == 0
+    assert "PRIVATE" not in json.dumps(raw) and str(tmp_path) not in json.dumps(raw)
+    if fault == "pass":
+        assert report["exitCode"] == 0 and report["failureCount"] == report["unavailableFailureCount"] == 0
+        assert report["phases"] == [[node, phase, "passed"] for phase in ("setup", "call", "teardown")]
+        return
+    assert report["exitCode"] == 1 and not report["passed"]
+    assert any(row == [node, "call", "failed"] for row in report["phases"])
+    assert report["failureCount"] == len(report["failures"]) == 1
+    failure, = report["failures"]
+    assert failure["node"] == node and failure["phase"] == "call"
+    if fault == "unavailable":
+        assert report["unavailableFailureCount"] == 1 and failure["exceptionAvailable"] is False
+        assert failure["type"] == "unavailable" and failure["frames"] == [] and failure["chain"] == []
+    else:
+        assert report["unavailableFailureCount"] == 0 and failure["exceptionAvailable"] is True
+        expected = {"call": "AssertionError", "chain": "RuntimeError", "setup": "PermissionError",
+                    "teardown": "OSError", "cleanup": "ValueError", "subtest": "AssertionError"}[fault]
+        assert failure["type"] == expected
+        frames = [frame for frame in failure["frames"] if frame["file"] == "test_unittest.py"]
+        assert frames and ("raise " + expected if fault != "subtest" and fault != "call" else "self.fail(") in (
+            test.read_text().splitlines()[frames[-1]["line"] - 1])
+        if fault == "chain":
+            assert failure["chain"][0]["type"] == "PermissionError"
+            assert failure["chain"][0]["frames"][-1]["file"] == "test_unittest.py"
+    # Unittest caught the call's exception before pytest's report bridge ran.
+    # The early observer sees no exception; the post-bridge collector still does.
+    if fault != "subtest":
+        assert ["call", False] in raw["early"]
+
+
+@pytest.mark.parametrize("fault", ["pass", "late-exception", "unavailable", "report-error"])
+def test_remaining_failure_hook_observes_after_yield_without_replacing_outcome(fault):
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    namespace = inline_definitions(tree, ["safe_failure", "safe_lease_witness", "Results"],
+                                   {"os": os, "nodes": PREFIX_NODES})
+    result = namespace["Results"]()
+    item = types.SimpleNamespace(nodeid=PREFIX_NODES[1])
+    call = types.SimpleNamespace(when="call", excinfo=None)
+    original = PermissionError("PRIVATE-CAUSE")
+    report = types.SimpleNamespace(failed=fault != "pass", outcome="passed" if fault == "pass" else "failed")
+    def get_result():
+        if fault == "report-error": raise original
+        return report
+    hook = result.pytest_runtest_makereport(item, call)
+    assert next(hook) is None and result.failure_count == 0
+    if fault == "late-exception":
+        call.excinfo = types.SimpleNamespace(value=original)
+    if fault == "report-error":
+        with pytest.raises(PermissionError) as caught:
+            hook.send(types.SimpleNamespace(get_result=get_result))
+        assert caught.value is original and result.failure_count == 0
+    else:
+        with pytest.raises(StopIteration) as finished:
+            hook.send(types.SimpleNamespace(get_result=get_result))
+        assert finished.value.value is None
+        assert result.failure_count == (0 if fault == "pass" else 1)
+        assert result.unavailable_failures == (1 if fault == "unavailable" else 0)
+    assert vars(report) == {"failed": fault != "pass", "outcome": "passed" if fault == "pass" else "failed"}
+    assert call.excinfo is None if fault != "late-exception" else call.excinfo.value is original
+    assert "PRIVATE" not in json.dumps(result.snapshot(1))
+
+
+def test_remaining_evidence_overflow_is_explicit_and_never_a_pass():
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    cls = inline_definitions(tree, ["Results"], {"nodes": FIVE_NODES})["Results"]
+    result = cls()
+    result.pytest_collection_finish(types.SimpleNamespace(items=[
+        types.SimpleNamespace(nodeid=FIVE_NODES[0]) for _ in range(40)]))
+    for _ in range(100):
+        result.pytest_runtest_logreport(types.SimpleNamespace(nodeid=FIVE_NODES[0], when="call", outcome="passed"))
+    report = result.snapshot(0)
+    assert report["collectedCount"] == 40 and report["omittedCollected"] == 8
+    assert report["phaseCount"] == 100 and report["omittedPhases"] == 4
+    assert report["invalid"] and not report["passed"]
+    opaque = cls()
+    assert opaque.node("PRIVATE-FIRST") == opaque.node("PRIVATE-FIRST") == "<unrecognized-1>"
+    assert opaque.node("PRIVATE-SECOND") == "<unrecognized-2>"
+    assert "PRIVATE" not in json.dumps(opaque.snapshot(0))
+
+
+def test_remaining_failure_projection_omits_private_types_paths_and_messages(tmp_path):
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    safe = inline_definitions(tree, ["safe_failure"], {"os": os})["safe_failure"]
+    private_type = type("PRIVATE_CUSTOMER", (Exception,), {"__module__": "customer_private"})
+    try:
+        raise private_type("PRIVATE-MESSAGE", "/PRIVATE-PATH")
+    except Exception as error:
+        report = safe(error, {})
+    assert report["type"] == "other" and report["frames"] == [] and report["omittedFrames"] > 0
+    assert "PRIVATE" not in json.dumps(report)
+
+
+def test_remaining_failure_projection_keeps_bounded_causes_without_exception_text():
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    safe = inline_definitions(tree, ["safe_failure"], {"os": os})["safe_failure"]
+    error = PermissionError("PRIVATE-FIRST")
+    for _ in range(6):
+        later = RuntimeError("PRIVATE-NEXT")
+        later.__cause__ = error
+        error = later
+    report = safe(error, {})
+    current = report
+    for _ in range(3):
+        assert len(current["chain"]) == 1 and not current["chainTruncated"]
+        current = current["chain"][0]
+    assert current["chain"] == [] and current["chainTruncated"]
+    assert "PRIVATE" not in json.dumps(report)
+    grouped = safe(ExceptionGroup("PRIVATE-GROUP", [ValueError("PRIVATE"), error]), {})
+    assert grouped["type"] == "ExceptionGroup" and grouped["groupMembersOmitted"] == 2
+
+
+def test_remaining_workflow_keeps_full_selection_and_first_result_failure_hook():
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    body = ast.unparse(tree)
+    assert "pytest.hookimpl(hookwrapper=True, tryfirst=True)(Results.pytest_runtest_makereport)" in body
+    results = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Results")
+    hook = next(n for n in results.body if isinstance(n, ast.FunctionDef) and n.name == "pytest_runtest_makereport")
+    hook_body = ast.unparse(hook)
+    assert isinstance(hook.body[0], ast.Assign) and isinstance(hook.body[0].value, ast.Yield)
+    assert ast.dump(hook.body[1], include_attributes=False) == ast.dump(
+        ast.parse("report = outcome.get_result()").body[0], include_attributes=False)
+    condition = ast.parse("call.excinfo is not None or report.failed", mode="eval").body
+    assert any(isinstance(n, ast.If) and ast.dump(n.test, include_attributes=False) ==
+               ast.dump(condition, include_attributes=False) for n in hook.body[2:])
+    assert "unavailableFailureCount" in body and "'exceptionAvailable': not unavailable" in hook_body
+    assert not any(isinstance(n, ast.Attribute) and n.attr in {
+        "force_result", "force_exception", "longrepr", "_excinfo", "f_locals"} for n in ast.walk(hook))
+    assert "selected.snapshot(code)" in body
+    assert "result['phases']" not in body and "[:15]" not in body
+    assert "postTestAudit" in body and "wrapperFailure" in body
+    assert body.index("assert selected.passed(code)") < body.index("result['postTestAudit'] = 'started'")
+    # No traceback/longrepr/source-line or locals renderer on the public route.
+    safe = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "safe_failure")
+    assert all(word not in ast.unparse(safe) for word in ("longrepr", "f_locals", "format_exc", "str(error)", "repr(error)"))
+
+
+@pytest.mark.parametrize("fault", [None, "version", "commit", "url", "ref", "subdirectory",
+                                  "editable", "registry-direct", "unknown", "missing", "duplicate-lock"])
+@pytest.mark.parametrize("scope", ["five", "cold"])
+def test_remaining_locked_host_verifier_checks_actual_pep610(fault, scope):
+    from urllib.parse import parse_qs, urlsplit, urlunsplit
+    _, _, tree = remaining_ci_code(FIVE_STEP) if scope == "five" else cold_ci_runner()
+    verify = inline_definitions(tree, ["verify_locked_graph"], {
+        "parse_qs": parse_qs, "urlsplit": urlsplit, "urlunsplit": urlunsplit})["verify_locked_graph"]
+    names = ["amplifier-core", "amplifier-foundation", "amplifier-module-loop-live",
+             "pytest", "pytest-asyncio", "pytest-aiohttp", "filelock", "pyyaml"]
+    lock = {"package": [{"name": name, "version": "1.0", "source": {"registry": "https://pypi.org/simple"}} for name in names]}
+    lock["package"][1]["source"] = {"git": "https://github.com/example/foundation?rev=main&subdirectory=module%2Fchild#" + "a" * 40}
+    rows = [{"name": name, "version": "1.0", "direct": {}} for name in names]
+    rows[1]["direct"] = {"url": "https://github.com/example/foundation",
+                         "vcs_info": {"vcs": "git", "commit_id": "a" * 40, "requested_revision": "main"},
+                         "subdirectory": "module/child"}
+    if fault == "version": rows[0]["version"] = "2.0"
+    elif fault == "commit": rows[1]["direct"]["vcs_info"]["commit_id"] = "b" * 40
+    elif fault == "url": rows[1]["direct"]["url"] += "-fork"
+    elif fault == "ref": rows[1]["direct"]["vcs_info"]["requested_revision"] = "other"
+    elif fault == "subdirectory": rows[1]["direct"]["subdirectory"] = "another"
+    elif fault == "editable": rows[1]["direct"]["dir_info"] = {"editable": True}
+    elif fault == "registry-direct": rows[0]["direct"] = {"url": "file:///borrowed"}
+    elif fault == "unknown": rows.append({"name": "extra", "version": "1.0", "direct": {}})
+    elif fault == "missing": rows.pop()
+    elif fault == "duplicate-lock": lock["package"].append(copy.deepcopy(lock["package"][0]))
+    if fault is None:
+        verify(rows, lock)
+    else:
+        with pytest.raises(AssertionError):
+            verify(rows, lock)
+
+
+def test_remaining_host_graph_is_identical_before_five_and_cold():
+    import re
+    _, _, five = remaining_ci_code(FIVE_STEP)
+    _, _, cold = cold_ci_runner()
+    functions = [next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "host_graph")
+                 for tree in (five, cold)]
+    assert ast.dump(functions[0]) == ast.dump(functions[1])
+    def dist(name, version, direct):
+        return types.SimpleNamespace(metadata={"Name": name}, version=version,
+                                     read_text=lambda _: json.dumps(direct))
+    rows = [dist("Example_Pkg", "1.0", {}), dist("amplifier-unified", "0.121.0", {"url": "file:///wheel"})]
+    namespace = {"re": re, "json": json, "metadata": types.SimpleNamespace(distributions=lambda: rows)}
+    graph = inline_definitions(five, ["host_graph"], namespace)["host_graph"]
+    assert graph() == [{"name": "example-pkg", "version": "1.0", "direct": {}}]
+    rows.append(dist("example-pkg", "1.0", {}))
+    with pytest.raises(AssertionError):
+        graph()
+
+
+@pytest.mark.parametrize("fault", [None, "private-url", "credentials", "commit", "subdirectory", "unknown-source", "duplicate", "name"])
+def test_declared_worker_lock_graph_is_closed_and_not_a_host_lock_claim(fault):
+    import re
+    from urllib.parse import parse_qs, urlsplit, urlunsplit
+    _, _, tree = cold_ci_runner()
+    packages = [
+        {"name": "amplifier-web-runtime", "version": "0.1.1", "source": {"virtual": "."}},
+        {"name": "foundation", "version": "1", "source": {"git": "https://github.com/example/foundation?rev=main#" + "b" * 40}},
+        {"name": "registry-package", "version": "2", "source": {"registry": "https://pypi.org/simple"}},
+    ]
+    if fault == "private-url": packages[2]["source"]["registry"] = "https://private.invalid/secret"
+    elif fault == "credentials": packages[1]["source"]["git"] = "https://secret@github.com/example/foundation#" + "b" * 40
+    elif fault == "commit": packages[1]["source"]["git"] = "https://github.com/example/foundation#main"
+    elif fault == "subdirectory": packages[1]["source"]["git"] = "https://github.com/example/foundation?subdirectory=../private#" + "b" * 40
+    elif fault == "unknown-source": packages[2]["source"] = {"path": "private"}
+    elif fault == "duplicate": packages.append(copy.deepcopy(packages[0]))
+    elif fault == "name": packages[0]["name"] = "private user text\n"
+    namespace = {"re": re, "parse_qs": parse_qs, "urlsplit": urlsplit, "urlunsplit": urlunsplit,
+                 "tomllib": types.SimpleNamespace(loads=lambda _: {"package": packages})}
+    graph = inline_definitions(tree, ["worker_lock_graph"], namespace)["worker_lock_graph"]
+    if fault is None:
+        result = graph(b"fixture")
+        assert result[1]["commit"] == "b" * 40  # Observed generated worker, NOT host134aba.
+    else:
+        with pytest.raises(AssertionError):
+            graph(b"fixture")
+
+
+def test_remaining_cold_keeps_original_journey_and_separate_graph_evidence():
+    _, job, tree = cold_ci_runner()
+    body = ast.unparse(tree)
+    assert "cold-declared-worker-with-locked-host" in body
+    assert "fresh-shipped-manifest-not-host-lock" in body
+    assert "probe-observed-imports-only-not-every-locked-package" in body
+    assert body.count("host_graph() == graph") == 3
+    assert "five['status'] == 'PASS'" in body and "five['installed'] == before" in body
+    assert "report['lockSha256']" in body and "worker_lock_graph(raw)" in body
+    assert body.index("selected.passed(code)") < body.index("root = cold_root(")
+    assert "read_worker_lock(root, report['manifestSha256'], report['lockSha256'])" in body
+    assert "source_file(root," in body and "'', 1024 * 1024)" in body
+    assert "read_private(" not in body
+    assert all(word not in body for word in ("rmtree(", "prepare_project(", "runtime.command =", "UV_CONSTRAINT"))
+    step = next(s for s in job["steps"] if s.get("name", "").startswith("Require one native cold"))
+    assert step["timeout-minutes"] == 21 and '$env:TEMP = "$base/cold-temp"' in step["run"]
+    # Copy the selected candidate's original bytes, not a revised fixture or
+    # a host-provided replacement command. Relevant source hashes are recorded
+    # per run; unrelated future test additions must not change this contract.
+    assert "shutil.copyfile(source / name, path)" in body
+    assert "assert path.read_bytes() == (source / name).read_bytes()" in body
+    assert "tests/fixtures/windows_default_runtime_probe.py" in body
+    _, _, five = remaining_ci_code(FIVE_STEP)
+    assert "tests/test_remote_test_origins.py" in ast.unparse(five)
+
+
+@pytest.mark.parametrize("missing_authoring", [False, True])
+def test_remaining_five_copies_runtime_fixture_from_authoring_not_product(tmp_path, missing_authoring):
+    """Run only the maintained copy/binding block, with deliberately different inputs."""
+    import shutil
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    blocks = [n.body for n in ast.walk(tree) if isinstance(n, ast.With)]
+    block = next(body for body in blocks if any(isinstance(n, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "target" for t in n.targets) for n in body))
+    first = next(i for i, n in enumerate(block) if isinstance(n, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "target" for t in n.targets))
+    last = next(i for i in range(first, len(block)) if isinstance(block[i], ast.Import))
+    source, workflow, base = (tmp_path / name for name in ("product", "authoring", "output"))
+    files = ("tests/conftest.py", "tests/test_runtime.py", "tests/test_remote_test_origins.py")
+    for root, label in ((source, "product"), (workflow, "reviewed")):
+        for name in files:
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not (missing_authoring and root == workflow and name == "tests/test_runtime.py"):
+                path.write_text(label + ":" + name)
+    candidate = {"head": "a" * 40, "tree": "b" * 40}
+    authoring = {"head": "c" * 40, "tree": "d" * 40}
+    namespace = {"source": source, "workflow": workflow, "base": base, "candidate": candidate,
+                 "prefix": False, "readiness": False, "stem": "five",
+                 "result": {"workflow": authoring}, "paths": {}, "shutil": shutil,
+                 "hashlib": hashlib, "os": os}
+    code = compile(ast.Module(body=block[first:last], type_ignores=[]), "<maintained-fixture-copy>", "exec")
+    if missing_authoring:
+        with pytest.raises(FileNotFoundError):
+            exec(code, namespace)
+        return  # Never substitute the stale product fixture.
+    exec(code, namespace)
+    result, target = namespace["result"], base / "five-tests"
+    for name in files:
+        origin = workflow if name == "tests/test_runtime.py" else source
+        assert (target / name).read_bytes() == (origin / name).read_bytes()
+        assert result["testFiles"][name] == hashlib.sha256((origin / name).read_bytes()).hexdigest()
+        assert result["testAuthoring"][name] == (authoring if origin == workflow else candidate)
+        assert namespace["paths"][os.path.normcase(os.path.abspath(target / name))] == (name, 1)
+    assert (target / "tests/test_runtime.py").read_bytes() != (source / "tests/test_runtime.py").read_bytes()
+
+
+def test_native_checkpoint_fixture_wait_preserves_budget_and_cancellation_oracles():
+    tree = ast.parse((ROOT / "tests/test_runtime.py").read_text())
+    helper = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef)
+                  and n.name == "_wait_for_native_identity_preparation")
+    code = ast.unparse(helper)
+    assert "asyncio.timeout(15)" in code and "asyncio.sleep(0.01)" in code
+    assert code.index("if task.done()") < code.index("if captured")
+    assert "await task" in code and "pytest.fail(" in code
+    assert "except" not in code and ".cancel(" not in code
+    case = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef)
+                and n.name == "test_native_windows_runtime_cancel_before_identity_reaps_job")
+    body = ast.unparse(case)
+    assert "await _wait_for_native_identity_preparation(task, manager, captured)" in body
+    assert body.index("_wait_for_native_identity_preparation(task, manager, captured)") < body.index("task.cancel()")
+    # Python versions may unparse the second `not` with parentheses. Require
+    # the complete assertion's expression, not a formatting-dependent substring.
+    absent_state = ast.parse("not manager.workers and not manager._preparations", mode="eval").body
+    assert ast.dump(absent_state) in {
+        ast.dump(node.test) for node in ast.walk(case) if isinstance(node, ast.Assert)
+    }
+    for retained in ("pytest.raises(asyncio.CancelledError)", "asyncio.wait_for(task, 15)",
+                     "captured[0].tree_empty and captured[0].io_finalized",
+                     "updates/worker-leases",
+                     "runtime.status", "ready", "await manager.close()"):
+        assert retained in body
+    _, _, five = remaining_ci_code(FIVE_STEP)
+    code = ast.unparse(five)
+    assert "audit.candidate(workflow) == result['workflow']" in code
+    assert "result['testAuthoring'][name]" in code
+    _, _, cold = cold_ci_runner()
+    assert "shutil.copyfile(source / name, path)" in ast.unparse(cold)
+    assert "testAuthoring" not in ast.unparse(cold)  # Cold still uses the unchanged product fixture.
+
+
+@pytest.mark.parametrize("statement, accepted", [
+    pytest.param("assert not manager.workers and (not manager._preparations)", True, id="parenthesized-right"),
+    pytest.param("assert (not manager.workers) and (not manager._preparations)", True, id="parenthesized-both"),
+    pytest.param("assert not manager._preparations", False, id="missing-workers"),
+    pytest.param("assert not manager.workers", False, id="missing-preparations"),
+    pytest.param("assert not manager.workers or not manager._preparations", False, id="or"),
+    pytest.param("assert manager.workers and not manager._preparations", False, id="positive-workers"),
+    pytest.param("assert not manager.workers and manager._preparations", False, id="positive-preparations"),
+    pytest.param("marker = 'not manager.workers and not manager._preparations'", False, id="string-decoy"),
+])
+def test_native_checkpoint_guard_compares_state_assertion_structure(monkeypatch, statement, accepted):
+    """Exercise the whole maintained guard against source variants, not native code."""
+    path = ROOT / "tests/test_runtime.py"
+    original = path.read_text()
+    case = next(n for n in ast.parse(original).body if isinstance(n, ast.AsyncFunctionDef)
+                and n.name == "test_native_windows_runtime_cancel_before_identity_reaps_job")
+    lines = original.splitlines(keepends=True)
+    body = "".join(lines[case.lineno - 1:case.end_lineno])
+    retained = "        assert not manager.workers and not manager._preparations\n"
+    assert body.count(retained) == 1
+    changed = ("".join(lines[:case.lineno - 1])
+               + body.replace(retained, "        " + statement + "\n")
+               + "".join(lines[case.end_lineno:]))
+    read_text = Path.read_text
+
+    def read(source, *args, **kwargs):
+        return changed if source == path else read_text(source, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    if accepted:
+        test_native_checkpoint_fixture_wait_preserves_budget_and_cancellation_oracles()
+    else:
+        with pytest.raises(AssertionError):
+            test_native_checkpoint_fixture_wait_preserves_budget_and_cancellation_oracles()
+
+
+@pytest.mark.parametrize("fault", [None, "ancestor-refused", "custody-write-refused"])
+def test_native_runtime_home_uses_profile_private_creator_and_retains_custody(tmp_path, monkeypatch, fault):
+    """Portable placement model; never create a Windows profile allocation."""
+    from contextlib import contextmanager
+    import uuid
+    from amplifier_web import windows_files
+
+    tree = ast.parse((ROOT / "tests/test_runtime.py").read_text())
+    fixture = inline_definitions(tree, ["native_runtime_home"],
+                                 {"pytest": pytest, "Path": Path, "json": json})["native_runtime_home"].__wrapped__
+    profile = tmp_path / "PRIVATE-profile"
+    ignored = tmp_path / "PRIVATE-runner-temp"
+    record = tmp_path / "native-runtime-home.json"
+    token = "a" * 32
+    root = profile / (".unified-runtime-test-" + token)
+    calls = []
+    failure = PermissionError("PRIVATE-refusal")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: profile))
+    monkeypatch.setattr(uuid, "uuid4", lambda: types.SimpleNamespace(hex=token))
+    for name in ("RUNNER_TEMP", "TEMP", "TMP", "TMPDIR"):
+        monkeypatch.setenv(name, str(ignored))
+
+    def address(value):
+        calls.append(("address", value))
+        return value
+
+    @contextmanager
+    def directory(value, *, owned_root, create):
+        # Exact custody is saved before the real creator would touch the tree.
+        assert json.loads(record.read_text()) == {
+            "root": str(root), "custody": "retained-for-test-environment-owner"}
+        calls.append(("directory", value, owned_root, create))
+        if fault == "ancestor-refused":
+            raise failure
+        yield object()
+        calls.append(("unpin",))
+
+    monkeypatch.setattr(windows_files, "address", address)
+    monkeypatch.setattr(windows_files, "directory", directory)
+    if fault == "custody-write-refused":
+        original = Path.write_text
+
+        def refuse(path, *args, **kwargs):
+            if path == record:
+                raise failure
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", refuse)
+    if fault:
+        with pytest.raises(PermissionError) as caught:
+            fixture(tmp_path)
+        assert caught.value is failure
+    else:
+        assert fixture(tmp_path) == root
+    assert calls == ([("address", root)] if fault == "custody-write-refused" else
+                     [("address", root), ("directory", root, root, True)]
+                     + ([] if fault else [("unpin",)]))
+    assert record.exists() is (fault != "custody-write-refused")
+    assert not profile.exists() and not ignored.exists()  # Stub only; no native operations.
+
+
+def test_native_profile_placement_preserves_closed_observer_and_oracles():
+    tree = ast.parse((ROOT / "tests/test_runtime.py").read_text())
+    fixture = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "native_runtime_home")
+    body = ast.unparse(fixture)
+    assert "Path.home()" in body and "uuid.uuid4().hex" in body
+    assert "directory(root, owned_root=root, create=True)" in body
+    assert body.index("'native-runtime-home.json'") < body.index("with directory(")
+    assert "'retained-for-test-environment-owner'" in body
+    forbidden = {"mkdir", "chmod", "rmtree", "rmdir", "unlink", "token_user_default_owner",
+                 "skip", "getenv", "environ", "resolve"}
+    # Inspect operations, not the custody text's legitimate word "environment".
+    for node in ast.walk(fixture):
+        assert not isinstance(node, ast.ExceptHandler)
+        if isinstance(node, ast.Name):
+            assert node.id not in forbidden
+        elif isinstance(node, ast.Attribute):
+            assert node.attr not in forbidden
+        elif isinstance(node, ast.alias):
+            assert node.name.split(".")[-1] not in forbidden
+    names = (
+        "test_native_windows_runtime_worker_identity_pipes_and_job_cleanup",
+        "test_native_windows_runtime_cancel_before_identity_reaps_job")
+    for name in names:
+        case = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == name)
+        assert {"native_runtime_home", "native_lease_witness"} <= {arg.arg for arg in case.args.args}
+        assert "tmp_path" not in {arg.arg for arg in case.args.args}
+        code = ast.unparse(case)
+        assert "manager.home = native_runtime_home" in code
+        assert "monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(manager.home))" in code
+        assert "startup_timeout=15" in code and "finally:\n        await manager.close()" in code
+    # Existing whole guard still checks cancel/Job/I/O/workers/leases/ready/close
+    # and reviewed-authoring versus unchanged cold-product fixture selection.
+    test_native_checkpoint_fixture_wait_preserves_budget_and_cancellation_oracles()
+    _, _, five = remaining_ci_code(FIVE_STEP)
+    public = ast.unparse(five)
+    assert "native-runtime-home.json" not in public  # Exact path stays in unuploaded pytest custody.
+    assert "safe_lease_witness" in public and "leaseWitnesses" in public
+
+
+@pytest.mark.parametrize("statement, accepted", [
+    pytest.param("note = 'environ getenv mkdir except pytest.skip'", True, id="literal-only"),
+    pytest.param("value = os.environ['RUNNER_TEMP']", False, id="environment-attribute"),
+    pytest.param("value = environ['RUNNER_TEMP']", False, id="environment-name"),
+    pytest.param("value = os.getenv('RUNNER_TEMP')", False, id="getenv-attribute"),
+    pytest.param("value = getenv('RUNNER_TEMP')", False, id="getenv-name"),
+    pytest.param("from os import environ as settings", False, id="environment-import-alias"),
+    pytest.param("root.mkdir()", False, id="forbidden-call"),
+    pytest.param("try:\n    pass\nexcept PermissionError:\n    pass", False, id="except-handler"),
+])
+def test_native_profile_guard_distinguishes_operations_from_literals(monkeypatch, statement, accepted):
+    """Invoke the whole maintained guard on parsed variants; execute none of them."""
+    path = ROOT / "tests/test_runtime.py"
+    tree = ast.parse(path.read_text())
+    fixture = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "native_runtime_home")
+    fixture.body[1:1] = ast.parse(statement).body
+    changed = ast.unparse(tree)
+    read_text = Path.read_text
+
+    def read(source, *args, **kwargs):
+        return changed if source == path else read_text(source, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    if accepted:
+        test_native_profile_placement_preserves_closed_observer_and_oracles()
+    else:
+        with pytest.raises(AssertionError):
+            test_native_profile_placement_preserves_closed_observer_and_oracles()
+
+
+@pytest.mark.parametrize("scenario", [
+    "pass", "other-owner", "os-owner-private", "os-owner-ancestor", "dacl-absent",
+    "dacl-null", "security-error", "control-error", "owner-error", "acl-error",
+    "missing-first", "handle-reuse", "unmapped-handle", "constructor-error",
+    "owner-after-acl", "role-error",
+])
+def test_native_lease_observer_forwards_real_validator_reads_and_restores(scenario):
+    """Real validator with synthetic API outputs; no Windows query or ACL write."""
+    import ctypes as C
+    from pathlib import PureWindowsPath
+    from amplifier_web import windows_files as wf
+
+    tree = ast.parse((ROOT / "tests/test_runtime.py").read_text())
+    observe = inline_definitions(tree, ["_observe_native_lease"], {"pytest": pytest})["_observe_native_lease"]
+    sentinel = PermissionError("PRIVATE-ERROR /PRIVATE-PATH S-PRIVATE")
+    returned = object()
+    instances, calls, slot = [], [], [37]
+    root = PureWindowsPath("C:/PRIVATE-HOME/native-app")
+    owner = "PRIVATE-SID" if scenario == "other-owner" else (
+        next(iter(wf._OS_AUTHORITIES)) if scenario.startswith("os-owner") else "CURRENT-SID")
+    c = types.SimpleNamespace(**{name: getattr(C, name) for name in ("c_void_p", "cast", "POINTER")})
+    c.get_last_error = lambda: slot[0]
+    c.set_last_error = lambda value: slot.__setitem__(0, value)
+
+    class API:
+        validate_acl = wf._API.validate_acl
+        sid = "CURRENT-SID"
+
+        def __init__(self):
+            calls.append("constructor")
+            if scenario == "constructor-error":
+                raise sentinel
+            self.opens = 0
+            self.in_acl = False
+            instances.append(self)
+
+        @staticmethod
+        def ok(value):
+            if not value:
+                raise sentinel
+
+        def open(self, path, *, directory=False):
+            calls.append(("open", str(path), directory))
+            self.opens += 1
+            if scenario == "missing-first" and self.opens == 1:
+                raise FileNotFoundError("PRIVATE-OPEN")
+            return 41  # Deliberately reuse a numeric handle.
+
+        def close(self, handle):
+            calls.append(("close", handle))
+
+        def GetSecurityInfo(self, *args):
+            calls.append(("security", args[0]))
+            if scenario == "security-error":
+                raise sentinel
+            C.cast(args[3], C.POINTER(wf.PVOID))[0] = 101
+            C.cast(args[5], C.POINTER(wf.PVOID))[0] = None if scenario == "dacl-null" else 202
+            C.cast(args[7], C.POINTER(wf.PVOID))[0] = 303
+            slot[0] = 71
+            return 0
+
+        def GetSecurityDescriptorControl(self, descriptor, control, revision):
+            calls.append(("control", descriptor.value))
+            if scenario == "control-error":
+                raise sentinel
+            C.cast(control, C.POINTER(wf.WORD))[0] = 0 if scenario == "dacl-absent" or descriptor.value == 404 else 4
+            slot[0] = 72
+            return 1
+
+        def sid_text(self, value):
+            calls.append(("sid", value.value))
+            if scenario == "owner-error":
+                raise sentinel
+            slot[0] = 73
+            return "PRIVATE-ACE-SID" if self.in_acl else owner
+
+        def GetAclInformation(self, dacl, info, size, kind):
+            calls.append(("acl", dacl.value))
+            if scenario == "owner-after-acl":
+                self.in_acl = True
+                self.GetSecurityDescriptorControl(wf.PVOID(404), C.byref(wf.WORD()), C.byref(wf.DWORD()))
+                self.sid_text(wf.PVOID(101))  # Not another owner read.
+                raise sentinel
+            if scenario in {"acl-error", "missing-first", "handle-reuse", "unmapped-handle", "role-error"}:
+                raise sentinel
+            C.cast(info, C.POINTER(wf.ACL_INFO))[0].count = 0
+            return 1
+
+        def LocalFree(self, descriptor):
+            calls.append(("free", descriptor.value))
+
+    files = types.SimpleNamespace(C=c, _API=API, PVOID=wf.PVOID, WORD=wf.WORD,
+                                  _OS_AUTHORITIES=wf._OS_AUTHORITIES)
+    path = root.parent if scenario == "os-owner-ancestor" else root
+    if scenario == "role-error":
+        path = object()  # Original synthetic API accepts it; observer role parsing refuses.
+
+    def acquire(home, generation, pid):
+        assert (home, generation, pid) == (root, "PRIVATE-GENERATION", 999)
+        api = files._API()
+        try:
+            try:
+                handle = api.open(path, directory=True)
+            except FileNotFoundError:
+                handle = api.open(path, directory=True)  # No creation claim.
+            if scenario == "handle-reuse":
+                api.close(handle)
+                handle = api.open(root / "updates/worker-leases", directory=True)
+            if scenario == "unmapped-handle":
+                api.close(handle)
+            api.validate_acl(handle, private=scenario != "os-owner-ancestor")
+            return returned
+        finally:
+            api.close(41)
+
+    def run(observed):
+        calls.clear()
+        slot[0] = 37
+        report = {"version": 1, "acquisitions": 1, "failure": None, "observerError": False, "restored": False}
+        try:
+            result = observe(files, acquire, (root, "PRIVATE-GENERATION", 999), {}, report) if observed else acquire(root, "PRIVATE-GENERATION", 999)
+            outcome = result
+        except PermissionError as error:
+            outcome = error
+        assert files._API is API
+        for instance in instances:
+            for name in ("open", "close", "validate_acl", "GetSecurityInfo",
+                         "GetSecurityDescriptorControl", "sid_text", "GetAclInformation"):
+                assert getattr(instance, name).__func__ is getattr(API, name)
+        return outcome, list(calls), slot[0], report
+
+    plain, original_calls, original_last_error, _ = run(False)
+    observed, observed_calls, observed_last_error, report = run(True)
+    assert observed_calls == original_calls  # No additional native calls/opens/queries.
+    assert observed_last_error == original_last_error
+    if plain is returned:
+        assert observed is returned and report["failure"] is None
+    elif plain is sentinel:
+        assert observed is sentinel  # Same exception and cause, not a substitute.
+    else:
+        assert type(observed) is type(plain) and observed.args == plain.args
+    assert report["observerError"] is (scenario == "role-error")
+    assert not any(private in json.dumps(report) for private in ("PRIVATE", "CURRENT-SID", "S-1-", "101", "202", "303"))
+    if scenario == "constructor-error":
+        assert report["failure"] is None
+    elif report["failure"] is not None:
+        fact = report["failure"]
+        assert fact["beforeAcquisition"] == "not-observed" and fact["observation"] == "in-call-read-results"
+        assert fact["private"] is (scenario != "os-owner-ancestor")
+        assert fact["firstOpen"] == ("missing" if scenario == "missing-first" else
+                                    "not-observed" if scenario in {"unmapped-handle", "role-error"} else "returned")
+        assert fact["role"] == ("worker-leases" if scenario == "handle-reuse" else
+                               "unknown" if scenario in {"unmapped-handle", "role-error"} else "app-root")
+        assert fact["validatorLine"] is not None
+        if scenario in {"other-owner", "os-owner-private", "dacl-absent", "dacl-null"}:
+            assert fact["stage"] == "owner-read"
+            assert fact["owner"] == ("other" if scenario == "other-owner" else
+                                    "OS-authority" if scenario == "os-owner-private" else "current-user")
+            assert fact["daclPresent"] is (scenario != "dacl-absent")
+            assert fact["daclNonNull"] is (scenario != "dacl-null")
+        if scenario == "owner-after-acl":
+            assert fact["stage"] == "acl-entries" and fact["owner"] == "current-user"
+            assert fact["daclPresent"] is True  # The unrelated descriptor's false bit is ignored.
+
+
+def test_native_lease_fixture_is_bounded_and_restores_original_acquire(monkeypatch):
+    from amplifier_web import generation_leases
+    tree = ast.parse((ROOT / "tests/test_runtime.py").read_text())
+    calls = []
+    failure = {"stage": "synthetic-only"}
+    original = lambda *args, **kwargs: (args, kwargs)
+
+    def observe(files, acquire, args, kwargs, report):
+        calls.append((acquire, args, kwargs))
+        return acquire(*args, **kwargs)
+
+    namespace = inline_definitions(tree, ["native_lease_witness"],
+                                   {"pytest": pytest, "_observe_native_lease": observe})
+    monkeypatch.setattr(generation_leases, "acquire", original)
+    node = types.SimpleNamespace()
+    fixture = namespace["native_lease_witness"].__wrapped__(
+        types.SimpleNamespace(node=node), monkeypatch)
+    report = next(fixture)
+    try:
+        for i in range(6):
+            assert generation_leases.acquire("private-home", i, pid=100) == (("private-home", i), {"pid": 100})
+        assert report["acquisitions"] == len(calls) == 4
+        report["failure"] = failure  # First failure is frozen; later calls stay ordinary.
+        assert generation_leases.acquire("private-home", 7, pid=100) == (("private-home", 7), {"pid": 100})
+        assert len(calls) == 4
+    finally:
+        fixture.close()
+    assert generation_leases.acquire is original and report["restored"]
+    assert node._native_lease_witness is report
+
+
+@pytest.mark.parametrize("fault", [
+    None, "private-extra", "owner-sid", "raw-role", "bool-as-count", "oversize-count",
+    "dacl-integer", "before-invented", "line-unbound", "line-bool", "missing-key",
+])
+def test_native_lease_public_projection_is_closed_and_fails_without_payload(fault):
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    project = inline_definitions(tree, ["safe_lease_witness"], {})["safe_lease_witness"]
+    raw = {"version": 1, "acquisitions": 1, "observerError": False, "restored": True,
+           "failure": {"role": "app-root", "private": True, "owner": "other",
+                       "daclPresent": True, "daclNonNull": True, "beforeAcquisition": "not-observed",
+                       "firstOpen": "returned", "observation": "in-call-read-results",
+                       "stage": "owner-read", "validatorLine": 258}}
+    if fault == "private-extra": raw["descriptor"] = "PRIVATE-SDDL"
+    elif fault == "owner-sid": raw["failure"]["owner"] = "S-PRIVATE"
+    elif fault == "raw-role": raw["failure"]["role"] = "/PRIVATE-PATH"
+    elif fault == "bool-as-count": raw["acquisitions"] = True
+    elif fault == "oversize-count": raw["acquisitions"] = 5
+    elif fault == "dacl-integer": raw["failure"]["daclPresent"] = 1
+    elif fault == "before-invented": raw["failure"]["beforeAcquisition"] = "existed"
+    elif fault == "line-unbound": raw["failure"]["validatorLine"] = 999
+    elif fault == "line-bool": raw["failure"]["validatorLine"] = True
+    elif fault == "missing-key": del raw["failure"]["private"]
+    projected = project(raw, {"source": ("amplifier_web/windows_files.py", 675)})
+    if fault:
+        assert projected == {"status": "invalid"}
+    else:
+        assert projected == {"status": "observed", **raw}
+        raw["failure"]["owner"] = "PRIVATE-LATE"
+        assert projected["failure"]["owner"] == "other"
+    assert "PRIVATE" not in json.dumps(projected)
+
+
+def test_native_lease_capture_observes_each_phase_without_replacing_failure():
+    _, _, tree = remaining_ci_code(FIVE_STEP)
+    namespace = inline_definitions(tree, ["safe_failure", "safe_lease_witness", "Results"],
+                                   {"os": os, "nodes": FIVE_NODES})
+    result = namespace["Results"]({"source": ("amplifier_web/windows_files.py", 675)})
+    raw = {"version": 1, "acquisitions": 0, "failure": None, "observerError": False, "restored": False}
+    item = types.SimpleNamespace(nodeid=FIVE_NODES[0], _native_lease_witness=raw)
+    error = PermissionError("PRIVATE-MESSAGE")
+    for phase in ("setup", "call", "teardown"):
+        raw["restored"] = phase == "teardown"
+        call = types.SimpleNamespace(when=phase, excinfo=types.SimpleNamespace(value=error) if phase == "call" else None)
+        hook = result.pytest_runtest_makereport(item, call)
+        assert next(hook) is None
+        with pytest.raises(StopIteration) as finished:
+            hook.send(types.SimpleNamespace(get_result=lambda: types.SimpleNamespace(failed=phase == "call")))
+        assert finished.value.value is None
+    report = result.snapshot(1)
+    assert report["failureCount"] == 1 and report["failures"][0]["type"] == "PermissionError"
+    assert [r["restored"] for r in report["leaseWitnesses"]] == [False, False, True]
+    assert not report["passed"] and "PRIVATE" not in json.dumps(report)
+    raw["PRIVATE"] = "PRIVATE"
+    hook = result.pytest_runtest_makereport(item, types.SimpleNamespace(when="call", excinfo=None))
+    assert next(hook) is None
+    with pytest.raises(StopIteration):
+        hook.send(types.SimpleNamespace(get_result=lambda: types.SimpleNamespace(failed=False)))
+    assert result.invalid and result.lease_witnesses[-1] == {
+        "node": FIVE_NODES[0], "phase": "call", "status": "invalid"}
+
+
+@pytest.mark.parametrize("token_owner", ["TokenUser", "Administrators"])
+def test_remaining_lock_observer_does_not_require_uv_file_tokenuser(tmp_path, monkeypatch, token_owner):
+    """Model ownership only: actual bounded no-follow source read, not native ACL proof."""
+    import re
+    from amplifier_web import test_origin_files
+    _, _, tree = cold_ci_runner()
+    read = inline_definitions(tree, ["read_worker_lock"], {"re": re, "hashlib": hashlib})["read_worker_lock"]
+    root = tmp_path / "dr-0123456789ab"
+    manifest = "a" * 64
+    path = root / "app/runtime" / manifest[:16] / "uv.lock"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"ordinary generated lock")
+    before = path.read_bytes()
+    called = []
+    original = test_origin_files.source_file
+    def observe(source, name, mode, maximum):
+        # The generated lock is not a product private receipt, regardless of
+        # which valid default owner created it. No ACL repair/owner rewrite.
+        called.append((source, name, mode, maximum, token_owner))
+        return original(source, name, mode, maximum)
+    monkeypatch.setattr(test_origin_files, "source_file", observe)
+    monkeypatch.setattr(test_origin_files, "_windows_private",
+                        lambda *a: pytest.fail("Observer demanded private receipt authority"))
+    assert read(root, manifest, hashlib.sha256(before).hexdigest()) == before
+    assert called == [(root, "app/runtime/" + manifest[:16] + "/uv.lock", "", 1024 * 1024, token_owner)]
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("fault", ["root", "manifest", "digest", "changed-bytes", "link-mode", "oversize", "reader-refusal"])
+def test_remaining_lock_observer_refuses_wrong_or_unbounded_input(tmp_path, monkeypatch, fault):
+    import re
+    from amplifier_web import test_origin_files
+    _, _, tree = cold_ci_runner()
+    read = inline_definitions(tree, ["read_worker_lock"], {"re": re, "hashlib": hashlib})["read_worker_lock"]
+    root, manifest, raw = tmp_path / "dr-0123456789ab", "a" * 64, b"lock"
+    digest = hashlib.sha256(raw).hexdigest()
+    called = []
+    def observe(source, name, mode, maximum):
+        called.append((source, name, maximum))
+        if fault in {"oversize", "reader-refusal"}:
+            raise ValueError("Bounded no-follow source reader refused")
+        return ("120000" if fault == "link-mode" else "100644",
+                b"changed" if fault == "changed-bytes" else raw)
+    monkeypatch.setattr(test_origin_files, "source_file", observe)
+    if fault == "root": root = tmp_path / "another-run"
+    elif fault == "manifest": manifest = "../private"
+    elif fault == "digest": digest = "not-a-hash"
+    with pytest.raises((AssertionError, ValueError)):
+        read(root, manifest, digest)
+    assert bool(called) is (fault not in {"root", "manifest", "digest"})
 
 
 def test_storage_staging_and_selection_leave_default_native_api_unchanged(tmp_path, monkeypatch):

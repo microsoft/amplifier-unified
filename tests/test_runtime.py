@@ -1631,9 +1631,225 @@ async def test_windows_owner_cannot_report_exit_without_zero_tree_and_io_proof(w
     assert owner.process.pid is None
 
 
+def _observe_native_lease(files, acquire, args, kwargs, report):
+    """Observe existing reads in one synchronous acquire; never query or repair ACLs."""
+    from contextvars import ContextVar
+    from pathlib import PureWindowsPath
+
+    C = files.C
+    active = ContextVar('native-lease-observation', default=False)
+    original_api = files._API
+    root = PureWindowsPath(args[0] if args else kwargs['home'])
+
+    def note(action):
+        # Python bookkeeping must not change the ctypes last-error slot consumed
+        # by the original caller, or replace its result/exception.
+        saved = C.get_last_error()
+        try:
+            action()
+        except Exception:
+            report['observerError'] = True
+        finally:
+            C.set_last_error(saved)
+
+    def role(path, directory):
+        if not directory:
+            return 'non-directory'
+        path = PureWindowsPath(path)
+        if path == root:
+            return 'app-root'
+        if path == root / 'updates':
+            return 'updates'
+        if path == root / 'updates/worker-leases':
+            return 'worker-leases'
+        return 'ancestor' if path in root.parents else 'other'
+
+    def pointer(value):
+        return value.value if isinstance(value, C.c_void_p) else value
+
+    with pytest.MonkeyPatch.context() as patches:
+        def api(*call_args, **call_kwargs):
+            instance = original_api(*call_args, **call_kwargs)
+            if not active.get():
+                return instance  # A different thread/context keeps ordinary behavior.
+            handles, first = {}, {}
+            frame = ContextVar('native-acl-call', default=None)
+            originals = {name: getattr(instance, name) for name in (
+                'open', 'close', 'validate_acl', 'GetSecurityInfo',
+                'GetSecurityDescriptorControl', 'sid_text', 'GetAclInformation')}
+
+            def opened(path, *pos, **named):
+                try:
+                    handle = originals['open'](path, *pos, **named)
+                except BaseException as error:
+                    def remember_error():
+                        if len(first) < 64:
+                            first.setdefault(str(path), 'missing' if isinstance(error, FileNotFoundError) else 'error')
+                        else:
+                            report['observerError'] = True
+                    note(remember_error)
+                    raise
+                def remember():
+                    if len(first) >= 64 or len(handles) >= 64:
+                        report['observerError'] = True
+                        return
+                    initial = first.setdefault(str(path), 'returned')
+                    # Replacing this entry on every open prevents numeric-handle
+                    # reuse from inheriting an earlier object's role.
+                    handles[pointer(handle)] = (object(), role(path, named.get('directory', False)), initial)
+                note(remember)
+                return handle
+
+            def closed(handle, *pos, **named):
+                try:
+                    return originals['close'](handle, *pos, **named)
+                finally:
+                    note(lambda: handles.pop(pointer(handle), None))
+
+            def security(*pos, **named):
+                result = originals['GetSecurityInfo'](*pos, **named)
+                def remember():
+                    current = frame.get()
+                    if current is not None and pointer(pos[0]) == current['handle']:
+                        current['stage'] = 'security-info'
+                        if result == 0:
+                            current['ownerPointer'] = C.cast(pos[3], C.POINTER(files.PVOID))[0]
+                            current['descriptorPointer'] = C.cast(pos[7], C.POINTER(files.PVOID))[0]
+                            current['daclPointer'] = C.cast(pos[5], C.POINTER(files.PVOID))[0]
+                            current['facts']['daclNonNull'] = bool(current['daclPointer'])
+                note(remember)
+                return result
+
+            def control(*pos, **named):
+                result = originals['GetSecurityDescriptorControl'](*pos, **named)
+                def remember():
+                    current = frame.get()
+                    if current is not None and pointer(pos[0]) == current.get('descriptorPointer'):
+                        current['stage'] = 'descriptor-control'
+                        if result:
+                            current['facts']['daclPresent'] = bool(C.cast(pos[1], C.POINTER(files.WORD))[0] & 4)
+                note(remember)
+                return result
+
+            def sid(value, *pos, **named):
+                result = originals['sid_text'](value, *pos, **named)
+                def remember():
+                    current = frame.get()
+                    if (current is not None and current['stage'] != 'acl-entries'
+                            and pointer(value) == current.get('ownerPointer')):
+                        current['stage'] = 'owner-read'
+                        current['facts']['owner'] = ('current-user' if result == instance.sid else
+                            'OS-authority' if result in files._OS_AUTHORITIES else 'other')
+                note(remember)
+                return result
+
+            def acl(*pos, **named):
+                def remember():
+                    current = frame.get()
+                    if current is not None and pointer(pos[0]) == current.get('daclPointer'):
+                        current['stage'] = 'acl-entries'
+                note(remember)
+                return originals['GetAclInformation'](*pos, **named)
+
+            def validate(handle, *, private):
+                entry = handles.get(pointer(handle))
+                facts = {'role': entry[1] if entry else 'unknown', 'private': private,
+                         'owner': 'unknown', 'daclPresent': None, 'daclNonNull': None,
+                         'beforeAcquisition': 'not-observed',
+                         'firstOpen': entry[2] if entry else 'not-observed',
+                         'observation': 'in-call-read-results', 'stage': 'validator-entry',
+                         'validatorLine': None}
+                current = {'handle': pointer(handle), 'facts': facts, 'stage': 'validator-entry'}
+                token = frame.set(current)
+                try:
+                    return originals['validate_acl'](handle, private=private)
+                except BaseException as error:
+                    def remember():
+                        if report['failure'] is not None:
+                            return  # Preserve the first rejection, not later cleanup errors.
+                        trace = error.__traceback__
+                        for _ in range(128):
+                            if trace is None:
+                                break
+                            if trace.tb_frame.f_code is original_api.validate_acl.__code__:
+                                facts['validatorLine'] = trace.tb_lineno
+                            trace = trace.tb_next
+                        facts['stage'] = current['stage']
+                        report['failure'] = dict(facts)
+                    note(remember)
+                    raise
+                finally:
+                    frame.reset(token)  # Never retain pointers/descriptor bytes in the report.
+
+            try:
+                for name, replacement in (
+                    ('open', opened), ('close', closed), ('validate_acl', validate),
+                    ('GetSecurityInfo', security), ('GetSecurityDescriptorControl', control),
+                    ('sid_text', sid), ('GetAclInformation', acl)):
+                    patches.setattr(instance, name, replacement)
+            except Exception:
+                report['observerError'] = True
+                patches.undo()
+                # The original constructor already returned. A failed observer
+                # installation must not substitute a new construction failure.
+            return instance
+
+        patches.setattr(files, '_API', api)
+        token = active.set(True)
+        try:
+            return acquire(*args, **kwargs)
+        finally:
+            active.reset(token)
+
+
+@pytest.fixture
+def native_lease_witness(request, monkeypatch):
+    from amplifier_web import generation_leases, windows_files
+    report = {'version': 1, 'acquisitions': 0, 'failure': None,
+              'observerError': False, 'restored': False}
+    request.node._native_lease_witness = report
+    original = generation_leases.acquire
+
+    def acquire(*args, **kwargs):
+        if report['acquisitions'] >= 4 or report['failure'] is not None:
+            return original(*args, **kwargs)
+        report['acquisitions'] += 1
+        return _observe_native_lease(windows_files, original, args, kwargs, report)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(generation_leases, 'acquire', acquire)
+        try:
+            yield report
+        finally:
+            scoped.undo()
+            report['restored'] = generation_leases.acquire is original
+
+
+@pytest.fixture
+def native_runtime_home(tmp_path):
+    """Keep synthetic app storage off the runner-temp ancestor chain."""
+    import uuid
+    from amplifier_web.windows_files import address, directory
+
+    # Match the profile-child placement in test_browser_code/test_host_config.
+    # The real boundary still validates every ancestor; no ACL repair or fallback.
+    root = address(Path.home() / ('.unified-runtime-test-' + uuid.uuid4().hex))
+    # Record exact custody before creation, inside the existing unuploaded pytest
+    # evidence. This is not an authority/cleanup receipt or public path output.
+    (tmp_path / 'native-runtime-home.json').write_text(json.dumps({
+        'root': str(root), 'custody': 'retained-for-test-environment-owner',
+    }), encoding='utf-8')
+    with directory(root, owned_root=root, create=True):
+        pass
+    # Retain on both success and failure: removing storage here could discard
+    # failed-Job/lease evidence. Hosted VM owner handles eventual teardown.
+    # Manual native runs likewise retain this exact child; no automatic disposal.
+    return root
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='native Windows runtime Job integration')
 @pytest.mark.parametrize('forced', [False, True])
-async def test_native_windows_runtime_worker_identity_pipes_and_job_cleanup(tmp_path, monkeypatch, forced):
+async def test_native_windows_runtime_worker_identity_pipes_and_job_cleanup(native_runtime_home, monkeypatch, forced, native_lease_witness):
     from amplifier_web import runtime
     # Exercise the actual Worker.run identity/ThreadedPipeReader/shutdown path,
     # with only the provider/bundle-dependent command body replaced.
@@ -1662,7 +1878,7 @@ asyncio.run(Fixture().run())
     manager = RuntimeManager(command=[sys.executable, '-I', '-c', code,
         str(Path(__file__).resolve().parents[1]), 'forced' if forced else 'normal'],
         startup_timeout=15, retention={'prewarm_on_select': False})
-    manager.home = tmp_path / 'native-app'
+    manager.home = native_runtime_home
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(manager.home))
     events = []
     async def emit(kind, data): events.append((kind, data))
@@ -1685,13 +1901,114 @@ asyncio.run(Fixture().run())
         await manager.close()
 
 
+async def _wait_for_native_identity_preparation(task, manager, captured):
+    """Observe the original startup outcome before waiting for its checkpoint."""
+    async with asyncio.timeout(15):
+        while True:
+            if task.done():
+                await task  # Preserve the original startup exception and cause.
+                pytest.fail('Startup completed before the cancellation checkpoint')
+            if captured and manager._preparations.get('cancel-native', {}).get('task'):
+                return
+            await asyncio.sleep(.01)
+
+
+@pytest.mark.parametrize('checkpoint_visible', [False, True])
+async def test_native_checkpoint_wait_surfaces_original_startup_failure(checkpoint_visible):
+    entered = asyncio.Event()
+    cause = PermissionError('synthetic private-directory refusal')
+    failure = RuntimeError('synthetic startup failure')
+
+    async def startup():
+        entered.set()
+        raise failure from cause
+
+    task = asyncio.create_task(startup())
+    await entered.wait()
+    manager = SimpleNamespace(_preparations={'cancel-native': {'task': object()}} if checkpoint_visible else {})
+    captured = [object()] if checkpoint_visible else []
+    with pytest.raises(RuntimeError) as raised:
+        await asyncio.wait_for(_wait_for_native_identity_preparation(task, manager, captured), 1)
+    assert raised.value is failure and raised.value.__cause__ is cause
+    assert task.done() and not task.cancelled()
+
+
+async def test_native_checkpoint_wait_rejects_completed_startup_without_cancelling():
+    task = asyncio.create_task(asyncio.sleep(0))
+    await task
+    with pytest.raises(pytest.fail.Exception, match='Startup completed before the cancellation checkpoint'):
+        await _wait_for_native_identity_preparation(
+            task, SimpleNamespace(_preparations={'cancel-native': {'task': object()}}), [object()])
+    assert task.done() and not task.cancelled()
+
+
+async def test_native_checkpoint_wait_keeps_pending_start_for_explicit_cancellation():
+    release, started, waiting = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    manager = SimpleNamespace(_preparations={'cancel-native': {}})
+    captured = []
+
+    async def startup():
+        started.set()
+        await release.wait()
+
+    class Preparations(dict):
+        def get(self, key, default=None):
+            waiting.set()
+            return super().get(key, default)
+
+    manager._preparations = Preparations(manager._preparations)
+    task = asyncio.create_task(startup())
+    await started.wait()
+    captured.append(object())
+    observer = asyncio.create_task(_wait_for_native_identity_preparation(task, manager, captured))
+    try:
+        await asyncio.wait_for(waiting.wait(), 1)
+        # The preparation can disappear while the same startup is pending.
+        manager._preparations.clear()
+        waiting.clear()
+        await asyncio.wait_for(waiting.wait(), 1)
+        assert not observer.done() and not task.done()
+        manager._preparations['cancel-native'] = {'task': object()}
+        await asyncio.wait_for(observer, 1)
+        assert not task.done()  # The observer never substitutes cancellation.
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        observer.cancel()
+        task.cancel()
+        await asyncio.gather(observer, task, return_exceptions=True)
+
+
+async def test_native_checkpoint_wait_cancellation_does_not_cancel_startup():
+    ready = asyncio.Event()
+
+    async def startup():
+        ready.set()
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(startup())
+    await ready.wait()
+    observer = asyncio.create_task(_wait_for_native_identity_preparation(
+        task, SimpleNamespace(_preparations={}), []))
+    try:
+        await asyncio.sleep(0)
+        observer.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await observer
+        assert not task.done()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='native Windows runtime startup cancellation')
-async def test_native_windows_runtime_cancel_before_identity_reaps_job(tmp_path, monkeypatch):
+async def test_native_windows_runtime_cancel_before_identity_reaps_job(native_runtime_home, monkeypatch, native_lease_witness):
     from amplifier_web import windows_jobs
     manager = RuntimeManager(command=[sys.executable, '-I', '-S', '-c',
         'import time;time.sleep(30)'], startup_timeout=15,
         retention={'prewarm_on_select': False})
-    manager.home = tmp_path / 'cancel-app'
+    manager.home = native_runtime_home
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(manager.home))
     captured, events = [], []
     original = windows_jobs.WindowsOwnedProcess.start
@@ -1703,9 +2020,7 @@ async def test_native_windows_runtime_cancel_before_identity_reaps_job(tmp_path,
     async def emit(kind, data): events.append((kind, data))
     task = asyncio.create_task(manager.start({'id': 'cancel-native'}, emit))
     try:
-        async with asyncio.timeout(15):
-            while not captured or not manager._preparations['cancel-native'].get('task'):
-                await asyncio.sleep(.01)
+        await _wait_for_native_identity_preparation(task, manager, captured)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, 15)
