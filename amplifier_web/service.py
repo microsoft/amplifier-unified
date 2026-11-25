@@ -545,6 +545,8 @@ class AppService:
         self.installed_build = capture()
         self.data_dir = Path(data_dir).expanduser()
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        from .linked_instances import LinkedInstances
+        self.linked_instances = LinkedInstances(self.data_dir, server_config or {"public_origins": []})
         self.db = sqlite3.connect(self.data_dir / "app.sqlite3")
         (self.data_dir / "app.sqlite3").chmod(0o600)
         self.db.execute("PRAGMA journal_mode=WAL")
@@ -6167,6 +6169,11 @@ class AppService:
             return await self._app_bridge(operation, args, session_id, input_origin=origin)
 
     async def _app_bridge(self, operation, args, session_id, *, input_origin=None):
+        # Never fall back to a local call when the caller supplied a target.
+        if 'target' in args or (operation == 'get_state' and args.get('path') == '/linkedInstances'):
+            from .linked_instances import agent_route
+            self.collaboration.active_binding(self._session(session_id, hydrate=False))
+            return await agent_route(self.linked_instances, operation, args)
         if operation == 'ui.use':
             return await self.ui_use.call(session_id, args.get('operation'), args.get('args', {}))
         if operation == 'context.prepare':

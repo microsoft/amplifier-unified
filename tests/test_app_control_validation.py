@@ -22,6 +22,24 @@ async def mounted_tool(bridge):
     return tools['app_control']
 
 
+async def test_link_target_never_dispatches_or_reads_context_locally():
+    bridge = AsyncMock(return_value={"availability": "online"})
+    tool = await mounted_tool(bridge)
+    target = {"instanceId": "a" * 32}
+    for operation, args in (
+        ("dispatch", {"action": "session.create", "target": target}),
+        ("history", {"target": target}),
+        ("context.read", {"target": None}),
+        ("context.focus", {"target": target}),
+    ):
+        refused = await tool.execute({"operation": operation, "args": args})
+        assert refused.success is False and refused.error["code"] == "link_unsupported"
+    bridge.assert_not_called()
+    observed = await tool.execute({"operation": "get_state", "args": {"target": target}})
+    assert observed.success and observed.output == {"availability": "online"}
+    bridge.assert_awaited_once_with("get_state", {"target": target})
+
+
 async def test_mounted_app_reads_overlap_without_loosening_other_operations():
     import asyncio
     from amplifier_module_loop_live.dispatch import GuardedTool
