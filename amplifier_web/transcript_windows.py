@@ -594,6 +594,10 @@ class TranscriptWindows:
             managed = session.get('historyManaged') is True
             previous_native = session.get('nativeRevision')
             cold = self._cold_source(session) if not managed else None
+            inline = dict.get(session, 'messages', ())
+            legacy_peer_page = (not managed and cold is None and INITIAL_MESSAGES < len(inline) <= 100
+                                and self._committed_messages(session) is None
+                                and self._peer_wanted(inline[-INITIAL_MESSAGES:]))
             saved_source = [cold.identity if cold is not None else None, self._fence(session_id)]
         stamp = await asyncio.to_thread(revision, source) if source.get('nativeProject') else None
         if self.closed:
@@ -604,7 +608,7 @@ class TranscriptWindows:
                 and (managed or entry.get('savedSource') == saved_source)):
             return
         if not managed:
-            page = await self.read(session_id, limit=INITIAL_MESSAGES) if cold is not None else None
+            page = await self.read(session_id, limit=INITIAL_MESSAGES) if cold is not None or legacy_peer_page else None
             if self.closed:
                 return
             self.initial[session_id] = {'status': 'ready', 'stamp': stamp,
@@ -658,6 +662,14 @@ class TranscriptWindows:
                 committed = self._committed_messages(session)
                 raw_page = self._saved_page(session, None, INITIAL_MESSAGES)
                 wanted = self._peer_wanted(raw_page['items'])
+                if wanted and committed is None and session['id'] not in self._peer_failed:
+                    # A newly opened inline history can predate snapshot preparation.
+                    # Reuse only its observed read page for passive display.
+                    retained = self.pages.get(entry.get('key'))
+                    if retained and retained[0]['windowKey'] == raw_page['windowKey']:
+                        from .message_preparation import _same
+                        if _same(raw_page['items'], retained[0]['items'], [100_000]):
+                            raw_page = retained[0]
                 if wanted and committed is not None:
                     raw_page['_peerChecked'] = True
                     try:

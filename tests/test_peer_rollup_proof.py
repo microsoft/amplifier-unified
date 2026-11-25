@@ -9,7 +9,7 @@ from amplifier_web.service import AppError
 from test_peer_preview import app, make_cold
 
 
-def long_receiver(service, receiving, *, count=count):
+def long_receiver(service, receiving, *, count=151):
     originals = copy.deepcopy(receiving['messages'])
     receiving['messages'] = [
         {'id': f'prefix-{i}', 'role': 'assistant', 'text': f'Earlier {i}'}
@@ -181,6 +181,25 @@ async def test_long_pages_keep_cursor_order_and_immediate_preview(app, count):
         meta = initial['messages'][-1]['attribution']['peer']
         result = await service.peer_preview.read({'proof': meta['proof']})
         assert result['page']['items']
+
+
+async def test_older_inline_page_reuses_observed_peer_proof_on_open(app, monkeypatch):
+    service, source, receiving, mid = app
+    long_receiver(service, receiving, count=51)
+    service._message_preparation.entries.clear()  # First open after loading an older inline record.
+    windows = service.history.windows
+    with service.clients.bind('preview-client'):
+        await windows.load(receiving['id'])
+        assert shown(service, receiving, mid)['attribution']['peer']['available']
+        with monkeypatch.context() as context:
+            def unexpected_scan(*args, **kwargs):
+                pytest.fail('Repeated a full resident proof on passive projection')
+            context.setattr(windows.peer_originals, 'resident', unexpected_scan)
+            assert shown(service, receiving, mid)['attribution']['peer']['available']
+        proof = shown(service, receiving, mid)['attribution']['peer']['proof']
+        receiving['messages'][0]['id'] = mid
+        with pytest.raises((AppError, ValueError)):
+            await service.peer_preview.read({'proof': proof})
 
 
 @pytest.mark.parametrize('field', ['id', 'inputId'])

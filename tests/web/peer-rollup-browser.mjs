@@ -32,6 +32,10 @@ try{
   const before=await page.evaluate(()=>{const s=window.amplifier.getState();return {id:s.selectedSessionId,draft:s.view.draft}});
   const sourceRows=await page.evaluate(ids=>{const s=window.amplifier.getState(),session=s.sessions.find(x=>x.id===s.selectedSessionId);return {window:session.messageWindow,rows:session.messages.filter(row=>ids.includes(row.id)).map(row=>({id:row.id,inputId:row.inputId,via:row.via,inputOrigin:row.inputOrigin,attribution:row.attribution||null}))}},facts.originals);
   assert.deepEqual(sourceRows.rows.map(row=>row.id),facts.originals);
+  if(partial){
+   await page.getByRole('button',{name:'Load earlier conversation',exact:true}).click();
+   await expect(page.locator(`[data-message-id="${facts.earlierRecipient}"]`)).toBeAttached();
+  }
   const run=page.locator('.a-peer-run');
   const runCount=await run.count();
   if(runCount===1)await run.locator('.a-peer-run-summary').press('Enter');

@@ -53,7 +53,7 @@ async def main():
         raise AssertionError('Unexpected worker/provider subprocess')
     from amplifier_web.setup import SetupManager
     import amplifier_web.draft_defaults as defaults
-    SetupManager.provider_rows = lambda self, workspace: []
+    SetupManager.provider_rows = lambda self, workspace, *, ordinary_only=False: []
     async def fixture_routing(self, workspace):
         pass
     SetupManager.ensure_routing_catalog = fixture_routing
@@ -100,9 +100,12 @@ async def main():
         service.state['view'].update(navPinned=False, navExpanded=False, draft=recipient['draft'])
         # A bounded recent page must not depend on the whole receiving history
         # fitting in that page. This opt-in retains ordinary fixture behavior.
+        earlier_recipient = None
         if os.environ.get('PEER_PREVIEW_PARTIAL_RECEIVER') == '1':
             for i in range(101):
-                service._message(recipient, 'assistant', f'Earlier synthetic recipient answer {i}')
+                row = service._message(recipient, 'assistant', f'Earlier synthetic recipient answer {i}')
+                if i == 60:
+                    earlier_recipient = row['id']
         service._message(recipient,'user','Keep all original formatting and preview without leaving this chat.')
         for source in (a,b):
             await generation(service,source,'g-'+source['id'],['human-'+source['id']])
@@ -130,6 +133,7 @@ async def main():
                 'text':TEXT,'long':LONG,'crlf':CRLF,'textSha256':hashlib.sha256(TEXT.encode()).hexdigest(),
                 'effects':runtime.effects,'subprocesses':attempts,'installed':INSTALLED,
                 'rendererValidations':renderer_validations,
+                'earlierRecipient':earlier_recipient,
                 'receiverCold':not dict.__contains__(service._session(recipient['id'],hydrate=False),'messages'),
                 'backend':str(Path(server.__file__).resolve())})
         app.router.add_get('/api/fixture/peerFacts',facts)

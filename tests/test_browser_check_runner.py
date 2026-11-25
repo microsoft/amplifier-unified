@@ -1167,11 +1167,11 @@ def test_linked_instances_has_one_client_owner_and_preserves_prior_order():
     index = host['scenarioOrder'].index('linked-instances')
     assert host['scenarioOrder'][index - 1:index + 2] == [
         'device-pairing', 'linked-instances', 'standard-ux-keyboard-reflow']
-    previous = [name for name in host['scenarioOrder'] if name != 'linked-instances']
+    previous = [name for name in host['scenarioOrder'] if name not in {'linked-instances', 'session-health-retry-preparation', 'peer-rollup'}]
     assert len(previous) == len(set(previous)) == 179
     assert hashlib.sha256(json.dumps(previous).encode()).hexdigest() == (
         '162ea1e700375b94b7ef9123f738c5475451f8e93374b9d660dd2a425d1ad9c8')
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 180
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 182
     assert 'linked-instances' not in {row['id'] for row in coverage_plan()['scenarios']}
     assert proof['registrySha256'] == {'unified': runner.digest(host_path),
                                       'client': runner.digest(client_path)}
