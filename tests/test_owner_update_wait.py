@@ -1651,7 +1651,9 @@ async def test_update_yield_distinguishes_fresh_admission_from_child_result(wait
     assert runtime.accepted.visits <= 5  # Constant old-history work plus the one new input.
 
 
-async def test_safe_update_holds_two_active_tasks_and_new_input_through_component_retry(waiting, monkeypatch):
+@pytest.mark.parametrize('unresolved_settings', [False, True])
+async def test_safe_update_holds_two_active_tasks_and_new_input_through_component_retry(
+        waiting, monkeypatch, unresolved_settings):
     from amplifier_web.safe_update import enroll
     from amplifier_web.update_health import browser_view
     from amplifier_web import updates
@@ -1715,6 +1717,39 @@ async def test_safe_update_holds_two_active_tasks_and_new_input_through_componen
                         lambda: [{'name': row['name'], 'version': row['latest']} for row in changes])
     await h.finish()
     assert not h.runtime.admitted and not h.runtime.sent
+
+    if unresolved_settings:
+        from amplifier_web.session_files import amplifier_home
+        from amplifier_web.update_sequence import StaleAppSelection, verify_app_selection
+        settings = amplifier_home() / 'settings.yaml'
+        original_settings = settings.read_bytes() if settings.exists() else None
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text('bundle: [')
+        try:
+            # Exercise the real inventory/selection reader before the synthetic
+            # component-transition fixture below replaces inventory_sources.
+            await h.manager.check(tier='included', fresh=True)
+            diagnostic_rows = h.manager.inventory
+            assert any(row.get('checkReason') == 'app-selection-unresolved'
+                       for row in diagnostic_rows)
+            assert all(not row.get('appSelection') for row in diagnostic_rows)
+            assert state['phase'] == 'error' and state['available'] == 0
+            assert state['includedCanProceed'] is False
+            assert state['sequence']['install'] is False
+            await h.manager.install()
+            await h.finish()
+            assert drain.held(h.app) and not state['drain']['componentsReady']
+            assert not h.runtime.admitted and not h.runtime.sent
+        finally:
+            if original_settings is None:
+                settings.unlink()
+            else:
+                settings.write_bytes(original_settings)
+        # Correcting settings cannot turn old diagnostic rows into permission.
+        with pytest.raises(StaleAppSelection):
+            verify_app_selection(h.manager, diagnostic_rows)
+        await h.finish()
+        assert drain.held(h.app) and not h.runtime.admitted and not h.runtime.sent
 
     revision = 'b' * 40
     current = 'a' * 40
