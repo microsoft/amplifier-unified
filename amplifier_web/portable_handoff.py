@@ -221,8 +221,10 @@ class PortableHandoff:
 
             def accepted():
                 check()
-                if current_owner() and _unit(export(target)) == unit:
-                    commit(candidate)
+                if current_owner():
+                    current = export(target)
+                    if _unit(current) == unit:
+                        commit(current)
             return accepted
 
         provider.portable_handoff = admit

@@ -129,7 +129,8 @@ async def test_old_or_unbound_sources_keep_existing_recovery(saved, reason):
 @pytest.mark.parametrize("outcome", ["success", "stop", "failed", "incomplete", "wrong_model",
                                     "rotated", "changed_prefix", "changed_file", "changed_writer", "removed_note",
                                     "unbound", "no_generation", "changed_mounted_writer", "different_generator",
-                                    "callback_removed_before_reply", "canceled_transport", "uncertain_terminal"])
+                                    "callback_removed_before_reply", "canceled_transport", "uncertain_terminal",
+                                    "evidence_refs_advanced"])
 async def test_only_a_fresh_rebuild_and_its_confirmed_reply_replace_legacy_note(saved, outcome, monkeypatch):
     old = json.loads(saved.read_bytes())
     del old["unifiedPortableOrigin"]
@@ -157,8 +158,13 @@ async def test_only_a_fresh_rebuild_and_its_confirmed_reply_replace_legacy_note(
     await target.save()
     assert saved.read_bytes() == original
 
+    updated_refs = [{"kind": "transcript", "messageIndex": 0, "sha256": digest(ROWS[0])}]
+
     async def answer(request, **kwargs):
         assert (NOTE in str(request.messages)) == (outcome != "removed_note")
+        if outcome == "evidence_refs_advanced":
+            assert target.coord.context.evidence_refs != updated_refs
+            target.coord.context.evidence_refs = updated_refs
         if outcome == "failed":
             raise RuntimeError("target failed")
         if outcome == "canceled_transport":
@@ -200,8 +206,11 @@ async def test_only_a_fresh_rebuild_and_its_confirmed_reply_replace_legacy_note(
             await target.route.complete(dispatch)
     else:
         await target.route.complete(dispatch)
-    if outcome == "success":
+    if outcome in {"success", "evidence_refs_advanced"}:
         completed = json.loads(saved.read_bytes())
+        if outcome == "evidence_refs_advanced":
+            assert completed["evidenceRefs"] == updated_refs
+            assert completed["sha256"] == digest({k: v for k, v in completed.items() if k != "sha256"})
         assert completed["identity"] == {"provider": "fixture", "model": "b"}
         assert completed["summary"]["text"] == NOTE and completed["unifiedPortableOrigin"]
         assert completed["sourceRevision"]["messages"] >= old["sourceRevision"]["messages"]
