@@ -262,11 +262,20 @@ async def test_suggestion_capture_preserves_peer_windows_across_cooling(app, cou
                 assert cold['status'] == 'ready' and cold['reused']
                 assert cold['sourceKey'] == first['sourceKey']
                 assert not dict.__contains__(receiving, 'messages')
+                cold_page = await windows.read(sid)
+                cold_proof = next(row for row in cold_page['items'] if row['id'] == mid)['attribution']['peer']['proof']
+                assert (await service.peer_preview.read({'proof': cold_proof}))['page']['items']
                 service.cold_display.hydrate(receiving)
                 hydrated = await request('hydrated-capture')
                 assert hydrated['status'] == 'ready' and hydrated['reused']
                 assert hydrated['sourceKey'] == first['sourceKey']
                 assert probe.await_count == 1
+                fresh_page = await windows.read(sid)
+                fresh_proof = next(row for row in fresh_page['items'] if row['id'] == mid)['attribution']['peer']['proof']
+                assert (await service.peer_preview.read({'proof': fresh_proof}))['page']['items']
+                # Hydration exposes mutable rows, not a committed snapshot.
+                # Publish through the normal owner before passive snapshot reuse.
+                service._publish_changes(sessions={sid})
             await windows.load(sid)
             latest = windows.project(receiving)
             assert len(latest['messages']) == 20
