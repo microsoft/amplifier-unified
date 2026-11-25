@@ -420,6 +420,13 @@ checkout to run or reinstall. Raw source development requires Node.
 
 ## Local experiments
 
+Rerun the same build command after an interruption. Before compiling again it
+finishes any prepared static replacement and cleans up its staging directory.
+If the pending files have changed, the build preserves them for inspection.
+Older builds used unmarked `.web-client-previous-*`, `.web-client-install-*`
+and `.web-client-development-*` directories beneath `amplifier_web`. A fresh
+build can restore a missing `static/` while leaving those directories intact.
+
 `python scripts/web_client_build.py dev` runs the prepared client's development
 server. `python scripts/web_client_build.py build-development` installs deliberately
 edited local output for an owned experiment or negative browser check, without a
