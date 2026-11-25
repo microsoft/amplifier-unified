@@ -1160,6 +1160,28 @@ def synthetic_requirements(lock):
 
 
 def safe_synthetic_result(name, value):
+    if name == "cleanup.json":
+        # Existing cleanup APIs may return detailed strings. They stay private;
+        # only this closed projection belongs in the uploaded evidence folder.
+        allowed = {"absent", "ended", "restored", "unchanged", "retained"}
+        value = {key: answer if type(answer) is bool or
+                 (type(answer) is str and answer in allowed) else "retained"
+                 for key, answer in value.items()}
+    else:
+        need(set(value) <= {"status", "case", "errorType", "selected", "phases", "source", "schedulerComplete"},
+             "Unexpected public evidence fields")
+        need(value.get("status") in {"PASS", "FAIL"}, "Invalid public status")
+        if "source" in value:
+            source = value["source"]
+            need(set(source) == {"fixture", "product", "lockSha256"}
+                 and re.fullmatch("[0-9a-f]{40}", source["fixture"])
+                 and source["product"] == SYNTHETIC_BASE
+                 and re.fullmatch("[0-9a-f]{64}", source["lockSha256"]), "Invalid public source identity")
+        if "phases" in value:
+            need(len(value["phases"]) <= 3 and all(set(row) == {"phase", "outcome"}
+                 and row["phase"] in {"setup", "call", "teardown"}
+                 and row["outcome"] in {"passed", "failed", "skipped"} for row in value["phases"]),
+                 "Invalid public phase evidence")
     path = Path(os.environ["RUNNER_TEMP"]).resolve() / "standard-account-evidence"
     path.mkdir(exist_ok=True)
     (path / name).write_text(json.dumps(value, indent=2), encoding="utf-8")
@@ -1256,6 +1278,12 @@ else {
 
 
 def exact_helper(op, record, previous=None):
+    need(op in {"query", "create", "start", "remove"}
+         and re.fullmatch(r"AmplifierStandardAccountCheck-[0-9a-f]{32}", record.get("name", ""))
+         and re.fullmatch(r"S-1-5-21-[0-9-]+", record.get("sid", "")), "Helper identity refused")
+    if op in {"start", "remove"}:
+        need(isinstance(previous, str) and previous and len(previous.encode()) < 48000,
+             "Helper has no registered-definition receipt")
     result = powershell(EXACT_HELPER, {**record, "op": op, "previous": previous}, timeout=30)
     need(result["exitCode"] == 0 and isinstance(result["json"], dict), "Exact helper operation failed")
     return result["json"]

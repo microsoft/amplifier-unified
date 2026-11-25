@@ -3866,3 +3866,79 @@ def test_synthetic_controller_avoids_legacy_cleanup_and_helper_overwrite(case):
     assert "publish_private(name, raw)" in source and "read_private(name, limit=len(raw))" in source
     assert "os.fsync(stream.fileno())" in source
     assert "service._scheduler = original" in source
+
+
+@pytest.mark.parametrize("bad", [{"name": "AmplifierStandardAccountCheck"},
+                               {"sid": "S-1-5-18"}, {"name": "foreign"}, {}])
+def test_synthetic_helper_rejects_unbound_mutations_before_transport(case, monkeypatch, bad):
+    calls = []
+    monkeypatch.setattr(case, "powershell", lambda *a, **k: calls.append(a))
+    record = {"name": "AmplifierStandardAccountCheck-" + "a" * 32, "sid": USER["sid"], **bad}
+    with pytest.raises(AssertionError):
+        case.exact_helper("remove", record)  # Even a valid identity needs a registered XML receipt.
+    assert calls == []
+
+
+@pytest.mark.parametrize("failure", ["foreign-owner", "missing-receipt", "changed-helper",
+                                   "running-helper", "subject-still-present"])
+def test_synthetic_uncertain_task_cleanup_retains_account_profile(case, tmp_path, monkeypatch, failure):
+    stage, exchange = tmp_path / "stage", tmp_path / "exchange"
+    owner = {"user": "synthetic-user", "mark": "synthetic-mark", "sid": USER["sid"]}
+    helper = {"name": "AmplifierStandardAccountCheck-" + "a" * 32, "sid": USER["sid"], "xml": "<exact/>"}
+    calls, saved = [], []
+    monkeypatch.setattr(case, "synthetic_folders", lambda: (stage, exchange))
+    def record(_, name):
+        if name == "signin-intent.json":
+            raise FileNotFoundError
+        if failure == "missing-receipt":
+            raise ValueError("malformed")
+        return owner if name == "owner.json" else helper
+    monkeypatch.setattr(case, "synthetic_record", record)
+    monkeypatch.setattr(case, "whose", lambda *a: "another account" if failure == "foreign-owner" else "this run's")
+    monkeypatch.setattr(case, "account_sid", lambda name: USER["sid"])
+    monkeypatch.setattr(case, "sid_text", lambda sid: sid)
+    def transport(op, row, previous=None):
+        calls.append(op)
+        if failure == "changed-helper":
+            return {"exists": True, "xml": "<changed/>", "sid": USER["sid"], "instances": 0}
+        if failure == "running-helper":
+            return {"exists": True, "xml": "<exact/>", "sid": USER["sid"], "instances": 1}
+        return {"exists": False}
+    monkeypatch.setattr(case, "exact_helper", transport)
+    monkeypatch.setattr(case, "read_protected", lambda p: (
+        json.dumps({"sid": USER["sid"], "name": "AmplifierUnified-Test-" + "a"*32}).encode(), USER["sid"], True))
+    monkeypatch.setattr(case, "task", lambda *a: {"exists": True})
+    for name in ("remove_profile", "remove_account", "sign_out", "forget", "end_viewers", "ask_to_end_programs"):
+        monkeypatch.setattr(case, name, lambda *a, n=name: pytest.fail("Unexpected effect: " + n))
+    monkeypatch.setattr(case, "safe_synthetic_result", lambda n, value: saved.append(dict(value)))
+    assert case.cleanup_synthetic() is False
+    assert saved[0]["profile"] == saved[0]["account"] == "retained"
+    assert "remove" not in calls
+
+
+def test_synthetic_public_cleanup_never_exports_private_error_text(case, tmp_path, monkeypatch):
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    case.safe_synthetic_result("cleanup.json", {"account": "left: PRIVATE-SID/PATH", "viewers": "ended",
+                                               "signedOut": True})
+    result = json.loads((tmp_path / "standard-account-evidence/cleanup.json").read_text())
+    assert result == {"account": "retained", "viewers": "ended", "signedOut": True}
+
+
+def test_synthetic_private_intent_flush_readback_precedes_return(case, tmp_path, monkeypatch):
+    order = []
+    monkeypatch.setattr(case.os, "fsync", lambda fd: order.append("flush"))
+    def read(path, folder=False):
+        if folder:
+            return b"", case.ADMINISTRATORS, True
+        order.append("readback")
+        return Path(path).read_bytes(), case.ADMINISTRATORS, True
+    monkeypatch.setattr(case, "read_protected", read)
+    case.protected_publish(tmp_path, "intent.json", {"name": "synthetic"})
+    assert order == ["flush", "readback"]
+    with pytest.raises(FileExistsError):
+        case.protected_publish(tmp_path, "intent.json", {"name": "different"})
+    assert json.loads((tmp_path / "intent.json").read_text()) == {"name": "synthetic"}
+    monkeypatch.setattr(case, "read_protected", lambda path, folder=False: (
+        b"changed", case.ADMINISTRATORS, True))
+    with pytest.raises(AssertionError):
+        case.protected_publish(tmp_path, "second.json", {"name": "synthetic"})
