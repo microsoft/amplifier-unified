@@ -14,7 +14,7 @@ import './composer-test-helpers.mjs';
 const moduleFailure=process.argv.includes('--module-failure');
 const contextLimit=process.argv.includes('--context-limit');
 const activeWorker=process.argv.includes('--active-worker');
-const lifecycleMode=process.argv.includes('--request-failure')?'request-failure':process.argv.includes('--completed-runtime-fault')?'completed-runtime-fault':null;
+const lifecycleMode=process.argv.includes('--retry-preparation')?'retry-preparation':process.argv.includes('--request-failure')?'request-failure':process.argv.includes('--completed-runtime-fault')?'completed-runtime-fault':null;
 const output=process.env.AMPLIFIER_TEST_ARTIFACTS?resolve(process.env.AMPLIFIER_TEST_ARTIFACTS)+sep:fileURLToPath(new URL('../../output/conversation-details-proof/',import.meta.url));
 await mkdir(output,{recursive:true});
 if(process.env.AMPLIFIER_TEST_ARTIFACTS)assert.deepEqual(await readdir(output),[],'AMPLIFIER_TEST_ARTIFACTS must be a new or empty directory; existing evidence must not be overwritten');
@@ -29,7 +29,9 @@ try{
  // Health geometry uses an unpinned chat column at every width. Do not race a
  // desktop "Close navigation" label that disappears on responsive collapse.
  await showFixtureConversation(page,lifecycleMode?{}:{navPinned:false});
- if(lifecycleMode){
+ if(lifecycleMode==='retry-preparation'){
+  await retryPreparationCheck(page,ready,output);
+ }else if(lifecycleMode){
   await lifecycleCheck(page,ready,output);
  }else{
  const actions=[],metrics=[];
@@ -382,6 +384,50 @@ async function assertContextNoticeReach(page,banner,label,disabledRecovery,negat
  await banner.evaluate(node=>node.scrollTo(0,0));
  assertReach(await readReach());
  return {label,reach:measured};
+}
+
+async function retryPreparationCheck(page,ready,output){
+ const facts=()=>page.request.get(ready.url+'/fixture/check').then(r=>r.json());
+ const phase=async phase=>assert.equal((await page.request.post(ready.url+'/fixture/preparation-phase',{data:{phase}})).status(),200);
+ const banner=page.locator('[data-part=conversation-trouble]');
+ const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
+ const notice=state=>state.attention.items.find(row=>row.id==='session:'+ready.sessionId);
+ await expect(banner).toContainText('The conversation summary reached its output limit.');
+ const before=await facts(),original=notice(before);
+ await banner.getByRole('button',{name:'Dismiss conversation error',exact:true}).click();
+ await expect(banner).toHaveCount(0);
+ await composer.fill('Try again?');await composer.press('Enter');
+ await expect.poll(async()=>(await facts()).calls.filter(row=>row.operation==='send').length).toBe(1);
+ const checkpoints=[];
+ for(const step of ['preparing','warm','ready']){
+  if(step!=='preparing')await phase(step);
+  const current=await facts();
+  assert.deepEqual(current.failure,before.failure);
+  assert.equal(notice(current)?.fingerprint,original.fingerprint);
+  assert.equal(notice(current)?.read,true);
+  await expect(banner).toHaveCount(0);
+  await page.screenshot({path:output+`retry-${step}.png`});
+  checkpoints.push({step,failure:current.failure,notice:notice(current)});
+ }
+ await phase('startup-error');
+ await expect(banner).toContainText('The conversation worker could not start.');
+ await expect(banner.getByRole('button',{name:'Dismiss conversation error',exact:true})).toBeVisible();
+ const startup=await facts();
+ assert.equal(notice(startup).read,false);assert.notEqual(notice(startup).fingerprint,original.fingerprint);
+ await page.screenshot({path:output+'retry-new-startup-error.png'});
+ await banner.getByRole('button',{name:'Dismiss conversation error',exact:true}).click();
+ await expect(banner).toHaveCount(0);
+ await composer.fill('Explicit second attempt');await composer.press('Enter');
+ await expect.poll(async()=>(await facts()).calls.filter(row=>row.operation==='send').length).toBe(2);
+ await phase('admitted');
+ await expect(page.getByText('A fresh explicit message worked.',{exact:true})).toBeVisible();
+ await expect(banner).toHaveCount(0);
+ const after=await facts();
+ assert.equal(after.failure,null);
+ assert.equal(after.messages.find(row=>row.inputId==='failed-input').inputStatus.failure.code,'summary_output_limit');
+ assert.equal(after.originalUnchanged,true);assert.equal(after.sessions,1);
+ await writeFile(output+'retry-preparation.json',JSON.stringify({scope:'Real host and packaged browser; synthetic transport, no provider or recovery calls',checkpoints,startup,after},null,2)+'\n');
+ console.log('PASS: dismissed prior failure stays hidden through fresh send, preparation, warmth and ready; new startup failure is visible/dismissible; exact admission clears current failure, not historical input.');
 }
 
 async function lifecycleCheck(page,ready,output){

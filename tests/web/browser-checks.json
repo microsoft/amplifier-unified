@@ -1037,6 +1037,10 @@
       "command": ["node", "tests/web/session-health-browser.mjs", "--request-failure"]
     },
     {
+      "id": "session-health-retry-preparation",
+      "command": ["node", "tests/web/session-health-browser.mjs", "--retry-preparation"]
+    },
+    {
       "id": "session-health-completed-runtime-fault",
       "command": ["node", "tests/web/session-health-browser.mjs", "--completed-runtime-fault"]
     },
@@ -1395,6 +1399,7 @@
     "session-health-context-limit",
     "session-health-context-limit-active-worker",
     "session-health-request-failure",
+    "session-health-retry-preparation",
     "session-health-completed-runtime-fault",
     "session-health-module-failure",
     "activity-feedback",
