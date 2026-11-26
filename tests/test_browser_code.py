@@ -2073,7 +2073,8 @@ def test_owner_page_says_what_is_wrong_and_never_shows_the_password(host, monkey
                                    "had before may no longer work. Set the password again.") in page.text
     assert "ABCDE" not in page.text and PASSWORD not in page.text
     page, _ = owner_page(host, method="POST", session=session, form={"action": "remove"})
-    assert page.status == 500 and "Amplifier could not confirm the removal. Remove it again." in page.text
+    assert page.status == 500 and ("Amplifier could not confirm the removal. Open this page again. "
+                                   "If a password or key is still set, remove it again.") in page.text
     # Another change of the record came first: this one is not made, and the page says so.
     entry.set_password(home, "the earlier password")
     earlier = auth.read_sign_in_key(home)

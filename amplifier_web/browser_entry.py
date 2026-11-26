@@ -934,7 +934,9 @@ _NOT_NOW = ("<p>This Amplifier cannot set a password for other devices now. "
             "Stop Amplifier on the PC and start it again.</p>")
 _UNCONFIRMED_SET = ("Amplifier could not confirm that the password is saved. A password or key that you had "
                     "before may no longer work. Set the password again.")
-_UNCONFIRMED_REMOVE = "Amplifier could not confirm the removal. Remove it again."
+# The record can be gone all the same; the page then has no remove card. So the text names a step that always works.
+_UNCONFIRMED_REMOVE = ("Amplifier could not confirm the removal. Open this page again. "
+                       "If a password or key is still set, remove it again.")
 
 
 def _session_here(request):
