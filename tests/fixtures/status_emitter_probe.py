@@ -15,6 +15,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -259,6 +260,52 @@ async def prepare_cli(root, inputs, digest):
     (root/'cli-prepared.json').write_text(json.dumps(proof, indent=2)+'\n')
 
 
+def cli_tool_sample(rows, pid, launched_at, received_at, received_monotonic, first=None):
+    """Freeze the first fresh observation, never the most favorable publication."""
+    if first is not None:
+        return first
+    matches = []
+    for row in rows:
+        producer, now = row['producer'], row['now']
+        if (producer['host'] != 'cli' or type(producer['pid']) is not int or producer['pid'] != pid
+                or row['lifecycle'] != 'live' or row['freshness'] != 'live'
+                or now['status'] != 'tool'):
+            continue
+        tools = [tool for tool in now['tools']
+                 if tool['name'] == 'status_hold' and tool['id'] == 'hold-call']
+        if len(tools) != 1:
+            continue
+        stamp, started = row['observedAt'], tools[0]['startedAt']
+        if (not all(type(value) in (int, float) and math.isfinite(value)
+                    for value in (stamp, started))
+                or not launched_at <= started <= stamp <= received_at):
+            continue
+        assert type(row['sequence']) is int and row['sequence'] > 0
+        identity = [producer['instanceId'], row['where']['sessionId'], tools[0]['id']]
+        assert all(isinstance(value, str) and 0 < len(value) <= 200 for value in identity)
+        matches.append({
+            'pid': pid, 'sequence': row['sequence'], 'publishedAt': stamp,
+            'toolStartedAt': started, 'receivedAt': received_at,
+            'receivedMonotonic': received_monotonic, 'launchedAt': launched_at,
+            'identitySha256': hashlib.sha256(json.dumps(identity).encode()).hexdigest(),
+        })
+    assert len(matches) <= 1, 'Ambiguous CLI tool observation'
+    return matches[0] if matches else None
+
+
+def check_cli_tool_latency(timing):
+    first, entered = timing['firstCliTool'], timing['toolEntryAt']
+    assert first is not None, 'No first CLI tool observation'
+    assert type(entered) in (int, float) and math.isfinite(entered), 'Missing tool entry time'
+    assert entered >= first['launchedAt'], 'Tool entry predates this CLI'
+    # Receiver time includes publication and polling delay. A late first read
+    # must fail even if its publisher timestamp happens to be early.
+    lag = first['receivedAt'] - entered
+    timing['cliToolObservationSeconds'] = lag
+    assert 0 <= lag < 1, lag
+    return lag
+
+
 async def main(args):
     inputs = read_cli_sources(args.cli_sources, args.cli_sources_sha256)
     root = args.root.resolve()
@@ -266,6 +313,33 @@ async def main(args):
     if root == store or root.is_relative_to(store) or store.is_relative_to(root):
         raise ValueError('Native work and prepared source store must be separate')
     root.mkdir(parents=True)
+    # This receipt survives handled failures without copying exception text,
+    # consumer rows, prompts or private logs. Forced outer termination can still
+    # prevent finalization; an absent receipt is never a pass.
+    result = {'passed': False, 'phase': 'setup', 'cleanupCompleted': False,
+              'timing': {'firstCliTool': None, 'finalCliTool': None,
+                         'toolEntryAt': None, 'phases': {}}}
+    try:
+        await run_probe(args, root, inputs, result)
+    except BaseException as error:
+        result['passed'] = False
+        # A failure in cleanup must not turn the success-only payload into
+        # diagnostic output. The fixed timing/phase facts suffice on failure.
+        result.pop('consumer', None)
+        result.pop('cliPreparation', None)
+        result['failureKind'] = ('assertion' if isinstance(error, AssertionError) else
+                                 'error' if isinstance(error, Exception) else 'interrupted')
+        raise
+    finally:
+        (root/'result.json').write_text(json.dumps(result, indent=2, allow_nan=False)+'\n')
+
+
+async def run_probe(args, root, inputs, result):
+    timing = result['timing']
+    def phase(name):
+        result['phase'] = name
+        timing['phases'][name] = time.monotonic()
+
     workspace = root/'workspace'; workspace.mkdir()
     env = cli_environment(root, inputs['store'])
     Path(env['AMPLIFIER_HOME']).mkdir()
@@ -329,6 +403,7 @@ async def mount(coordinator,config=None):
         'hooks': [{'module': 'hooks-status-emitter', 'source': installed_path.decode().strip(), 'config': {'directory': str(registry), 'bundle': 'status-proof'}}]}))
     # No host/CLI session exists until exact full-default source preparation
     # succeeds in the independent CLI interpreter. No Unified sys.path there.
+    phase('cli_preparation')
     with (root/'cli-prepare.log').open('wb') as log:
         code = await run_cli_preparation([
             os.environ['CLI_PYTHON'], '-I', '-B', str(Path(__file__).resolve()),
@@ -356,60 +431,95 @@ async def mount(coordinator,config=None):
     cli = None
     observed = None
     try:
+        phase('runtime_start')
         await app.management.ensure_runtime(session)
         # Public CLI entry point, installed in an environment without Unified.
+        phase('cli_registration')
         registration = await asyncio.create_subprocess_exec(os.environ['CLI_PYTHON'], '-m', 'amplifier_app_cli.main', 'bundle', 'add', bundle.as_uri(), '--name', 'status-proof', cwd=workspace, env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         output, errors = await asyncio.wait_for(registration.communicate(), 30)
         assert registration.returncode == 0, (output+errors).decode()
         command = [os.environ['CLI_PYTHON'], '-m', 'amplifier_app_cli.main', 'run', '--bundle', 'status-proof', '--mode', 'single', '--output-format', 'json', 'PRIVATE prompt never emitted']
         with (root/'cli.log').open('wb') as log:
+            phase('cli_launch')
+            launched_at = time.time()
             cli = await asyncio.create_subprocess_exec(*command, cwd=workspace, env=env, stdout=log, stderr=log)
+            timing['cliPid'] = cli.pid
+            timing['cliLaunchedAt'] = launched_at
             deadline = time.monotonic()+60
             host_started = False
+            phase('first_cli_tool')
             while time.monotonic() < deadline:
                 if cli.returncode is not None:
                     break
                 rows = discover(registry)['sessions']
-                running = [row for row in rows if row['producer']['host'] == 'cli' and any(tool['name'] == 'status_hold' for tool in row['now']['tools'])]
-                if running and not host_started:
+                received_at, received_monotonic = time.time(), time.monotonic()
+                timing['firstCliTool'] = cli_tool_sample(
+                    rows, cli.pid, launched_at, received_at, received_monotonic,
+                    timing['firstCliTool'])
+                if timing['firstCliTool'] is not None and timing['toolEntryAt'] is None:
+                    marker = root/('tool-started-'+str(cli.pid)+'.json')
+                    if marker.exists():
+                        entered = json.loads(marker.read_text())['at']
+                        assert type(entered) in (int, float) and math.isfinite(entered)
+                        timing['toolEntryAt'] = entered
+                if timing['firstCliTool'] is not None and not host_started:
+                    phase('host_dispatch')
                     await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'PRIVATE host prompt'})
                     host_started = True
+                    phase('dual_tool')
+                running = cli_tool_sample(rows, cli.pid, launched_at, received_at, received_monotonic)
                 host_running = any(row['producer']['host']=='unified' and any(t['name']=='status_hold' for t in row['now']['tools']) for row in rows)
                 if running and host_running:
                     # External installed consumer imports no source or host code.
+                    phase('consumer_read')
                     process = await asyncio.create_subprocess_exec(os.environ['CONSUMER_PYTHON'], '-I', '-m', 'amplifier_status.cli', '--directory', str(registry), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env)
                     stdout, stderr = await asyncio.wait_for(process.communicate(), 5)
                     assert process.returncode == 0, stderr.decode()
                     observed = json.loads(stdout)
+                    timing['finalCliTool'] = cli_tool_sample(
+                        observed['sessions'], cli.pid, launched_at, time.time(), time.monotonic())
                     break
                 await asyncio.sleep(.03)
+            phase('cli_exit')
             await asyncio.wait_for(cli.wait(), 60)
+        phase('consumer_assertions')
         assert cli.returncode == 0, (root/'cli.log').read_text()[-6000:]
         assert observed is not None, (root/'cli.log').read_text()[-6000:]
         assert observed['complete'] and not observed['invalid'], observed
         by_host = {row['producer']['host']: row for row in observed['sessions']}
         assert set(by_host) == {'cli', 'unified'}, observed
+        assert len(observed['sessions']) == 2
+        assert timing['finalCliTool'] is not None
+        assert timing['finalCliTool']['identitySha256'] == timing['firstCliTool']['identitySha256']
+        assert timing['finalCliTool']['toolStartedAt'] == timing['firstCliTool']['toolStartedAt']
+        assert timing['finalCliTool']['sequence'] >= timing['firstCliTool']['sequence']
+        assert by_host['unified']['where']['sessionId'] == sid
+        assert any(tool['name'] == 'status_hold' and tool['id'] == 'hold-call'
+                   for tool in by_host['unified']['now']['tools'])
         assert by_host['cli']['plan']['counts'] == {'pending': 0, 'in_progress': 1, 'completed': 1}
         assert by_host['unified']['plan']['counts']['in_progress'] == 1
         assert by_host['cli']['now']['status'] == by_host['unified']['now']['status'] == 'tool'
-        lag = by_host['cli']['observedAt'] - json.loads((root/('tool-started-'+str(by_host['cli']['producer']['pid'])+'.json')).read_text())['at']
-        assert 0 <= lag < 1, lag
+        phase('first_observation_assertion')
+        lag = check_cli_tool_latency(timing)
+        phase('privacy_assertion')
         assert 'PRIVATE' not in json.dumps(observed)
+        phase('ended_assertion')
         ended = [r for r in discover(registry)['sessions'] if r['producer']['host'] == 'cli']
         assert len(ended) == 1 and ended[0]['freshness'] == 'ended', ended
-        result = {'passed': True, 'cliToolObservationSeconds': lag, 'consumer': observed,
+        result.update({'passed': True, 'cliToolObservationSeconds': lag, 'consumer': observed,
                   'cliEnded': True, 'networkModelCalls': 0,
                   'cliPreparation': json.loads((root/'cli-prepared.json').read_text()),
                   'limits': ['CLI is real installed entry point with scripted provider/local tools.',
                              'Unified uses a real worker/Core/Foundation with the same scripted provider and local tools.',
-                             'No runtime/TUI/recipe-specific adapter qualification.']}
-        (root/'result.json').write_text(json.dumps(result, indent=2))
-        print(json.dumps({key: value for key, value in result.items() if key != 'consumer'}))
+                             'First observation includes polling delay; publisher observedAt can advance on later updates.',
+                             'No runtime/TUI/recipe-specific adapter qualification.']})
+        phase('assertions_complete')
     finally:
         if cli and cli.returncode is None:
             cli.terminate()
             await asyncio.wait_for(cli.wait(), 5)
         await app.close()
+        result['cleanupCompleted'] = True
 
 
 if __name__ == '__main__':

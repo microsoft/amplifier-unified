@@ -415,7 +415,10 @@ async def test_native_cli_failed_preparation_cannot_start_either_runtime(
     with pytest.raises(ValueError, match='CLI prepared inputs refused'):
         await native_probe.main(args)
     assert len(calls) == 2
-    assert not (args.root/'result.json').exists()
+    result = json.loads((args.root/'result.json').read_text())
+    assert result['passed'] is False and result['phase'] == 'cli_preparation'
+    assert result['timing']['firstCliTool'] is None
+    assert result['cleanupCompleted'] is False
     assert not (args.root/'app').exists()
 
 
@@ -503,3 +506,156 @@ def test_native_cli_outer_owner_settles_preparation_descendant(tmp_path, exit_mo
     while running() and time.monotonic() < deadline:
         time.sleep(.01)
     assert not running(), 'Preparation descendant escaped outer cleanup'
+
+
+def cli_tool_row():
+    return {
+        'producer': {'host': 'cli', 'pid': 123, 'instanceId': 'private-instance'},
+        'where': {'sessionId': 'private-session', 'cwd': 'PRIVATE workspace'},
+        'lifecycle': 'live', 'freshness': 'live', 'observedAt': 100.15, 'sequence': 4,
+        'now': {'status': 'tool', 'tools': [
+            {'name': 'status_hold', 'id': 'hold-call', 'startedAt': 100.05}]},
+        'plan': {'text': 'PRIVATE plan label'},
+    }
+
+
+@pytest.mark.parametrize('later_publication', [100.3, 102.15], ids=['dirty-update', 'heartbeat'])
+def test_native_first_observation_survives_later_publications(native_probe, later_publication):
+    row = cli_tool_row()
+    first = native_probe.cli_tool_sample([row], 123, 99., 100.2, 20.)
+    assert first['sequence'] == 4 and first['publishedAt'] == 100.15
+    # Mutation of the source row must not mutate the captured numeric sample.
+    row['sequence'] = 5
+    row['observedAt'] = later_publication
+    later = native_probe.cli_tool_sample([row], 123, 99., later_publication+.05, 22.)
+    assert later['sequence'] == 5 and later['publishedAt'] == later_publication
+    assert native_probe.cli_tool_sample(
+        [row], 123, 99., later_publication+.05, 22., first) is first
+    timing = {'firstCliTool': first, 'toolEntryAt': 100.1}
+    assert native_probe.check_cli_tool_latency(timing) == pytest.approx(.1)
+    # The later snapshot remains useful for the independent consumer assertion,
+    # never as a replacement for the first observation's latency.
+    assert later['identitySha256'] == first['identitySha256']
+    assert first['receivedAt'] == 100.2 and first['sequence'] == 4
+    assert 'PRIVATE' not in json.dumps(first)
+    assert 'private-instance' not in json.dumps(first)
+    assert 'private-session' not in json.dumps(first)
+
+
+@pytest.mark.parametrize('received,entered', [
+    (101.1, 100.1), (102., 100.1), (100.2, 100.3),
+], ids=['one-second-boundary', 'late-first-even-with-early-publication', 'negative-lag'])
+def test_native_first_observation_same_budget_rejects_late_or_negative(native_probe, received, entered):
+    first = native_probe.cli_tool_sample([cli_tool_row()], 123, 99., received, 20.)
+    assert first['publishedAt'] == 100.15  # An early publisher stamp cannot rescue a slow read.
+    timing = {'firstCliTool': first, 'toolEntryAt': entered}
+    with pytest.raises(AssertionError):
+        native_probe.check_cli_tool_latency(timing)
+    assert timing['cliToolObservationSeconds'] == received-entered
+
+
+def test_native_first_observation_cannot_resample_a_failed_first_read(native_probe):
+    row = cli_tool_row()
+    first = native_probe.cli_tool_sample([row], 123, 99., 102., 20.)
+    timing = {'firstCliTool': first, 'toolEntryAt': 100.1}
+    with pytest.raises(AssertionError):
+        native_probe.check_cli_tool_latency(timing)
+    # Even a later caller supplying a favorable clock/sample cannot overwrite it.
+    row['sequence'] += 1
+    same = native_probe.cli_tool_sample([row], 123, 99., 100.2, 21., first)
+    assert same is first and same['receivedAt'] == 102.
+    with pytest.raises(AssertionError):
+        native_probe.check_cli_tool_latency({'firstCliTool': same, 'toolEntryAt': 100.1})
+
+
+@pytest.mark.parametrize('change', [
+    'pid', 'pid-type', 'host', 'name', 'call-id', 'stale', 'ended', 'status',
+    'old-publication', 'old-tool', 'future-publication', 'nan-tool',
+])
+def test_native_first_observation_wrong_identity_or_stale_row_cannot_satisfy(native_probe, change):
+    row = cli_tool_row()
+    if change == 'pid':
+        row['producer']['pid'] = 124
+    elif change == 'pid-type':
+        row['producer']['pid'] = 123.
+    elif change == 'host':
+        row['producer']['host'] = 'unified'
+    elif change == 'name':
+        row['now']['tools'][0]['name'] = 'other'
+    elif change == 'call-id':
+        row['now']['tools'][0]['id'] = 'old-hold-call'
+    elif change == 'stale':
+        row['freshness'] = 'stale'
+    elif change == 'ended':
+        row['lifecycle'] = 'ended'
+    elif change == 'status':
+        row['now']['status'] = 'thinking'
+    elif change == 'old-publication':
+        row['observedAt'] = 98.
+    elif change == 'old-tool':
+        row['now']['tools'][0]['startedAt'] = 98.
+    elif change == 'future-publication':
+        row['observedAt'] = 101.
+    elif change == 'nan-tool':
+        row['now']['tools'][0]['startedAt'] = float('nan')
+    assert native_probe.cli_tool_sample([row], 123, 99., 100.2, 20.) is None
+    with pytest.raises(AssertionError, match='No first CLI'):
+        native_probe.check_cli_tool_latency({'firstCliTool': None, 'toolEntryAt': 100.1})
+
+
+def test_native_first_observation_ambiguous_rows_are_not_cherry_picked(native_probe):
+    rows = [cli_tool_row(), cli_tool_row()]
+    rows[1]['where']['sessionId'] = 'another-session'
+    with pytest.raises(AssertionError, match='Ambiguous'):
+        native_probe.cli_tool_sample(rows, 123, 99., 100.2, 20.)
+
+
+@pytest.mark.parametrize('entry', [None, float('nan'), float('inf'), True, 98.])
+def test_native_first_observation_requires_current_numeric_tool_entry(native_probe, entry):
+    first = native_probe.cli_tool_sample([cli_tool_row()], 123, 99., 100.2, 20.)
+    with pytest.raises(AssertionError):
+        native_probe.check_cli_tool_latency({'firstCliTool': first, 'toolEntryAt': entry})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('outcome', ['success', 'late', 'private-error', 'cleanup-error'])
+async def test_native_first_observation_receipt_survives_failure_without_private_text(
+        tmp_path, native_probe, cli_sources, monkeypatch, outcome):
+    from types import SimpleNamespace
+    inputs, digest = write_cli_sources(tmp_path, cli_sources)
+    args = SimpleNamespace(root=tmp_path/'native', cli_sources=inputs, cli_sources_sha256=digest)
+    async def run_probe(args, root, inputs, result):
+        result['phase'] = 'first_observation_assertion'
+        timing = result['timing']
+        timing['phases']['first_observation_assertion'] = 20.
+        timing['firstCliTool'] = native_probe.cli_tool_sample(
+            [cli_tool_row()], 123, 99., 102. if outcome == 'late' else 100.2, 20.)
+        timing['toolEntryAt'] = 100.1
+        if outcome == 'private-error':
+            raise ValueError('PRIVATE prompt, credential, exception body')
+        native_probe.check_cli_tool_latency(timing)
+        result['passed'] = True
+        if outcome == 'cleanup-error':
+            result['consumer'] = {'text': 'PRIVATE success-only row'}
+            result['cliPreparation'] = {'text': 'PRIVATE preparation detail'}
+            raise ValueError('PRIVATE cleanup failure')
+        result['cleanupCompleted'] = True
+    monkeypatch.setattr(native_probe, 'run_probe', run_probe)
+    if outcome == 'success':
+        await native_probe.main(args)
+    else:
+        with pytest.raises(AssertionError if outcome == 'late' else ValueError):
+            await native_probe.main(args)
+    raw = (args.root/'result.json').read_text()
+    result = json.loads(raw)
+    assert result['passed'] is (outcome == 'success')
+    assert result['cleanupCompleted'] is (outcome == 'success')
+    assert result['phase'] == 'first_observation_assertion'
+    assert result['timing']['firstCliTool']['sequence'] == 4
+    assert result['timing']['toolEntryAt'] == 100.1
+    assert result['timing']['phases'] == {'first_observation_assertion': 20.}
+    if outcome == 'late':
+        assert result['timing']['cliToolObservationSeconds'] == pytest.approx(1.9)
+    assert 'PRIVATE' not in raw and 'private-instance' not in raw and 'private-session' not in raw
+    assert 'consumer' not in result
+    assert 'cliPreparation' not in result
