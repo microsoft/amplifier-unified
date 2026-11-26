@@ -1,4 +1,4 @@
-"""CI-only native check: the release gate reads a plan that the real producer made on Windows.
+"""Native check for a Windows runner of CI: the release gate reads a plan that the real producer made there.
 
 One installation of a published release wheel, made as the release job
 `windows-consumer` makes it: `uv pip install <wheel>` with no pins. The real
@@ -16,19 +16,25 @@ installation. The host rows are the plan's rows. The runtime graph is the
 tool's own reading of the install records.
 
 Not shown here: a release run, the artifact downloads of its job `release`, and
-that job's step condition. The plan's form comes from the published wheel, so a
-change of the app's component graph reaches this check only with a newer RELEASE.
+that job's step condition. The installation is of the published wheel, so a
+change of the app's own requirements reaches this check only with a newer
+RELEASE. The installation resolves those requirements at its moment: for a
+component that the wheel requires at a branch, the plan has the branch's commit
+of that moment.
 """
 from __future__ import annotations
 
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -39,8 +45,20 @@ SOURCE = "https://github.com/microsoft/amplifier-unified"
 RELEASE = {"version": "0.106.0", "sha256": "5d89c247b7ba19aa0264516036d17a26e314a17ea05de05d9683a2f84e97b94c",
            "revision": "89de72c3a635f9e000cbb049c6bca3d525ade6e6"}
 NAME = "amplifier-foundation"
-# Any commit other than the installed one. Nothing installs it; the gate compares text.
+# Any commit other than the one that the plan has for Amplifier Foundation. Nothing installs it; the gate
+# compares text.
 OTHER = "e37a946b64854eb39c09a3857ce2bc366ff297e0"
+# Each command that this file starts itself (see started) gets a time limit: its own, and at most what
+# is left of this time, counted from the import of this file. This time is below the workflow step's
+# limit of 15 minutes. The purpose: a timeout is recorded in result.json and not cut off by that limit.
+# The step's limit can still end the check without result.json:
+# - Not limited as a whole: the download (its timeout is for single socket operations); the commands
+#   that the release tool starts in this process (in receipts and in prepare: it reads the checkout's
+#   commit and the installation's packages); the file work.
+# - Python on Windows waits for the output of a command that it ended. A program that the command
+#   started can hold that output open.
+LIMIT = 12 * 60
+STARTED = time.monotonic()
 # The last line of a refusal, after one line for each difference.
 STOP = "\nThis run stops before it publishes. If a branch moved during this run, run all jobs again."
 
@@ -52,10 +70,39 @@ def load(path):
     return module
 
 
+def left(limit):
+    """The seconds that one command may take: its own limit, and at most what is left of the check's time."""
+    remaining = LIMIT - (time.monotonic() - STARTED)
+    if remaining <= 0:
+        raise RuntimeError(f"The check did not end in {LIMIT // 60} minutes.")
+    return min(limit, remaining)
+
+
+def span(seconds):
+    return f"{seconds} second" if seconds == 1 else f"{seconds} seconds"
+
+
+def started(name, arguments, limit, **options):
+    """Run one command with a time limit and give its result.
+
+    The limit is for the command and its output together. When they do not end in that time, Python calls
+    kill() for the command's own process, which can have ended already. It does not end a program that the
+    command started.
+    """
+    seconds = left(limit)
+    try:
+        return subprocess.run([*map(str, arguments)], capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=seconds, **options)
+    except subprocess.TimeoutExpired:
+        if seconds == limit:
+            raise RuntimeError(f"{name} or its output did not end in {span(limit)}.") from None
+        raise RuntimeError(f"{name} or its output did not end in what was left of the check's "
+                           f"{LIMIT // 60} minutes (at most {span(math.ceil(seconds))}).") from None
+
+
 def command(tool, *arguments):
     """The release workflow's command line, with the checkout as the working directory."""
-    return subprocess.run([sys.executable, str(tool), *map(str, arguments)], cwd=ROOT, capture_output=True,
-                          text=True, encoding="utf-8", errors="replace", timeout=120)
+    return started(f"{Path(tool).name} {arguments[0]}", [sys.executable, tool, *arguments], 120, cwd=ROOT)
 
 
 def evidence(tool, folder, resolved):
@@ -66,7 +113,8 @@ def evidence(tool, folder, resolved):
     (folder / "development.lock").write_text("native check\n", encoding="utf-8")
     result = command(tool, "candidate", "--evidence", folder)
     if result.returncode != 0:
-        raise RuntimeError("The tool did not bind the candidate: " + result.stderr[-2000:])
+        raise RuntimeError(f"The tool's candidate command ended with exit status {result.returncode}: "
+                           + result.stderr[-2000:])
     return result.stdout.strip().splitlines()[-1]
 
 
@@ -81,15 +129,29 @@ def receipts(tool, folder, candidate, graph):
                                            "runtime": module.digest(snapshot)})
 
 
-def moved(rows):
-    """The same rows with the one row of Amplifier Foundation at the other commit, in either row form."""
+def normal(name):
+    """A package name in the gate's form. An install record has the name as the package's metadata writes it."""
+    return re.sub(r"[-_.]+", "-", name.lower())
+
+
+def moved(rows, owner):
+    """The same rows with the one row of Amplifier Foundation at the other commit, in either row form.
+
+    That row must be from Git: the gate compares no commit of a row from another source.
+    """
     result = json.loads(json.dumps(rows))
-    for row in result:
-        if row["name"] == NAME:
-            if "direct" in row:
-                row["direct"]["vcs_info"]["commit_id"] = OTHER
-            else:
-                row["revision"] = OTHER
+    found = [row for row in result if normal(row["name"]) == NAME]
+    if len(found) != 1:
+        raise RuntimeError(f"{owner} does not have exactly one row of {NAME}.")
+    row = found[0]
+    if "direct" in row:
+        origin, key = (row["direct"] or {}).get("vcs_info") or {}, "commit_id"
+        git = origin.get("vcs") == "git"
+    else:
+        origin, key, git = row, "revision", bool(row.get("url"))
+    if not git:
+        raise RuntimeError(f"{owner} does not have {NAME} from Git.")
+    origin[key] = OTHER
     return result
 
 
@@ -98,14 +160,16 @@ def cases(work, plan_path, records, tool=TOOL):
     plan = json.loads(Path(plan_path).read_text(encoding="utf-8"))
     host = [{key: value for key, value in row.items() if key != "delivery"}
             for row in plan["graph"] if row["name"] != "amplifier-unified"]
-    installed = {row["name"]: row["revision"] for row in host if row.get("url")}
-    if installed[NAME] == OTHER:
-        raise RuntimeError("The installed Amplifier Foundation commit is the fixture's other commit. Change OTHER.")
+    installed = {normal(row["name"]): row["revision"] for row in host if row.get("url")}
+    if installed.get(NAME) == OTHER:
+        raise RuntimeError("The plan has Amplifier Foundation at the fixture's other commit. Change OTHER.")
+    # Before the tool runs: the plan and the installation each have the one row of Amplifier Foundation, from Git.
+    host_other, records_other = moved(host, "The plan"), moved(records, "The installation")
     same = evidence(tool, work / "host-same", host)
-    other = evidence(tool, work / "host-other", moved(host))
+    other = evidence(tool, work / "host-other", host_other)
     receipts(tool, work / "runtime-same", same, records)
     receipts(tool, work / "runtime-same-for-other-host", other, records)
-    receipts(tool, work / "runtime-other", same, moved(records))
+    receipts(tool, work / "runtime-other", same, records_other)
     first = f"The Windows setup file has {NAME} at {installed[NAME]}. "
     wanted = [
         ("control: the evidence has the installation's commits", "host-same", same, "runtime-same", None),
@@ -133,19 +197,18 @@ def cases(work, plan_path, records, tool=TOOL):
     return {"gitComponents": installed, "cases": results, "ok": all(item["passed"] is True for item in results)}
 
 
-def run(*arguments, **options):
-    result = subprocess.run([*map(str, arguments)], capture_output=True, text=True, encoding="utf-8",
-                            errors="replace", **options)
+def run(*arguments, limit, **options):
+    name = f"{Path(str(arguments[0])).name} {arguments[1]}"
+    result = started(name, arguments, limit, **options)
     if result.returncode != 0:
-        raise RuntimeError(f"{Path(str(arguments[0])).name} {arguments[1]} failed: "
-                           + (result.stdout + result.stderr)[-3000:])
+        raise RuntimeError(f"{name} failed: " + (result.stdout + result.stderr)[-3000:])
 
 
 def wheel(work):
     """The publisher's release file. Only the bytes with the published digest are kept."""
     path = work / f"amplifier_unified-{RELEASE['version']}-py3-none-any.whl"
     with urllib.request.urlopen(f"{SOURCE}/releases/download/v{RELEASE['version']}/{path.name}",
-                                timeout=120) as response:
+                                timeout=left(120)) as response:
         raw = response.read(64 * 1024 * 1024)
     if hashlib.sha256(raw).hexdigest() != RELEASE["sha256"]:
         raise RuntimeError("The downloaded wheel is not the published release file.")
@@ -155,18 +218,24 @@ def wheel(work):
 
 def prepare(work):
     """One installation, as the release job makes it, and the real producer's plan of it."""
-    # A real installation and a compiler run: only on a runner of CI. The producer requires Windows.
-    assert os.environ.get("GITHUB_ACTIONS") == "true"
+    # A real installation and a compiler run. A guard against accidental use: GitHub Actions sets
+    # GITHUB_ACTIONS to "true" in a workflow run. The line does not prove that the machine is a runner
+    # of CI. The producer requires Windows.
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        raise RuntimeError('GITHUB_ACTIONS is not "true". This check installs a wheel and runs a compiler; '
+                           "it does neither without that setting.")
     release = wheel(work)
     uv = shutil.which("uv")
+    if not uv:
+        raise RuntimeError("uv is not on PATH.")
     environment = work / "windows-consumer-app"
     python = environment / "Scripts/python.exe"
-    run(uv, "venv", "--python", "3.13", environment, timeout=300)
-    run(uv, "pip", "install", "--python", python, release, timeout=900)
-    run(uv, "pip", "check", "--python", python, timeout=120)
+    run(uv, "venv", "--python", "3.13", environment, limit=300)
+    run(uv, "pip", "install", "--python", python, release, limit=600)
+    run(uv, "pip", "check", "--python", python, limit=120)
     run(sys.executable, ROOT / "scripts/windows_consumer_release.py", "build", "--wheel", release,
         "--python", python, "--revision", RELEASE["revision"], "--output", work / "windows-consumer",
-        cwd=ROOT, timeout=600)
+        limit=300, cwd=ROOT)
     return work / "windows-consumer/windows-consumer-plan.json", load(TOOL).graph(python)
 
 
@@ -179,9 +248,13 @@ def main():
         plan_path, records = prepare(work)
         raw = plan_path.read_bytes()
         plan = json.loads(raw)
-        assert plan["version"] == RELEASE["version"] and plan["source"] == RELEASE["revision"]
+        if (plan.get("version"), plan.get("source")) != (RELEASE["version"], RELEASE["revision"]):
+            has = " and ".join(f"{key} {plan[key]}" if key in plan else f"no {key}" for key in ("version", "source"))
+            raise RuntimeError(f"The plan has {has}. This check's release has version {RELEASE['version']} "
+                               f"and revision {RELEASE['revision']}.")
         # The control must cover a component that is in a subdirectory of its repository.
-        assert any(row.get("subdirectory") for row in plan["graph"])
+        if not any(row.get("subdirectory") for row in plan["graph"]):
+            raise RuntimeError("The plan has no component in a subdirectory of its repository.")
         folder.mkdir(parents=True, exist_ok=True)
         (folder / plan_path.name).write_bytes(raw)
         report.update(stage="cases", planSha256=hashlib.sha256(raw).hexdigest(), packages=len(plan["graph"]))

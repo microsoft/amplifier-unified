@@ -59,11 +59,15 @@ def source_refusal_message(code):
     return reason + ' No environment or test command was started. ' + correction + ' and submit a new check.'
 
 
-def selected_profile(payload):
+def profile_support():
     spec = importlib.util.spec_from_file_location('_environment_profiles', Path(__file__).with_name('test_environment_profiles.py'))
     profiles = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(profiles)
-    return profiles.resources(payload.get('profileId', 'linux-python'), payload.get('resourceRequest'))
+    return profiles
+
+
+def selected_profile(payload):
+    return profile_support().resources(payload.get('profileId', 'linux-python'), payload.get('resourceRequest'))
 
 
 def prepared_runtime(payload):
@@ -72,8 +76,24 @@ def prepared_runtime(payload):
     return payload.get('preparedRuntime', selected_profile(payload)['preparationRequired'] and not payload.get('composeFile'))
 
 
+def runtime_workdir(payload):
+    # Only a validated prepared owner receipt supplies this private helper field.
+    # Old owners and custom Compose do not acquire a new path on execute/recovery.
+    value = payload.get('runtimeWorkdir')
+    if value is None:
+        return None
+    expected = profile_support().runtime_workdir(payload.get('profileId', 'linux-python'),
+                                                payload.get('resourceRequest'))
+    if not expected or value != expected or not prepared_runtime(payload) or payload.get('composeFile'):
+        raise ValueError('The prepared runtime workdir changed.')
+    return expected
+
+
 def job_environment(payload):
     value = dict(selected_profile(payload)['environment']) if prepared_runtime(payload) else {}
+    runtime = runtime_workdir(payload)
+    if runtime:
+        value[runtime['environmentVariable']] = runtime['path']
     if payload.get('offline') is False:
         for key in ('UV_OFFLINE', 'PIP_NO_INDEX', 'npm_config_offline'):
             value.pop(key, None)
@@ -768,6 +788,8 @@ def cleanup_failure(payload, phase, identity, code='preservation_failed'):
 
 def profile(image, payload=None):
     selected = selected_profile(payload or {})
+    runtime = runtime_workdir(payload or {})
+    temporary_mib = runtime['tmpMiB'] if runtime else selected['tmpMiB']
     value = {
         'name': 'unified-test',
         'services': {'twin': {
@@ -778,7 +800,7 @@ def profile(image, payload=None):
             'pids_limit': selected['pids'], 'mem_limit': str(selected['memoryMiB'])+'m', 'cpus': selected['cpus'],
             'shm_size': str(selected['shmMiB'])+'m',
             'healthcheck': {'test': ['CMD', 'true'], 'interval': '2s'},
-            'tmpfs': ['/tmp:rw,noexec,nosuid,size='+str(selected['tmpMiB']*1024**2)],
+            'tmpfs': ['/tmp:rw,noexec,nosuid,nodev,size='+str(temporary_mib*1024**2)],
             'volumes': ['workspace:/workspace', 'artifacts:/artifacts', 'control:/var/lib/unified-jobs'],
             'networks': ['default'], 'working_dir': '/workspace',
             # Root only inside this container, with no capabilities or host mounts.
@@ -789,6 +811,10 @@ def profile(image, payload=None):
         'networks': {'default': {'internal': (payload or {}).get('offline', True)}},
         'x-dtu': {'twin_machine': 'twin'},
     }
+    if runtime:
+        value['services']['twin']['tmpfs'].append(
+            runtime['path'] + ':rw,exec,nosuid,nodev,size=' + str(runtime['sizeMiB'] * 1024 ** 2)
+            + ',mode=0700,uid=65534,gid=65534')
     if payload is not None:
         labels = {'io.amplifier.root-owner': payload['rootOwner'], 'io.amplifier.operation-id': payload['operationId']}
         value['services']['twin']['labels'] = dict(labels)

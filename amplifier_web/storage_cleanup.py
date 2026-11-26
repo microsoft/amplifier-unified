@@ -22,7 +22,7 @@ LATEST = 'storage-cleanup-latest'
 
 def definitions(schema, string):
     return {
-        'storage.cleanup.read': ('Read global automatic cleanup settings and the last receipt without scanning or starting work.', schema({}, [])),
+        'storage.cleanup.read': ('Read cleanup settings, the policy receipt and separate online artifact-collection status without scanning or starting work. Artifact collection does not require idle.', schema({}, [])),
         'storage.cleanup.evidence': ('Read one bounded page of saved-test historical sizes or Smart Tool receipt/body accounting. Does not open bodies, measure current files, start work or delete evidence.', schema({'owner': {'enum': ['tests', 'smartTools']}, 'before': {'type': 'integer', 'minimum': 1, 'maximum': 2**53-1}}, [])),
         'storage.cleanup.save': ('Save global retention under standing Full or user control. Optional temporary workspace and terminal operation-output expiry apply prospectively. Chats, saved outputs, request identities and uncertain work stay.', schema({
             'expectedRevision': {'type': 'integer', 'minimum': 0}, 'enabled': {'type': 'boolean'},
@@ -61,7 +61,14 @@ def public(value):
 
 
 def read(app):
+    diagnostics = getattr(app, 'performance_diagnostics', None)
     return {'policy': policy(app), 'lastCleanup': public(record(app, LATEST)),
+            'artifacts': {
+                'automatic': True, 'requiresIdle': False,
+                'lastCollection': diagnostics.storage_collection_snapshot() if diagnostics else None,
+                'scope': 'Unreferenced artifact files are collected separately while the app runs, after complete retained-reference validation. The cleanup policy run does not force this collector.',
+                'measurementNote': 'Completed-pass bytes describe successful file unlinks, not filesystem free space or a current reclaimable-size estimate. Counts reset when the app restarts; missing or incomplete results are not proof of zero work.',
+            },
             'scope': 'All workspaces on this Amplifier installation. Unused code and dependencies, explicitly temporary retired test workspace copies, and opted-in settled operation output are eligible.',
             'preserved': 'Chats, working folders, saved test sources/results and outputs, request identities, current and rollback versions, uncertain work and unresolved task references are kept.'}
 

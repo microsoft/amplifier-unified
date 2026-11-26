@@ -314,13 +314,11 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     plan = coverage_plan()
     rows = runner.validate_plan(plan)
     canvas_additions = canvas_browser_additions(rows, set())
-    breadbin_addition = breadbin_browser_addition(rows, set())
-    question_fade_addition = question_fade_browser_addition(rows, set())
+    fixture_additions = ready_and_question_browser_additions(rows, set())
     context_addition = context_inspector_browser_addition(rows, set())
     immediate_addition = immediate_direction_browser_addition(rows, set())
     waiting_addition = navigation_waiting_browser_addition(rows, set())
     delivery_addition = delivery_warning_browser_addition(rows, set())
-    resume_addition = question_resume_browser_addition(rows, set())
     navigation_ids = agent_navigation_browser_additions(rows, set())
     sidebar_ids = sidebar_controls_browser_addition(rows, set())
     client_addition_ids = input_status_and_action_spacing_browser_additions(rows, set())
@@ -334,7 +332,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     assert [row for row in rows if row['id'] in lifecycle_ids] == lifecycle_additions
     historical_rows = [row for row in rows
                        if row['id'] not in navigation_ids | sidebar_ids | client_addition_ids | lifecycle_ids
-                       and not (canvas_additions | breadbin_addition | question_fade_addition | context_addition | immediate_addition | delivery_addition | waiting_addition | resume_addition).intersection(row['command'])]
+                       and not (canvas_additions | fixture_additions | context_addition | immediate_addition | delivery_addition | waiting_addition).intersection(row['command'])]
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
     additions = {
@@ -643,17 +641,21 @@ def provider_browser_additions(rows, readiness_scripts):
     return scripts
 
 
-def breadbin_browser_addition(rows, readiness_scripts):
-    """One background source owner; never subtract missing/duplicate coverage."""
-    script = 'tests/ready-browser.mjs'
-    owners = [row for row in rows if script in row['command']]
-    assert owners == [{
-        'id': 'ready', 'command': ['node', script],
-        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/ready',
-                'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python'},
-    }], f'{script}: expected one ordinary source owner and its exact environment'
-    assert script not in readiness_scripts, f'{script}: duplicate readiness owner'
-    return {script}
+def ready_and_question_browser_additions(rows, readiness_scripts):
+    """Check each fixture registration before excluding its script from historical coverage."""
+    scripts = set()
+    for name in ('ready', 'question-transcript-fade', 'question-resume'):
+        script = f'tests/{name}-browser.mjs'
+        expected = {
+            'id': name,
+            'command': ['node', script],
+            'env': {'AMPLIFIER_TEST_ARTIFACTS': f'{{root}}/output/browser-checks/{name}',
+                    'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python'},
+        }
+        assert [row for row in rows if script in row['command']] == [expected], script
+        assert script not in readiness_scripts, f'{script}: duplicate readiness owner'
+        scripts.add(script)
+    return scripts
 
 
 def appearance_lifecycle_browser_addition(rows, readiness_scripts=()):
@@ -795,21 +797,25 @@ def test_appearance_lifecycle_addition_rejects_missing_duplicate_or_changed_owne
         appearance_lifecycle_browser_addition(rows, readiness)
 
 
-@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'different-command',
-                                  'missing-python', 'wrong-artifacts', 'managed-contract',
-                                  'readiness-owner'])
-def test_breadbin_browser_addition_rejects_missing_duplicate_or_wrong_environment(fault):
-    plan = coverage_plan()
-    rows = plan['scenarios']
-    script = 'tests/ready-browser.mjs'
-    owner, = [row for row in rows if row['id'] == 'ready']
+@pytest.mark.parametrize('name', ['ready', 'question-transcript-fade', 'question-resume'])
+@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'alias', 'different-command',
+                                  'empty-environment', 'missing-python', 'wrong-artifacts',
+                                  'managed-contract', 'readiness-owner'])
+def test_ready_and_question_fixture_rejects_wrong_registration(name, fault):
+    rows = coverage_plan()['scenarios']
+    script = f'tests/{name}-browser.mjs'
+    owner, = [row for row in rows if row['id'] == name]
     readiness_scripts = set()
     if fault == 'missing':
         rows.remove(owner)
     elif fault == 'duplicate':
-        rows.append({**owner, 'id': 'ready-extra'})
+        rows.append(dict(owner))
+    elif fault == 'alias':
+        rows.append({**owner, 'id': f'{name}-extra'})
     elif fault == 'different-command':
         owner['command'].append('--extra')
+    elif fault == 'empty-environment':
+        owner['env'] = {}
     elif fault == 'missing-python':
         del owner['env']['AMPLIFIER_TEST_PYTHON']
     elif fault == 'wrong-artifacts':
@@ -819,7 +825,7 @@ def test_breadbin_browser_addition_rejects_missing_duplicate_or_wrong_environmen
     else:
         readiness_scripts.add(script)
     with pytest.raises(AssertionError, match=re.escape(script)):
-        breadbin_browser_addition(rows, readiness_scripts)
+        ready_and_question_browser_additions(rows, readiness_scripts)
 
 
 @pytest.mark.parametrize('canvas', ['canvas-refresh', 'canvas-refresh-catchup'])
@@ -896,19 +902,6 @@ def canvas_browser_additions(rows, readiness_scripts):
     return scripts
 
 
-def question_fade_browser_addition(rows, readiness_scripts):
-    """Validate the additive owner before excluding it from frozen coverage."""
-    script = 'tests/question-transcript-fade-browser.mjs'
-    owners = [row for row in rows if script in row['command']]
-    assert owners == [{
-        'id': 'question-transcript-fade', 'command': ['node', script],
-        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/question-transcript-fade',
-                'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python'},
-    }], f'{script}: expected one ordinary source owner and its exact environment'
-    assert script not in readiness_scripts, f'{script}: duplicate readiness owner'
-    return {script}
-
-
 def immediate_direction_browser_addition(rows, readiness_scripts):
     """Validate the new real-worker owner without changing frozen coverage."""
     script = 'tests/immediate-direction-browser.mjs'
@@ -944,30 +937,6 @@ def test_immediate_direction_browser_owner_rejects_invalid_coverage(fault):
         readiness.add('tests/immediate-direction-browser.mjs')
     with pytest.raises(AssertionError, match='immediate-direction'):
         immediate_direction_browser_addition(rows, readiness)
-
-
-def question_resume_browser_addition(rows, readiness_scripts):
-    script = 'tests/question-resume-browser.mjs'
-    assert [row for row in rows if script in row['command']] == [{
-        'id': 'question-resume', 'command': ['node', script],
-        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/question-resume',
-                'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python'},
-    }], 'question-resume: expected one exact ordinary owner'
-    assert script not in readiness_scripts, 'question-resume: duplicate readiness owner'
-    return {script}
-
-
-@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'environment', 'readiness'])
-def test_question_resume_owner_is_distinct(fault):
-    rows = coverage_plan()['scenarios']
-    owner = next(row for row in rows if row['id'] == 'question-resume')
-    readiness = set()
-    if fault == 'missing': rows.remove(owner)
-    elif fault == 'duplicate': rows.append(dict(owner))
-    elif fault == 'environment': owner['env'] = {}
-    else: readiness.add('tests/question-resume-browser.mjs')
-    with pytest.raises(AssertionError, match='question-resume'):
-        question_resume_browser_addition(rows, readiness)
 
 
 def navigation_waiting_browser_addition(rows, readiness_scripts):
@@ -1020,33 +989,6 @@ def test_context_inspector_browser_owner_is_distinct(fault, name):
     else: readiness.add(f'tests/{name}-browser.mjs')
     with pytest.raises(AssertionError, match='context-inspector'):
         context_inspector_browser_addition(rows, readiness)
-
-
-@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'different-command',
-                                  'missing-python', 'wrong-artifacts', 'managed-contract',
-                                  'readiness-owner'])
-def test_question_fade_browser_addition_rejects_missing_duplicate_or_wrong_environment(fault):
-    plan = coverage_plan()
-    rows = plan['scenarios']
-    script = 'tests/question-transcript-fade-browser.mjs'
-    owner, = [row for row in rows if row['id'] == 'question-transcript-fade']
-    readiness_scripts = set()
-    if fault == 'missing':
-        rows.remove(owner)
-    elif fault == 'duplicate':
-        rows.append({**owner, 'id': 'question-transcript-fade-extra'})
-    elif fault == 'different-command':
-        owner['command'].append('--extra')
-    elif fault == 'missing-python':
-        del owner['env']['AMPLIFIER_TEST_PYTHON']
-    elif fault == 'wrong-artifacts':
-        owner['env']['AMPLIFIER_TEST_ARTIFACTS'] = '{root}/output/browser-checks/provider-native'
-    elif fault == 'managed-contract':
-        owner['env']['AMPLIFIER_TEST_CONTRACT'] = '/invented/contract.json'
-    else:
-        readiness_scripts.add(script)
-    with pytest.raises(AssertionError, match=re.escape(script)):
-        question_fade_browser_addition(rows, readiness_scripts)
 
 
 def selected_client_browser_addition(rows, readiness_scripts, identity, *, current=False):
@@ -1167,11 +1109,11 @@ def test_linked_instances_has_one_client_owner_and_preserves_prior_order():
     index = host['scenarioOrder'].index('linked-instances')
     assert host['scenarioOrder'][index - 1:index + 2] == [
         'device-pairing', 'linked-instances', 'standard-ux-keyboard-reflow']
-    previous = [name for name in host['scenarioOrder'] if name != 'linked-instances']
+    previous = [name for name in host['scenarioOrder'] if name not in {'linked-instances', 'session-health-retry-preparation', 'peer-rollup'}]
     assert len(previous) == len(set(previous)) == 179
     assert hashlib.sha256(json.dumps(previous).encode()).hexdigest() == (
         '162ea1e700375b94b7ef9123f738c5475451f8e93374b9d660dd2a425d1ad9c8')
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 180
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 182
     assert 'linked-instances' not in {row['id'] for row in coverage_plan()['scenarios']}
     assert proof['registrySha256'] == {'unified': runner.digest(host_path),
                                       'client': runner.digest(client_path)}
@@ -1251,7 +1193,16 @@ def browser_additions_after_update_configuration_hold(rows, readiness_scripts=()
     assert owners == [{'id': name, 'command': ['node', script],
                        'env': {'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python'}}]
     assert coverage_paths(script) not in readiness_scripts
-    return ({name} | model_change_history_browser_addition(rows, readiness_scripts)
+    extra = {
+        'peer-rollup': {'command': ['node', 'tests/web/peer-rollup-browser.mjs'],
+                        'env': {'PEER_PREVIEW_PARTIAL_RECEIVER': '1',
+                                'AMPLIFIER_PROOF_DIR': '{root}/output/browser-checks/peer-rollup'}},
+        'session-health-retry-preparation': {'command': ['node', 'tests/web/session-health-browser.mjs',
+                                                          '--retry-preparation']},
+    }
+    for identity, body in extra.items():
+        assert [row for row in rows if row['id'] == identity] == [{'id': identity, **body}]
+    return ({name, *extra} | model_change_history_browser_addition(rows, readiness_scripts)
             | grouped_work_browser_addition(rows, readiness_scripts)
             | transcript_suggestion_browser_addition(rows, readiness_scripts)
             | linked_instances_browser_addition(rows, readiness_scripts))
@@ -2116,18 +2067,16 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     assert update_delivery in extended_scripts - readiness_scripts
     assert sum(row['command'] == ['node', update_delivery] for row in plan['scenarios']) == 1
     provider_additions = provider_browser_additions(plan['scenarios'], readiness_scripts)
-    breadbin_addition = breadbin_browser_addition(plan['scenarios'], readiness_scripts)
+    fixture_additions = ready_and_question_browser_additions(plan['scenarios'], readiness_scripts)
     canvas_additions = canvas_browser_additions(plan['scenarios'], readiness_scripts)
-    question_fade_addition = question_fade_browser_addition(plan['scenarios'], readiness_scripts)
     context_addition = context_inspector_browser_addition(plan['scenarios'], readiness_scripts)
     immediate_addition = immediate_direction_browser_addition(plan['scenarios'], readiness_scripts)
     waiting_addition = navigation_waiting_browser_addition(plan['scenarios'], readiness_scripts)
     delivery_addition = delivery_warning_browser_addition(plan['scenarios'], readiness_scripts)
-    resume_addition = question_resume_browser_addition(plan['scenarios'], readiness_scripts)
     # Freeze all three prior counts; validate each new owner before subtracting
     # the additions so missing or duplicated coverage cannot disappear.
     previous_scripts = ((readiness_scripts | extended_scripts) - relocated_readiness.keys() - {state_stream, update_delivery}
-                        - provider_additions - breadbin_addition - canvas_additions - question_fade_addition - context_addition - immediate_addition - delivery_addition - waiting_addition - resume_addition)
+                        - provider_additions - fixture_additions - canvas_additions - context_addition - immediate_addition - delivery_addition - waiting_addition)
     assert len(previous_scripts - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder, approval, dormant, shared_work} - feature_additions - voice_additions) == 146
     assert len(previous_scripts - {shared_work, 'tests/delegate-work-stream-browser.mjs', 'tests/client-traffic-browser.mjs'} - voice_additions) == 164
     assert len(previous_scripts) == 171

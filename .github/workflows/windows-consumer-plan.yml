@@ -49,12 +49,16 @@ jobs:
           architecture: x64
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - name: Install a published wheel, build its plan, and run the gate three times
+        # The fixture gives each command that it starts itself a time limit: the command's own, and at most
+        # what is left of 12 minutes from the fixture's start. The purpose: a timeout is recorded in
+        # result.json and not cut off by the limit below. That limit can still end the step without
+        # result.json: see LIMIT in the fixture.
         timeout-minutes: 15
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           python -I -B tests/fixtures/windows_consumer_plan_native.py
-          if ($LASTEXITCODE -ne 0) { throw 'The consumer plan check failed; inspect result.json.' }
+          if ($LASTEXITCODE -ne 0) { throw 'The consumer plan check failed. Read result.json in the artifact if the check wrote one.' }
       - name: Retain the bounded result and the plan
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

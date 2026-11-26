@@ -102,7 +102,8 @@ def test_every_session_check_in_the_package_uses_the_one_shared_check():
     for name in ("device_pairing.py", "device_connections.py"):
         assert "valid_session(" in (ROOT / "amplifier_web" / name).read_text(encoding="utf-8")
     body = (ROOT / "amplifier_web/auth.py").read_text(encoding="utf-8")
-    assert body.count('"session")') == 1  # Only inside valid_session itself.
+    assert body.count('"session")') == 1  # Only inside the one check, which valid_session uses.
+    assert "    return session_issued(app, value) is not None\n" in body
 
 
 def test_sign_out_saves_a_time_that_never_moves_backward(home, monkeypatch):
@@ -477,7 +478,7 @@ def test_watcher_keeps_running_after_a_fault_and_stops_when_cancelled(home, monk
     # Said once in the host log, not once per attempt and never in silence.
     assert capsys.readouterr().out == (
         "Sign-out of all browsers could not be checked: RuntimeError. "
-        "Until it can be checked, no browser can sign in with a ticket, a code or a key.\n")
+        "Until it can be checked, no browser can sign in with a ticket, a code, a key or a password.\n")
 
 
 def test_real_middleware_refuses_a_signed_out_cookie(home, monkeypatch):

@@ -135,7 +135,7 @@ async def test_cancelled_snapshot_never_validates_or_erases_inflight_copy(tmp_pa
         assert stage.is_dir() and (stage / "shared-config").is_dir()
         assert not (stage / "validated.json").exists() and updates.active_release(home) == {}
         progress = json.loads((stage / "install-progress.json").read_text())
-        assert progress["events"][-1]["status"] == "failed"
+        assert progress["events"][-1]["status"] == "interrupted"
     finally:
         release.set()
         assert await asyncio.to_thread(finished.wait, 3)
@@ -309,12 +309,115 @@ def test_runtime_preparation_failure_keeps_closed_command_facts(tmp_path):
     owner = setup._Preparation(tmp_path, tmp_path / "attempt")
     async def fail():
         raise CommandFailure({"exitCode": 1, "stderrBytes": 42, "stdoutBytes": 0,
-                              "durationMs": 12, "text": "SECRET", "argv": ["SECRET"]})
+                              "durationMs": 12, "text": "SECRET", "argv": ["SECRET"],
+                              "probe": {"ok": False, "stage": "prepare", "errorType": "ImportError",
+                                        "reason": "module-prepare-failed", "profileIndex": True,
+                                        "failureLocation": "amplifier_web.update_probe:prepare:123",
+                                        "package": "SECRET", "text": "SECRET", "argv": ["SECRET"]}})
     with pytest.raises(CommandFailure):
         asyncio.run(owner.run("initial-runtime-lock", fail))
     saved = json.loads((owner.stage / "install-failure.json").read_text())
     assert saved["exitCode"] == 1 and saved["stderrBytes"] == 42
+    assert saved["probe"] == {"ok": False, "stage": "prepare", "errorType": "ImportError",
+                              "reason": "module-prepare-failed",
+                              "failureLocation": "amplifier_web.update_probe:prepare:123"}
     assert "SECRET" not in json.dumps(saved)
+
+
+async def test_first_profile_failure_survives_sibling_cancellation(tmp_path, qualifier, monkeypatch):
+    from amplifier_web.update_diagnostics import CommandFailure, PROBE_PREFIX, command_facts
+    started, cancelled = asyncio.Event(), asyncio.Event()
+    probe = {"ok": False, "stage": "prepare", "errorType": "ImportError", "profileIndex": 2,
+             "failureLocation": "amplifier_web.update_probe:prepare:123", "text": "SECRET"}
+    failure = CommandFailure(command_facts((PROBE_PREFIX + json.dumps(probe)).encode(), b"SECRET", 7, 0.012))
+    async def fail():
+        await started.wait()
+        raise failure
+    async def sibling():
+        started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            cancelled.set()
+    async def validate(owner, stage, generation):
+        tasks = [asyncio.create_task(owner.run("ecosystem-compatibility", work)) for work in (fail, sibling)]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+    monkeypatch.setattr(updates.UpdateManager, "validate", validate)
+    with pytest.raises(CommandFailure) as observed:
+        async with asyncio.timeout(3):
+            await setup.prepare(tmp_path)
+    assert observed.value is failure and cancelled.is_set()
+    stage, = (tmp_path / "updates/releases").iterdir()
+    saved = json.loads((stage / "install-failure.json").read_text())
+    assert saved["status"] == "failed" and saved["errorType"] == "CommandFailure"
+    assert saved["phase"] == "ecosystem-compatibility" and saved["exitCode"] == 7
+    assert saved["probe"] == {key: value for key, value in probe.items() if key != "text"}
+    assert "SECRET" not in (stage / "install-failure.json").read_text()
+    progress = json.loads((stage / "install-progress.json").read_text())["events"]
+    assert {"phase": "ecosystem-compatibility", "status": "interrupted"} in progress
+    assert progress[-1] == {"phase": "initial-installation", "status": "failed"}
+    assert not (stage / "validated.json").exists() and updates.active_release(tmp_path) == {}
+
+
+async def test_cancelled_preparation_is_interrupted_without_activation(tmp_path, qualifier, monkeypatch):
+    started = asyncio.Event()
+    async def pending():
+        started.set()
+        await asyncio.Future()
+    async def validate(owner, stage, generation):
+        await owner.run("ecosystem-compatibility", pending)
+    monkeypatch.setattr(updates.UpdateManager, "validate", validate)
+    task = asyncio.create_task(setup.prepare(tmp_path))
+    try:
+        await asyncio.wait_for(started.wait(), 3)
+        task.cancel("SECRET")
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    stage, = (tmp_path / "updates/releases").iterdir()
+    saved = json.loads((stage / "install-failure.json").read_text())
+    assert saved["status"] == "interrupted" and saved["errorType"] == "CancelledError"
+    assert "SECRET" not in json.dumps(saved)
+    progress = json.loads((stage / "install-progress.json").read_text())["events"]
+    assert progress[-1] == {"phase": "initial-installation", "status": "interrupted"}
+    assert not (stage / "validated.json").exists() and updates.active_release(tmp_path) == {}
+
+
+async def test_actionable_failure_supersedes_interruption_but_not_an_earlier_failure(tmp_path):
+    from amplifier_web.update_diagnostics import CommandFailure
+    owner = setup._Preparation(tmp_path, tmp_path / "attempt")
+    async def fail(error):
+        raise error
+    for phase, error in (("cancelled", asyncio.CancelledError()),
+                         ("first", CommandFailure({"exitCode": 7})),
+                         ("later", CommandFailure({"exitCode": 8}))):
+        with pytest.raises(type(error)):
+            await owner.run(phase, fail, error)
+    saved = json.loads((owner.stage / "install-failure.json").read_text())
+    assert saved["phase"] == "first" and saved["status"] == "failed" and saved["exitCode"] == 7
+
+
+@pytest.mark.parametrize("probe", [{"ok": "SECRET", "reason": "SECRET"}, "SECRET"])
+def test_malformed_probe_cannot_mask_original_failure(tmp_path, probe):
+    from amplifier_web.update_diagnostics import CommandFailure
+    owner = setup._Preparation(tmp_path, tmp_path / "attempt")
+    error = CommandFailure({"probe": probe})
+    def fail():
+        raise error
+    with pytest.raises(CommandFailure) as observed:
+        asyncio.run(owner.run("ecosystem-compatibility", fail))
+    saved = json.loads((owner.stage / "install-failure.json").read_text())
+    assert observed.value is error and saved["errorType"] == "CommandFailure"
+    assert "probe" not in saved and "SECRET" not in json.dumps(saved)
 
 
 def test_baseline_composes_real_override_writer_with_explicit_private_owner(tmp_path, monkeypatch):

@@ -34,7 +34,11 @@ def setup_routes(app):
     async def connect(request):
         require_safe_transport(request)
         browser_cookie(request)
-        return page('Devices & apps', (ASSETS / 'web/connect.html').read_text(), script='connect.js')
+        from .browser_entry import password_card
+        content = (ASSETS / 'web/connect.html').read_text(encoding='utf-8')
+        # On a Windows host, on the PC itself: the way to the password for a browser on another device.
+        return page('Devices & apps', content.replace('<section class="card">', password_card(request) + '<section class="card">', 1),
+                    script='connect.js')
 
     async def verify(request):
         require_safe_transport(request)
@@ -94,7 +98,7 @@ def setup_routes(app):
         types = {'connect.css': 'text/css', 'connect.js': 'text/javascript', 'sample.js': 'text/javascript'}
         if name not in types:
             raise web.HTTPNotFound()
-        return web.Response(text=(ASSETS / 'web' / name).read_text(), content_type=types[name])
+        return web.Response(text=(ASSETS / 'web' / name).read_text(encoding='utf-8'), content_type=types[name])
 
     async def download(request):
         require_safe_transport(request)
@@ -109,7 +113,7 @@ def setup_routes(app):
 
     async def catalog(request):
         browser_cookie(request)
-        manifest = json.loads((ASSETS / 'extension/manifest.json').read_text())
+        manifest = json.loads((ASSETS / 'extension/manifest.json').read_text(encoding='utf-8'))
         import base64, hashlib
         extension_id = ''.join(chr(ord('a') + int(c, 16)) for c in hashlib.sha256(base64.b64decode(manifest['key'])).hexdigest()[:32])
         return web.json_response({'extensionId': extension_id, 'download': '/connect/download/extension',

@@ -18,8 +18,12 @@ RESULT_CANDIDATE = """json_extract(value,'$.status') IN ('completed','failed')
     AND (json_type(value,'$.result') IS NOT NULL OR json_type(value,'$.arguments') IS NOT NULL)
     AND json_type(value,'$.updatedAt') IN ('integer','real')"""
 BACKGROUND_PRUNE_LIMIT = 1024
-BACKGROUND_ROOT_CATCHUPS = 3
 BACKGROUND_EDGE_BATCH = 64
+# These bound actual additional work, not the number of snapshots seen. Normal
+# chat progress can replace several small roots during one large initial mark.
+BACKGROUND_CATCHUP_RESOURCES = 4096
+BACKGROUND_CATCHUP_SECONDS = 5
+BACKGROUND_DRAIN_SECONDS = 5
 
 
 def index_operations(db):
@@ -168,7 +172,7 @@ def _roots(service):
     return [service._state, *clients.records.values()] if clients else service._state
 
 
-def _prune(service, marked, *, limit=None):
+def _prune(service, marked, *, limit=None, candidates=None, scan=True):
     from .resource_files import prune_marked, sweep_unindexed_locked
     if marked is None:
         scan = getattr(service, '_resource_scan', None)
@@ -178,9 +182,14 @@ def _prune(service, marked, *, limit=None):
         service._resource_scan_status = {'blocked': True, 'complete': False, 'inspected': 0, 'removed': 0}
         service.db.rollback()
         return
-    service._resource_scan, service._resource_scan_status = sweep_unindexed_locked(
-        service.db, getattr(service, '_resource_scan', None))
-    stale = prune_marked(service.db, marked, limit=limit)
+    if scan:
+        service._resource_scan, service._resource_scan_status = sweep_unindexed_locked(
+            service.db, getattr(service, '_resource_scan', None))
+    else:
+        # EOF belongs to this pass only. Don't restart scandir on every remaining
+        # indexed page, or repeatedly report the preceding page's removals.
+        service._resource_scan_status = {'blocked': False, 'complete': True, 'inspected': 0, 'removed': 0}
+    stale = prune_marked(service.db, marked, limit=limit, candidates=candidates)
     service.db.commit()
     return stale
 
@@ -191,16 +200,29 @@ def _finish(service, marked):
         remove_files(service.db, stale)
 
 
-async def _finish_async(service, marked):
+async def _finish_async(service, marked, *, after='', scan=True, indexed=True):
     from .resource_files import remove_files_async
-    stale = _prune(service, marked, limit=BACKGROUND_PRUNE_LIMIT)
+    # Keyset pages bound INSPECTED rows, not only successful deletions. Otherwise
+    # each 1024 removals rescans an arbitrarily large retained prefix.
+    candidates = ([row[0] for row in service.db.execute(
+        'SELECT id FROM state_resources WHERE id>? ORDER BY id LIMIT ?',
+        (after, BACKGROUND_PRUNE_LIMIT))] if marked is not None and indexed else [])
+    stale = _prune(service, marked, candidates=candidates, scan=scan)
     if stale is not None:
+        complete = not indexed or len(candidates) < BACKGROUND_PRUNE_LIMIT
+        # This is only a traversal cursor, never a mark or deletion authority.
+        # Preserve progress if the drain budget ends in a retained-heavy prefix.
+        # New rows behind it wait until the next wrap, with a fresh full proof.
+        service._resource_prune_after = '' if complete else candidates[-1]
         removed = await remove_files_async(service.db, stale)
         service._resource_scan_status['indexedRemoved'] = len(stale)
+        service._resource_scan_status['indexedInspected'] = len(candidates)
         return {'indexedPruned': len(stale),
                 'indexedFilesRemoved': (removed or {}).get('filesRemoved', 0),
                 'indexedBytesRemoved': (removed or {}).get('bytesRemoved', 0),
-                'unindexedFilesRemoved': service._resource_scan_status.get('removed', 0)}
+                'unindexedFilesRemoved': service._resource_scan_status.get('removed', 0),
+                'after': candidates[-1] if candidates else after,
+                'complete': complete}
     return {}
 
 
@@ -220,8 +242,9 @@ async def _maintenance_async(service):
     No writer transaction or application lock spans durable JSON/body reading.
     Before deletion, recheck every root and source index under the writer boundary.
     Bounded file deletion retains exclusion until its worker has settled.
-    A bounded catch-up retains newly added roots as well as earlier roots. A
-    still-changing, unavailable or uncertain graph defers the entire sweep.
+    Catch-up budgets charge new resources/time, not snapshot counts. Reuse the
+    conservative closure across a time-bounded drain, yielding between indexed
+    pages and revalidating fresh roots before EACH deletion boundary.
     """
     from .resource_files import references, detach, ReferenceEdges, settle_worker
     from . import resource_roots
@@ -234,6 +257,12 @@ async def _maintenance_async(service):
     deferred = None
     reason = None
     catchups = 0
+    catchup_resources = 0
+    catchup_deadline = None
+    drain_deadline = None
+    after = getattr(service, '_resource_prune_after', '')
+    complete = False
+    scan_complete = False
     removed = {}
     started = time.monotonic()
     outcome = 'interrupted'
@@ -266,7 +295,7 @@ async def _maintenance_async(service):
         # Caller retains app.lock from the current live-root capture, with no
         # intervening await. Durable/index witnesses are checked in the writer
         # transaction before pruning; file cleanup retains the same exclusion.
-        nonlocal valid, reason, stage, removed, deferred, outcome
+        nonlocal valid, reason, stage, removed, deferred, outcome, after, complete, drain_deadline, scan_complete
         service.db.execute('BEGIN IMMEDIATE')
         try:
             with measure(service, 'storage.gc.roots', synchronous=True):
@@ -283,8 +312,22 @@ async def _maintenance_async(service):
                     valid = False
                 if not valid:
                     reason = 'resource-index-changed'
+            # A slow revalidation/catch-up can use the remainder of the drain
+            # budget. Do not admit another destructive batch after it expires.
+            if valid and drain_deadline is not None and time.monotonic() >= drain_deadline:
+                service.db.rollback()
+                return
             stage = 'file-cleanup-unavailable'
-            removed = await _finish_async(service, set(sources) if valid else None)
+            if drain_deadline is None:
+                drain_deadline = time.monotonic() + BACKGROUND_DRAIN_SECONDS
+            batch_result = await _finish_async(service, set(sources) if valid else None,
+                                               after=after, scan=not scan_complete,
+                                               indexed=not complete)
+            scan_complete = service._resource_scan_status.get('complete', False)
+            after = batch_result.pop('after', after)
+            complete = batch_result.pop('complete', True)
+            for key, value in batch_result.items():
+                removed[key] = removed.get(key, 0) + value
             if not valid:
                 deferred = {'deferred': True, 'reason': reason}
                 service._resource_scan_status.update(deferred)
@@ -319,6 +362,12 @@ async def _maintenance_async(service):
                         identities.add(identity)
                 if not identities:
                     continue
+                if catchup_deadline is not None:
+                    catchup_resources += len(identities)
+                    if (catchup_resources > BACKGROUND_CATCHUP_RESOURCES
+                            or time.monotonic() >= catchup_deadline):
+                        valid, reason = False, 'root-catchup-budget'
+                        break
                 try:
                     async with service.lock:
                         if unavailable():
@@ -340,6 +389,8 @@ async def _maintenance_async(service):
             async with service.lock:
                 if unavailable():
                     return
+                if drain_deadline is not None and time.monotonic() >= drain_deadline:
+                    return
                 current = live_roots()
                 final_snapshot = resource_roots.capture(service.db)
                 if (current is not None and final_snapshot == snapshot
@@ -347,19 +398,31 @@ async def _maintenance_async(service):
                     # Nothing can mutate live roots before finish takes its
                     # writer boundary. Rewalking the same graph adds no proof.
                     await finish(current)
-                    return
+                    if not valid or (complete and scan_complete) or time.monotonic() >= drain_deadline:
+                        return
+                    # finish's file worker settled before releasing app/writer
+                    # exclusion. A new page must capture roots again after yield.
+                    continue_drain = True
+                else:
+                    continue_drain = False
+            if continue_drain:
+                await asyncio.sleep(0)
+                continue
             if current is None:
                 valid, reason = False, 'presentation-recovery-pending'
+                break
+            if catchup_deadline is None:
+                catchup_deadline = time.monotonic() + BACKGROUND_CATCHUP_SECONDS
+            if time.monotonic() >= catchup_deadline:
+                valid, reason = False, 'root-catchup-budget'
                 break
             if final_snapshot != snapshot:
                 stage = 'durable-roots-unavailable'
                 saved = await settle_worker(durable_roots, final_snapshot)
                 snapshot = final_snapshot
             pending = list((current | saved) - sources.keys())
-            if not pending:
-                break
-            if catchups >= BACKGROUND_ROOT_CATCHUPS:
-                valid, reason = False, 'root-catchup-limit'
+            if time.monotonic() >= catchup_deadline:
+                valid, reason = False, 'root-catchup-budget'
                 break
             catchups += 1
         async with service.lock:

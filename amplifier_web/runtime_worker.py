@@ -1082,7 +1082,8 @@ class Worker:
             source_captures = []
             from amplifier_web.tool_source_proof import QualifiedToolSources
             def capture_tool_sources(project, receipt, expected):
-                source_captures.append(QualifiedToolSources.capture(project, receipt, expected))
+                with startup_timing.phase('worker.runtime.verify.tool_sources'):
+                    source_captures.append(QualifiedToolSources.capture(project, receipt, expected))
             if not os.environ.get("UV_OVERRIDE"):
                 with startup_timing.phase('worker.runtime.verify.before_prepare'):
                     qualified_overrides = active_install_overrides(self.home, on_verified=capture_tool_sources)
@@ -1245,9 +1246,19 @@ class Worker:
                 public["support"] = runtime_versions()
             public.update(self.preparation_report)
             with startup_timing.phase('worker.ready'):
+                policy = self.session.coordinator.get_capability('web.write_policy')
+                settings_path = None
+                if policy is not None:
+                    config_owner = policy.source.config
+                    from amplifier_web.shared_settings import settings_paths
+                    settings_path = str(settings_paths(
+                        config_owner.workspace, shared_home=config_owner.config_home,
+                        session_id=policy.session_id,
+                        global_only=config_owner.global_only)['session'])
                 publish({"type": "runtime.ready", "report": public,
                          "configurationInputs": list(self.config_inputs),
                          "configurationStamp": self.configuration_stamp(),
+                         "sessionSettingsPath": settings_path,
                          "workerIdentity": {"pid": os.getpid(), "sessionId": self.session.session_id,
                             "owner": {key: self.shared_handle.owner[key] for key in
                                       ('hostname', 'app', 'pid', 'acquisition_id')}}})
@@ -1902,7 +1913,7 @@ class Worker:
                 if policy is None:
                     raise ValueError('The live write-policy boundary is unavailable.')
                 with self.write_policy_boundary():
-                    result = policy.confirm(data['settingsRevision'])
+                    result = policy.confirm_mount(data['settingsRevision'])
             elif op == 'handoff.boundary':
                 from amplifier_web.handoff_boundary import inspect
                 from amplifier_web.handoff_drain import finish

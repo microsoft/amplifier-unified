@@ -5,6 +5,7 @@ import json
 import hashlib
 import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -41,14 +42,39 @@ def prepare_client(prefix, workspace, project, locks):
     verify_manifests(workspace, project, locks)
 
 
+def verify_runtime_workdir(value):
+    """Check the fixed disposable mount before any workload/harness can run."""
+    if (not isinstance(value, dict)
+            or {key: item for key, item in value.items() if key not in ('sizeMiB', 'tmpMiB')} != {
+                'path': '/unified-runtime', 'environmentVariable': 'AMPLIFIER_TEST_RUNTIME',
+                'uid': 65534, 'gid': 65534, 'mode': '0700', 'retained': False}
+            or type(value.get('sizeMiB')) is not int or type(value.get('tmpMiB')) is not int
+            or not 64 <= value['sizeMiB'] + value['tmpMiB'] <= 1048576
+            or value['tmpMiB'] != (value['sizeMiB'] + value['tmpMiB']) // 4):
+        raise ValueError('The prepared runtime workdir contract changed.')
+    path = Path(value['path'])  # A fixed root-level path, never a source/control descendant.
+    info = path.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700
+            or (info.st_uid, info.st_gid) != (65534, 65534) or not path.is_mount()):
+        raise ValueError('The prepared runtime workdir is not a private workload-owned mount.')
+    filesystem = os.statvfs(path)
+    required = os.ST_NOSUID | os.ST_NODEV
+    if (filesystem.f_flag & required != required or filesystem.f_flag & (os.ST_NOEXEC | os.ST_RDONLY)
+            or filesystem.f_blocks * filesystem.f_frsize != value['sizeMiB'] * 1024 ** 2):
+        raise ValueError('The prepared runtime workdir mount flags or size changed.')
+
+
 def initialize(prefix=Path('/opt/unified-prepared'), workspace=Path('/workspace')):
     plan = json.loads((prefix / 'plan.json').read_text())
     if 'executionContract' in plan:
         contract = json.loads((prefix / 'execution-contract.json').read_text())
         if (contract.get('source') != plan['executionContract']['source']
                 or contract.get('profileId') != plan['profileId'] or contract.get('version') != 1
+                or contract.get('runtimeWorkdir') != plan['executionContract'].get('runtimeWorkdir')
                 or not (prefix / 'venv/bin/python').is_file()):
             raise ValueError('The prepared execution contract is incomplete or belongs to different source.')
+        if 'runtimeWorkdir' in contract:
+            verify_runtime_workdir(contract['runtimeWorkdir'])
     marker = workspace / '.unified-prepared-dependencies.json'
     if marker.exists():
         if marker.is_symlink() or json.loads(marker.read_text()) != {'preparationId': plan['preparationId']}:

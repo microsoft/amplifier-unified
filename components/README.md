@@ -325,9 +325,8 @@ code while preserving newer caller-owned workspace records.
 
 ## Select a Scheduling artifact
 
-Unified selects Scheduling 0.1.0 from the public repository's
-[`scheduling-v0.1.0` release](https://github.com/bkrabach/amplifier-platform-scheduling/releases/tag/scheduling-v0.1.0).
-The source record binds its original publication and exact runtime bytes. Historical
+The [Scheduling selection](scheduling.source.json) identifies the public release,
+its original artifacts and the exact runtime bytes bundled with Unified. Historical
 Unified publication receipts remain unchanged; source handoff and component
 publication do not automatically refresh this app selection. Never edit the
 generated snapshot or rewrite original publication records.
@@ -354,7 +353,7 @@ Normal wheel, source archive and editable builds verify the selected snapshot
 offline through Hatch. The source archive carries the snapshot, receipt and build
 helpers, so rebuilding needs no Git, network or producer checkout. Editable installs
 map the selected copy; develop the standalone library in its separate environment.
-Do not coinstall `amplifier-scheduling` with Unified. The five policy/store cases
+Do not coinstall `amplifier-scheduling` with Unified. The policy/store tests
 stay with the public package; Unified keeps host integration tests.
 
 Ordinary app staging and rollback retain one installed owner and existing activation
@@ -419,6 +418,13 @@ source distributions contain complete assets and require no Node or client
 checkout to run or reinstall. Raw source development requires Node.
 
 ## Local experiments
+
+Rerun the same build command after an interruption. Before compiling again it
+finishes any prepared static replacement and cleans up its staging directory.
+If the pending files have changed, the build preserves them for inspection.
+Older builds used unmarked `.web-client-previous-*`, `.web-client-install-*`
+and `.web-client-development-*` directories beneath `amplifier_web`. A fresh
+build can restore a missing `static/` while leaving those directories intact.
 
 `python scripts/web_client_build.py dev` runs the prepared client's development
 server. `python scripts/web_client_build.py build-development` installs deliberately

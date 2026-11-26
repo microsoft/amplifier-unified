@@ -1524,22 +1524,27 @@ def test_manual_host_payload_selects_resource_profile_without_caller_environment
     (tmp_path / 'test_environment_worker.py').write_text(
         "import json,sys\np=json.load(sys.stdin)\nprint(json.dumps({'ok': True, **p}))\n")
     args = {'requestId': 'manual-exact', 'command': 'python -V', 'profileId': 'linux-python',
-            'environment': {'HOME': '/root'}, 'jobEnvironment': {'PATH': '/caller'}, 'uid': 0}
+            'environment': {'HOME': '/root'}, 'jobEnvironment': {'PATH': '/caller'}, 'uid': 0,
+            'runtimeWorkdir': {'path': '/artifacts/caller-selected'}}
     result = owner.invoke({'python': sys.executable, 'image': owner.APPROVED_IMAGE, 'dockerHost': 'unix:///socket'},
                           home, row, 'execute', args)
     assert result['action'] == 'execute' and result['profileId'] == 'browser-test'
     assert result['requestId'] == 'manual-exact' and result['command'] == 'python -V'
-    assert not {'environment', 'jobEnvironment', 'uid'} & result.keys()
+    assert not {'environment', 'jobEnvironment', 'uid', 'runtimeWorkdir'} & result.keys()
 
 
 @pytest.mark.parametrize('prepared', [False, True])
-def test_owned_receipt_selects_prepared_image_and_initializer_payload(tmp_path, monkeypatch, prepared):
+@pytest.mark.parametrize('runtime', [False, True])
+def test_owned_receipt_selects_prepared_image_and_initializer_payload(tmp_path, monkeypatch, prepared, runtime):
     home, row = allocated(tmp_path)
     row.update(profileId='browser-test', resourceRequest=profiles.freeze('browser-test'),
                composeFile=None, offline=False)
     if prepared:
         row.update(snapshot={}, preparedDependencies={'version': 1, 'status': 'ready',
             'profileId': 'browser-test', 'sourceSha256': None, 'backend': 'docker', 'image': 'sha256:' + 'a' * 64})
+        if runtime:
+            row['preparedDependencies']['executionContract'] = profiles.execution_contract(
+                'browser-test', backend='docker', resource_request=row['resourceRequest'])
     monkeypatch.setattr(owner, '__file__', str(tmp_path / 'owner.py'))
     (tmp_path / 'test_environment_worker.py').write_text(
         "import json,sys\np=json.load(sys.stdin)\nprint(json.dumps({'ok':True,**p}))\n")
@@ -1549,6 +1554,12 @@ def test_owned_receipt_selects_prepared_image_and_initializer_payload(tmp_path, 
     assert value['image'] == ('sha256:' + 'a' * 64 if prepared else owner.APPROVED_IMAGE)
     assert worker.prepared_runtime(value) is prepared
     assert bool(worker.job_environment(value)) is prepared
+    if prepared and runtime:
+        assert value['runtimeWorkdir'] == row['preparedDependencies']['executionContract']['runtimeWorkdir']
+        assert worker.job_environment(value)['AMPLIFIER_TEST_RUNTIME'] == '/unified-runtime'
+    else:
+        assert 'runtimeWorkdir' not in value
+        assert 'AMPLIFIER_TEST_RUNTIME' not in worker.job_environment(value)
 
 
 def test_manual_backend_uncertainty_dispatches_once(library, tmp_path):

@@ -719,6 +719,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_post(browser_entry.CODE_PATH, browser_entry.code_issue)
     app.router.add_post(browser_entry.CODE_REDEEM_PATH, browser_entry.code_redeem)
     app.router.add_post(browser_entry.KEY_REDEEM_PATH, browser_entry.key_redeem)
+    app.router.add_get(browser_entry.PASSWORD_PATH, browser_entry.password_page, allow_head=False)
+    app.router.add_post(browser_entry.PASSWORD_PATH, browser_entry.password_page)
     app.router.add_get("/setup", setup)
     app.router.add_get("/api/ca", certificate)
     app.router.add_get("/ca.crt", certificate)
@@ -775,7 +777,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         async with service.lock:
             if bundled:
                 service.shell.resources.register(client_id, demand_id, navigation_resources, scope,
-                                                 recovery=request.query.get('recovery') == '1')
+                                                 recovery=request.query.get('recovery') == '1',
+                                                 compact=request.query.get('compact') == 'recent-items')
                 service._client_snapshots.pop(client_id, None)
             result = service.shell.inspect(client_id, snapshots=True, recovery=request.query.get('recovery') == '1',
                                            navigation_resources=navigation_resources, bundled=bundled)

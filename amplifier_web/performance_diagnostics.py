@@ -397,6 +397,11 @@ class PerformanceDiagnostics:
                 'indexedBytesRemoved': indexedBytesRemoved, 'unindexedFilesRemoved': unindexedFilesRemoved,
                 'removalCountsComplete': outcome == 'completed'}
 
+    def storage_collection_snapshot(self):
+        """Bounded detached read for storage controls, without unrelated diagnostics."""
+        with self.lock:
+            return dict(self.storage_collection) if self.storage_collection is not None else None
+
     def record_resource_rebuild(self, resource, package, reasons, globals_changed):
         """Call-site enums only; page keys and their values never enter diagnostics."""
         with self.lock:

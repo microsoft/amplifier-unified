@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
@@ -13,6 +14,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import frontend_build_artifact as output
 import web_client_source as delivery
 from browser_check_runner import compose_browser_plan
 
@@ -165,33 +167,116 @@ def verify_artifact(root, source, component, static, *, node='node'):
     return component
 
 
-def install(root, package):
-    application = root / 'amplifier_web'
-    static = application / 'static'
-    if static.is_symlink():
+def clear_staging(work):
+    # Keep state.json until the last disposable staging directory is gone.
+    for name in ('package', 'new'):
+        path = work / name
+        if path.exists():
+            shutil.rmtree(path)
+    output.discard_verified(work)
+
+
+def recover_static(root, work):
+    if not work.exists():
+        return
+    record = work / 'state.json'
+    directories, files = {'package', 'new', 'old'}, {'state.tmp', 'state.json'}
+    for path in work.iterdir():
+        if path.is_symlink() or not ((path.name in files and path.is_file())
+                                     or (path.name in directories and path.is_dir())):
+            raise ValueError(f'Unrecognized build recovery at {work}')
+    if not record.exists():
+        if set(path.name for path in work.iterdir()) - {'state.tmp'}:
+            raise ValueError(f'Missing build recovery record at {work}')
+        clear_staging(work)
+        return
+    state = read(record)
+    target = str(root / output.STATIC)
+    if not isinstance(state, dict) or state.get('target') != target:
+        raise ValueError(f'Build recovery belongs to a different output at {work}')
+    if state == {'phase': 'preparing', 'target': target} and not (work / 'old').exists():
+        clear_staging(work)
+        return
+    if (state.keys() != {'phase', 'target', 'before', 'after'}
+            or state['phase'] not in {'prepared', 'verified'} or (work / 'package').exists()
+            or (state['phase'] == 'verified' and (work / 'new').exists())):
+        raise ValueError(f'Unrecognized build recovery record at {work}')
+    if state['phase'] == 'prepared':
+        output.replace_static(root, work, state)
+        output.save_apply_state(work, state, 'verified')
+    output.finish_apply(root, work, state)
+
+
+@contextmanager
+def static_build(root):
+    """Build and recover at the same two rename boundaries as artifact apply."""
+    root = root.resolve()
+    target = root / output.STATIC
+    work = root / '.web-client-output'
+    if any(path.is_symlink() for path in (target.parent, target, work)):
         raise ValueError('Installed client paths must not be links')
-    with tempfile.TemporaryDirectory(prefix='.web-client-install-', dir=application) as name:
-        stage = Path(name)
-        shutil.copytree(package / 'static', stage / 'ready')
-        shutil.copyfile(package / 'component.json', stage / 'ready/client-component.json')
-        replace_directory(stage / 'ready', static)
+    if (root / '.git').exists():
+        git_dir = Path(output.git(root, 'rev-parse', '--absolute-git-dir').decode().strip())
+        pending = git_dir / 'frontend-build-apply'
+        lock = pending.with_suffix('.lock')
+    else:
+        cache = root / '.build'
+        cache.mkdir(exist_ok=True)
+        pending, lock = None, cache / 'web-client-output.lock'
+    with output.apply_lock(lock):
+        if pending is not None and pending.exists():
+            raise ValueError(f'Pending generated artifact recovery at {pending}; rerun artifact apply')
+        recover_static(root, work)
+        work.mkdir()
+        owner = {'target': str(target)}
+        state = dict(owner)
+        output.save_apply_state(work, state, 'preparing')
+        try:
+            yield work
+            new, old = work / 'new', work / 'old'
+            state.update(before=output.tree(target, bounded=False) if target.exists() else None,
+                         after=output.tree(new, bounded=False))
+            output.save_apply_state(work, state, 'prepared')
+            if target.exists():
+                target.rename(old)
+            new.rename(target)
+            output.save_apply_state(work, state, 'verified')
+        except BaseException:
+            if state.get('phase') == 'prepared':
+                try:
+                    output.restore_original(root, work, state)
+                except OSError as error:
+                    raise ValueError(f'Restore previous client output from {work / "old"}') from error
+            if not (work / 'old').exists():
+                output.save_apply_state(work, dict(owner), 'preparing')
+                clear_staging(work)
+            raise
+        output.discard_verified(work)
+
+
+def install(root, package):
+    with static_build(root) as stage:
+        shutil.copytree(package / 'static', stage / 'new')
+        shutil.copyfile(package / 'component.json', stage / 'new/client-component.json')
 
 
 def build(root=ROOT, *, node='node', npm='npm'):
     root = root.resolve()
-    source = prepare(root, node=node)
-    if sys.platform == 'win32':
-        # CreateProcess does not apply the shell's PATHEXT lookup to bare npm.
-        npm = shutil.which(npm) or npm
-    command(npm, 'run', 'build', '--prefix', source, timeout=300)
-    with tempfile.TemporaryDirectory(prefix='.web-client-package-', dir=source.parent) as name:
-        package = Path(name) / 'package'
+    with static_build(root) as stage:
+        source = prepare(root, node=node)
+        if sys.platform == 'win32':
+            # CreateProcess does not apply the shell's PATHEXT lookup to bare npm.
+            npm = shutil.which(npm) or npm
+        command(npm, 'run', 'build', '--prefix', source, timeout=300)
+        package = stage / 'package'
         peer = read(source / 'build-inputs.lock.json')['source']['revision']
         command(node, source / 'scripts/package-client.mjs', package, peer,
                 '--source-record', source / '.client-source.json', capture=True, timeout=60)
         component = read(package / 'component.json')
         verify_artifact(root, source, component, package / 'static', node=node)
-        install(root, package)
+        (package / 'static').rename(stage / 'new')
+        shutil.copyfile(package / 'component.json', stage / 'new/client-component.json')
+        shutil.rmtree(package)
     return component
 
 
@@ -214,14 +299,12 @@ def develop(root=ROOT, *, npm='npm'):
 def build_development(root=ROOT, *, npm='npm'):
     """Build deliberate local experiments without a qualifying component receipt."""
     root = root.resolve()
-    source = root / '.build/web-client'
-    if not (source / '.client-source.json').is_file():
-        raise ValueError('Prepare the selected client before building a development experiment')
-    command(shutil.which(npm) or npm, 'run', 'build', '--prefix', source, timeout=300)
-    with tempfile.TemporaryDirectory(prefix='.web-client-development-', dir=root / 'amplifier_web') as name:
-        ready = Path(name) / 'ready'
-        shutil.copytree(source / 'dist', ready)
-        replace_directory(ready, root / 'amplifier_web/static')
+    with static_build(root) as stage:
+        source = root / '.build/web-client'
+        if not (source / '.client-source.json').is_file():
+            raise ValueError('Prepare the selected client before building a development experiment')
+        command(shutil.which(npm) or npm, 'run', 'build', '--prefix', source, timeout=300)
+        shutil.copytree(source / 'dist', stage / 'new')
     return {'directory': str(source), 'qualification': 'development-only'}
 
 

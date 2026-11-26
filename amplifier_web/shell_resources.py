@@ -51,10 +51,12 @@ def scope_for(state):
             (view.get('workWorkspaceTab') or 'chats') if surface == 'workspace' else None]
 
 
-def page_value(snapshot, name):
+def page_value(snapshot, name, *, compact=False):
     if name.startswith('sidebar'):
         field = name.removeprefix('sidebar').lower()
         return {'sidebarNavigation': {field: snapshot['sidebarNavigation'][field]}}
+    if compact and name == 'recentNavigation':
+        return {name: snapshot[name]}
     return {key: snapshot[key] for key in PAGE_FIELDS[name] if key in snapshot}
 
 
@@ -187,7 +189,7 @@ class ShellResources:
                 composition=composition, instances=instances, bootstrap=bootstrap)
         return result
 
-    def register(self, identity, demand_id, resources, scope, recovery=False):
+    def register(self, identity, demand_id, resources, scope, recovery=False, *, compact=None):
         state = self._bound(identity)
         self._prune()
         if type(demand_id) is not int or not 1 <= demand_id <= MAX_SAFE_INTEGER:
@@ -207,7 +209,10 @@ class ShellResources:
         if old and (demand_id < old['demandId'] or demand_id == old['demandId'] and
                     (wanted != old['wanted'] or scope != old['scope'] or recovery != old['recovery'])):
             fail('Shell demand is stale or reuses an identity for different resources.', 409)
-        if old and demand_id == old['demandId']:
+        # Bootstrap negotiates the representation. Later demand refreshes keep it.
+        if compact is None:
+            compact = bool(old and old['compact'])
+        if old and demand_id == old['demandId'] and compact == old['compact']:
             old['disconnected_since'] = time.monotonic()
             return
         for key in list(self.clients):
@@ -216,7 +221,7 @@ class ShellResources:
         if old is None and len(self.clients) >= MAX_CLIENTS:
             fail('Too many active shell resource clients; close an unused client before attaching another.', 429)
         self.clients[identity] = {'demandId': demand_id, 'wanted': wanted, 'scope': list(scope),
-            'recovery': recovery, 'instances': old['instances'] if old else {},
+            'recovery': recovery, 'compact': compact, 'instances': old['instances'] if old else {},
             'keys': old['keys'] if old else {}, 'bytes': old['bytes'] if old else 0,
             'envelope': None, 'disconnected_since': time.monotonic()}
 
@@ -433,7 +438,10 @@ class ShellResources:
                 scoped = scoped_states[name]
                 dirty = set()
                 for resource in registration['wanted']:
-                    key = (bootstrap, self._page_key(resource, scoped, instance, navigation_revision, client, workspace_revision, root_navigation_revision))
+                    page_key = self._page_key(resource, scoped, instance, navigation_revision, client, workspace_revision, root_navigation_revision)
+                    if resource == 'recentNavigation':
+                        page_key += (registration['compact'],)
+                    key = (bootstrap, page_key)
                     own_keys[resource] = key
                     if previous_keys.get(resource) == key and resource not in prior.get('pending', {}):
                         own[resource] = previous[resource]
@@ -455,7 +463,7 @@ class ShellResources:
                                     self.shell.service, 'shell.resources.pages', synchronous=True):
                                 built = self.shell.navigation(client, instance, identity=identity,
                                     navigation_resources=frozenset({resource}), _page_only=True)
-                            value = page_value(built, resource)
+                            value = page_value(built, resource, compact=registration['compact'])
                             if resource in {'workspaceExplorer', 'workspaceShortcuts', 'pinnedNavigation'}:
                                 value['navigationAge'] = scoped['view'].get('navAge', 'all')
                             own[resource] = self._record(value, previous.get(resource),
