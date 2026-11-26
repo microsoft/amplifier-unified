@@ -446,7 +446,7 @@
         "tests/fixtures/status_emitter_probe.py",
         "tests/fixtures/status_package_probe.py"
       ],
-      "prerequisite": "Explicit owned DTU, prepared Unified native interpreter, independent installed CLI interpreter with matching standalone wheel, candidate Unified/standalone wheels and published native Core wheel. Runner creates fresh consumer/package environments; missing prerequisites fail. See docs/validation/integration-coverage.md."
+      "prerequisite": "Explicit owned DTU, prepared Unified native interpreter, independent installed CLI with all implicit default dependencies and matching standalone wheel, candidate Unified/standalone wheels and published native Core wheel. Supply --cli-sources/--cli-sources-sha256 for the complete public CLI store and --host-sources/--host-sources-sha256 for the separate exact captureCommit host store; schemaVersion 1 inputs use normal Foundation verification/binding and fresh synthetic work/home. Installed CI bundle/hook and full source object must share the reviewed commit. Retain untimed bounded READY-worker provenance, truthful resolved dependencies and exact executed owner bytes. Runner creates fresh consumer/package environments; missing inputs fail. Retain optional provider-discovery refusals without claiming zero attempts or exhaustive imported-byte proof. See docs/validation/integration-coverage.md."
     }
   },
   "baselineRecords": [
@@ -1062,14 +1062,14 @@
       "node": "tests/fixtures/status_emitter_probe.py",
       "kind": "executable_probe",
       "owner": "status-installed",
-      "prerequisite": "Explicit owned DTU, prepared Unified native interpreter, independent installed CLI interpreter with matching standalone wheel, candidate Unified/standalone wheels and published native Core wheel. Runner creates fresh consumer/package environments; missing prerequisites fail. See docs/validation/integration-coverage.md.",
+      "prerequisite": "Explicit owned DTU, prepared Unified native interpreter, independent installed CLI with all default dependencies and matching standalone consumer. Supply --cli-sources/--cli-sources-sha256 plus --host-sources/--host-sources-sha256 for reviewed schemaVersion 1 inputs: disjoint complete public stores, exact host captureCommit matching normally installed CI bundle/hook dependencies, fresh synthetic homes. Use normal Foundation verify/bind, untimed existing READY-worker provenance and the outer process-group owner/240-second limit. First exact CLI tool observation must meet the unchanged one-second budget; final consumer and ended checks remain separate. Missing inputs fail; optional provider-discovery refusals are not zero attempts or complete provider qualification. See docs/validation/integration-coverage.md.",
       "introducedBy": "#290"
     },
     {
       "node": "tests/fixtures/status_package_probe.py",
       "kind": "executable_probe",
       "owner": "status-installed",
-      "prerequisite": "Explicit owned DTU, prepared Unified native interpreter, independent installed CLI interpreter with matching standalone wheel, candidate Unified/standalone wheels and published native Core wheel. Runner creates fresh consumer/package environments; missing prerequisites fail. See docs/validation/integration-coverage.md.",
+      "prerequisite": "Disposable installed environment containing candidate Unified and standalone status wheels; this probe checks RECORD ownership, commands and standalone uninstall isolation. The full status-installed qualifier also requires reviewed --cli-sources/--cli-sources-sha256 and --host-sources/--host-sources-sha256 inputs for its separate native probe and creates fresh consumer/package environments. Missing prerequisites fail. See docs/validation/integration-coverage.md.",
       "introducedBy": "#290"
     },
     {

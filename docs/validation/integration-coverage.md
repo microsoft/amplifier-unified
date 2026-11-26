@@ -387,9 +387,62 @@ metadata, and installed host/CLI Core package bytes must match it. The runner
 records actual CLI/module import paths and distribution provenance; changing the
 CLI or dependencies creates a new qualification, not an extension of an old one.
 
+The CLI must also have every implicit default module and its dependencies
+installed normally. Prepare the complete reviewed public source/resource trees
+in a separate owned shared store using the selected Foundation's
+`SharedSourceStore.ensure(url, commit, existing=clean_checkout)` and `verify`
+APIs. Keep the original repository/ref selections, including top-level default
+behaviors, nested includes, module sources, curated skills and Wayfinder content.
+Do not substitute a moving branch tip, hand-write cache records or suppress
+defaults to make preparation pass.
+
+Supply a reviewed JSON file through `--cli-sources` and its exact SHA-256 through
+`--cli-sources-sha256`. Its schema is:
+
+```text
+{
+  "schemaVersion": 1,
+  "store": "/owned/public-source-store",
+  "sources": [
+    {"url": "https://github.com/microsoft/REPOSITORY", "ref": "main", "commit": "FULL_40_HEX_COMMIT"}
+  ]
+}
+```
+
+The row above describes the shape, not a complete runnable manifest. Include all
+six required repositories: `amplifier-bundle-imagegen`, `amplifier-bundle-modes`,
+`amplifier-bundle-skills`, `amplifier-bundle-routing-matrix`,
+`amplifier-bundle-wayfinder` and `amplifier-module-hooks-approval`. Each uses
+`main` as its requested ref, including Approval's omitted-ref URI as parsed by
+the selected Foundation; the commit is the exact reviewed selection, not a new
+lookup of that branch. Add any other source required by the selected composition.
+The store path must be absolute and canonical, with all objects already present
+and verified. Keep it separate from the new synthetic work directory.
+
+The Unified worker's mandatory capture hook is a separate real component, not a
+scripted tool. Supply `--host-sources` and `--host-sources-sha256` for a second
+reviewed JSON input: `{"schemaVersion": 1, "store": "/owned/host-source-store",
+"captureCommit": "FULL_40_HEX_COMMIT"}`. Use the complete selected
+`microsoft/amplifier-bundle-context-intelligence` repository and normally install
+its bundle and hook distributions at that same commit, including their resolved
+dependencies. Both installed PEP 610 identities must agree. The host store,
+CLI store and fresh synthetic work must be disjoint. The fixture uses normal
+`sources.modules` selection for the capture hook and binds the immutable ref
+through the host's installed Foundation before worker startup; it does not
+disable capture or substitute six matching files for the complete source.
+
+The fixture validates the input digest and schema, then its independent CLI
+preparation process verifies every object before creating normal `bind` records
+in a fresh CLI home. It checks the complete default modules/resources before
+either runtime starts. No live home, credentials or existing private CLI state
+is copied. Keep bytecode disabled for source-store consumers. Missing, changed
+or incomplete inputs fail; the fixture does not fetch or install them.
+
 Inside the owned DTU, from the candidate checkout:
 
 ```sh
+CLI_SOURCES_SHA256="$(sha256sum /owned/cli-sources.json | cut -d ' ' -f 1)"
+HOST_SOURCES_SHA256="$(sha256sum /owned/host-sources.json | cut -d ' ' -f 1)"
 python scripts/qualify_status_emitter.py \
   --owned-dtu dtu-unified-codex-dev-20261014 \
   --python /owned/native-env/bin/python \
@@ -397,6 +450,10 @@ python scripts/qualify_status_emitter.py \
   --unified-wheel /owned/wheels/amplifier_unified-CANDIDATE-py3-none-any.whl \
   --status-wheel /owned/wheels/amplifier_status_emitter-0.1.0-py3-none-any.whl \
   --core-wheel /owned/wheels/EXACT_PUBLISHED_CORE_PLATFORM_WHEEL.whl \
+  --cli-sources /owned/cli-sources.json \
+  --cli-sources-sha256 "$CLI_SOURCES_SHA256" \
+  --host-sources /owned/host-sources.json \
+  --host-sources-sha256 "$HOST_SOURCES_SHA256" \
   --work /owned/status-acceptance-new-directory
 ```
 
@@ -410,6 +467,44 @@ the source digest must remain unchanged during execution. `result.json` is true
 only after both probes pass. Retain that receipt, command logs, wheel hashes and
 dependency identities, then audit/remove the work directory. No live model,
 native Windows, TUI, recipe-specific or ACP acceptance is claimed.
+
+The CLI child denies Git transport and uses `UV_OFFLINE`; this is not a general
+OS network sandbox. Optional provider auto-discovery can still attempt source
+acquisition and log transport refusals before the scripted provider completes.
+Keep those messages in the result: passing status assertions do not establish
+zero acquisition attempts, clean logs or complete provider qualification.
+The native latency check freezes the first fresh `status_hold` / `hold-call`
+observation for the launched CLI PID. It compares the reader's receipt time with
+that process's recorded tool-entry time using the unchanged `0 <= lag < 1` second
+budget, including polling delay. Later dirty writes or heartbeats may update
+`observedAt` and `sequence`; they cannot replace this first sample. The final
+independent consumer must still show both hosts' tools and plans, redacted
+content and the same CLI tool identity. A separate host-local read checks the
+CLI's ended state after exit. The tool-entry marker is read only after its CLI
+writer exits; this does not change the frozen first observation. The native `result.json` retains
+bounded numeric timing/sequence and fixed phase facts on handled failure as well
+as success; failure omits raw consumer rows, preparation details and exception
+text. Forced termination can prevent finalization, so a missing receipt is not
+success. Keep original failed evidence separate from a corrected-input run.
+Before CLI launch, the fixture calls the existing READY worker's bounded
+`RuntimeManager.provenance` operation. It checks worker/session identity and the
+private settings-path/stamp relationship (the settings file may legitimately be
+absent), then joins listed current-source, capture-source, scripted and installed
+module files to their expected bytes/RECORDs. It exports hashes and fixed facts,
+not settings contents or private paths. Missing required modules, unknown file
+evidence or mismatches fail before the timed phase. This is listed loaded-origin
+and current-file evidence: `importedBytesVerified` remains false, and neither
+exhaustive transitive imports nor historical imported bytes are established.
+Qualification must also retain the exact executed observer/owner bytes, truthful
+resolved dependency inputs and bounded output-drain disposition. Do not install
+global line/profile tracing or verbose import logging on the timed path, or
+replace an incomplete observation with an absence claim. Normal preparation
+owns full source and dependency closure; the fixture's source binding alone is
+not an OS network sandbox.
+Direct native-only reuse must retain an outer process-group owner and the
+240-second limit; the full qualifier supplies that owner and still runs both
+probes. Do not turn a separately passed native probe into a rewritten earlier
+qualifier receipt.
 
 ### Shared Work native and nested-effect ownership (October 22)
 
