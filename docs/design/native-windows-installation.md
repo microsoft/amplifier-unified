@@ -748,9 +748,7 @@ request, sends one grant request to the first host that matches, and starts the
 browser once. A refused or unconfirmed grant request ends the command; it is
 never sent again. After the first round of health requests, none starts at or
 after the end of the wait; one that started can take 5 seconds and the grant
-request 5 more. The typed-code command for another device
-(`amplifier-unified browsers code`) uses the same owner request without a
-wait: it asks each local address once.
+request 5 more.
 
 The launcher learns the result from one line of the command's output
 (`browser_entry.OPENED`), not from its exit status. With a launcher from a
@@ -4395,79 +4393,85 @@ it is dropped as well. The owner waits a few seconds after the command.
 #### Remote browser sign-in on a Windows host
 
 A browser on another device cannot use the local launcher, and a Windows host
-has no password form. The owner starts that sign-in at the PC:
-`amplifier-unified browsers code` prints a code, and the owner types it on the
-sign-in page that the other device shows. Terminal and companion grants are not
+does not check the password of the Windows account. The owner sets a password
+for this in the app on the PC, and types it on the sign-in page that the other
+device shows (see "A password that the owner sets in the app on the PC"
+below). A command can make a random key in its place (see "A saved sign-in
+key for a browser on another device"). Terminal and companion grants are not
 reused for this; they carry broader authority.
 
-- **The code.** Ten symbols from 32 (no `0`, `1`, `I` or `O`): 50 bits. It
-  lasts 120 seconds and works once. The host keeps only its SHA-256, and at
-  most eight codes at a time. Input is upper-cased, and spaces and hyphens are
-  removed. No other character is changed, so a look-alike is a wrong code.
-- **Who can make one.** The command uses the same request as `open`. It pins
-  the privately read leaf certificate before it reads or sends the control
-  credential, and the host accepts that request from this computer only. The
-  code is bound to the host instance, the data folder, the owner SID and one
-  address: an exact HTTPS entry of `public_origins` that is not this computer.
-- **Where it works.** The redeem endpoint has its own narrow check: HTTPS, an
-  explicit `Origin` equal to the address the browser used, and that address an
-  exact configured remote one. It does **not** look at the peer address. A
-  Tailscale TCP forward connects to the host from `127.0.0.1` (measured), so
-  the socket does not say where the browser is. The local ticket keeps its
-  check that both socket ends are local. With the forward on, that check no
-  longer tells a tailnet device from this computer: a client there can also
-  send the local address as `Host` and `Origin`. It gains nothing by that. The
-  owner endpoints still need the control credential from the owner-only folder,
-  and the local redeem still needs a ticket that only the launcher can get.
-  Loopback was never authority; another Windows account on the PC is in the
-  same position.
-- **Wrong codes.** No lockout and no delay. A lockout would let any device
-  that reaches the address keep the owner out. A delay taken in turn would
-  make the owner wait behind a flood of wrong codes. The numbers carry the
-  guess resistance: at 10,000 guesses each second against eight pending codes,
-  the chance of a hit in one code lifetime is about 1 in 100 million. A wrong
-  code never removes a real one and never reaches the owner's command, which
-  uses another endpoint. The host counts wrong codes and logs only the count.
+The first way was a one-use code: `amplifier-unified browsers code` printed
+ten symbols that lasted 120 seconds, and the owner typed them on the other
+device. The key and then the password came after it. The owner who asked for
+the password then asked for it as the one way, and the code is removed: its
+command, its two endpoints, its store and its form. Three reasons. A second
+way on the sign-in page asks every person which one to use. The code needs a
+terminal, and the password needs none. And a person who is away from the PC
+cannot make a code, so the code never covered the case that the password is
+for. One thing went with the code: a wrong code slowed nobody down, so a
+sender of wrong texts could not keep the owner out. That cost is stated
+under "Why the wait is for everyone" below. A key from the command still has
+no wait.
+
+What this section fixed for every way, and what stays:
+
+- **Where it works.** The sign-in endpoint has its own narrow check
+  (`browser_entry.remote_origin`): HTTPS, an explicit `Origin` equal to the
+  address the browser used, and that address an exact configured remote one.
+  It does **not** look at the peer address. A Tailscale TCP forward connects
+  to the host from `127.0.0.1` (measured), so the socket does not say where
+  the browser is. The local ticket keeps its check that both socket ends are
+  local. With the forward on, that check no longer tells a tailnet device
+  from this computer: a client there can also send the local address as
+  `Host` and `Origin`. It gains nothing by that. The owner endpoint still
+  needs the control credential from the owner-only folder, and the local
+  redeem still needs a ticket that only the launcher can get. Loopback was
+  never authority; another Windows account on the PC is in the same position.
 - **The page.** Server-rendered, with no script, and it shows nothing from the
   request. It is sent with `Referrer-Policy: same-origin`, not `no-referrer`:
   from a `no-referrer` page a browser posts the form with `Origin: null`, and
-  the redeem check refuses that. The redeem reply is `no-store`, `no-referrer`.
+  the check refuses that. The sign-in reply is `no-store`, `no-referrer`.
   The field and **Sign in** come directly after the heading and the error
-  text; the help follows them. In clean-room Run G the help stood before the
-  field, and with the error text **Sign in** was below the window edge at
-  300 % scale. Measured with Chromium and the page's own stylesheet, in CSS
-  pixels: in that window (1272 x 512) **Sign in** ended at 565 before and ends
-  at 372 now; at 320 x 480 it ends at 384. With the error text, a window lower
-  than 372 CSS pixels still needs scrolling. The page has no style of its own:
-  the stylesheet belongs to the web client, and the page's policy allows no
-  inline style.
-- **The session.** The signed cookie from a code is marked remote
-  (`"via": "remote"`), so that a rule for remote sessions only is possible
-  later. Local cookies do not change. The lifetime is the configured one.
+  text; the help follows them. In clean-room Run G the help of the code form
+  stood before its field, and with the error text **Sign in** was below the
+  window edge at 300 % scale. Measured with Chromium and the page's own
+  stylesheet, in CSS pixels, for the password form with its error text: in
+  that window (1272 x 512) **Sign in** ends at 372; at 320 x 480 it ends at
+  423. A lower window still needs scrolling. The page has no style of its
+  own: the stylesheet belongs to the web client, and the page's policy
+  allows no inline style.
+- **The session.** The signed cookie from this sign-in is marked remote
+  (`"via": "remote"`). The owner's page uses the mark: a remote session
+  cannot set the password. Local cookies do not change. The lifetime is the
+  configured one.
 - **The control.** `amplifier-unified browsers sign-out` signs out every
-  browser and drops every pending ticket and code. It also ends a saved
-  sign-in key (see the next section).
+  browser and drops every pending ticket. It also ends a saved password or
+  sign-in key (see the next sections).
+- **Requests of an earlier version.** A page or a command of a version with
+  the code can still send its request. The two code paths are no routes.
+  The form's path is no public path any more, so a browser that is not
+  signed in gets the refusal of every protected path. The owner's request
+  finds no such operation. Neither is counted as a wrong password.
 
-Limits: there is no sign-out for one device. A person on the same network who
-gets the owner to type the code into a look-alike page within 120 seconds can
-use it; the command prints the exact address to open. One host process holds
-the pending codes in memory, so a restart drops them and the owner makes a new
-code. Not measured yet: a phone browser, and the whole journey on a real second
-device. Linux, macOS and WSL hosts keep the password form and refuse both code
-endpoints. The steps for the owner are in the
+Limits: there is no sign-out for one device. A person who gets the owner to
+type the password into a look-alike page has it until the owner changes it.
+Not measured yet: a phone browser. Linux, macOS and WSL hosts keep the
+password form of the host account and refuse the sign-in endpoint of a
+Windows host. The steps for the owner are in the
 [deployment guide](../DEPLOYMENT.md#windows-host-reach-unified-from-another-device).
 
 #### A saved sign-in key for a browser on another device
 
-A code needs the owner at the PC at the moment of the sign-in. An owner who is
-away from the PC, with no device that is signed in, has no way in. A sign-in
-key closes that gap: the owner makes it once at the PC, saves it (a password
-manager is the expected place), and types it on any device later. It is an
-addition; the code stays for a device that must not keep a secret.
+The one-use code of the first version needed the owner at the PC at the
+moment of the sign-in. An owner who was away from the PC, with no device that
+was signed in, had no way in. A sign-in key closed that gap: the owner makes
+it once at the PC, saves it (a password manager is the expected place), and
+types it on any device later.
 
-- **The key.** Twenty-five symbols of the code's alphabet: 125 bits. The
-  command shows it once, in five groups of five. Input is treated as for a
-  code: upper-cased, spaces and hyphens removed, no look-alike mapped.
+- **The key.** Twenty-five symbols from 32 (no `0`, `1`, `I` or `O`): 125
+  bits. The command shows it once, in five groups of five. Input is
+  upper-cased, and spaces and hyphens are removed. No other character is
+  changed, so a look-alike is a wrong key.
 - **The record.** `amplifier-unified browsers key` writes one private file,
   `config/auth/sign-in-key`: the second in which the key was made and the
   SHA-256 of the key. The key itself is kept nowhere. A plain hash is enough:
@@ -4481,11 +4485,13 @@ addition; the code stays for a device that must not keep a secret.
   request. The command refuses when no address for other devices is
   configured.
 - **Where it works.** At every exact configured HTTPS address that is not
-  this computer, with the redeem check of a code: HTTPS and an explicit
-  `Origin` equal to the address in use. The peer address is not read, for the
-  same reason. A key is not bound to one address: the owner saves one secret.
-- **Wrong keys.** No lockout and no delay, for the reason given for a code;
-  125 bits carry the guess resistance. A wrong key must stay cheap, because
+  this computer, with the check of the section above: HTTPS and an explicit
+  `Origin` equal to the address in use. The peer address is not read. A key
+  is not bound to one address: the owner saves one secret.
+- **Wrong keys.** No lockout and no delay. A lockout would let any device
+  that reaches the address keep the owner out, and a delay taken in turn
+  would make the owner wait behind a flood of wrong keys. The 125 bits carry
+  the guess resistance. A wrong key must stay cheap, because
   any device that reaches the address can send one: the host looks at the
   record's file time, size and identity, and reads the record through the
   private boundary only when those changed. So a new or a removed key counts
@@ -4495,9 +4501,10 @@ addition; the code stays for a device that must not keep a secret.
   each well-formed wrong key costs one failed private read. The host counts
   wrong keys and logs only the count.
   It logs each sign-in with the key, without the key.
-- **Before a session opens.** A right key confirms the owner credential as a
-  live code does, and it opens nothing while a saved sign-out waits for this
-  host. Both refusals are not counted as wrong keys.
+- **Before a session opens.** A right key confirms the owner credential and
+  the host identity (`browser_entry._binding`), and it opens nothing while a
+  saved sign-out waits for this host. Both refusals are not counted as wrong
+  keys.
 - **The end of a key.** A new key replaces the record. `--remove` ends the
   key and leaves every browser signed in. The sign-out of all browsers ends
   the key by the rule of a session: the key counts only while the second of
@@ -4524,14 +4531,14 @@ addition; the code stays for a device that must not keep a secret.
 - **The page.** The key is typed in the field **Password** of the page for
   another device. The next section describes that form: a key and a password
   share it.
-- **The session.** As from a code: marked remote, with the configured
-  lifetime. It is not renewed; after that lifetime the device signs in with
-  the key again.
+- **The session.** Marked remote, with the configured lifetime. It is not
+  renewed; after that lifetime the device signs in with the key again.
 
 Limits: the key is a long-lived secret. Everyone who has it and can reach an
 address for other devices can sign in until the owner replaces it, removes it
-or signs out all browsers; there is no second factor. On a look-alike page a
-key is lost for longer than a code. There is no key for one device and no
+or signs out all browsers; there is no second factor. A key that is typed
+into a look-alike page is lost until the owner replaces it. There is no key
+for one device and no
 list of sign-ins beyond the host log. A clock that was set back is handled as
 for a session: a key from a later second opens nothing until the clock reaches
 that second. A sign-out of all browsers in that time does not end such a
@@ -4572,7 +4579,7 @@ has a terminal.
   NFKC, so that two keyboards that send the same characters in two forms
   give one password.
 - **Wrong passwords.** A person chooses a password, so the "no lockout and no
-  delay" of a code and a key is not enough. The fifth wrong password in a
+  delay" of a key is not enough. The fifth wrong password in a
   row starts a time in which the host checks no password: 2 seconds at
   first, and two times as long after each further wrong password, to 5
   minutes at most. During that time it checks nothing, also not the right
@@ -4586,11 +4593,12 @@ has a terminal.
   no hash. A key has no wait.
 - **Why the wait is for everyone.** The request does not say which device
   sent it: a Tailscale forward connects from this computer for every device
-  (see the code's "Where it works"). A wait for each address would be no
-  wait behind the forward. So a person who reaches the address can keep the
-  owner from signing in with the password, and gets in no faster. A code is
-  not slowed down and still works, and so does the PC itself. The owner who
-  wants no such wait uses a key.
+  (see "Where it works" above). A wait for each address would be no wait
+  behind the forward. So a person who reaches the address can keep the owner
+  from signing in from another device, and gets in no faster. Since the
+  one-use code is gone, no second way goes around the wait. The PC itself
+  still works, and a new password that the owner sets there ends the wait.
+  The owner who wants no such wait uses a key from the command.
 - **One check at a time.** The hash runs in a thread, away from the event
   loop, and only one runs. A second password that arrives meanwhile is not
   checked and not counted; its page says that the password was not checked
@@ -4603,11 +4611,11 @@ has a terminal.
   page (`/connect/sign-in`). The page and its form need all of these: a
   valid browser session that is not marked remote; HTTPS; both socket ends
   and the name in use are this computer's; for the form also the exact local
-  `Origin` and a token that is made from the session. A session that a code,
-  a key or a password opened is marked remote since the code (`"via":
-  "remote"`); this is the rule for remote sessions that the mark was made
-  for. Behind a Tailscale forward a device of the tailnet has local sockets
-  and can send a local name. It has no session that is not remote: such a
+  `Origin` and a token that is made from the session. A session that a
+  password or a key opened is marked remote (`"via": "remote"`); this is the
+  rule for remote sessions that the mark was made for. Behind a Tailscale
+  forward a device of the tailnet has local sockets and can send a local
+  name. It has no session that is not remote: such a
   session comes only from the launcher's ticket. The control credential and
   a device credential do not open the page. This is not a wall against a
   remote session, which has the whole app and can run a command through a
@@ -4626,8 +4634,8 @@ has a terminal.
   - The sign-out record must still be that one. A sign-out that was saved
     after that first check refuses the change, whatever its second, and
     whether the host applied it meanwhile or not. No clock is read for
-    this; it is the test that keeps a ticket or a code from a session while
-    a saved sign-out waits (`auth.sign_in`). The change makes this test
+    this; it is the test that keeps a ticket from a session while a saved
+    sign-out waits (`auth.sign_in`). The change makes this test
     before its record goes in place and again after it. When the second
     test refuses, it removes its own record, by its exact bytes, and no
     other.
@@ -4663,31 +4671,43 @@ has a terminal.
   `/connect`. On a Windows host, for a browser that the owner's page would
   accept, that page gets one more card, the first one: "Sign in from a
   browser on another device", with **Set a password**. So the app has a way
-  to the page with no change of the web client. The texts of the sign-in
-  page and of the key command name this way (`browser_entry.SETTINGS_PATH`).
-  The two names are the web client's: when it renames them, that text must
-  change with it. No check connects the two.
+  to the page with no change of the web client. It is a long way. On a
+  rendered client (Chromium, client revision `409156e`, a synthetic host,
+  1280 and 390 pixels wide; the four Settings files that place the page
+  are the same in the bundled revision `d868461b`) "Install app" is no
+  section of Settings: it is in the section "Advanced", in the closed group
+  "Performance & runtime", whose text does not name it. Release 0.130.0 said 'Settings, then "Install
+  app"'. That was read from the client's source and never seen on a screen,
+  and the owner did not find it. The texts of the sign-in page and of the
+  key command now name the way as it was seen
+  (`browser_entry.SETTINGS_PATH`). The names are the web client's: when it
+  moves or renames them, that text must change with the selection of that
+  client. No check connects the two. A Settings entry of its own for the
+  page needs the web client.
 - **The page for another device.** While a password or a key is saved, the
-  page has the form **Password** first, with the focus; then one short line
-  and the code form, with **Sign in with code**. The password field is a
-  password field with `autocomplete="current-password"`. With nothing saved,
-  the page has the code form only, and one line that says where a password
-  is set. So the page says whether a password or a key is saved; a sender
-  sees the same from an attempt. All help follows the forms. The error text
-  is one of four fixed texts, chosen by the redirect (`?error=password`,
-  `?error=wait`, another value for a code); the text for a wait names the
-  time that is left, from the host's own state.
+  page has one form: the field **Password**, with the focus, and **Sign
+  in**. The field is a password field with
+  `autocomplete="current-password"`. With nothing saved, the page has no
+  form: one paragraph says that no password is set and where the owner sets
+  one. So the page says whether a password or a key is saved; a sender sees
+  the same from an attempt. The help follows the form. The page names no
+  command and has no link. The error text is one of three fixed texts,
+  chosen by the redirect (`?error=password`, `?error=wait`); the text for a
+  wait names the time that is left, from the host's own state. Another
+  value, as the code form of an earlier version made it, shows no text.
 - **The command line.** No command sets a password: a password on a command
   line stays in the history of the shell. `browsers key --remove` removes a
   password as it removes a key, and the texts of the key command and of the
   sign-out command name both.
 
 Limits: the limits of the key, and these. A person on the same network can
-keep the owner from signing in with the password, for as long as that person
-sends wrong passwords. The password is as good as the owner's choice; twelve
-characters and the wait are the floor, and there is no check against known
+keep the owner from signing in from another device, for as long as that
+person sends wrong passwords; no second way goes around the wait. The
+password is as good as the owner's choice; twelve characters and the wait
+are the floor, and there is no check against known
 passwords. Settings has no entry of its own for the page; the way goes
-through "Install app" and "Devices & apps". The page `/connect` and its
+through "Advanced", "Performance & runtime", "Install app" and "Devices &
+apps". The page `/connect` and its
 script were read with the default text encoding of the host, which showed
 four of their characters wrong on a Windows host; they are read as UTF-8
 now. A clock that was set back keeps its limit for sessions: a session
@@ -4753,8 +4773,7 @@ never name it or the Start menu. Their reader ran the command, or the launcher
 ran it and shows its own message. `open` prints the host's reason for a
 refused request; that reply came over the pinned connection from a host of the
 same package version. It prints one fixed sentence for a reply without a
-reason, for an unconfirmed reply, and when no host answered. The typed-code
-command keeps its texts and its own next step.
+reason, for an unconfirmed reply, and when no host answered.
 
 ### Background lifetime
 
