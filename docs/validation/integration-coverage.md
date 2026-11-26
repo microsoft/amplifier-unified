@@ -464,7 +464,9 @@ that process's recorded tool-entry time using the unchanged `0 <= lag < 1` secon
 budget, including polling delay. Later dirty writes or heartbeats may update
 `observedAt` and `sequence`; they cannot replace this first sample. The final
 independent consumer must still show both hosts' tools and plans, redacted
-content, and the CLI's ended state after exit. The native `result.json` retains
+content and the same CLI tool identity. A separate host-local read checks the
+CLI's ended state after exit. The tool-entry marker is read only after its CLI
+writer exits; this does not change the frozen first observation. The native `result.json` retains
 bounded numeric timing/sequence and fixed phase facts on handled failure as well
 as success; failure omits raw consumer rows, preparation details and exception
 text. Forced termination can prevent finalization, so a missing receipt is not

@@ -568,6 +568,24 @@ def test_native_first_observation_cannot_resample_a_failed_first_read(native_pro
         native_probe.check_cli_tool_latency({'firstCliTool': same, 'toolEntryAt': 100.1})
 
 
+def test_native_first_observation_marker_read_waits_for_cli_exit(tmp_path, native_probe):
+    from types import SimpleNamespace
+    cli = SimpleNamespace(pid=123, returncode=None)
+    marker = tmp_path/'tool-started-123.json'
+    marker.write_text('{"at":')  # The real Path.write_text writer has not closed yet.
+    first = native_probe.cli_tool_sample([cli_tool_row()], cli.pid, 99., 100.2, 20.)
+    timing = {'firstCliTool': first, 'toolEntryAt': None}
+    with pytest.raises(AssertionError, match='still running'):
+        native_probe.record_cli_tool_entry(tmp_path, cli, timing)
+    assert timing['firstCliTool'] is first and timing['toolEntryAt'] is None
+    marker.write_text('{"at": 100.1}')
+    cli.returncode = 0
+    native_probe.record_cli_tool_entry(tmp_path, cli, timing)
+    assert timing['firstCliTool'] is first
+    assert first['receivedAt'] == 100.2
+    assert native_probe.check_cli_tool_latency(timing) == pytest.approx(.1)
+
+
 @pytest.mark.parametrize('change', [
     'pid', 'pid-type', 'host', 'name', 'call-id', 'stale', 'ended', 'status',
     'old-publication', 'old-tool', 'future-publication', 'nan-tool',

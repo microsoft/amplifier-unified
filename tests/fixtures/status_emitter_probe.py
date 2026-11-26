@@ -306,6 +306,15 @@ def check_cli_tool_latency(timing):
     return lag
 
 
+def record_cli_tool_entry(root, cli, timing):
+    """Read the non-atomic marker only after its owning process has exited."""
+    assert cli.returncode is not None, 'CLI tool entry writer is still running'
+    if timing['firstCliTool'] is not None:
+        entered = json.loads((root/('tool-started-'+str(cli.pid)+'.json')).read_text())['at']
+        assert type(entered) in (int, float) and math.isfinite(entered)
+        timing['toolEntryAt'] = entered
+
+
 async def main(args):
     inputs = read_cli_sources(args.cli_sources, args.cli_sources_sha256)
     root = args.root.resolve()
@@ -456,12 +465,6 @@ async def mount(coordinator,config=None):
                 timing['firstCliTool'] = cli_tool_sample(
                     rows, cli.pid, launched_at, received_at, received_monotonic,
                     timing['firstCliTool'])
-                if timing['firstCliTool'] is not None and timing['toolEntryAt'] is None:
-                    marker = root/('tool-started-'+str(cli.pid)+'.json')
-                    if marker.exists():
-                        entered = json.loads(marker.read_text())['at']
-                        assert type(entered) in (int, float) and math.isfinite(entered)
-                        timing['toolEntryAt'] = entered
                 if timing['firstCliTool'] is not None and not host_started:
                     phase('host_dispatch')
                     await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'PRIVATE host prompt'})
@@ -482,6 +485,7 @@ async def mount(coordinator,config=None):
                 await asyncio.sleep(.03)
             phase('cli_exit')
             await asyncio.wait_for(cli.wait(), 60)
+        record_cli_tool_entry(root, cli, timing)
         phase('consumer_assertions')
         assert cli.returncode == 0, (root/'cli.log').read_text()[-6000:]
         assert observed is not None, (root/'cli.log').read_text()[-6000:]
