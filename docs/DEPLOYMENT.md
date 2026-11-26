@@ -425,8 +425,9 @@ Amplifier, open the address of that window with `/connect/sign-in` after the
 port, for example `https://127.0.0.1:<port>/connect/sign-in`. If the window
 has no address bar, open the same browser and type the address there.
 
-Until a password is set, the sign-in page on another device has no field. It
-says that no password is set.
+When Amplifier finds that no password and no sign-in key is set, the sign-in
+page on another device has no field. It says that no password is set and
+where to set one.
 
 The password works at every address for other devices, as often as you need
 it. Amplifier must be running. It uses a new address only after the steps of
