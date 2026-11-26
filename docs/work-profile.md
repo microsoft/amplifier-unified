@@ -38,6 +38,15 @@ bundle rather than using the small standalone root.
 
 ## Run acceptance
 
+`scripts/work_profile/pyproject.toml` is a separate, non-packaged qualification
+project (`amplifier-work-acceptance`, `package = false`), not a source of ordinary
+installed host or worker defaults. Its `project.dependencies` may select exact
+tested revisions, with the resolved graph retained in its lock and qualification
+evidence. This does not exempt other Work manifest sections or scripts from the
+shipped-source checks. The portable Work bundle source and packaged host/worker
+defaults remain branch-tracking; changing a qualification pin does not update them.
+Revisit this boundary if the acceptance project becomes an installed runtime input.
+
 The commands below reproduce the committed Python resolution. Before a new
 current-main qualification, use the [latest-component resolution workflow](latest-component-qualification.md)
 for `scripts/work_profile` and retain its new lock and source evidence. This
