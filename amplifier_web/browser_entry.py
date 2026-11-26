@@ -851,7 +851,7 @@ _NOT_READ = ('<p id="password-help">Amplifier could not check now whether a pass
              "another device. Open this page again in a moment.</p>\n")
 # The host has no stores: it could not confirm its owner credential at its start (see initialize).
 _NO_SIGN_IN = ('<p id="password-help">This Amplifier cannot sign in a browser on another device now. '
-               "Start Amplifier again on the PC that runs it. Then open this page again.</p>\n")
+               "Stop Amplifier on the PC that runs it and start it again. Then open this page again.</p>\n")
 
 
 def _duration(seconds: int) -> str:
@@ -930,7 +930,8 @@ _SIGNED_OUT = ("<p>A sign-out of all browsers ended this sign-in. This change do
                "Open Amplifier again on the PC.</p>")
 _CHANGED = ("<p>Another change of the password or key came first, so this change was not made. "
             f'<a href="{PASSWORD_PATH}">Open this page again</a>.</p>')
-_NOT_NOW = "<p>This Amplifier cannot set a password for other devices now. Start Amplifier again on the PC.</p>"
+_NOT_NOW = ("<p>This Amplifier cannot set a password for other devices now. "
+            "Stop Amplifier on the PC and start it again.</p>")
 _UNCONFIRMED_SET = ("Amplifier could not confirm that the password is saved. A password or key that you had "
                     "before may no longer work. Set the password again.")
 _UNCONFIRMED_REMOVE = "Amplifier could not confirm the removal. Remove it again."
@@ -957,10 +958,15 @@ def _owner_csrf(request, session) -> str:
                     hashlib.sha256).hexdigest()
 
 
-def _owner_body(request, session, *, notice="", error=""):
+def _owner_body(request, session, saved, *, notice="", error=""):
+    """The owner's page for one look at the saved record: `saved` is that look (`SavedKey.state`).
+
+    The caller looks once for a response and gives the same answer to
+    everything on the page. Two looks can differ, and a page must not say
+    two things.
+    """
     import html
     app = request.app
-    saved = app["browser_key"].state(app)
     csrf = _owner_csrf(request, session)
     if saved == "password":
         state, title, button = "A password is set.", "Change the password", "Change password"
@@ -1038,11 +1044,14 @@ async def password_page(request):
     applied = getattr(request.app.get("sessions"), "hint", _UNSEEN)
     if session is None:
         return page(_NOT_HERE, 403)
+    def body(**texts):
+        # One look at the saved record for one response: the notice and the page say the same.
+        state = saved.state(request.app)
+        notice = {("set", "password"): "The password is set.",
+                  ("removed", "none"): "No password or key is set now."}.get((texts.pop("done", None), state), "")
+        return _owner_body(request, session, state, notice=notice, **texts)
     if request.method == "GET":
-        done = {("set", "password"): "The password is set.",
-                ("removed", "none"): "No password or key is set now."}.get(
-                    (request.query.get("done"), saved.state(request.app)), "")
-        return page(_owner_body(request, session, notice=done))
+        return page(body(done=request.query.get("done")))
     if not local_origin(request) or request.content_type != "application/x-www-form-urlencoded":
         return page(_NOT_HERE, 403)
     form = await request.clone(client_max_size=16384).post()
@@ -1066,13 +1075,13 @@ async def password_page(request):
         except ChangedMeanwhile:
             return page(_CHANGED, 409)
         except (OSError, ValueError):
-            return page(_owner_body(request, session, error=_UNCONFIRMED_REMOVE), 500)
+            return page(body(error=_UNCONFIRMED_REMOVE), 500)
         raise web.HTTPSeeOther(PASSWORD_PATH + "?done=removed", headers=headers)
     if action != "set" or set(form) != {"csrf", "action", "password", "confirm"}:
         return web.Response(text="This page expired. Open it again.", status=403, headers=headers)
     password = form["password"]
     if not isinstance(password, str) or password != form["confirm"]:
-        return page(_owner_body(request, session, error="The two passwords are not the same. Type them again."), 400)
+        return page(body(error="The two passwords are not the same. Type them again."), 400)
     try:
         await asyncio.to_thread(set_password, data_dir, password, owner)
     except OwnerSignedOut:
@@ -1080,11 +1089,11 @@ async def password_page(request):
     except ChangedMeanwhile:
         return page(_CHANGED, 409)
     except PasswordRefused as refused:
-        return page(_owner_body(request, session, error=str(refused)), 400)
+        return page(body(error=str(refused)), 400)
     except BrowserEntryUnavailable as unavailable:
-        return page(_owner_body(request, session, error=str(unavailable)), 409)
+        return page(body(error=str(unavailable)), 409)
     except (OSError, ValueError):
-        return page(_owner_body(request, session, error=_UNCONFIRMED_SET), 500)
+        return page(body(error=_UNCONFIRMED_SET), 500)
     raise web.HTTPSeeOther(PASSWORD_PATH + "?done=set", headers=headers)
 
 

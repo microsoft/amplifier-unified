@@ -1399,9 +1399,34 @@ def test_page_never_says_that_no_password_is_set_when_that_is_not_known(host, mo
     host["browser_key"] = None
     for path in ("/login", "/login?error=password"):
         body = remote(path)
-        assert ('<p id="password-help">This Amplifier cannot sign in a browser on another device now. Start Amplifier '
-                "again on the PC that runs it. Then open this page again.</p>") in body
+        assert ('<p id="password-help">This Amplifier cannot sign in a browser on another device now. Stop Amplifier '
+                "on the PC that runs it and start it again. Then open this page again.</p>") in body
         assert "<form" not in body and "No password is set" not in body and "Set a password" not in body
+
+
+@pytest.mark.parametrize("later", ["key", "password", "unknown"])
+def test_owner_page_looks_at_the_saved_record_once_for_one_response(host, monkeypatch, later):
+    """Two looks can differ: another process saves a record, or a look fails. A page must not say two things."""
+    looks = []
+
+    def state(self, app):
+        looks.append(1)
+        return "none" if len(looks) == 1 else later         # The record changes after the first look.
+    monkeypatch.setattr(entry.SavedKey, "state", state)
+    session = auth.new_session(SECRET)
+    text = owner_page(host, session=session, query="?done=removed")[0].text
+    assert len(looks) == 1
+    assert '<div id="notice" role="status">No password or key is set now.</div>' in text
+    assert "<p>No password is set.</p>" in text and "is set. A password replaces it" not in text
+    assert "A password is set." not in text and "could not check" not in text and "Remove" not in text
+    # A page with an error text has one look as well.
+    del looks[:]
+    page, _ = owner_page(host, method="POST", session=session, form=set_form(confirm="another text here"))
+    assert page.status == 400 and len(looks) == 1 and "<p>No password is set.</p>" in page.text
+    # The page for another device has one look too.
+    del looks[:]
+    remote = call(host, "/login?error=wait", method="GET", at=REMOTE, origin=None).text
+    assert len(looks) == 1 and "No password is set for sign-in from another device." in remote and "<form" not in remote
 
 
 def test_state_of_the_saved_record_is_one_of_four(host, monkeypatch):
@@ -1412,7 +1437,7 @@ def test_state_of_the_saved_record_is_one_of_four(host, monkeypatch):
     key = new_key(host)
     assert saved.state(host) == "key" and saved.current(host)[1] == "key"
     # A malformed record is no key: that is known.
-    auth._sign_in_key_path(home).write_bytes(b"not a record\n")
+    auth.write_sign_in_key(home, ("soon", "0" * 64))        # Through the private store, as on a Windows host.
     assert saved.state(host) == "none"
     # A record that a sign-out of all browsers ended is no key either.
     new_key(host)
@@ -2494,7 +2519,9 @@ def test_owner_page_on_a_host_that_is_not_a_windows_host_has_no_form(host, monke
     monkeypatch.setattr(entry, "is_windows", lambda: True)
     host["browser_key"] = None                              # A Windows host without its stores.
     page, _ = owner_page(host, session=session)
-    assert page.status == 503 and "<form" not in page.text and "cannot set a password for other devices now" in page.text
+    assert page.status == 503 and "<form" not in page.text
+    assert ("This Amplifier cannot set a password for other devices now. "
+            "Stop Amplifier on the PC and start it again.") in page.text
     assert "host account" not in page.text
     assert owner_page(host, method="POST", session=session, form=set_form())[0].status == 503
     assert auth.read_sign_in_key(home) is None
