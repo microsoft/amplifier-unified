@@ -949,10 +949,19 @@ def _session_here(request):
     return session
 
 
+def can_set_password(request) -> bool:
+    """This browser can use the owner's page: a Windows host with its stores, and a session of this computer.
+
+    One test for every place that offers the page: the card on "Devices & apps"
+    and the field that tells the web client to show its Settings entry
+    (`auth.with_history_scope`). The page itself checks again.
+    """
+    return is_windows() and request.app.get("browser_key") is not None and _session_here(request) is not None
+
+
 def password_card(request) -> str:
     """The card for the page "Devices & apps": only where the owner's page works."""
-    here = is_windows() and request.app.get("browser_key") is not None and _session_here(request) is not None
-    return PASSWORD_CARD if here else ""
+    return PASSWORD_CARD if can_set_password(request) else ""
 
 
 def _owner_csrf(request, session) -> str:

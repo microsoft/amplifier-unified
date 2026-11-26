@@ -85,7 +85,9 @@ async def boundaries(request, handler):
             from .device_pairing import companion_receipt
             payload['receipt'] = companion_receipt(exc.receipt) if request.get('companion_device') else exc.receipt
         if exc.code == 'session_busy' and not request.get('companion_device'):
-            payload['state'] = getattr(exc, 'client_state', None) or request.app['service'].browser_state()
+            # The web client takes this state as its own: it gets this browser's facts, as every other state does.
+            payload['state'] = with_history_scope(
+                request, getattr(exc, 'client_state', None) or request.app['service'].browser_state())
         return _set_response_headers(web.json_response(payload, status=exc.status), request)
     except (json.JSONDecodeError, ValueError, KeyError) as exc:
         return _set_response_headers(web.json_response({"error": "Invalid request: " + str(exc), "accepted": False}, status=400), request)

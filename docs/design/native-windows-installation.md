@@ -4687,6 +4687,18 @@ has a terminal.
   moves or renames them, that text must change with the selection of that
   client. No check connects the two. A Settings entry of its own for the
   page needs the web client.
+- **The field for a Settings entry.** The host tells a web client where the
+  owner's page works. `state.client.passwordSignIn` is `true` in the state
+  that a request sends to a browser that passes the test of the card
+  (`browser_entry.can_set_password`): a Windows host with its stores, and a
+  session of this computer at an address of this computer. For every other
+  browser the field is absent. It is a fact of one request, as
+  `historyScope` is (`auth.with_history_scope`): it is never saved and never
+  in the state of another browser. The state stream, `GET /api/state`, the
+  attach answer and the state of a `session_busy` answer carry it; an action
+  answer for the web client carries no state. The owner's page checks the
+  browser again, so a wrong field shows an entry and opens nothing. The
+  bundled web client of this revision does not read the field yet.
 - **The page for another device.** While a password or a key is saved, the
   page has one form: the field **Password**, with the focus, and **Sign
   in**. The field is a password field with

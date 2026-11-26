@@ -130,11 +130,22 @@ def history_scope(secret: str, credential: str, data_dir: Path) -> str:
 
 
 def with_history_scope(request: web.Request, snapshot: dict) -> dict:
-    """Decorate this request's browser response, never shared/persisted state."""
-    scope = request.get("history_scope")
-    if scope and snapshot.get("client", {}).get("kind") == "web":
-        return {**snapshot, "client": {**snapshot["client"], "historyScope": scope}}
-    return snapshot
+    """Decorate this request's browser response, never shared/persisted state.
+
+    `historyScope` is the sign-in scope of this browser. `passwordSignIn` is
+    there, and true, only for a browser that can set the password for other
+    devices on a Windows host (`browser_entry.can_set_password`); a web client
+    that knows the field shows its Settings entry for the password page. Both
+    are facts of one request: another browser of the same host gets its own.
+    """
+    if snapshot.get("client", {}).get("kind") != "web":
+        return snapshot
+    facts = {}
+    if request.get("history_scope"):
+        facts["historyScope"] = request["history_scope"]
+    if request.get("password_sign_in") is True:
+        facts["passwordSignIn"] = True
+    return {**snapshot, "client": {**snapshot["client"], **facts}} if facts else snapshot
 
 
 def validate_next_path(value: str | None) -> str:
@@ -648,6 +659,8 @@ async def auth_required(request: web.Request, handler):
         scope = history_scope(request.app["session_secret"], credential,
                               request.app["service"].data_dir)
         request["history_scope"] = scope
+        # For the state that this request sends to its browser (see with_history_scope).
+        request["password_sign_in"] = browser_entry.can_set_password(request)
         response = await handler(request)
         if not response.prepared:
             response.headers["X-Amplifier-History-Scope"] = scope
