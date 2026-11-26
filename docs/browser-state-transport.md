@@ -358,6 +358,16 @@ starts with a complete snapshot; a mismatched baseline starts a fresh stream.
 If an action's state does not arrive, waiting actions share one recovery fetch
 after 1.5 seconds. This does not introduce a polling loop.
 
+A browser can also request `reuse=message-page` on its delta stream. Across a
+selection change it retains the single ready selected page it just left. If the
+same session, window key, source revision and exact projected messages return,
+the host may omit `messages` from the replacement session and supply
+`reuseMessages: {sessionId, windowKey, revision, fromRevision}`. The last
+field identifies the departing stream snapshot. The client restores only those
+rows and takes all current cursor, conversation and interaction fields from
+the new frame. A missing retained page requires a fresh snapshot. Neither side
+carries the departed-page proof across connections.
+
 The stream has its own baseline: an independently fetched HTTP snapshot may be
 ahead of it. Full snapshots remain the default for older clients and agent
 callers. Historical retired usage records remain in authoritative storage;
