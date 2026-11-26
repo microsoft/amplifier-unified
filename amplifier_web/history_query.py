@@ -5,7 +5,7 @@ Native history is discovered on demand; app rows are rebuildable projections.
 """
 import asyncio
 import copy
-from collections import Counter
+from collections import Counter, defaultdict
 
 from jsonschema import validate
 from .owned_history import includes, selected as selected_scope, require, metadata
@@ -30,6 +30,46 @@ SCHEMA = {"type": "object", "properties": {
 }, "required": ["action"], "additionalProperties": False}
 
 
+def _terminal_aliases(session, native, current):
+    """Join a single final block only at its exact persisted checkpoint and event sequence."""
+    from .message_interactions import matches_native_terminal
+    by_receipt = defaultdict(list)
+    for row in current:
+        receipt = row.get("runtimeMessage")
+        seq = receipt.get("sequence") if isinstance(receipt, dict) else None
+        if row.get("role") == "assistant" and type(seq) is int and isinstance(row.get("generationId"), str):
+            by_receipt[(row["generationId"], seq)].append(row)
+    events_by_native = defaultdict(list)
+    for event in session.get("_historyFinals", ()):
+        message_id = event["nativeTerminal"].get("messageId")
+        if isinstance(message_id, str):
+            events_by_native[message_id].append(event)
+    aliases = {}
+    for saved in native:
+        events = events_by_native.get(saved.get("id"), ())
+        if saved.get("role") != "assistant" or len(events) != 1:
+            continue
+        event = events[0]
+        refs, gen = event["finalMessageRefs"], event.get("generation_id")
+        sequences = refs.get("sequences")
+        if (refs.get("version") != 1
+                or not isinstance(gen, str) or refs.get("generationId") != gen or not isinstance(sequences, list)
+                or len(sequences) != 1 or type(sequences[0]) is not int):
+            continue
+        matches = by_receipt.get((gen, sequences[0]), [])
+        if len(matches) != 1 or not matches_native_terminal(session, event, saved):
+            continue
+        row = matches[0]
+        inputs = event.get("input_ids")
+        if (isinstance(inputs, list) and row.get("inputId") and row["inputId"] in inputs
+                and row.get("text") == saved["text"]
+                and row.get("nativeIndex") in (None, saved["nativeIndex"])
+                and row.get("nativeMessageId") in (None, saved["id"])):
+            aliases[saved["id"]] = row
+    claims = Counter(row["id"] for row in aliases.values())
+    return {key: row for key, row in aliases.items() if claims[row["id"]] == 1}
+
+
 def _rows(session):
     if session.get("nativeProject"):
         from .automatic_history import read_transcript, directory
@@ -45,6 +85,9 @@ def _rows(session):
             current, native = align_voice_inputs(session, result["messages"])
             current = align_expanded_inputs(current, native)
             rows = alias_input_originals({**session, "messages": current}, native)
+            if session.get("_historyFinals"):
+                aliases = _terminal_aliases(session, rows, current)
+                rows = [aliases.get(row["id"], row) for row in rows]
             # Exact input bindings retain public originals, including attachment
             # descriptors, instead of returning expanded model-facing inputs.
             # Unbound originals remain distinct, including ambiguous IDs.
@@ -91,8 +134,20 @@ def _read_snapshot(session):
               'workspace', 'title', 'description', 'status', 'parentId',
               'nativeParentId', 'sessionKind', 'sessionPurpose', 'messages',
               'historyManaged', 'createdAt', 'updatedAt', 'recentActivityAt')
-    return copy.deepcopy({key: value for key in fields
-                          if (value := session.get(key, missing)) is not missing})
+    snapshot = {key: value for key in fields
+                if (value := session.get(key, missing)) is not missing}
+    if snapshot.get("nativeProject") and snapshot.get("messages") and not snapshot.get("historyManaged"):
+        # Only terminal receipts from the existing bounded generation window.
+        keys = ("event", "sessionId", "rootSessionId", "generation_id", "input_ids",
+                "text", "nativeTerminal", "finalMessageRefs")
+        finals = [{k: event[k] for k in keys if k in event}
+                  for event in session.get("generations", ())
+                  if isinstance(event, dict) and event.get("event") == "generation.finished"
+                  and isinstance(event.get("nativeTerminal"), dict)
+                  and isinstance(event.get("finalMessageRefs"), dict)]
+        if finals:
+            snapshot["_historyFinals"] = finals
+    return copy.deepcopy(snapshot)
 
 
 async def query_history(service, args, caller_id):

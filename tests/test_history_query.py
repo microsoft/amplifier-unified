@@ -314,3 +314,39 @@ async def test_history_snapshot_fallback_order_alias_and_ambiguity(monkeypatch):
             patch.setattr(history, '_read_snapshot', snapshot)
             with pytest.raises(ValueError, match='more than one project'):
                 await history.query_history(service, {'action': 'read', 'session_id': 'ambiguous'}, 'a')
+
+
+def test_terminal_receipts_join_only_their_saved_assistant_occurrence(tmp_path, monkeypatch):
+    from amplifier_operations.coordination import fingerprint
+    from amplifier_web import history_query as history
+
+    native = []
+    visible = []
+    generations = []
+    for index in range(2):
+        gen, inp = f'gen-{index}', f'input-{index}'
+        saved = dict(id=f'native-{index}', nativeIndex=index, role='assistant', text='Done')
+        reply = dict(id=f'live-{index}', role='assistant', text='Done', inputId=inp,
+                     generationId=gen, runtimeMessage={'sequence': 7})
+        native.append(saved)
+        visible.append(reply)
+        generations.append(dict(event='generation.finished', sessionId='s', rootSessionId='s',
+            generation_id=gen, input_ids=[inp], text='Done',
+            nativeTerminal=dict(messageId=saved['id'], nativeIndex=index, nativeText='Done',
+                rootSessionId='s', generationId=gen, textDigest=fingerprint('Done')),
+            finalMessageRefs=dict(version=1, generationId=gen, sequences=[7])))
+    pending = dict(visible[-1], id='pending', runtimeMessage={'sequence': 12})
+    session = dict(id='s', nativeProject='p', messages=[*visible, pending], generations=generations)
+    monkeypatch.setattr('amplifier_web.automatic_history.directory', lambda row: tmp_path)
+    monkeypatch.setattr('amplifier_web.automatic_history.read_transcript', lambda *a, **kw:
+                        dict(messages=native, revision='r'))
+
+    def ids():
+        rows, _ = history._rows(history._read_snapshot(session))
+        return [row['id'] for row in rows]
+
+    assert ids() == ['live-0', 'live-1', 'pending']
+    # An unrelated or multiblock receipt cannot consume a same-text message.
+    generations[0]['nativeTerminal']['rootSessionId'] = 'other'
+    generations[1]['finalMessageRefs']['sequences'].append(12)
+    assert ids() == ['native-0', 'native-1', 'live-0', 'live-1', 'pending']
