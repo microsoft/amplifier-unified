@@ -42,24 +42,29 @@ def message(session, identity):
     return row
 
 
+def matches_native_terminal(session, event, native):
+    """Verify a generation's exact saved checkpoint anchor against this native row."""
+    from amplifier_operations.coordination import fingerprint
+    native_id = session.get("runtimeSessionId") or session.get("nativeIdentity") or session["id"]
+    return (event.get("event") == "generation.finished"
+        and event.get("sessionId") == session["id"] and event.get("rootSessionId") == session["id"]
+        and (event.get("nativeTerminal") or {}).get("messageId") == native["id"]
+        and event["nativeTerminal"].get("nativeIndex") == native["nativeIndex"]
+        and event["nativeTerminal"].get("nativeText") == native["text"]
+        and event["nativeTerminal"].get("rootSessionId") == native_id
+        and event["nativeTerminal"].get("generationId") == event.get("generation_id")
+        and event["nativeTerminal"].get("textDigest") == fingerprint(event.get("text", "")))
+
+
 def reconcile_native_reveal(session, native):
     """Attach a canonical alias only to an exact index or observed generation."""
     from .errors import AppError
-    from amplifier_operations.coordination import fingerprint
     indexed = [row for row in session["messages"] if row.get("nativeIndex") == native["nativeIndex"]]
     if indexed:
         candidates = indexed
     else:
-        native_id = session.get("runtimeSessionId") or session.get("nativeIdentity") or session["id"]
         terminal = next((event for event in reversed(session.get("generations", []))
-            if event.get("event") == "generation.finished"
-            and event.get("sessionId") == session["id"] and event.get("rootSessionId") == session["id"]
-            and (event.get("nativeTerminal") or {}).get("messageId") == native["id"]
-            and event["nativeTerminal"].get("nativeIndex") == native["nativeIndex"]
-            and event["nativeTerminal"].get("nativeText") == native["text"]
-            and event["nativeTerminal"].get("rootSessionId") == native_id
-            and event["nativeTerminal"].get("generationId") == event.get("generation_id")
-            and event["nativeTerminal"].get("textDigest") == fingerprint(event.get("text", ""))), None)
+                         if matches_native_terminal(session, event, native)), None)
         candidates = [row for row in session["messages"] if terminal
             and row.get("nativeIndex") is None and row.get("role") == "assistant"
             and row.get("generationId") == terminal["generation_id"]
