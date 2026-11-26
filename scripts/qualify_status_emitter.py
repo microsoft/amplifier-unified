@@ -9,9 +9,10 @@ from __future__ import annotations
 import argparse
 import email
 import hashlib
+import importlib.util
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
 import signal
 import socket
@@ -47,6 +48,37 @@ def published_core(identity):
                and row['packagetype'] == 'bdist_wheel' for row in metadata['urls']):
         raise ValueError('Core wheel does not match a published registry wheel')
     return {'url': url, 'wheel': identity}
+
+
+def wheel_package_prefixes(project):
+    """Map the supported literal Hatch package roots to installed prefixes."""
+    build = project['tool']['hatch']['build']
+    wheel = build['targets']['wheel']
+    # As in qualify_default_installed.verify_candidate_wheel, do not silently
+    # approximate Hatch's configurable source rewriting or selection language.
+    if any({'sources', 'only-include', 'include'} & config.keys() for config in (build, wheel)):
+        raise ValueError('Review unsupported wheel source selection')
+    packages = wheel.get('packages', build.get('packages'))
+    if not isinstance(packages, list) or not packages:
+        raise ValueError('Expected explicit wheel packages')
+    paths = []
+    for package in packages:
+        if (not isinstance(package, str) or not package
+                or any(char in package for char in '*?[]!\\')
+                or PurePosixPath(package).is_absolute()
+                or '..' in PurePosixPath(package).parts
+                or PurePosixPath(package).as_posix() != package or package == '.'):
+            raise ValueError('Review unsupported wheel package path: ' + repr(package))
+        paths.append(PurePosixPath(package))
+    # Hatch generates a source rewrite for each package's parent. Overlapping
+    # parents or a rewrite inside another package need more than basename mapping.
+    parents = {path.parent for path in paths if path.parent != PurePosixPath('.')}
+    if (any(a != b and a.is_relative_to(b) for a in parents for b in parents)
+            or any(parent.is_relative_to(path) for parent in parents for path in paths)):
+        raise ValueError('Review unsupported overlapping wheel package roots')
+    if len({path.name for path in paths}) != len(paths):
+        raise ValueError('Ambiguous wheel package destination')
+    return {package: path.name for package, path in zip(packages, paths)}
 
 
 def matching_source(wheel, prefix, source, force_include=None):
@@ -130,6 +162,20 @@ print(json.dumps({'python':sys.version,'prefix':sys.prefix,'imports':imports,
 '''
 
 
+def run_owned(command, *, cwd, env, log, timeout):
+    """Own one process group through success, failure, timeout or cancellation."""
+    process = subprocess.Popen(command, cwd=cwd, env=env, stdout=log,
+                               stderr=subprocess.STDOUT, start_new_session=True)
+    try:
+        return process.wait(timeout=timeout)
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--owned-dtu', required=True)
@@ -141,6 +187,8 @@ def main(argv=None):
     parser.add_argument('--work', type=Path, required=True, help='New disposable directory outside source')
     parser.add_argument('--uv', default='uv')
     parser.add_argument('--source-revision')
+    parser.add_argument('--cli-sources', type=Path, required=True, help='Reviewed exact public CLI source-store inputs')
+    parser.add_argument('--cli-sources-sha256', required=True)
     args = parser.parse_args(argv)
     if socket.gethostname() != args.owned_dtu:
         raise ValueError('Run inside the explicitly named owned DTU')
@@ -149,6 +197,16 @@ def main(argv=None):
     work = args.work.resolve()
     if work == ROOT or ROOT in work.parents or work in ROOT.parents:
         raise ValueError('Work must be separate from source')
+    # The fixture's input validator imports only the standard library. Reject
+    # missing/mismatched inputs before publication lookup or environment effects.
+    spec = importlib.util.spec_from_file_location(
+        'status_emitter_probe', Path(__file__).resolve().parents[1]/'tests/fixtures/status_emitter_probe.py')
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+    inputs = probe.read_cli_sources(args.cli_sources, args.cli_sources_sha256)
+    store = Path(inputs['store'])
+    if work == store or work.is_relative_to(store) or store.is_relative_to(work):
+        raise ValueError('Work and prepared source store must be separate')
     work.mkdir(parents=True, exist_ok=False)
     env = {key: value for key, value in os.environ.items()
            if key in {'PATH', 'LANG', 'SSL_CERT_FILE', 'SSL_CERT_DIR'}}
@@ -163,14 +221,7 @@ def main(argv=None):
         entry = {'name': name, 'argv': list(map(str, command)), 'exitCode': None}
         receipt['commands'].append(entry)
         with (work/(name+'.log')).open('w') as log:
-            process = subprocess.Popen(entry['argv'], cwd=work, env=env, stdout=log,
-                                       stderr=subprocess.STDOUT, start_new_session=True)
-            try:
-                entry['exitCode'] = process.wait(timeout=timeout)
-            except BaseException:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
-                raise
+            entry['exitCode'] = run_owned(entry['argv'], cwd=work, env=env, log=log, timeout=timeout)
         if entry['exitCode']:
             raise ValueError(name+' failed; inspect '+str(work/(name+'.log')))
 
@@ -181,11 +232,13 @@ def main(argv=None):
             ('amplifier-status-emitter', args.status_wheel), ('amplifier-core', args.core_wheel))}
         receipt['wheels'] = wheels
         project = tomllib.loads((ROOT/'pyproject.toml').read_text())
+        packages = wheel_package_prefixes(project)
+        receipt['wheelPackagePrefixes'] = packages
         force_include = {target: ROOT/original for original, target in
                          project['tool']['hatch']['build']['targets']['wheel']['force-include'].items()}
         receipt['wheelSourceFiles'] = {
-            'unified': {package: matching_source(wheels['amplifier-unified']['path'], package, ROOT/package, force_include)
-                        for package in project['tool']['hatch']['build']['targets']['wheel']['packages']},
+            'unified': {package: matching_source(wheels['amplifier-unified']['path'], prefix, ROOT/package, force_include)
+                        for package, prefix in packages.items()},
             'status': matching_source(wheels['amplifier-status-emitter']['path'], 'amplifier_status', ROOT/'amplifier_web/status_protocol')}
         minimum = next(item.removeprefix('amplifier-core>=') for item in
                        project['project']['dependencies']
@@ -205,7 +258,10 @@ def main(argv=None):
             if kind == 'package': selected.append(wheels['amplifier-unified']['path'])
             run(kind+'-install', [args.uv, 'pip', 'install', '--python', str(python), '--no-deps', *selected])
         env.update(CLI_PYTHON=args.cli_python, CONSUMER_PYTHON=str(work/'consumer-env/bin/python'))
-        run('native', [args.python, '-I', str(ROOT/'tests/fixtures/status_emitter_probe.py'), str(work/'native')], timeout=240)
+        native = [args.python, '-I', str(ROOT/'tests/fixtures/status_emitter_probe.py'), str(work/'native')]
+        native += ['--cli-sources', str(args.cli_sources.resolve()),
+                   '--cli-sources-sha256', args.cli_sources_sha256]
+        run('native', native, timeout=240)
         receipt['native'] = json.loads((work/'native/result.json').read_text())
         if receipt['native'].get('passed') is not True:
             raise ValueError('Native probe did not establish success')

@@ -3,21 +3,274 @@
 Run inside an owned DTU with CLI_PYTHON and CONSUMER_PYTHON pointing at separate
 owned environments. CLI uses installed Core/Foundation/loop-live/context-simple;
 only the provider and two local tools are scripted. No network/model calls.
+
+--cli-sources names a reviewed JSON input (schemaVersion: 1, store: absolute
+shared-store path, sources: [{url, ref, commit}]). Its explicit SHA-256 binds the
+selection. Prepare complete public objects and installed module dependencies
+normally, outside this probe. The probe only verifies objects and creates normal
+Foundation ref bindings in its NEW private home; it never acquires source inputs.
 """
+import argparse
 import asyncio
+import hashlib
 import json
+import logging
 import os
 from pathlib import Path
+import re
 import sys
 import time
+from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
 
 
-async def main():
-    root = Path(sys.argv[1]); root.mkdir(parents=True)
+DEFAULT_REPOSITORIES = {
+    'amplifier-bundle-imagegen', 'amplifier-bundle-modes',
+    'amplifier-bundle-skills', 'amplifier-bundle-routing-matrix',
+    'amplifier-bundle-wayfinder', 'amplifier-module-hooks-approval',
+}
+DEFAULT_CONTEXT = {
+    'imagegen': ['context/imagegen.md'],
+    'modes': ['context/modes-instructions.md'],
+    'skills': ['context/skills-instructions.md'],
+    'routing-matrix': ['context/routing-instructions.md'],
+    'wayfinder': ['context/wayfinder-voice.md', 'context/propose-and-ack.md'],
+    'app-cli': ['context/cli-awareness.md'],
+}
+DEFAULT_MODULES = {
+    'tool-image', 'tool-mode', 'hooks-mode', 'tool-skills',
+    'hooks-routing', 'hooks-wayfinder', 'hooks-approval',
+}
+
+
+def read_cli_sources(path, expected_sha256):
+    data = Path(path).read_bytes()
+    if not re.fullmatch(r'[a-f0-9]{64}', expected_sha256 or '') or hashlib.sha256(data).hexdigest() != expected_sha256:
+        raise ValueError('CLI source input digest differs')
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('Ambiguous CLI source input key: '+key)
+            result[key] = value
+        return result
+    value = json.loads(data, object_pairs_hook=unique)
+    if (not isinstance(value, dict) or set(value) != {'schemaVersion', 'store', 'sources'}
+            or type(value['schemaVersion']) is not int or value['schemaVersion'] != 1):
+        raise ValueError('Expected explicit CLI source input schemaVersion 1')
+    if not isinstance(value['store'], str):
+        raise ValueError('CLI source store must be an existing canonical directory')
+    store = Path(value['store'])
+    if not store.is_absolute() or store != store.resolve(strict=True) or not store.is_dir():
+        raise ValueError('CLI source store must be an existing canonical directory')
+    sources = value['sources']
+    if not isinstance(sources, list) or not sources:
+        raise ValueError('CLI source bindings are missing')
+    identities = set()
+    for row in sources:
+        if (not isinstance(row, dict) or set(row) != {'url', 'ref', 'commit'}
+                or not isinstance(row['url'], str)
+                or not re.fullmatch(r'https://github.com/microsoft/[A-Za-z0-9_-]+', row['url'])
+                or not isinstance(row['ref'], str) or not re.fullmatch(r'[A-Za-z0-9_./-]+', row['ref'])
+                or not isinstance(row['commit'], str) or not re.fullmatch(r'[a-f0-9]{40}', row['commit'])):
+            raise ValueError('Invalid exact public CLI source binding')
+        identity = (row['url'], row['ref'])
+        if identity in identities:
+            raise ValueError('Ambiguous CLI source binding')
+        identities.add(identity)
+    # Foundation's parser supplies main for an omitted Git ref (Approval).
+    required = {('https://github.com/microsoft/'+name, 'main') for name in DEFAULT_REPOSITORIES}
+    if not required <= identities:
+        raise ValueError('CLI default source bindings are incomplete')
+    return value
+
+
+def cli_environment(root, store):
+    env = {key: os.environ[key] for key in ('PATH', 'LANG', 'SSL_CERT_FILE') if key in os.environ}
+    env.update(HOME=str(root/'cli-base-home'), AMPLIFIER_HOME=str(root/'cli-home'),
+               AMPLIFIER_STATUS_DIR=str(root/'status'),
+               AMPLIFIER_SESSION_STATE_HOME=str(root/'cli-ownership'),
+               AMPLIFIER_SOURCE_STORE=store, PYTHONDONTWRITEBYTECODE='1',
+               UV_OFFLINE='true', UV_CACHE_DIR=str(root/'cli-uv-cache'),
+               GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
+               GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='protocol.allow',
+               GIT_CONFIG_VALUE_0='never', GIT_TERMINAL_PROMPT='0')
+    return env
+
+
+async def bind_cli_sources(store, sources, cache):
+    # Verify ALL objects before bind(), whose missing-object path may acquire.
+    objects = {(row['url'], row['ref']): store.verify(row['url'], row['commit']) for row in sources}
+    for row in sources:
+        await store.bind(cache, row['url'], row['ref'], row['commit'])
+    return objects
+
+
+async def run_cli_preparation(command, *, cwd, env, log, timeout=60):
+    process = await asyncio.create_subprocess_exec(
+        *command, cwd=cwd, env=env, stdout=log, stderr=log)
+    try:
+        return await asyncio.wait_for(process.wait(), timeout)
+    finally:
+        # Keep descendants in the native runner's group. A detached helper
+        # would escape its outer cancellation. The qualifier/owned native-only
+        # runner settles the whole group, also on a failed native exit.
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+
+
+def local_cli_source(parsed, base_path, contained):
+    """Preserve the file handler's container root, not the admission boundary."""
+    path = Path(unquote(parsed.path)).expanduser()
+    path = path if path.is_absolute() else base_path/path
+    origin, _ = contained(path)
+    active, _ = contained(origin/parsed.subpath if parsed.subpath else origin)
+    return active, origin if origin.is_dir() else origin.parent
+
+
+async def prepare_cli(root, inputs, digest):
+    """Installed CLI process: bind/inspect sources, never create a session."""
+    expected_env = cli_environment(root, inputs['store'])
+    if any(os.environ.get(key) != value for key, value in expected_env.items()):
+        raise ValueError('CLI preparation requires the isolated fixture environment')
+    if Path.cwd() != root/'workspace' or (root/'cli-home/cache').exists():
+        raise ValueError('CLI preparation requires a fresh fixture home and workspace')
+    if json.loads((root/'cli-home/settings.yaml').read_text()) != {'bundle': {'app': []}}:
+        raise ValueError('CLI fixture settings changed before preparation')
+    import amplifier_app_cli
+    import amplifier_status
+    from amplifier_app_cli.lib.settings import AppSettings
+    from amplifier_app_cli.runtime.config import resolve_bundle_config
+    from amplifier_foundation.modules.install_policy import dependency_installation_policy
+    from amplifier_foundation.paths.resolution import ResolvedSource, parse_uri
+    from amplifier_foundation.sources.policy import SourceResolutionDenied, source_resolution_policy
+    from amplifier_foundation.sources.shared import SharedSourceStore
+
+    store = SharedSourceStore(inputs['store'])
+    cache = root/'cli-home/cache'
+    objects = await bind_cli_sources(store, inputs['sources'], cache)
+    cli_package = Path(amplifier_app_cli.__file__).resolve().parent
+    status_package = Path(amplifier_status.__file__).resolve().parent
+    local_roots = [root, status_package, cli_package]
+    allowed = [*objects.values(), *local_roots]
+    denied, warnings, seen = [], [], set()
+
+    def contained(path):
+        path = Path(path).resolve(strict=True)
+        matches = [base for base in allowed if path == base or path.is_relative_to(base)]
+        if not matches:
+            raise ValueError('CLI resource is outside prepared inputs: '+str(path))
+        return path, max(matches, key=lambda base: len(base.parts))
+
+    def admit(uri, *, base_path):
+        try:
+            parsed = parse_uri(uri)
+            if parsed.is_git:
+                if not uri.startswith('git+https://'):
+                    raise ValueError('Unsupported public CLI transport: '+uri)
+                key = ('https://'+parsed.host+parsed.path, parsed.ref or 'HEAD')
+                if key not in objects:
+                    raise ValueError('Unbound CLI source: '+uri)
+                origin = store.cached(uri, cache)
+                if origin != objects[key]:
+                    raise ValueError('CLI source binding changed: '+uri)
+                active, _ = contained(origin/parsed.subpath if parsed.subpath else origin)
+                if not active.is_relative_to(origin):
+                    raise ValueError('CLI source subpath escapes its object')
+            elif parsed.is_file:
+                active, origin = local_cli_source(parsed, base_path, contained)
+            else:
+                raise ValueError('Unsupported prepared CLI source: '+uri)
+            seen.add(uri)
+            return ResolvedSource(active_path=active, source_root=origin)
+        except Exception as error:
+            denied.append(str(error))
+            raise SourceResolutionDenied(str(error)) from error
+
+    class Capture(logging.Handler):
+        def emit(self, record):
+            if record.levelno >= logging.WARNING:
+                warnings.append(record.getMessage())
+
+    capture = Capture()
+    loggers = [logging.getLogger(name) for name in ('amplifier_app_cli', 'amplifier_foundation')]
+    for logger in loggers:
+        logger.addHandler(capture)
+    try:
+        with source_resolution_policy(admit), dependency_installation_policy(False):
+            config, prepared = await resolve_bundle_config((root/'bundle.yaml').as_uri(), AppSettings())
+    finally:
+        for logger in loggers:
+            logger.removeHandler(capture)
+    if denied or warnings:
+        raise ValueError('Incomplete CLI preparation: '+repr(denied+warnings))
+    modules = {item['module'] for section in ('tools', 'hooks') for item in config.get(section, [])}
+    if not DEFAULT_MODULES <= modules:
+        raise ValueError('CLI defaults were not completely composed')
+    namespaces = prepared.bundle.source_base_paths
+    if not DEFAULT_CONTEXT.keys() <= namespaces.keys():
+        raise ValueError('CLI default resource namespaces are incomplete')
+    prepared.bundle.resolve_pending_context()
+    context_paths = {Path(path).resolve(strict=True) for path in prepared.bundle.context.values()}
+    expected_context = {contained(namespaces[name]/relative)[0]
+                        for name, relatives in DEFAULT_CONTEXT.items() for relative in relatives}
+    if not expected_context <= context_paths:
+        raise ValueError('CLI default context was omitted')
+    for path in prepared.bundle.context.values():
+        active, _ = contained(path)
+        if not active.is_file():
+            raise ValueError('CLI context file is missing')
+    for name in prepared.bundle.agents:
+        path = prepared.bundle.resolve_agent_path(name)
+        if path is None or not contained(path)[0].is_file():
+            raise ValueError('CLI agent resource is missing: '+name)
+    skills = next(item for item in config['tools'] if item['module'] == 'tool-skills')['config']['skills']
+    curated = 'git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=skills'
+    if not {curated, '@imagegen:skills', '@routing-matrix:skills', '@wayfinder:skills',
+            str(cli_package/'data/skills')} <= set(skills):
+        raise ValueError('CLI default skills were omitted')
+    if not (cli_package/'data/skills').is_dir():
+        raise ValueError('CLI packaged skills are missing')
+    for source in skills:
+        if source.startswith('git+'):
+            parsed = parse_uri(source)
+            origin = store.cached(source, cache/'skills')
+            if origin != objects.get(('https://'+parsed.host+parsed.path, parsed.ref or 'HEAD')):
+                raise ValueError('Curated skills binding is unavailable')
+            if not contained(origin/parsed.subpath)[0].is_dir():
+                raise ValueError('Curated skills directory is missing')
+        elif source.startswith('@'):
+            namespace, relative = source[1:].split(':', 1)
+            if namespace not in namespaces or not contained(namespaces[namespace]/relative)[0].is_dir():
+                raise ValueError('Namespaced skills directory is missing')
+    # Wayfinder reads content beside its source module, not from wheel metadata.
+    if not contained(namespaces['wayfinder']/'content')[0].is_dir():
+        raise ValueError('Wayfinder content is missing')
+    rows = [{'module': module, 'source': hint, 'path': str(path)}
+            for module, hint, path in prepared.resolver.prepared_sources()]
+    for row in rows:
+        contained(row['path'])
+    proof = {'inputSha256': digest, 'sources': inputs['sources'], 'sourceRequests': sorted(seen),
+             'modules': rows, 'namespaces': {key: str(value) for key, value in namespaces.items()},
+             'contextFiles': sorted(map(str, context_paths)), 'skills': skills,
+             'warnings': warnings, 'denied': denied, 'sessionsStarted': 0}
+    (root/'cli-prepared.json').write_text(json.dumps(proof, indent=2)+'\n')
+
+
+async def main(args):
+    inputs = read_cli_sources(args.cli_sources, args.cli_sources_sha256)
+    root = args.root.resolve()
+    store = Path(inputs['store'])
+    if root == store or root.is_relative_to(store) or store.is_relative_to(root):
+        raise ValueError('Native work and prepared source store must be separate')
+    root.mkdir(parents=True)
     workspace = root/'workspace'; workspace.mkdir()
+    env = cli_environment(root, inputs['store'])
+    Path(env['AMPLIFIER_HOME']).mkdir()
+    Path(env['AMPLIFIER_HOME'], 'settings.yaml').write_text(json.dumps({'bundle': {'app': []}}))
+    sys.path.insert(0, str(ROOT))
     registry = root/'status'
     os.environ.update(AMPLIFIER_STATUS_DIR=str(registry), AMPLIFIER_HOME=str(root/'shared'),
                       AMPLIFIER_WEB_HOME=str(root/'app'), AMPLIFIER_SESSION_STATE_HOME=str(root/'ownership'))
@@ -74,6 +327,16 @@ async def mount(coordinator,config=None):
         'providers': [{'module': 'provider-statusfixture', 'source': str(provider.parent)}],
         'tools': [{'module': 'tool-statusfixture', 'source': str(tools.parent)}],
         'hooks': [{'module': 'hooks-status-emitter', 'source': installed_path.decode().strip(), 'config': {'directory': str(registry), 'bundle': 'status-proof'}}]}))
+    # No host/CLI session exists until exact full-default source preparation
+    # succeeds in the independent CLI interpreter. No Unified sys.path there.
+    with (root/'cli-prepare.log').open('wb') as log:
+        code = await run_cli_preparation([
+            os.environ['CLI_PYTHON'], '-I', '-B', str(Path(__file__).resolve()),
+            str(root), '--prepare-cli', '--cli-sources', str(args.cli_sources.resolve()),
+            '--cli-sources-sha256', args.cli_sources_sha256],
+            cwd=workspace, env=env, log=log)
+        if code:
+            raise ValueError('CLI prepared inputs refused; inspect '+str(root/'cli-prepare.log'))
     from amplifier_web.service import AppService
     from amplifier_web.status_protocol import discover
     from amplifier_web.runtime import RuntimeManager
@@ -94,14 +357,6 @@ async def mount(coordinator,config=None):
     observed = None
     try:
         await app.management.ensure_runtime(session)
-        env = {key: os.environ[key] for key in ('PATH', 'LANG', 'SSL_CERT_FILE') if key in os.environ}
-        env['HOME'] = str(root/'cli-base-home')
-        env['UV_OFFLINE'] = 'true'
-        env['AMPLIFIER_STATUS_DIR'] = str(registry)
-        env['AMPLIFIER_HOME'] = str(root/'cli-home')
-        env['AMPLIFIER_SESSION_STATE_HOME'] = str(root/'cli-ownership')
-        Path(env['AMPLIFIER_HOME']).mkdir()
-        Path(env['AMPLIFIER_HOME'],'settings.yaml').write_text(json.dumps({'bundle': {'app': []}}))
         # Public CLI entry point, installed in an environment without Unified.
         registration = await asyncio.create_subprocess_exec(os.environ['CLI_PYTHON'], '-m', 'amplifier_app_cli.main', 'bundle', 'add', bundle.as_uri(), '--name', 'status-proof', cwd=workspace, env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         output, errors = await asyncio.wait_for(registration.communicate(), 30)
@@ -144,6 +399,7 @@ async def mount(coordinator,config=None):
         assert len(ended) == 1 and ended[0]['freshness'] == 'ended', ended
         result = {'passed': True, 'cliToolObservationSeconds': lag, 'consumer': observed,
                   'cliEnded': True, 'networkModelCalls': 0,
+                  'cliPreparation': json.loads((root/'cli-prepared.json').read_text()),
                   'limits': ['CLI is real installed entry point with scripted provider/local tools.',
                              'Unified uses a real worker/Core/Foundation with the same scripted provider and local tools.',
                              'No runtime/TUI/recipe-specific adapter qualification.']}
@@ -157,4 +413,14 @@ async def mount(coordinator,config=None):
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('root', type=Path)
+    parser.add_argument('--cli-sources', type=Path, required=True)
+    parser.add_argument('--cli-sources-sha256', required=True)
+    parser.add_argument('--prepare-cli', action='store_true', help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    if args.prepare_cli:
+        asyncio.run(prepare_cli(args.root, read_cli_sources(args.cli_sources, args.cli_sources_sha256),
+                                args.cli_sources_sha256))
+    else:
+        asyncio.run(main(args))
