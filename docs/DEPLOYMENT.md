@@ -422,7 +422,8 @@ device, also when you are not at the PC.
 
 A shorter way in place of steps 2 to 4: in the browser on the PC that shows
 Amplifier, open the address of that window with `/connect/sign-in` after the
-port, for example `https://127.0.0.1:<port>/connect/sign-in`.
+port, for example `https://127.0.0.1:<port>/connect/sign-in`. If the window
+has no address bar, open the same browser and type the address there.
 
 Until a password is set, the sign-in page on another device has no field. It
 says that no password is set.
@@ -442,12 +443,13 @@ for something else.
   Amplifier checks no password for a time: 2 seconds at first, and two times
   as long after each further wrong password, to 5 minutes at most. During
   that time it does not check the right password either. One hour with no
-  wrong password, the right password, or a change of the password on the PC
-  starts the count again. The wait is the same for every device. So a person
-  on your network who sends wrong passwords can keep you from signing in
-  from another device. That person gets in no faster. Amplifier on the PC
-  itself still works then. A key from a command has no such wait (see the
-  next section).
+  wrong password, or the right password, starts the count again. To end the
+  wait at once, set the password again on the PC; the same password is
+  enough. The wait is the same for every device. So a person on your network
+  who sends wrong passwords can keep you from signing in from another
+  device. That person gets in no faster. Amplifier on the PC itself still
+  works then, and a device that is signed in stays signed in. A key from a
+  command has no such wait (see the next section).
 - [Sign out all browsers from the PC](#sign-out-all-browsers-from-the-pc) also
   removes the password.
 - If another person may have the password, sign out all browsers first. Then

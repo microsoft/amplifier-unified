@@ -279,7 +279,7 @@ def test_stores_exist_together_or_not_at_all(host, monkeypatch):
     assert other["browser_entry"] is None and other["browser_key"] is None
 
 
-# The typed code at the remote address.
+# The address check of the sign-in from another device.
 
 def test_address_check_stands_alone_and_does_not_depend_on_the_peer_address(host):
     """The handler's own check, without the middleware in front of it."""
@@ -1082,7 +1082,9 @@ def test_key_signs_in_at_every_remote_address_again_and_again(host, peer):
         assert response.headers["Cache-Control"] == "no-store" and response.headers["Referrer-Policy"] == "no-referrer"
         cookie = response.cookies[auth.SESSION_COOKIE]
         assert cookie["secure"] and cookie["httponly"] and cookie["samesite"] == "Strict" and cookie["path"] == "/"
-        assert int(cookie["max-age"]) == 600 and response.cookies[auth.CSRF_COOKIE].value == ""
+        assert int(cookie["max-age"]) == 600
+        deleted = response.cookies[auth.CSRF_COOKIE]
+        assert deleted.value == "" and int(deleted["max-age"]) == 0         # The form's token is used up.
         assert auth.valid_session(host, cookie.value) and session_payload(cookie.value)["via"] == "remote"
         assert call(host, "/api/protected", method="GET", at=at, origin=None,
                     headers={"Cookie": f"{auth.SESSION_COOKIE}={cookie.value}"}).status == 200
@@ -1333,8 +1335,9 @@ def test_remote_page_has_the_password_form_only_while_a_password_or_key_is_saved
     assert "The password was not checked. Type it again." in remote("/login?error=wait").text
     host["browser_key"]._until = host["browser_key"].clock() + 119.5
     waiting = remote("/login?error=wait").text
-    assert ("Too many wrong passwords were typed. No password is checked for 2 minutes. "
-            "Then type the password again.</p>") in waiting and "code" not in waiting.split("<main>")[1]
+    assert ("Too many wrong passwords were typed. No password is checked for 2 minutes. Then type the password "
+            "again. To end the wait at once, set the password again on the PC.</p>") in waiting
+    assert "code" not in waiting.split("<main>")[1]
     host["browser_key"]._until = host["browser_key"].clock() + 0.5
     assert "No password is checked for 1 second." in remote("/login?error=wait").text
     host["browser_key"]._until = 0.0
@@ -1349,6 +1352,76 @@ def test_remote_page_has_the_password_form_only_while_a_password_or_key_is_saved
     # The page of this computer never has the form.
     entry.set_password(home, PASSWORD)
     assert entry.KEY_REDEEM_PATH not in call(host, "/login", method="GET", at=LOCAL, origin=None).text
+
+
+def test_page_never_says_that_no_password_is_set_when_that_is_not_known(host, monkeypatch):
+    """A record that cannot be read now is not "no password", and a host with no stores cannot say it either."""
+    home = host["service"].data_dir
+    key = new_key(host)
+    not_read = ('<p id="password-help">Amplifier could not check now whether a password is set for sign-in from '
+                "another device. Open this page again in a moment.</p>")
+
+    def remote(path="/login"):
+        text = call(host, path, method="GET", at=REMOTE, origin=None).text
+        return text[text.index("<main>"):text.index("</main>")]
+
+    def owner():
+        return owner_page(host, query="?done=removed")[0].text
+    assert "<form " in remote() and "A sign-in key from a command is set." in owner()
+    look, read = auth.sign_in_key_hint, auth.read_sign_in_key
+    faults = (
+        # The look at the record's file fails.
+        lambda: monkeypatch.setattr(auth, "sign_in_key_hint", lambda data_dir: auth._UNSEEN),
+        # The file changed, and the read of the new record fails.
+        lambda: (auth.write_sign_in_key(home, read(home)),
+                 monkeypatch.setattr(auth, "read_sign_in_key", lambda data_dir: (_ for _ in ()).throw(PermissionError("in use")))))
+    for fault in faults:
+        fault()
+        for path in ("/login", "/login?error=password", "/login?error=wait"):
+            body = remote(path)
+            assert not_read in body and "<form" not in body and "<input" not in body
+            assert "No password is set" not in body and "Set a password" not in body
+            assert '<p class="error" role="alert"></p>' in body and body.count("<p") == 2
+        text = owner()
+        assert ("<p>Amplifier could not check now whether a password is set. Open this page again in a moment.</p>"
+                in text) and "No password" not in text and "Remove" not in text
+        assert '<div id="notice" role="status"></div>' in text              # No notice says that nothing is set.
+        monkeypatch.setattr(auth, "sign_in_key_hint", look)
+        monkeypatch.setattr(auth, "read_sign_in_key", read)
+        # The fault is over: the form is back, and the same key signs in. Nothing was changed meanwhile.
+        assert "<form " in remote() and "A sign-in key from a command is set." in owner()
+        assert signed_in(with_key(host, key))
+    # With nothing saved, both pages say so.
+    assert entry.remove_key(home) is True
+    assert "No password is set for sign-in from another device." in remote() and "<p>No password is set.</p>" in owner()
+    assert '<div id="notice" role="status">No password or key is set now.</div>' in owner()
+    # A host that could not confirm its owner credential at its start has no stores.
+    host["browser_key"] = None
+    for path in ("/login", "/login?error=password"):
+        body = remote(path)
+        assert ('<p id="password-help">This Amplifier cannot sign in a browser on another device now. Start Amplifier '
+                "again on the PC that runs it. Then open this page again.</p>") in body
+        assert "<form" not in body and "No password is set" not in body and "Set a password" not in body
+
+
+def test_state_of_the_saved_record_is_one_of_four(host, monkeypatch):
+    home, saved = host["service"].data_dir, host["browser_key"]
+    assert saved.state(host) == "none" and saved.current(host) is None
+    entry.set_password(home, PASSWORD)
+    assert saved.state(host) == "password"
+    key = new_key(host)
+    assert saved.state(host) == "key" and saved.current(host)[1] == "key"
+    # A malformed record is no key: that is known.
+    auth._sign_in_key_path(home).write_bytes(b"not a record\n")
+    assert saved.state(host) == "none"
+    # A record that a sign-out of all browsers ended is no key either.
+    new_key(host)
+    host["sessions"].epoch = auth.read_sign_in_key(home)[0]
+    assert saved.state(host) == "none"
+    host["sessions"].epoch = 0
+    assert saved.state(host) == "key"
+    monkeypatch.setattr(auth, "sign_in_key_hint", lambda data_dir: auth._UNSEEN)
+    assert saved.state(host) == "unknown" and saved.current(host) is None
 
 
 def test_real_https_sign_in_with_the_saved_key_at_the_remote_address(host, tmp_path):
@@ -1722,6 +1795,12 @@ def test_wait_is_for_the_password_that_the_wrong_ones_were_sent_for(host):
         assert wrong_key(with_key(host, PASSWORD))
     assert saved.wait() == 2 and saved.current(host)[1] == "password" and saved.wait() == 2
     assert waits(with_key(host, "another horse battery"))
+    # The same password, set again, is a new record: the wait ends at once, as the sign-in page says.
+    # The host sees the new record at its next look: the page's own look, or the next password.
+    entry.set_password(home, "another horse battery")
+    page = call(host, "/login?error=wait", method="GET", at=REMOTE, origin=None).text
+    assert "The password was not checked. Type it again." in page and "Too many wrong passwords" not in page
+    assert saved.wait() == 0 and signed_in(with_key(host, "another horse battery"))
 
 
 def test_wrong_passwords_are_slowed_down_and_during_a_wait_no_password_is_checked(host, monkeypatch):

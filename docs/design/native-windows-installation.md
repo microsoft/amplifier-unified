@@ -4597,8 +4597,10 @@ has a terminal.
   behind the forward. So a person who reaches the address can keep the owner
   from signing in from another device, and gets in no faster. Since the
   one-use code is gone, no second way goes around the wait. The PC itself
-  still works, and a new password that the owner sets there ends the wait.
-  The owner who wants no such wait uses a key from the command.
+  still works, and a new password that the owner sets there ends the wait;
+  the same password again is a new record and is enough. The text of the
+  wait on the sign-in page names this way out. The owner who wants no such
+  wait uses a key from the command.
 - **One check at a time.** The hash runs in a thread, away from the event
   loop, and only one runs. A second password that arrives meanwhile is not
   checked and not counted; its page says that the password was not checked
@@ -4676,8 +4678,9 @@ has a terminal.
   1280 and 390 pixels wide; the four Settings files that place the page
   are the same in the bundled revision `d868461b`) "Install app" is no
   section of Settings: it is in the section "Advanced", in the closed group
-  "Performance & runtime", whose text does not name it. Release 0.130.0 said 'Settings, then "Install
-  app"'. That was read from the client's source and never seen on a screen,
+  "Performance & runtime", whose text does not name it. Release 0.130.0
+  said 'Settings, then "Install app"'. That was read from the client's
+  source and never seen on a screen,
   and the owner did not find it. The texts of the sign-in page and of the
   key command now name the way as it was seen
   (`browser_entry.SETTINGS_PATH`). The names are the web client's: when it
@@ -4689,8 +4692,13 @@ has a terminal.
   in**. The field is a password field with
   `autocomplete="current-password"`. With nothing saved, the page has no
   form: one paragraph says that no password is set and where the owner sets
-  one. So the page says whether a password or a key is saved; a sender sees
-  the same from an attempt. The help follows the form. The page names no
+  one. It says that only when it is known. When the record could not be
+  read, the page says that Amplifier could not check now and asks to open
+  the page again; a host that has no stores, because it could not confirm
+  its owner credential at its start, says that it cannot sign in a browser
+  on another device now. The owner's page has the same care. So the page
+  says whether a password or a key is saved; a sender sees the same from an
+  attempt. The help follows the form. The page names no
   command and has no link. The error text is one of three fixed texts,
   chosen by the redirect (`?error=password`, `?error=wait`); the text for a
   wait names the time that is left, from the host's own state. Another

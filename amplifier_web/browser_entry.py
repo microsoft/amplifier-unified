@@ -369,22 +369,40 @@ class SavedKey:
     def display(key: str) -> str:
         return "-".join(key[index:index + 5] for index in range(0, len(key), 5))
 
-    def _saved(self, data_dir):
+    def _look(self, data_dir):
+        """The saved record or None, and whether this look gave an answer.
+
+        Without an answer it is not known whether a record is saved: nothing
+        opens, and no text may say that nothing is saved.
+        """
         from . import auth
         hint = auth.sign_in_key_hint(data_dir)
         if hint is auth._UNSEEN:
-            return None                                     # A look that failed never finds a key.
+            return None, False                              # A look that failed never finds a key.
         if self._hint is self._UNREAD or hint != self._hint:
             try:
                 record = auth.read_sign_in_key(data_dir)
             except ValueError:
                 record = None                               # Malformed: no key, until the file changes.
             except OSError:
-                return None                                 # Not kept: the record is read again next time.
+                return None, False                          # Not kept: the record is read again next time.
             if record != self._record:
                 self._streak, self._until = 0, 0.0          # A wait is for the password that it was counted for.
             self._hint, self._record = hint, record
-        return self._record
+        return self._record, True
+
+    def _saved(self, data_dir):
+        return self._look(data_dir)[0]
+
+    def state(self, app) -> str:
+        """What a page may say now: "password", "key", "none", or "unknown" when the record could not be read."""
+        from .auth import sign_in_key_is_current
+        record, known = self._look(app["service"].data_dir)
+        if not known:
+            return "unknown"
+        if record is None or not sign_in_key_is_current(app, record[0]):
+            return "none"
+        return "password" if record[1].startswith(_SCRYPT) else "key"
 
     def current(self, app):
         """The saved record that no sign-out of all browsers ended, or None: (second, "password" or "key")."""
@@ -828,6 +846,12 @@ _WITH_PASSWORD = (_PASSWORD_FORM
                   + _ON_THE_PC + "</p>\n")
 _WITHOUT_PASSWORD = ('<p id="password-help">No password is set for sign-in from another device. '
                      "Set one on the PC that runs Amplifier. " + _ON_THE_PC + " Then open this page again.</p>\n")
+# Not "no password is set": that is not known when the record could not be read.
+_NOT_READ = ('<p id="password-help">Amplifier could not check now whether a password is set for sign-in from '
+             "another device. Open this page again in a moment.</p>\n")
+# The host has no stores: it could not confirm its owner credential at its start (see initialize).
+_NO_SIGN_IN = ('<p id="password-help">This Amplifier cannot sign in a browser on another device now. '
+               "Start Amplifier again on the PC that runs it. Then open this page again.</p>\n")
 
 
 def _duration(seconds: int) -> str:
@@ -842,6 +866,8 @@ def remote_login_page(request):
 
     The password form shows only while a password or key is saved. With none
     saved, the page has no form: it says where the owner sets a password.
+    When the record could not be read, or the host has no stores, the page
+    says that, not that no password is set.
 
     Referrer-Policy is same-origin, not no-referrer: from a no-referrer page a
     browser sends "Origin: null" with the form, and the redeem check refuses it.
@@ -854,22 +880,25 @@ def remote_login_page(request):
     if not _verified(secret, csrf, 900, "csrf"):
         csrf = new_csrf(secret)
     saved = request.app.get("browser_key")
-    with_password = saved is not None and saved.current(request.app) is not None
+    state = "off" if saved is None else saved.state(request.app)
+    with_password = state in {"password", "key"}
     kind = request.query.get("error")
     if not with_password:
-        error = ""                                          # Nothing to type: the page says that no password is set.
+        error = ""                                          # Nothing to type: the page says why.
     elif kind == "wait":
         wait = saved.wait()
+        # The way out is named: with the one-use code gone, the wait has no second way around it.
         error = (f"Too many wrong passwords were typed. No password is checked for {_duration(wait)}. "
-                 "Then type the password again."
+                 "Then type the password again. To end the wait at once, set the password again on the PC."
                  if wait else "The password was not checked. Type it again.")
     elif kind == "password":
         error = ("That password did not work. Check it and type it again. A password stops working when you "
                  "change it or remove it on the PC, or sign out all browsers there.")
     else:
         error = ""
-    page = (_REMOTE_PAGE.replace("__FORMS__", _WITH_PASSWORD if with_password else _WITHOUT_PASSWORD)
-            .replace("__ERROR__", error).replace("__CSRF__", csrf))
+    forms = _WITH_PASSWORD if with_password else {
+        "none": _WITHOUT_PASSWORD, "unknown": _NOT_READ, "off": _NO_SIGN_IN}[state]
+    page = _REMOTE_PAGE.replace("__FORMS__", forms).replace("__ERROR__", error).replace("__CSRF__", csrf)
     page = request.app['service'].instance_branding.document(page, login=True)
     response = web.Response(text=page,
                             content_type="text/html",
@@ -931,15 +960,19 @@ def _owner_csrf(request, session) -> str:
 def _owner_body(request, session, *, notice="", error=""):
     import html
     app = request.app
-    current = app["browser_key"].current(app)
+    saved = app["browser_key"].state(app)
     csrf = _owner_csrf(request, session)
-    if current is None:
-        state, title, button = "No password is set.", "Set a password", "Set password"
-    elif current[1] == "password":
+    if saved == "password":
         state, title, button = "A password is set.", "Change the password", "Change password"
-    else:
+    elif saved == "key":
         state, title, button = ("A sign-in key from a command is set. A password replaces it.",
                                 "Set a password", "Set password")
+    elif saved == "none":
+        state, title, button = "No password is set.", "Set a password", "Set password"
+    else:
+        # Not "no password is set": the record could not be read.
+        state, title, button = ("Amplifier could not check now whether a password is set. "
+                                "Open this page again in a moment.", "Set a password", "Set password")
     remote = [origin for origin in app["server_config"].get("public_origins", ()) if _remote_address(app, origin)]
     if remote:
         where = ("<p>On the other device, open one of these addresses and type the password:</p><ul>"
@@ -949,10 +982,10 @@ def _owner_body(request, session, *, notice="", error=""):
     else:
         where = ("<p>This Amplifier has no address for other devices yet, so no other device can reach it. The "
                  f'<a href="{GUIDE}" target="_blank" rel="noopener noreferrer">deployment guide</a> has the steps.</p>')
-    name = "" if current is None else "password" if current[1] == "password" else "sign-in key"
-    remove = "" if current is None else (
+    name = {"password": "password", "key": "sign-in key"}.get(saved)
+    remove = "" if name is None else (
         f'<section class="card"><h2>Remove the {name}</h2>'
-        "<p>After that, no browser on another device can sign in until you set a password again. "
+        "<p>After that, no browser on another device can sign in until you set a password. "
         "Browsers that are signed in stay signed in.</p>"
         f'<form method="post"><input type="hidden" name="csrf" value="{csrf}">'
         f'<button name="action" value="remove">Remove {name}</button></form></section>\n')
@@ -1006,10 +1039,9 @@ async def password_page(request):
     if session is None:
         return page(_NOT_HERE, 403)
     if request.method == "GET":
-        current = saved.current(request.app)
         done = {("set", "password"): "The password is set.",
-                ("removed", None): "No password or key is set now."}.get(
-                    (request.query.get("done"), current[1] if current else None), "")
+                ("removed", "none"): "No password or key is set now."}.get(
+                    (request.query.get("done"), saved.state(request.app)), "")
         return page(_owner_body(request, session, notice=done))
     if not local_origin(request) or request.content_type != "application/x-www-form-urlencoded":
         return page(_NOT_HERE, 403)
