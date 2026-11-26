@@ -100,12 +100,10 @@ def _parse() -> argparse.Namespace:
     runtime.add_argument("runtime_command", choices=["prepare", "status"])
     runtime.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
     browsers = subcommands.add_parser("browsers", help="Manage signed-in browsers")
-    browsers.add_argument("browsers_command", choices=["sign-out", "code", "key"],
+    browsers.add_argument("browsers_command", choices=["sign-out", "key"],
                           help="sign-out: sign out every browser on every device; "
-                               "code: make a one-use code that signs in a browser on another device (Windows host); "
                                "key: make a random sign-in key to save, for a browser on another device (Windows host; "
                                "to set your own password, use the app on the PC)")
-    browsers.add_argument("--origin", metavar="URL", help="code: the address that the other device opens")
     browsers.add_argument("--remove", action="store_true",
                           help="key: remove the saved sign-in key or password and make no new key")
     setup_tls = subcommands.add_parser("setup-tls", help="Create or inspect the app-owned local CA")
@@ -506,43 +504,6 @@ def _remote_origins(config):
     return remote
 
 
-def _code_origin(config, given):
-    """The address a code is for: the given one, or the only one for other devices."""
-    from .deployment import validate_origin
-    remote = _remote_origins(config)
-    if given is None and len(remote) == 1:
-        return remote[0]
-    try:
-        given = validate_origin(given.rstrip("/")) if given is not None else None
-    except ValueError:
-        given = ""
-    if given in remote:
-        return given
-    raise SystemExit(("That is not one of Amplifier's addresses for other devices." if given is not None
-                      else "Amplifier has more than one address for other devices.")
-                     + " Run the command again with --origin and one of these:\n  " + "\n  ".join(remote))
-
-
-def _browser_code(args, data_dir):
-    """Show the owner one code. The pinned helper alone reads the control credential."""
-    if not browser_entry.is_windows():
-        raise SystemExit("On this computer, sign in with the host account password on the sign-in page.")
-    from .deployment import load_server_config
-    try:
-        config = load_server_config(data_dir, overrides=_server_overrides(args))
-        origin = _code_origin(config, args.origin)
-        code = asyncio.run(browser_entry.owner_browser_code(data_dir, config, origin))
-    except browser_entry.BrowserEntryUnavailable as exc:
-        raise SystemExit(str(exc)) from None
-    except (OSError, ValueError):
-        raise SystemExit("Could not make a code. " + browser_entry.NEW_CODE) from None
-    print(f"Open {origin} on the other device and type this code within two minutes:")
-    print()
-    print("    " + browser_entry.CodeStore.display(code))
-    print()
-    print("The code works once.")
-
-
 def _browser_key(args, data_dir):
     """Show the owner a new sign-in key once, or remove the saved one. No credential is read."""
     if not browser_entry.is_windows():
@@ -575,7 +536,7 @@ def _browser_key(args, data_dir):
     print()
     print("    " + browser_entry.SavedKey.display(key))
     print()
-    print('On the other device, open Amplifier and type the key in the field "Sign-in key". '
+    print('On the other device, open Amplifier and type the key in the field "Password". '
           "Addresses for other devices:")
     for origin in remote:
         print("  " + origin)
@@ -741,8 +702,6 @@ def main():
     if args.command == "browsers":
         if args.remove and args.browsers_command != "key":
             raise SystemExit("--remove is only valid with browsers key.")
-        if args.browsers_command == "code":
-            return _browser_code(args, data_dir)
         if args.browsers_command == "key":
             return _browser_key(args, data_dir)
         from .auth import SignOutUncertain, sign_out_all

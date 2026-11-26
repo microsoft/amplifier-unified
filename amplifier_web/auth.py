@@ -475,7 +475,9 @@ def sign_in_key_is_current(app, made: int) -> bool:
 
 
 def session_is_remote(value) -> bool:
-    """A valid session's own mark: a code, a key or a password opened it at an address for other devices.
+    """A valid session's own mark: a password or a key opened it at an address for other devices.
+
+    A session that a one-use code of an earlier version opened has the same mark.
 
     Call it only for a session that `valid_session` accepted. A value that
     cannot be read counts as remote.
@@ -495,9 +497,9 @@ def saved_sign_out(data_dir: Path) -> int:
 def refresh_sessions(app, streams=()) -> bool:
     """Apply a changed saved sign-out to the running host; True for a newer time.
 
-    Pending sign-in tickets and codes are dropped for every changed record,
-    also when its second is the one already applied: a second sign-out in the
-    same second must still drop a ticket or code that was made in between.
+    Pending sign-in tickets are dropped for every changed record, also when
+    its second is the one already applied: a second sign-out in the same
+    second must still drop a ticket that was made in between.
     For a newer time, open state streams are ended as well, so that a
     signed-out browser cannot keep watching. A stream that reconnects must
     pass the session check again.
@@ -511,11 +513,11 @@ def refresh_sessions(app, streams=()) -> bool:
         return False
     value = session_epoch(data_dir)
     # Kept only now: a record that could not be read is read again next time,
-    # and until then no ticket or code opens a session (see sign_in).
+    # and until then nothing opens a session (see sign_in).
     state.hint = hint
-    for store in (app.get("browser_entry"), app.get("browser_codes")):
-        if store is not None:
-            store.clear()
+    tickets = app.get("browser_entry")
+    if tickets is not None:
+        tickets.clear()
     if value <= state.epoch:
         # No session is older than before: one that is valid now was made
         # after the second of this record, so no stream needs to end.
@@ -544,25 +546,25 @@ async def watch_sessions(app, streams, *, interval=2.0):
                 reported = True
                 try:
                     print("Sign-out of all browsers could not be checked: " + type(error).__name__
-                          + ". Until it can be checked, no browser can sign in with a ticket, a code, "
-                          "a key or a password.",
+                          + ". Until it can be checked, no browser can sign in with a ticket, a key "
+                          "or a password.",
                           flush=True)
                 except (OSError, ValueError):
                     pass
 
 
 def new_session(secret: str, *, remote: bool = False) -> str:
-    """Mark a session from a typed remote code; a local session is unchanged."""
+    """Mark a session that a password or key opened at an address for other devices; a local session is unchanged."""
     payload = {"kind": "session", "issued": int(time.time()), "nonce": secrets.token_urlsafe(16)}
     return _signed(secret, {**payload, "via": "remote"} if remote else payload)
 
 
 def sign_in(app, *, remote: bool = False) -> str | None:
-    """A session for a redeemed ticket or code, or None.
+    """A session for a redeemed ticket, or for a right password or key, or None.
 
-    None while a saved sign-out waits for this host to apply it. The ticket or
-    code is then from before that sign-out, and it must not open a session
-    after it.
+    None while a saved sign-out waits for this host to apply it. The ticket,
+    password or key is then from before that sign-out, and it must not open a
+    session after it.
 
     The order matters. The session's second is read first; the saved record
     is looked at after that. So a session that is returned was made before
@@ -664,17 +666,16 @@ async def auth_required(request: web.Request, handler):
         # This exact handler checks a room/source-bound transport capability.
         # Neither that capability nor an owner cookie grants other API access.
         return await handler(request)
-    if request.path in {browser_entry.ISSUE_PATH, browser_entry.CODE_PATH}:
+    if request.path == browser_entry.ISSUE_PATH:
         authorization = request.headers.get("Authorization", "")
         if (request.method != "POST" or not authorization.startswith("Bearer ")
                 or not hmac.compare_digest(authorization[7:].encode(), request.app["control_token"].encode())):
             return web.json_response({"error": "The owner control credential is required."}, status=403)
         return await handler(request)
-    if (request.path in {browser_entry.REDEEM_PATH, browser_entry.CODE_REDEEM_PATH, browser_entry.KEY_REDEEM_PATH}
-            and request.method == "POST"):
+    if request.path in {browser_entry.REDEEM_PATH, browser_entry.KEY_REDEEM_PATH} and request.method == "POST":
         # Only these exact public mutations. Each handler requires HTTPS, Origin
-        # and signed form CSRF before atomically consuming the one-use ticket
-        # or typed code, or before it compares the typed key.
+        # and signed form CSRF before it atomically consumes the one-use ticket,
+        # or before it compares the typed password or key.
         return await handler(request)
     if extension and request.method == 'OPTIONS':
         return await handler(request)
@@ -757,7 +758,7 @@ def _other_device_address(request: web.Request) -> bool:
 
 async def login_page(request: web.Request) -> web.Response:
     if browser_entry.is_windows() and _other_device_address(request):
-        # Another device cannot use the local launcher; it types an owner-made code.
+        # Another device cannot use the local launcher; it types the password that the owner set.
         return browser_entry.remote_login_page(request)
     secret = request.app["session_secret"]
     csrf = request.cookies.get(CSRF_COOKIE)

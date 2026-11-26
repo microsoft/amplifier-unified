@@ -2,14 +2,14 @@
 
 The foreground owner launcher reads existing private credentials only.
 Listener authentication and grant exchange remain separate from that local read.
-A browser on another device signs in with a one-use code that the owner makes
-on this computer and types on that device, or with the password that the owner
-set in the app on this computer (or the sign-in key that a command made there).
+A browser on another device signs in with the password that the owner set in
+the app on this computer (or the sign-in key that a command made there). The
+one-use code of earlier versions is gone: the password is the one way.
 """
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 import hashlib
 import hmac
 import ipaddress
@@ -25,17 +25,16 @@ from urllib.parse import urlsplit
 
 ISSUE_PATH = "/api/browser-entry/issue"
 REDEEM_PATH = "/api/browser-entry/redeem"
-CODE_PATH = "/api/browser-entry/code"
-CODE_REDEEM_PATH = "/api/browser-entry/code/redeem"
-CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"  # 32 symbols: no 0, 1, I or O.
-CODE_LENGTH = 10
-_CODE = re.compile(f"[{CODE_ALPHABET}]{{{CODE_LENGTH}}}")
 KEY_REDEEM_PATH = "/api/browser-entry/key/redeem"
-KEY_LENGTH = 25  # 125 bits, in the symbols of a code.
-_KEY = re.compile(f"[{CODE_ALPHABET}]{{{KEY_LENGTH}}}")
+KEY_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"  # 32 symbols: no 0, 1, I or O.
+KEY_LENGTH = 25  # 125 bits.
+_KEY = re.compile(f"[{KEY_ALPHABET}]{{{KEY_LENGTH}}}")
 PASSWORD_PATH = "/connect/sign-in"   # The owner's page on this computer.
-# The way to that page in the app. The Settings pages are the web client's: when it renames them, change this text.
-SETTINGS_PATH = 'Open Settings, then "Install app", then "Devices & apps". There, select "Set a password".'
+# The way to that page in the app, as a person clicks it in the bundled web client (seen on a rendered client,
+# not read from its source). The Settings pages are the web client's: when it moves or renames them, change this
+# text with the selection of that client.
+SETTINGS_PATH = ('Open Settings, then "Advanced", then "Performance & runtime", then "Install app", '
+                 'then "Devices & apps". There, select "Set a password".')
 PASSWORD_MIN, PASSWORD_MAX = 12, 256
 _SCRYPT = "scrypt 15 8 1 "           # The start of a password's record: N = 2**15, r = 8, p = 1.
 # What a person does when the browser on this computer is not signed in
@@ -67,14 +66,10 @@ OPENED = "Amplifier opened in your browser."
 # finish an update, also one that it found at its first start; it is then away
 # for some seconds, and before that the earlier version still answers.
 HOST_WAIT = 60.0
-NEW_CODE = "Make sure that Amplifier is running on this PC. Then run this again: amplifier-unified browsers code."
-RELOAD = "Could not sign in. Open the sign-in page again and type the code."
 RELOAD_KEY = "Could not sign in. Open the sign-in page again and type the password."
 NEW_KEY = "Then run this again: amplifier-unified browsers key."
 GUIDE = ("https://github.com/microsoft/amplifier-unified/blob/main/docs/DEPLOYMENT.md"
          "#windows-host-reach-unified-from-another-device")
-NOT_IN_USE = ("The running Amplifier does not use this address yet. Stop Amplifier and start it again. "
-              "Then run this again: amplifier-unified browsers code.")
 
 
 class BrowserEntryUnavailable(RuntimeError):
@@ -310,65 +305,6 @@ class GrantStore:
             return record[2]
 
 
-class CodeStore:
-    """Typed one-use codes for a browser on another device; hash-only, bounded.
-
-    Fifty bits, at most eight codes and two minutes carry the guess resistance.
-    So there is no lockout and no delay: a wrong code is counted and never
-    removes a real one, and nobody can keep the owner out by guessing.
-    """
-
-    def __init__(self, *, ttl=120, capacity=8, clock=time.monotonic):
-        if not 0 < ttl <= 120 or not 1 <= capacity <= 8:
-            raise ValueError("Choose a TTL up to 120 seconds and capacity up to 8.")
-        self.ttl, self.capacity, self.clock = ttl, capacity, clock
-        self.failures = 0
-        self._codes = {}
-        self._lock = threading.Lock()
-
-    @staticmethod
-    def display(code: str) -> str:
-        return code[:5] + "-" + code[5:]
-
-    def issue(self, binding: Binding) -> str:
-        with self._lock:
-            now = self.clock()
-            self._codes = {key: record for key, record in self._codes.items() if record[0] > now}
-            if len(self._codes) >= self.capacity:
-                raise BrowserEntryUnavailable("Too many codes are waiting. Wait two minutes, then make a new code.")
-            code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
-            self._codes[hashlib.sha256(code.encode("ascii")).digest()] = (now + self.ttl, binding)
-            return code
-
-    def clear(self) -> None:
-        """Drop every pending code: a sign-out must not be followed by an old one."""
-        with self._lock:
-            self._codes.clear()
-
-    def consume(self, text: str, binding) -> bool:
-        """Accept case, spaces and hyphens only; never map a look-alike symbol.
-
-        `binding` may be a function that returns the current binding. It runs
-        only for a live code, so a wrong code costs no private-file read.
-        """
-        code = _typed(text)
-        key = hashlib.sha256(code.encode("ascii")).digest() if _CODE.fullmatch(code) else None
-        with self._lock:
-            record = self._codes.get(key)
-            if record is not None and record[0] <= self.clock():
-                del self._codes[key]
-                record = None
-            try:
-                current = None if record is None else binding() if callable(binding) else binding
-            except BrowserEntryUnavailable:
-                current = None  # The host identity cannot be confirmed now; the code stays.
-            if record is None or record[1] != current:
-                self.failures += 1
-                return False
-            del self._codes[key]
-            return True
-
-
 def _typed(text) -> str:
     """What a person typed, without case, spaces and hyphens; never a mapped look-alike."""
     return text.upper().replace(" ", "").replace("-", "") if isinstance(text, str) and text.isascii() else ""
@@ -398,8 +334,8 @@ class SavedKey:
     has a salt and its scrypt hash. Neither is kept anywhere.
 
     A key has 125 bits, so a wrong key is only counted: no lockout and no
-    delay, as for a code. A person chooses a password, so wrong passwords are
-    slowed down. One password is checked at a time, away from the event loop.
+    delay, and nobody can keep the owner out by wrong keys. A person chooses
+    a password, so wrong passwords are slowed down. One password is checked at a time, away from the event loop.
     The wrong password number `FREE` in a row starts a wait of `FIRST_WAIT`
     seconds, each further one doubles it, to `LONGEST_WAIT` seconds at most,
     and during a wait no password is checked, also not the right one. `QUIET`
@@ -409,7 +345,8 @@ class SavedKey:
     `LONGEST_WAIT`, and a new count costs `QUIET`. The device cannot be
     told from the request (see remote_origin), so the wait is for everyone:
     a person who can reach the address can keep the owner from signing in
-    with the password, and gets in no faster. A code still works then.
+    with the password, and gets in no faster. The PC itself still works
+    then, and a new password that the owner sets there ends the wait.
 
     The host reads the record again only when the file changed. So a wrong
     key costs one look at the file and no private read, once the host has
@@ -432,22 +369,40 @@ class SavedKey:
     def display(key: str) -> str:
         return "-".join(key[index:index + 5] for index in range(0, len(key), 5))
 
-    def _saved(self, data_dir):
+    def _look(self, data_dir):
+        """The saved record or None, and whether this look gave an answer.
+
+        Without an answer it is not known whether a record is saved: nothing
+        opens, and no text may say that nothing is saved.
+        """
         from . import auth
         hint = auth.sign_in_key_hint(data_dir)
         if hint is auth._UNSEEN:
-            return None                                     # A look that failed never finds a key.
+            return None, False                              # A look that failed never finds a key.
         if self._hint is self._UNREAD or hint != self._hint:
             try:
                 record = auth.read_sign_in_key(data_dir)
             except ValueError:
                 record = None                               # Malformed: no key, until the file changes.
             except OSError:
-                return None                                 # Not kept: the record is read again next time.
+                return None, False                          # Not kept: the record is read again next time.
             if record != self._record:
                 self._streak, self._until = 0, 0.0          # A wait is for the password that it was counted for.
             self._hint, self._record = hint, record
-        return self._record
+        return self._record, True
+
+    def _saved(self, data_dir):
+        return self._look(data_dir)[0]
+
+    def state(self, app) -> str:
+        """What a page may say now: "password", "key", "none", or "unknown" when the record could not be read."""
+        from .auth import sign_in_key_is_current
+        record, known = self._look(app["service"].data_dir)
+        if not known:
+            return "unknown"
+        if record is None or not sign_in_key_is_current(app, record[0]):
+            return "none"
+        return "password" if record[1].startswith(_SCRYPT) else "key"
 
     def current(self, app):
         """The saved record that no sign-out of all browsers ended, or None: (second, "password" or "key")."""
@@ -610,7 +565,7 @@ def make_key(data_dir: Path) -> tuple[str, bool]:
     browsers: no network request and no credential are involved. Only the
     caller shows the key, once, and only to the owner; never log it.
     """
-    key = "".join(secrets.choice(CODE_ALPHABET) for _ in range(KEY_LENGTH))
+    key = "".join(secrets.choice(KEY_ALPHABET) for _ in range(KEY_LENGTH))
     return key, _save(data_dir, hashlib.sha256(key.encode("ascii")).hexdigest(), NEW_KEY)
 
 
@@ -691,7 +646,7 @@ def remote_origin(request) -> str | None:
 
     The peer address is deliberately not read. A Tailscale TCP forward connects
     from 127.0.0.1, so the socket does not say where the browser is. The typed
-    one-use code is the proof; this check only fixes the address it is for.
+    password or key is the proof; this check only fixes the address in use.
     """
     from .deployment import validate_origin
     if not request.secure:
@@ -706,7 +661,7 @@ def remote_origin(request) -> str | None:
 
 
 def initialize(app) -> None:
-    app["browser_entry"] = app["browser_codes"] = app["browser_key"] = None
+    app["browser_entry"] = app["browser_key"] = None
     if not is_windows():
         return
     try:
@@ -715,7 +670,7 @@ def initialize(app) -> None:
             return
     except BrowserEntryUnavailable:
         return
-    app["browser_entry"], app["browser_codes"], app["browser_key"] = GrantStore(), CodeStore(), SavedKey()
+    app["browser_entry"], app["browser_key"] = GrantStore(), SavedKey()
 
 
 def _binding(request, origin):
@@ -731,14 +686,9 @@ def _binding(request, origin):
     return Binding(service.update_manager.running_identity["instanceId"], identity, origin, sid)
 
 
-async def _owner_issue(request, name, extra, mint, again=None):
-    """The one owner-only local check that a ticket and a typed code share.
-
-    `again` is the next step of the typed-code command. A ticket has none here:
-    `open` prints these answers, and it never names itself.
-    """
+async def issue(request):
+    """Owner only and this computer only: one ticket for the browser that the launcher opens."""
     from aiohttp import web
-    again = " " + again if again else ""
     authorization = request.headers.get("Authorization", "")
     if not (authorization.startswith("Bearer ") and
             hmac.compare_digest(authorization[7:].encode(), request.app["control_token"].encode())):
@@ -746,9 +696,9 @@ async def _owner_issue(request, name, extra, mint, again=None):
     origin = local_origin(request)
     if not origin:
         return web.json_response({"error": "Use the exact HTTPS local owner origin."}, status=403)
-    store = request.app[name]
+    store = request.app["browser_entry"]
     if not is_windows() or store is None:
-        return web.json_response({"error": "Windows owner browser entry is not available." + again}, status=503)
+        return web.json_response({"error": "Windows owner browser entry is not available."}, status=503)
     try:
         if request.content_type != "application/json":
             return web.json_response({"error": "Use a JSON owner entry request."}, status=400)
@@ -761,37 +711,19 @@ async def _owner_issue(request, name, extra, mint, again=None):
         package = _package_identity(identity)
         if package is None:
             raise BrowserEntryUnavailable("Cannot verify the running package identity for browser entry.")
-        if (not isinstance(body, dict) or set(body) - {"instanceId", "dataIdentity", "version", "revision", "ownerSid", extra}
+        if (not isinstance(body, dict) or set(body) - {"instanceId", "dataIdentity", "version", "revision", "ownerSid", "next"}
                 or _package_identity(body) != package
                 or any(body.get(key) != value for key, value in {
                     "instanceId": binding.instance_id, "dataIdentity": binding.data_identity,
                     "ownerSid": binding.owner_sid}.items())):
-            return web.json_response({"error": "The owner host identity changed." + again}, status=409)
-        result = mint(store, binding, body.get(extra))
+            return web.json_response({"error": "The owner host identity changed."}, status=409)
+        ticket = store.issue(binding, body.get("next"))
     except BrowserEntryUnavailable as exc:
         return web.json_response({"error": str(exc)}, status=503)
     except (ValueError, TypeError):
-        return web.json_response({"error": "Invalid owner entry request." + again}, status=400)
-    return web.json_response({**result, "expiresIn": store.ttl},
+        return web.json_response({"error": "Invalid owner entry request."}, status=400)
+    return web.json_response({"ticket": ticket, "expiresIn": store.ttl},
                              headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
-
-
-async def issue(request):
-    return await _owner_issue(request, "browser_entry", "next",
-                              lambda store, binding, target: {"ticket": store.issue(binding, target)})
-
-
-async def code_issue(request):
-    """Owner only and this computer only, exactly as for a ticket.
-
-    The code is bound to the one address the owner named: an exact configured
-    HTTPS address of this host that is not this computer itself.
-    """
-    def mint(store, binding, origin):
-        if not _remote_address(request.app, origin):
-            raise ValueError("Not a configured remote address")
-        return {"code": store.issue(replace(binding, origin=origin))}
-    return await _owner_issue(request, "browser_codes", "origin", mint, NEW_CODE)
 
 
 async def _signed_form(request, field):
@@ -839,43 +771,6 @@ async def redeem(request):
 _PRIVATE = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 
 
-async def code_redeem(request):
-    """Public: the typed code is the proof. No lockout and no delay (see CodeStore).
-
-    Only the address the browser used is checked here, never the peer address
-    (see remote_origin). A session from a code is marked remote.
-    """
-    from aiohttp import web
-    from .auth import CSRF_COOKIE, SESSION_COOKIE, sign_in
-    origin = remote_origin(request)
-    store = request.app["browser_codes"]
-    if not origin or not is_windows() or store is None or request.content_type != "application/x-www-form-urlencoded":
-        return web.Response(text=RELOAD, status=403)
-    code = await _signed_form(request, "code")
-    if code is None:
-        return web.Response(text=RELOAD, status=403)
-    # The current host identity is read only for a live code: any device that
-    # reaches this address can send wrong codes, and each must stay cheap.
-    if not store.consume(code, lambda: _binding(request, origin)):
-        if store.failures == 1 or store.failures % 100 == 0:
-            try:  # The count only; never the typed text. A log fault changes nothing.
-                print(f"Remote sign-in: {store.failures} wrong codes since start.", flush=True)
-            except (OSError, ValueError):
-                pass
-        raise web.HTTPSeeOther("/login?error=1", headers=_PRIVATE)
-    session = sign_in(request.app, remote=True)
-    if session is None:
-        # The code is from before a sign-out that this host has not applied yet.
-        # It is used up and opens nothing; this is not counted as a wrong code.
-        raise web.HTTPSeeOther("/login?error=1", headers=_PRIVATE)
-    response = web.HTTPSeeOther("/", headers=_PRIVATE)
-    response.set_cookie(SESSION_COOKIE, session,
-                        max_age=request.app["server_config"]["session_ttl_seconds"],
-                        httponly=True, samesite="Strict", secure=True, path="/")
-    response.del_cookie(CSRF_COOKIE, path="/")
-    raise response
-
-
 def _said(text) -> None:
     try:  # A log fault changes nothing.
         print(text, flush=True)
@@ -886,8 +781,9 @@ def _said(text) -> None:
 async def key_redeem(request):
     """Public: the typed password or key is the proof. A key has no lockout and no delay; a password waits (see SavedKey).
 
-    The address check is the one of a typed code (see remote_origin), and the
-    session is marked remote as well. The password or key is not used up.
+    Only the address that the browser used is checked, never the peer address
+    (see remote_origin). The session is marked remote. The password or key is
+    not used up.
     """
     from aiohttp import web
     from .auth import CSRF_COOKIE, SESSION_COOKIE, sign_in
@@ -907,7 +803,7 @@ async def key_redeem(request):
             _said(f"Remote sign-in: {saved.failures} wrong passwords or keys since start.")
         raise web.HTTPSeeOther("/login?error=password", headers=_PRIVATE)
     try:
-        # As for a live code: the owner credential and the host identity are confirmed before a session opens.
+        # The owner credential and the host identity are confirmed before a session opens.
         _binding(request, origin)
         session = sign_in(request.app, remote=True)
     except BrowserEntryUnavailable:
@@ -929,21 +825,9 @@ _ON_THE_PC = "In Amplifier on the PC, " + SETTINGS_PATH[0].lower() + SETTINGS_PA
 _PASSWORD_FORM = f"""<form method="post" action="{KEY_REDEEM_PATH}">
 <input type="hidden" name="csrf" value="__CSRF__">
 <label for="password">Password</label>
-<input id="password" name="password" type="password" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" aria-describedby="password-help" __FOCUS__required>
+<input id="password" name="password" type="password" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" aria-describedby="password-help" autofocus required>
 <button type="submit">Sign in</button>
 </form>
-"""
-_CODE_FORM = f"""<form method="post" action="{CODE_REDEEM_PATH}">
-<input type="hidden" name="csrf" value="__CSRF__">
-<label for="code">Code</label>
-<input id="code" name="code" autocomplete="one-time-code" autocapitalize="characters" autocorrect="off" spellcheck="false" aria-describedby="code-help" __FOCUS__required>
-<button type="submit">__BUTTON__</button>
-</form>
-"""
-_CODE_HELP = f"""<p id="code-help">To get a code, run this on the Windows PC that runs Amplifier: <code>amplifier-unified browsers code</code>.
-Type the code here within two minutes.</p>
-<p>If Windows does not find that command, use the full command from the
-<a href="{GUIDE}" target="_blank" rel="noopener noreferrer">Windows steps of the deployment guide</a>.</p>
 """
 _REMOTE_PAGE = """<!doctype html>
 <html lang="en"><head>
@@ -956,16 +840,18 @@ _REMOTE_PAGE = """<!doctype html>
 <p class="error" role="alert">__ERROR__</p>
 __FORMS__</main></body></html>
 """
-_WITH_PASSWORD = (_PASSWORD_FORM.replace("__FOCUS__", "autofocus ")
-                  + '<p class="note">Or sign in with a one-use code from the PC.</p>\n'
-                  + _CODE_FORM.replace("__FOCUS__", "").replace("__BUTTON__", "Sign in with code")
+_WITH_PASSWORD = (_PASSWORD_FORM
                   + '<p id="password-help">Type the password that you set in Amplifier on the PC, '
                   'or the sign-in key that a command on the PC showed. To change the password: '
-                  + _ON_THE_PC + "</p>\n" + _CODE_HELP)
-_WITHOUT_PASSWORD = (_CODE_FORM.replace("__FOCUS__", "autofocus ").replace("__BUTTON__", "Sign in")
-                     + _CODE_HELP
-                     + '<p id="password-help">To sign in with a password when you are not at the PC, '
-                     "set the password on the PC first. " + _ON_THE_PC + "</p>\n")
+                  + _ON_THE_PC + "</p>\n")
+_WITHOUT_PASSWORD = ('<p id="password-help">No password is set for sign-in from another device. '
+                     "Set one on the PC that runs Amplifier. " + _ON_THE_PC + " Then open this page again.</p>\n")
+# Not "no password is set": that is not known when the record could not be read.
+_NOT_READ = ('<p id="password-help">Amplifier could not check now whether a password is set for sign-in from '
+             "another device. Open this page again in a moment.</p>\n")
+# The host has no stores: it could not confirm its owner credential at its start (see initialize).
+_NO_SIGN_IN = ('<p id="password-help">This Amplifier cannot sign in a browser on another device now. '
+               "Stop Amplifier on the PC that runs it and start it again. Then open this page again.</p>\n")
 
 
 def _duration(seconds: int) -> str:
@@ -978,8 +864,10 @@ def _duration(seconds: int) -> str:
 def remote_login_page(request):
     """Sign-in page for a browser on another device: no script, nothing reflected.
 
-    The password form shows only while a password or key is saved; it is then
-    the first form. The code form always shows.
+    The password form shows only while a password or key is saved. With none
+    saved, the page has no form: it says where the owner sets a password.
+    When the record could not be read, or the host has no stores, the page
+    says that, not that no password is set.
 
     Referrer-Policy is same-origin, not no-referrer: from a no-referrer page a
     browser sends "Origin: null" with the form, and the redeem check refuses it.
@@ -992,21 +880,25 @@ def remote_login_page(request):
     if not _verified(secret, csrf, 900, "csrf"):
         csrf = new_csrf(secret)
     saved = request.app.get("browser_key")
-    with_password = saved is not None and saved.current(request.app) is not None
+    state = "off" if saved is None else saved.state(request.app)
+    with_password = state in {"password", "key"}
     kind = request.query.get("error")
-    if kind == "wait" and with_password:
+    if not with_password:
+        error = ""                                          # Nothing to type: the page says why.
+    elif kind == "wait":
         wait = saved.wait()
+        # The way out is named: with the one-use code gone, the wait has no second way around it.
         error = (f"Too many wrong passwords were typed. No password is checked for {_duration(wait)}. "
-                 "Then type the password again. A code from the PC works now."
+                 "Then type the password again. To end the wait at once, set the password again on the PC."
                  if wait else "The password was not checked. Type it again.")
-    elif kind in {"password", "wait"}:
+    elif kind == "password":
         error = ("That password did not work. Check it and type it again. A password stops working when you "
                  "change it or remove it on the PC, or sign out all browsers there.")
     else:
-        error = ("That code did not work. Check it and type it again. A code works for two minutes "
-                 "and only once. After that, make a new code on the PC.") if kind else ""
-    page = (_REMOTE_PAGE.replace("__FORMS__", _WITH_PASSWORD if with_password else _WITHOUT_PASSWORD)
-            .replace("__ERROR__", error).replace("__CSRF__", csrf))
+        error = ""
+    forms = _WITH_PASSWORD if with_password else {
+        "none": _WITHOUT_PASSWORD, "unknown": _NOT_READ, "off": _NO_SIGN_IN}[state]
+    page = _REMOTE_PAGE.replace("__FORMS__", forms).replace("__ERROR__", error).replace("__CSRF__", csrf)
     page = request.app['service'].instance_branding.document(page, login=True)
     response = web.Response(text=page,
                             content_type="text/html",
@@ -1031,17 +923,20 @@ _OWNER_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 __BODY__</main></body></html>
 """
 _NOT_HERE = ("<p>Open this page in Amplifier on the PC that runs it, in a browser that signed in there. "
-             "A browser that signed in with a password, a key or a code cannot set the password.</p>")
+             "A browser that signed in with the password or a key cannot set the password.</p>")
 _NOT_WINDOWS = ("<p>On this computer, a browser on another device signs in with the password of the "
                 "host account. There is no other password to set.</p>")
 _SIGNED_OUT = ("<p>A sign-out of all browsers ended this sign-in. This change does not count. "
                "Open Amplifier again on the PC.</p>")
 _CHANGED = ("<p>Another change of the password or key came first, so this change was not made. "
             f'<a href="{PASSWORD_PATH}">Open this page again</a>.</p>')
-_NOT_NOW = "<p>This Amplifier cannot set a password for other devices now. Start Amplifier again on the PC.</p>"
+_NOT_NOW = ("<p>This Amplifier cannot set a password for other devices now. "
+            "Stop Amplifier on the PC and start it again.</p>")
 _UNCONFIRMED_SET = ("Amplifier could not confirm that the password is saved. A password or key that you had "
                     "before may no longer work. Set the password again.")
-_UNCONFIRMED_REMOVE = "Amplifier could not confirm the removal. Remove it again."
+# The record can be gone all the same; the page then has no remove card. So the text names a step that always works.
+_UNCONFIRMED_REMOVE = ("Amplifier could not confirm the removal. Open this page again. "
+                       "If a password or key is still set, remove it again.")
 
 
 def _session_here(request):
@@ -1065,18 +960,27 @@ def _owner_csrf(request, session) -> str:
                     hashlib.sha256).hexdigest()
 
 
-def _owner_body(request, session, *, notice="", error=""):
+def _owner_body(request, session, saved, *, notice="", error=""):
+    """The owner's page for one look at the saved record: `saved` is that look (`SavedKey.state`).
+
+    The caller looks once for a response and gives the same answer to
+    everything on the page. Two looks can differ, and a page must not say
+    two things.
+    """
     import html
     app = request.app
-    current = app["browser_key"].current(app)
     csrf = _owner_csrf(request, session)
-    if current is None:
-        state, title, button = "No password is set.", "Set a password", "Set password"
-    elif current[1] == "password":
+    if saved == "password":
         state, title, button = "A password is set.", "Change the password", "Change password"
-    else:
+    elif saved == "key":
         state, title, button = ("A sign-in key from a command is set. A password replaces it.",
                                 "Set a password", "Set password")
+    elif saved == "none":
+        state, title, button = "No password is set.", "Set a password", "Set password"
+    else:
+        # Not "no password is set": the record could not be read.
+        state, title, button = ("Amplifier could not check now whether a password is set. "
+                                "Open this page again in a moment.", "Set a password", "Set password")
     remote = [origin for origin in app["server_config"].get("public_origins", ()) if _remote_address(app, origin)]
     if remote:
         where = ("<p>On the other device, open one of these addresses and type the password:</p><ul>"
@@ -1086,10 +990,10 @@ def _owner_body(request, session, *, notice="", error=""):
     else:
         where = ("<p>This Amplifier has no address for other devices yet, so no other device can reach it. The "
                  f'<a href="{GUIDE}" target="_blank" rel="noopener noreferrer">deployment guide</a> has the steps.</p>')
-    name = "" if current is None else "password" if current[1] == "password" else "sign-in key"
-    remove = "" if current is None else (
+    name = {"password": "password", "key": "sign-in key"}.get(saved)
+    remove = "" if name is None else (
         f'<section class="card"><h2>Remove the {name}</h2>'
-        "<p>After that, a browser on another device needs a one-use code from this PC. "
+        "<p>After that, no browser on another device can sign in until you set a password. "
         "Browsers that are signed in stay signed in.</p>"
         f'<form method="post"><input type="hidden" name="csrf" value="{csrf}">'
         f'<button name="action" value="remove">Remove {name}</button></form></section>\n')
@@ -1116,8 +1020,7 @@ async def password_page(request):
     """The owner sets, changes or removes the password for other devices. Only on this computer.
 
     The authority is a browser that signed in on this computer: a session
-    that a code, a key or a password opened is marked remote and gets no
-    form. A POST also needs HTTPS, both socket ends local, the exact local
+    that a password or a key opened is marked remote and gets no form. A POST also needs HTTPS, both socket ends local, the exact local
     Origin (see local_origin) and the form's own token. The session is
     checked again after the form is read, and the change is bound to it (see
     `_swap`): a session that a sign-out of all browsers ended sets nothing
@@ -1143,12 +1046,14 @@ async def password_page(request):
     applied = getattr(request.app.get("sessions"), "hint", _UNSEEN)
     if session is None:
         return page(_NOT_HERE, 403)
+    def body(**texts):
+        # One look at the saved record for one response: the notice and the page say the same.
+        state = saved.state(request.app)
+        notice = {("set", "password"): "The password is set.",
+                  ("removed", "none"): "No password or key is set now."}.get((texts.pop("done", None), state), "")
+        return _owner_body(request, session, state, notice=notice, **texts)
     if request.method == "GET":
-        current = saved.current(request.app)
-        done = {("set", "password"): "The password is set.",
-                ("removed", None): "No password or key is set now."}.get(
-                    (request.query.get("done"), current[1] if current else None), "")
-        return page(_owner_body(request, session, notice=done))
+        return page(body(done=request.query.get("done")))
     if not local_origin(request) or request.content_type != "application/x-www-form-urlencoded":
         return page(_NOT_HERE, 403)
     form = await request.clone(client_max_size=16384).post()
@@ -1172,13 +1077,13 @@ async def password_page(request):
         except ChangedMeanwhile:
             return page(_CHANGED, 409)
         except (OSError, ValueError):
-            return page(_owner_body(request, session, error=_UNCONFIRMED_REMOVE), 500)
+            return page(body(error=_UNCONFIRMED_REMOVE), 500)
         raise web.HTTPSeeOther(PASSWORD_PATH + "?done=removed", headers=headers)
     if action != "set" or set(form) != {"csrf", "action", "password", "confirm"}:
         return web.Response(text="This page expired. Open it again.", status=403, headers=headers)
     password = form["password"]
     if not isinstance(password, str) or password != form["confirm"]:
-        return page(_owner_body(request, session, error="The two passwords are not the same. Type them again."), 400)
+        return page(body(error="The two passwords are not the same. Type them again."), 400)
     try:
         await asyncio.to_thread(set_password, data_dir, password, owner)
     except OwnerSignedOut:
@@ -1186,78 +1091,35 @@ async def password_page(request):
     except ChangedMeanwhile:
         return page(_CHANGED, 409)
     except PasswordRefused as refused:
-        return page(_owner_body(request, session, error=str(refused)), 400)
+        return page(body(error=str(refused)), 400)
     except BrowserEntryUnavailable as unavailable:
-        return page(_owner_body(request, session, error=str(unavailable)), 409)
+        return page(body(error=str(unavailable)), 409)
     except (OSError, ValueError):
-        return page(_owner_body(request, session, error=_UNCONFIRMED_SET), 500)
+        return page(body(error=_UNCONFIRMED_SET), 500)
     raise web.HTTPSeeOther(PASSWORD_PATH + "?done=set", headers=headers)
 
 
 async def owner_browser_url(data_dir: Path, config: dict, *, wait=0.0, pause=1.0, waiting=None) -> str:
     """Pinned owner request; no redirect/proxy/HTTP fallback or uncertain reissue.
 
-    The returned URL contains a single-use grant, never the control bearer.
-    Callers must not print it or include browser backend exceptions in output.
+    The privately read leaf is pinned before the control bearer is read or
+    sent. The returned URL contains a single-use grant, never the control
+    bearer. Callers must not print it or include browser backend exceptions
+    in output. The caller is `open`: it prints the host's own reason for a
+    refusal, and it never names itself or the Start menu.
 
     For up to `wait` seconds, a host that does not answer, or that answers as
     another package version, is asked again: it is restarting. `waiting` is
     called once before the first pause. Only the health request is repeated.
     The grant request is sent once, to the first host that matches; a refused
-    or unconfirmed grant request ends the call.
+    or unconfirmed grant request ends the call. Without a wait, every local
+    address is asked once, with no pause.
 
     The first round asks every local address, as a call without a wait does.
     After it, a health request starts only before the end of the wait. A
     request can take 5 seconds and the grant request 5 more, so the requests
     need about 10 seconds after the wait. That is not a limit for the whole
     call: a pause that ends late (a PC that slept) ends the call late.
-    """
-    origin, ticket = await _owner_post(data_dir, config, ISSUE_PATH, {}, "ticket", r"[A-Za-z0-9_-]{43}",
-                                       wait=wait, pause=pause, waiting=waiting)
-    return origin + "/login#ticket=" + ticket
-
-
-async def owner_browser_code(data_dir: Path, config: dict, origin: str) -> str:
-    """The same pinned owner request, for a code to type at one remote address.
-
-    Only the caller shows the code, and only to the owner; never log it.
-    """
-    _, code = await _owner_post(data_dir, config, CODE_PATH, {"origin": origin}, "code", _CODE.pattern, NEW_CODE,
-                                invalid=NOT_IN_USE)
-    return code
-
-
-async def _refusal(response) -> str:
-    """The host's own reason for a refused owner request, or "" when it gave none.
-
-    The reply came over the pinned connection from a host of this package
-    version, so the reason is one of the host's own fixed sentences.
-    """
-    import aiohttp
-    try:
-        value = await response.json()
-    except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
-        return ""
-    reason = value.get("error") if isinstance(value, dict) else None
-    return reason if isinstance(reason, str) and 0 < len(reason) <= 300 and reason.isprintable() else ""
-
-
-async def _owner_post(data_dir: Path, config: dict, path: str, extra: dict, field: str, pattern: str, again=None,
-                      *, invalid=None, wait=0.0, pause=1.0, waiting=None):
-    """Pin the privately read leaf before reading or sending the control bearer.
-
-    Returns the local origin and the one named reply value. No redirect, no
-    proxy, no HTTP fallback, and an unconfirmed POST is never sent again.
-    `invalid` is the text for the host's reply that the request itself is not
-    acceptable (400): for a code, the running host does not have the address.
-
-    `wait`, `pause` and `waiting` are the wait of owner_browser_url for a host
-    that is restarting. Only the health request is repeated, never the POST.
-    Without a wait, every local address is asked once, with no pause.
-
-    `again` is the next step of the typed-code command, and its texts stay as
-    they are. Without it the caller is `open`: it prints the host's own reason
-    for a refusal, and it never names itself or the Start menu.
     """
     import aiohttp
     from .auth import data_identity
@@ -1298,26 +1160,19 @@ async def _owner_post(data_dir: Path, config: dict, path: str, extra: dict, fiel
                 except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
                     continue
                 try:
-                    async with client.post(origin + path, ssl=pin, allow_redirects=False,
+                    async with client.post(origin + ISSUE_PATH, ssl=pin, allow_redirects=False,
                                            headers={**headers, "Origin": origin}, json={
                                                "instanceId": health["instanceId"], "dataIdentity": health["dataIdentity"],
-                                               "version": version, "revision": revision, "ownerSid": sid,
-                                               **extra}) as response:
+                                               "version": version, "revision": revision, "ownerSid": sid}) as response:
                         if response.status != 200:
-                            if invalid and response.status == 400:
-                                raise BrowserEntryUnavailable(invalid)
-                            if again:
-                                raise BrowserEntryUnavailable("The owner host refused browser entry. " + again)
                             raise BrowserEntryUnavailable(await _refusal(response) or REFUSED)
                         result = await response.json()
-                    value = result.get(field) if isinstance(result, dict) else None
-                    if not isinstance(value, str) or not re.fullmatch(pattern, value):
+                    ticket = result.get("ticket") if isinstance(result, dict) else None
+                    if not isinstance(ticket, str) or not re.fullmatch(r"[A-Za-z0-9_-]{43}", ticket):
                         raise ValueError("Invalid reply")
                 except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
-                    raise BrowserEntryUnavailable(
-                        "Browser entry response was not confirmed; no retry was made. " + again
-                        if again else UNCONFIRMED) from None
-                return origin, value
+                    raise BrowserEntryUnavailable(UNCONFIRMED) from None
+                return origin + "/login#ticket=" + ticket
             repeated = True
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -1326,5 +1181,19 @@ async def _owner_post(data_dir: Path, config: dict, path: str, extra: dict, fiel
                 waiting()
                 waiting = None
             await asyncio.sleep(min(pause, remaining))
-    raise BrowserEntryUnavailable(
-        "The owned local host is not reachable or its identity does not match. " + again if again else NO_ANSWER)
+    raise BrowserEntryUnavailable(NO_ANSWER)
+
+
+async def _refusal(response) -> str:
+    """The host's own reason for a refused owner request, or "" when it gave none.
+
+    The reply came over the pinned connection from a host of this package
+    version, so the reason is one of the host's own fixed sentences.
+    """
+    import aiohttp
+    try:
+        value = await response.json()
+    except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
+        return ""
+    reason = value.get("error") if isinstance(value, dict) else None
+    return reason if isinstance(reason, str) and 0 < len(reason) <= 300 and reason.isprintable() else ""
