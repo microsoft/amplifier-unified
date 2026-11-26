@@ -71,6 +71,15 @@ def test_history_scope_decorates_only_request_owned_browser_snapshot():
     assert with_history_scope({}, source) is source
     terminal = {"client": {"id": "terminal", "kind": "terminal"}}
     assert with_history_scope({"history_scope": "opaque"}, terminal) is terminal
+    # The field for the Settings entry of the password page: true, or not there at all.
+    both = with_history_scope({"history_scope": "opaque", "password_sign_in": True}, source)
+    assert both["client"] == {"id": "browser", "kind": "web", "historyScope": "opaque", "passwordSignIn": True}
+    assert with_history_scope({"password_sign_in": True}, source)["client"] == {
+        "id": "browser", "kind": "web", "passwordSignIn": True}
+    for other in (False, None, "true", 1):
+        assert "passwordSignIn" not in with_history_scope({"history_scope": "o", "password_sign_in": other}, source)["client"]
+    assert "passwordSignIn" not in source["client"]
+    assert with_history_scope({"history_scope": "opaque", "password_sign_in": True}, terminal) is terminal
 
 
 def test_pam_wrong_user_cannot_enter_same_installation_peer_scope(monkeypatch):

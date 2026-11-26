@@ -2549,6 +2549,45 @@ def test_page_devices_and_apps_gets_the_card_only_where_the_owner_page_works(hos
     assert page.count('<section class="card">') >= 1 and entry.PASSWORD_PATH not in page
 
 
+def test_state_tells_the_web_client_where_the_password_page_works(host, monkeypatch):
+    """Through the real middleware: the field is in the state of a browser that can set the password, and of no other."""
+    async def state(request):
+        return web.json_response(auth.with_history_scope(request, {"client": {"id": "b", "kind": "web"}, "revision": 1}))
+    host.router.add_get("/api/state-of-this-browser", state)
+
+    def client(session=..., **options):
+        session = auth.new_session(SECRET) if session is ... else session
+        headers = {**({"Cookie": f"{auth.SESSION_COOKIE}={session}"} if session else {}), **options.pop("headers", {})}
+        response = call(host, "/api/state-of-this-browser", method="GET", origin=None, headers=headers, **options)
+        assert response.status == 200, response.status
+        return json.loads(response.body)["client"]
+    here = client()
+    assert here["passwordSignIn"] is True and len(here["historyScope"]) == 64 and set(here) == {
+        "id", "kind", "historyScope", "passwordSignIn"}
+    # The same test as the card on "Devices & apps" and the owner's page.
+    refused = {
+        "a session that a password or a key opened": {"session": auth.new_session(SECRET, remote=True)},
+        "an address for other devices": {"at": REMOTE},
+        "a peer that is not this computer": {"peer": "192.168.1.9"},
+        "the control credential in place of a session": {"session": None, "headers": BEARER},
+    }
+    for name, options in refused.items():
+        other = client(**options)
+        assert "passwordSignIn" not in other and len(other["historyScope"]) == 64, name
+    host["browser_key"], kept = None, host["browser_key"]   # A Windows host without its stores.
+    assert "passwordSignIn" not in client()
+    host["browser_key"] = kept
+    monkeypatch.setattr(entry, "is_windows", lambda: False)
+    assert "passwordSignIn" not in client() and entry.can_set_password is not None
+    monkeypatch.setattr(entry, "is_windows", lambda: True)
+    assert client()["passwordSignIn"] is True
+    # The card and the field have one test.
+    source = Path(entry.__file__).read_text(encoding="utf-8")
+    assert "    return PASSWORD_CARD if can_set_password(request) else \"\"\n" in source
+    assert ('        request["password_sign_in"] = browser_entry.can_set_password(request)\n'
+            in (Path(entry.__file__).parent / "auth.py").read_text(encoding="utf-8"))
+
+
 def test_host_serves_the_owner_page_and_the_command_keeps_its_one_job(home, monkeypatch, capsys):
     # This file must not import the server module; its routes are checked as text.
     source = (Path(entry.__file__).parent / "server.py").read_text(encoding="utf-8")
