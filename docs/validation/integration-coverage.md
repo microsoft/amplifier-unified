@@ -419,6 +419,18 @@ lookup of that branch. Add any other source required by the selected composition
 The store path must be absolute and canonical, with all objects already present
 and verified. Keep it separate from the new synthetic work directory.
 
+The Unified worker's mandatory capture hook is a separate real component, not a
+scripted tool. Supply `--host-sources` and `--host-sources-sha256` for a second
+reviewed JSON input: `{"schemaVersion": 1, "store": "/owned/host-source-store",
+"captureCommit": "FULL_40_HEX_COMMIT"}`. Use the complete selected
+`microsoft/amplifier-bundle-context-intelligence` repository and normally install
+its bundle and hook distributions at that same commit, including their resolved
+dependencies. Both installed PEP 610 identities must agree. The host store,
+CLI store and fresh synthetic work must be disjoint. The fixture uses normal
+`sources.modules` selection for the capture hook and binds the immutable ref
+through the host's installed Foundation before worker startup; it does not
+disable capture or substitute six matching files for the complete source.
+
 The fixture validates the input digest and schema, then its independent CLI
 preparation process verifies every object before creating normal `bind` records
 in a fresh CLI home. It checks the complete default modules/resources before
@@ -430,6 +442,7 @@ Inside the owned DTU, from the candidate checkout:
 
 ```sh
 CLI_SOURCES_SHA256="$(sha256sum /owned/cli-sources.json | cut -d ' ' -f 1)"
+HOST_SOURCES_SHA256="$(sha256sum /owned/host-sources.json | cut -d ' ' -f 1)"
 python scripts/qualify_status_emitter.py \
   --owned-dtu dtu-unified-codex-dev-20261014 \
   --python /owned/native-env/bin/python \
@@ -439,6 +452,8 @@ python scripts/qualify_status_emitter.py \
   --core-wheel /owned/wheels/EXACT_PUBLISHED_CORE_PLATFORM_WHEEL.whl \
   --cli-sources /owned/cli-sources.json \
   --cli-sources-sha256 "$CLI_SOURCES_SHA256" \
+  --host-sources /owned/host-sources.json \
+  --host-sources-sha256 "$HOST_SOURCES_SHA256" \
   --work /owned/status-acceptance-new-directory
 ```
 
@@ -471,6 +486,21 @@ bounded numeric timing/sequence and fixed phase facts on handled failure as well
 as success; failure omits raw consumer rows, preparation details and exception
 text. Forced termination can prevent finalization, so a missing receipt is not
 success. Keep original failed evidence separate from a corrected-input run.
+Before CLI launch, the fixture calls the existing READY worker's bounded
+`RuntimeManager.provenance` operation. It checks worker/session identity and the
+private settings-path/stamp relationship (the settings file may legitimately be
+absent), then joins listed current-source, capture-source, scripted and installed
+module files to their expected bytes/RECORDs. It exports hashes and fixed facts,
+not settings contents or private paths. Missing required modules, unknown file
+evidence or mismatches fail before the timed phase. This is listed loaded-origin
+and current-file evidence: `importedBytesVerified` remains false, and neither
+exhaustive transitive imports nor historical imported bytes are established.
+Qualification must also retain the exact executed observer/owner bytes, truthful
+resolved dependency inputs and bounded output-drain disposition. Do not install
+global line/profile tracing or verbose import logging on the timed path, or
+replace an incomplete observation with an absence claim. Normal preparation
+owns full source and dependency closure; the fixture's source binding alone is
+not an OS network sandbox.
 Direct native-only reuse must retain an outer process-group owner and the
 240-second limit; the full qualifier supplies that owner and still runs both
 probes. Do not turn a separately passed native probe into a rewritten earlier

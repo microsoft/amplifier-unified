@@ -111,8 +111,9 @@ def test_wheel_package_mapping_uses_target_packages_before_global_packages():
     assert owner.wheel_package_prefixes(project) == {'global': 'global'}
 
 
-def test_qualifier_uses_source_to_prefix_map_before_preflight(tmp_path, monkeypatch, cli_sources):
+def test_qualifier_uses_source_to_prefix_map_before_preflight(tmp_path, monkeypatch, cli_sources, host_sources):
     inputs, digest = write_cli_sources(tmp_path, cli_sources)
+    host_path, host_digest = write_host_sources(tmp_path, host_sources)
     root = tmp_path/'source'; root.mkdir()
     package = 'components/scheduling-delivery/amplifier_scheduling'
     (root/'pyproject.toml').write_text(
@@ -150,6 +151,7 @@ def test_qualifier_uses_source_to_prefix_map_before_preflight(tmp_path, monkeypa
         '--unified-wheel', str(wheel), '--status-wheel', str(wheel),
         '--core-wheel', str(wheel), '--work', str(work),
         '--cli-sources', str(inputs), '--cli-sources-sha256', digest,
+        '--host-sources', str(host_path), '--host-sources-sha256', host_digest,
     ]) == 1
     receipt = json.loads((work/'result.json').read_text())
     assert receipt['error'] == 'test stops before preflight'
@@ -220,12 +222,14 @@ def test_candidate_force_included_bundle_files_bind_original_source(tmp_path):
         owner.matching_source(wheel, 'package', source, mapping)
 
 
-def test_wrong_host_and_reused_work_directory_refuse_before_effects(tmp_path, monkeypatch, cli_sources):
+def test_wrong_host_and_reused_work_directory_refuse_before_effects(tmp_path, monkeypatch, cli_sources, host_sources):
     inputs, digest = write_cli_sources(tmp_path, cli_sources)
+    host_path, host_digest = write_host_sources(tmp_path, host_sources)
     work = tmp_path/'owned'
     argv = ['--owned-dtu','owned-dtu','--python',sys.executable,'--cli-python',sys.executable,
             '--unified-wheel','missing','--status-wheel','missing','--core-wheel','missing',
-            '--work',str(work), '--cli-sources', str(inputs), '--cli-sources-sha256', digest]
+            '--work',str(work), '--cli-sources', str(inputs), '--cli-sources-sha256', digest,
+            '--host-sources', str(host_path), '--host-sources-sha256', host_digest]
     monkeypatch.setattr(owner.socket, 'gethostname', lambda:'wrong-host')
     with pytest.raises(ValueError, match='owned DTU'):
         owner.main(argv)
@@ -256,6 +260,19 @@ def cli_sources(tmp_path, native_probe):
 
 def write_cli_sources(tmp_path, value):
     path = tmp_path/'sources.json'
+    data = json.dumps(value).encode()
+    path.write_bytes(data)
+    return path, hashlib.sha256(data).hexdigest()
+
+
+@pytest.fixture
+def host_sources(tmp_path):
+    store = tmp_path/'host-store'; store.mkdir()
+    return {'schemaVersion': 1, 'store': str(store), 'captureCommit': 'a'*40}
+
+
+def write_host_sources(tmp_path, value):
+    path = tmp_path/'host-sources.json'
     data = json.dumps(value).encode()
     path.write_bytes(data)
     return path, hashlib.sha256(data).hexdigest()
@@ -340,12 +357,14 @@ async def test_native_cli_missing_input_refuses_before_runtime_or_work(tmp_path,
 
 
 @pytest.mark.asyncio
-async def test_native_cli_work_must_not_overlap_source_store(tmp_path, native_probe, cli_sources):
+async def test_native_cli_work_must_not_overlap_source_store(tmp_path, native_probe, cli_sources, host_sources):
     from types import SimpleNamespace
     path, digest = write_cli_sources(tmp_path, cli_sources)
+    host_path, host_digest = write_host_sources(tmp_path, host_sources)
     root = Path(cli_sources['store'])/'work'
     with pytest.raises(ValueError, match='must be separate'):
-        await native_probe.main(SimpleNamespace(root=root, cli_sources=path, cli_sources_sha256=digest))
+        await native_probe.main(SimpleNamespace(root=root, cli_sources=path, cli_sources_sha256=digest,
+                                               host_sources=host_path, host_sources_sha256=host_digest))
     assert not root.exists()
 
 
@@ -384,14 +403,23 @@ async def test_native_cli_verifies_all_objects_before_normal_binding(
 
 @pytest.mark.asyncio
 async def test_native_cli_failed_preparation_cannot_start_either_runtime(
-        tmp_path, native_probe, cli_sources, monkeypatch):
+        tmp_path, native_probe, cli_sources, host_sources, monkeypatch):
     from types import SimpleNamespace
     path, digest = write_cli_sources(tmp_path, cli_sources)
-    args = SimpleNamespace(root=tmp_path/'native', cli_sources=path, cli_sources_sha256=digest)
+    host_path, host_digest = write_host_sources(tmp_path, host_sources)
+    args = SimpleNamespace(root=tmp_path/'native', cli_sources=path, cli_sources_sha256=digest,
+                           host_sources=host_path, host_sources_sha256=host_digest)
     for key in ('CLI_PYTHON', 'AMPLIFIER_STATUS_DIR', 'AMPLIFIER_HOME',
-                'AMPLIFIER_WEB_HOME', 'AMPLIFIER_SESSION_STATE_HOME'):
+                'AMPLIFIER_WEB_HOME', 'AMPLIFIER_SESSION_STATE_HOME', 'AMPLIFIER_SOURCE_STORE',
+                'PYTHONDONTWRITEBYTECODE', 'UV_OFFLINE', 'GIT_CONFIG_NOSYSTEM',
+                'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0',
+                'GIT_CONFIG_VALUE_0', 'GIT_TERMINAL_PROMPT'):
         monkeypatch.setenv(key, 'test-original')
     monkeypatch.setattr(sys, 'path', list(sys.path))
+    monkeypatch.setattr(sys, 'dont_write_bytecode', sys.dont_write_bytecode)
+    async def prepared_host(root, inputs):
+        return Path(inputs['store'])/'exact-object'
+    monkeypatch.setattr(native_probe, 'prepare_host_sources', prepared_host)
     calls = []
     class Process:
         pid = 123
@@ -460,7 +488,8 @@ def test_native_cli_outer_qualifier_refuses_missing_inputs_before_effects(tmp_pa
         owner.main(argv)
     assert not work.exists()
     with pytest.raises(FileNotFoundError):
-        owner.main([*argv, '--cli-sources', str(tmp_path/'absent.json'), '--cli-sources-sha256', '0'*64])
+        owner.main([*argv, '--cli-sources', str(tmp_path/'absent.json'), '--cli-sources-sha256', '0'*64,
+                    '--host-sources', str(tmp_path/'host-absent.json'), '--host-sources-sha256', '0'*64])
     assert not work.exists()
 
 
@@ -638,11 +667,13 @@ def test_native_first_observation_requires_current_numeric_tool_entry(native_pro
 @pytest.mark.asyncio
 @pytest.mark.parametrize('outcome', ['success', 'late', 'private-error', 'cleanup-error'])
 async def test_native_first_observation_receipt_survives_failure_without_private_text(
-        tmp_path, native_probe, cli_sources, monkeypatch, outcome):
+        tmp_path, native_probe, cli_sources, host_sources, monkeypatch, outcome):
     from types import SimpleNamespace
     inputs, digest = write_cli_sources(tmp_path, cli_sources)
-    args = SimpleNamespace(root=tmp_path/'native', cli_sources=inputs, cli_sources_sha256=digest)
-    async def run_probe(args, root, inputs, result):
+    host_path, host_digest = write_host_sources(tmp_path, host_sources)
+    args = SimpleNamespace(root=tmp_path/'native', cli_sources=inputs, cli_sources_sha256=digest,
+                           host_sources=host_path, host_sources_sha256=host_digest)
+    async def run_probe(args, root, inputs, host_inputs, result):
         result['phase'] = 'first_observation_assertion'
         timing = result['timing']
         timing['phases']['first_observation_assertion'] = 20.
@@ -677,3 +708,195 @@ async def test_native_first_observation_receipt_survives_failure_without_private
     assert 'PRIVATE' not in raw and 'private-instance' not in raw and 'private-session' not in raw
     assert 'consumer' not in result
     assert 'cliPreparation' not in result
+
+
+def test_native_host_input_binds_exact_commit_and_digest(tmp_path, native_probe, host_sources):
+    path, digest = write_host_sources(tmp_path, host_sources)
+    assert native_probe.read_host_sources(path, digest) == host_sources
+    assert native_probe.host_settings(['optional'], host_sources) == {
+        'bundle': {'app': []}, 'web_bundles': {'excluded': ['optional']},
+        'sources': {'modules': {'hook-context-intelligence':
+            'git+'+native_probe.CAPTURE_REPOSITORY+'@'+'a'*40
+            +'#subdirectory=modules/hook-context-intelligence'}}}
+    with pytest.raises(ValueError, match='digest'):
+        native_probe.read_host_sources(path, '0'*64)
+
+
+@pytest.mark.parametrize('change', ['moving', 'extra', 'schema', 'relative', 'duplicate', 'oversize'])
+def test_native_host_input_refuses_ambiguous_or_unpinned_sources(tmp_path, native_probe, host_sources, change):
+    if change == 'moving':
+        host_sources['captureCommit'] = 'main'
+    elif change == 'extra':
+        host_sources['url'] = 'https://unreviewed.invalid'
+    elif change == 'schema':
+        host_sources['schemaVersion'] = True
+    elif change == 'relative':
+        host_sources['store'] = 'relative'
+    path, digest = write_host_sources(tmp_path, host_sources)
+    if change in {'duplicate', 'oversize'}:
+        data = path.read_bytes()
+        data = (data.replace(b'"schemaVersion": 1', b'"schemaVersion": 1, "schemaVersion": 1')
+                if change == 'duplicate' else data+b' '*65536)
+        path.write_bytes(data); digest = hashlib.sha256(data).hexdigest()
+    with pytest.raises(ValueError):
+        native_probe.read_host_sources(path, digest)
+
+
+@pytest.mark.parametrize('placement', ['same-store', 'nested-store', 'work-in-host'])
+def test_native_host_input_store_separation(tmp_path, native_probe, cli_sources, host_sources, placement):
+    root = tmp_path/'native'
+    if placement == 'same-store':
+        host_sources['store'] = cli_sources['store']
+    elif placement == 'nested-store':
+        host_sources['store'] = str(Path(cli_sources['store'])/'host')
+    else:
+        root = Path(host_sources['store'])/'native'
+    with pytest.raises(ValueError, match='separate'):
+        native_probe.separate_source_work(root, cli_sources, host_sources)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bad', [None, 'bundle-pin', 'hook-pin', 'object'])
+async def test_native_host_prepare_verifies_installed_graph_before_exact_binding(
+        tmp_path, native_probe, host_sources, monkeypatch, bad):
+    import importlib.metadata
+    from types import SimpleNamespace
+    import amplifier_foundation.sources.shared as shared
+    from amplifier_web.host import config
+    calls = []
+    def distribution(name):
+        hook = name == 'amplifier-module-hook-context-intelligence'
+        commit = 'b'*40 if bad == ('hook-pin' if hook else 'bundle-pin') else 'a'*40
+        direct = {'url': native_probe.CAPTURE_REPOSITORY,
+                  'vcs_info': {'vcs': 'git', 'commit_id': commit}}
+        if hook:
+            direct['subdirectory'] = 'modules/hook-context-intelligence'
+        return SimpleNamespace(read_text=lambda name: json.dumps(direct))
+    monkeypatch.setattr(importlib.metadata, 'distribution', distribution)
+    registry = tmp_path/'actual-registry'
+    monkeypatch.setattr(config, 'read_config', lambda *a, **kw: SimpleNamespace(
+        registry_home=registry, module_sources=native_probe.host_settings([], host_sources)['sources']['modules']))
+    class Store:
+        def __init__(self, path):
+            assert path == host_sources['store']
+        def verify(self, url, commit):
+            calls.append('verify')
+            assert url == native_probe.CAPTURE_REPOSITORY and commit == 'a'*40
+            if bad == 'object':
+                raise ValueError('Missing complete object')
+            return tmp_path/'complete-object'
+        async def bind(self, cache, url, ref, commit):
+            assert calls == ['verify']
+            assert cache == registry/'cache' and ref == commit == 'a'*40
+            calls.append('bind')
+    monkeypatch.setattr(shared, 'SharedSourceStore', Store)
+    if bad:
+        with pytest.raises(ValueError if bad == 'object' else AssertionError):
+            await native_probe.prepare_host_sources(tmp_path, host_sources)
+        assert 'bind' not in calls
+    else:
+        assert await native_probe.prepare_host_sources(tmp_path, host_sources) == tmp_path/'complete-object'
+        assert calls == ['verify', 'bind']
+
+
+@pytest.mark.asyncio
+async def test_native_host_missing_input_refuses_before_work(tmp_path, native_probe, cli_sources):
+    from types import SimpleNamespace
+    path, digest = write_cli_sources(tmp_path, cli_sources)
+    args = SimpleNamespace(root=tmp_path/'native', cli_sources=path, cli_sources_sha256=digest,
+                           host_sources=tmp_path/'absent', host_sources_sha256='0'*64)
+    with pytest.raises(FileNotFoundError):
+        await native_probe.main(args)
+    assert not args.root.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bad', [
+    None, 'changed-worker', 'session', 'unstable', 'unknown', 'absent-ci',
+    'file-unknown', 'hash', 'record', 'foreign-ci', 'ready-outside', 'duplicate-stamp',
+])
+async def test_native_host_provenance_joins_current_worker_without_loading_modules(
+        tmp_path, native_probe, monkeypatch, bad):
+    import importlib.metadata
+    import base64
+    from types import SimpleNamespace
+    root = tmp_path/'native'; root.mkdir()
+    source = tmp_path/'source'; source.mkdir()
+    capture = tmp_path/'capture'; capture.mkdir()
+    prefix = tmp_path/'prefix'; prefix.mkdir()
+    monkeypatch.setattr(native_probe, 'ROOT', source)
+    monkeypatch.setattr(sys, 'prefix', str(prefix))
+    records = {}
+    def file(path):
+        path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(b'fixed source')
+        return path
+    origins = {
+        '__main__': file(source/'amplifier_web/runtime_worker.py'),
+        'amplifier_web': file(source/'amplifier_web/__init__.py'),
+        'amplifier_core': file(prefix/'amplifier_core/__init__.py'),
+        'amplifier_foundation': file(prefix/'amplifier_foundation/__init__.py'),
+        native_probe.CAPTURE_MODULE: file(capture/'modules/hook-context-intelligence'/
+                                         native_probe.CAPTURE_MODULE/'__init__.py'),
+    }
+    for path in origins.values():
+        records[path] = base64.urlsafe_b64encode(hashlib.sha256(path.read_bytes()).digest()).decode().rstrip('=')
+    dist = SimpleNamespace(files=[SimpleNamespace(hash=SimpleNamespace(mode='sha256', value=value), path=path)
+                                  for path, value in records.items()],
+                           locate_file=lambda item: item.path)
+    if bad == 'record':
+        next(item for item in dist.files if item.path == origins['amplifier_core']).hash.value = 'wrong'
+    monkeypatch.setattr(importlib.metadata, 'distributions', lambda: [dist])
+    monkeypatch.setattr(importlib.metadata, 'distribution', lambda name: SimpleNamespace(
+        locate_file=lambda name: prefix/name))
+    path = root/'settings-not-created.yaml'
+    if bad == 'ready-outside':
+        path = tmp_path/'outside'
+    row = {'process': SimpleNamespace(pid=123, returncode=None), 'started_at': 5.,
+           'runtime_id': 'runtime', 'sessionSettingsPath': str(path),
+           'configurationStamp': [[str(path), None]]}
+    if bad == 'duplicate-stamp':
+        row['configurationStamp'].append([str(path), None])
+    modules = []
+    for name in dict.fromkeys([*native_probe.WORKER_MODULES, 'amplifier_core', 'amplifier_foundation']):
+        item = {'module': name, 'loaded': name in origins, 'fileStatus': 'unknown',
+                'importedBytesVerified': False}
+        if name in origins:
+            origin = origins[name]
+            item.update(origin=str(origin), fileStatus='observed', bytes=origin.stat().st_size,
+                        currentFileSha256=hashlib.sha256(origin.read_bytes()).hexdigest())
+        modules.append(item)
+    ci = next(item for item in modules if item['module'] == native_probe.CAPTURE_MODULE)
+    if bad == 'absent-ci':
+        ci['loaded'] = False
+    elif bad == 'file-unknown':
+        ci['fileStatus'] = 'unknown'
+    elif bad == 'hash':
+        ci['currentFileSha256'] = '0'*64
+    elif bad == 'foreign-ci':
+        ci['origin'] = str(file(root/'unexpected-real-source/__init__.py'))
+    calls = []
+    class Runtime:
+        workers = {'sid': row}
+        async def provenance(self, sid, modules=()):
+            calls.append((sid, modules))
+            return {'status': 'unknown' if bad == 'unknown' else 'observed',
+                    'identityStable': bad != 'unstable', 'mounted': True,
+                    'workerInstance': '999:5.0' if bad == 'changed-worker' else '123:5.0',
+                    'runtimeSessionId': 'other' if bad == 'session' else 'runtime',
+                    'modules': evidence}
+    evidence = modules
+    proof = {}
+    if bad:
+        with pytest.raises(AssertionError):
+            await native_probe.observe_worker(Runtime(), 'sid', root, capture, proof)
+        assert proof['passed'] is False
+    else:
+        await native_probe.observe_worker(Runtime(), 'sid', root, capture, proof)
+        assert proof['passed'] and proof['readyStampMatches']
+        assert proof['readySettingsSha256'] is None and not proof['readySettingsPresent']
+        assert not proof['importedBytesVerified'] and not proof['exhaustive']
+        assert next(item for item in proof['modules'] if item['module'] == native_probe.CAPTURE_MODULE)['originClass'] == 'capture'
+        assert 'unexpected-real-source' not in json.dumps(proof)
+    assert len(calls) == (0 if bad in {'ready-outside', 'duplicate-stamp'} else 1)
+    if calls:
+        assert calls == [('sid', native_probe.WORKER_MODULES)] and len(native_probe.WORKER_MODULES) <= 16

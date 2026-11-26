@@ -189,6 +189,8 @@ def main(argv=None):
     parser.add_argument('--source-revision')
     parser.add_argument('--cli-sources', type=Path, required=True, help='Reviewed exact public CLI source-store inputs')
     parser.add_argument('--cli-sources-sha256', required=True)
+    parser.add_argument('--host-sources', type=Path, required=True, help='Reviewed exact Unified capture source-store input')
+    parser.add_argument('--host-sources-sha256', required=True)
     args = parser.parse_args(argv)
     if socket.gethostname() != args.owned_dtu:
         raise ValueError('Run inside the explicitly named owned DTU')
@@ -204,9 +206,8 @@ def main(argv=None):
     probe = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(probe)
     inputs = probe.read_cli_sources(args.cli_sources, args.cli_sources_sha256)
-    store = Path(inputs['store'])
-    if work == store or work.is_relative_to(store) or store.is_relative_to(work):
-        raise ValueError('Work and prepared source store must be separate')
+    host_inputs = probe.read_host_sources(args.host_sources, args.host_sources_sha256)
+    probe.separate_source_work(work, inputs, host_inputs)
     work.mkdir(parents=True, exist_ok=False)
     env = {key: value for key, value in os.environ.items()
            if key in {'PATH', 'LANG', 'SSL_CERT_FILE', 'SSL_CERT_DIR'}}
@@ -260,7 +261,9 @@ def main(argv=None):
         env.update(CLI_PYTHON=args.cli_python, CONSUMER_PYTHON=str(work/'consumer-env/bin/python'))
         native = [args.python, '-I', str(ROOT/'tests/fixtures/status_emitter_probe.py'), str(work/'native')]
         native += ['--cli-sources', str(args.cli_sources.resolve()),
-                   '--cli-sources-sha256', args.cli_sources_sha256]
+                   '--cli-sources-sha256', args.cli_sources_sha256,
+                   '--host-sources', str(args.host_sources.resolve()),
+                   '--host-sources-sha256', args.host_sources_sha256]
         run('native', native, timeout=240)
         receipt['native'] = json.loads((work/'native/result.json').read_text())
         if receipt['native'].get('passed') is not True:

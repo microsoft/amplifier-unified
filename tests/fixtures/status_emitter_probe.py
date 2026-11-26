@@ -9,9 +9,13 @@ shared-store path, sources: [{url, ref, commit}]). Its explicit SHA-256 binds th
 selection. Prepare complete public objects and installed module dependencies
 normally, outside this probe. The probe only verifies objects and creates normal
 Foundation ref bindings in its NEW private home; it never acquires source inputs.
+--host-sources and --host-sources-sha256 separately bind schemaVersion: 1,
+store: an absolute host source store, captureCommit: an exact public CI commit.
+The capture hook and installed CI bundle must use that same selection.
 """
 import argparse
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -43,6 +47,28 @@ DEFAULT_MODULES = {
     'tool-image', 'tool-mode', 'hooks-mode', 'tool-skills',
     'hooks-routing', 'hooks-wayfinder', 'hooks-approval',
 }
+CAPTURE_REPOSITORY = 'https://github.com/microsoft/amplifier-bundle-context-intelligence'
+CAPTURE_MODULE = 'amplifier_module_hook_context_intelligence'
+CAPTURE_FILES = {
+    CAPTURE_MODULE: '__init__.py',
+    CAPTURE_MODULE+'.config_resolver': 'config_resolver.py',
+    CAPTURE_MODULE+'.handlers': 'handlers/__init__.py',
+    CAPTURE_MODULE+'.handlers.logging_handler': 'handlers/logging_handler.py',
+    CAPTURE_MODULE+'.upload': 'upload.py',
+    CAPTURE_MODULE+'.fanout': 'fanout.py',
+}
+WORKER_SOURCE_FILES = {
+    '__main__': 'amplifier_web/runtime_worker.py',
+    'runtime_bootstrap': 'amplifier_web/runtime_bootstrap.py',
+    'runtime_protocol': 'amplifier_web/runtime_protocol.py',
+    'amplifier_web': 'amplifier_web/__init__.py',
+    'amplifier_operations': 'amplifier_operations/__init__.py',
+    'amplifier_kernels': 'amplifier_kernels/__init__.py',
+    'amplifier_scheduling.store': 'components/scheduling-delivery/amplifier_scheduling/store.py',
+}
+WORKER_MODULES = (*WORKER_SOURCE_FILES, 'amplifier_module_loop_live',
+                  'amplifier_module_context_simple', 'amplifier_module_hooks_session_naming',
+                  *CAPTURE_FILES)
 
 
 def read_cli_sources(path, expected_sha256):
@@ -85,6 +111,154 @@ def read_cli_sources(path, expected_sha256):
     if not required <= identities:
         raise ValueError('CLI default source bindings are incomplete')
     return value
+
+
+def read_host_sources(path, expected_sha256):
+    with Path(path).open('rb') as stream:
+        data = stream.read(65537)
+    if (len(data) > 65536 or not re.fullmatch(r'[a-f0-9]{64}', expected_sha256 or '')
+            or hashlib.sha256(data).hexdigest() != expected_sha256):
+        raise ValueError('Host source input size or digest differs')
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError('Ambiguous host source input')
+            value[key] = item
+        return value
+    value = json.loads(data, object_pairs_hook=unique)
+    if (not isinstance(value, dict) or set(value) != {'schemaVersion', 'store', 'captureCommit'}
+            or type(value['schemaVersion']) is not int or value['schemaVersion'] != 1
+            or not isinstance(value['captureCommit'], str)
+            or not re.fullmatch(r'[a-f0-9]{40}', value['captureCommit'])
+            or not isinstance(value['store'], str)):
+        raise ValueError('Expected exact host source input schemaVersion 1')
+    store = Path(value['store'])
+    if not store.is_absolute() or store != store.resolve(strict=True) or not store.is_dir():
+        raise ValueError('Host source store must be an existing canonical directory')
+    return value
+
+
+def separate_source_work(root, cli_inputs, host_inputs):
+    paths = [root, Path(cli_inputs['store']), Path(host_inputs['store'])]
+    if any(a.is_relative_to(b) or b.is_relative_to(a)
+           for index, a in enumerate(paths) for b in paths[index+1:]):
+        raise ValueError('Native work and prepared source stores must be separate')
+
+
+def host_settings(excluded, host_inputs):
+    return {'bundle': {'app': []}, 'web_bundles': {'excluded': list(excluded)},
+            'sources': {'modules': {'hook-context-intelligence':
+                'git+'+CAPTURE_REPOSITORY+'@'+host_inputs['captureCommit']
+                +'#subdirectory=modules/hook-context-intelligence'}}}
+
+
+async def prepare_host_sources(root, inputs):
+    """Use the installed host Foundation, not the independent CLI's Foundation."""
+    from importlib.metadata import distribution
+    from amplifier_foundation.sources.shared import SharedSourceStore
+    from amplifier_web.host.config import read_config
+    config = read_config(root/'workspace', home=root/'app', shared_home=root/'shared')
+    expected = host_settings([], inputs)['sources']['modules']['hook-context-intelligence']
+    assert config.module_sources.get('hook-context-intelligence') == expected
+    # A hook source override does not rewrite installed transitive dependencies.
+    # Require both normally installed distributions to name the same public pin.
+    for name, subdirectory in (
+            ('amplifier-bundle-context-intelligence', None),
+            ('amplifier-module-hook-context-intelligence', 'modules/hook-context-intelligence')):
+        direct = json.loads(distribution(name).read_text('direct_url.json') or 'null')
+        assert isinstance(direct, dict) and direct.get('url') == CAPTURE_REPOSITORY
+        assert direct.get('vcs_info', {}).get('vcs') == 'git'
+        assert direct.get('vcs_info', {}).get('commit_id') == inputs['captureCommit']
+        assert direct.get('subdirectory') == subdirectory
+        assert direct.get('dir_info', {}).get('editable') is not True
+    store = SharedSourceStore(inputs['store'])
+    # verify() checks the full already-prepared repository. Never ensure/acquire
+    # an absent object here. bind() receives the exact commit as both ref and pin.
+    source = store.verify(CAPTURE_REPOSITORY, inputs['captureCommit'])
+    await store.bind(config.registry_home/'cache', CAPTURE_REPOSITORY,
+                     inputs['captureCommit'], inputs['captureCommit'])
+    return source
+
+
+async def observe_worker(runtime, sid, root, capture_source, proof):
+    """Untimed, bounded, listed-module evidence; never an exhaustive import trace."""
+    from amplifier_web.shared_state import configuration_path_stamp, configuration_path_digest
+    from importlib.metadata import distribution, distributions
+    row = runtime.workers.get(sid)
+    assert row and row['process'].returncode is None, 'No existing worker'
+    pid, started = row['process'].pid, row['started_at']
+    proof.update(passed=False, pid=pid, startedMonotonic=started,
+                 importedBytesVerified=False, exhaustive=False, modules=[])
+    path = Path(row.get('sessionSettingsPath', '')).resolve()
+    matches = [entry for entry in row.get('configurationStamp', [])
+               if isinstance(entry, list) and len(entry) == 2 and entry[0] == str(path)]
+    proof['readySettingsContained'] = path.is_relative_to(root)
+    proof['readyStampMatches'] = len(matches) == 1 and matches[0][1] == configuration_path_stamp(path)
+    assert proof['readySettingsContained'] and proof['readyStampMatches'], 'READY settings identity differs'
+    proof['readySettingsSha256'] = configuration_path_digest(path)
+    proof['readySettingsPresent'] = matches[0][1] is not None
+    observed = await runtime.provenance(sid, modules=WORKER_MODULES)
+    proof['identityStable'] = observed.get('identityStable') is True
+    proof['sameWorker'] = (runtime.workers.get(sid) is row and row['process'].returncode is None
+                           and observed.get('workerInstance') == f'{pid}:{started}')
+    proof['sameSession'] = observed.get('runtimeSessionId') == row.get('runtime_id')
+    assert (observed.get('status') == 'observed' and observed.get('mounted') is True
+            and proof['identityStable'] and proof['sameWorker'] and proof['sameSession']), 'Worker provenance incomplete'
+    modules = observed.get('modules')
+    assert isinstance(modules, list) and len(modules) <= 64
+    names = [item['module'] for item in modules]
+    required = {'__main__', 'amplifier_web', 'amplifier_core', 'amplifier_foundation', CAPTURE_MODULE}
+    assert len(set(names)) == len(names) and (set(WORKER_MODULES) | required) <= set(names)
+    capture_package = capture_source/'modules/hook-context-intelligence'/CAPTURE_MODULE
+    installed_capture = Path(distribution('amplifier-module-hook-context-intelligence').locate_file(CAPTURE_MODULE)).resolve()
+    authored = {root/'provider/amplifier_module_provider_statusfixture/__init__.py',
+                root/'tools/amplifier_module_tool_statusfixture/__init__.py'}
+    # Join listed installed origins to normal RECORD hashes, not merely a path
+    # beneath a trusted prefix. This remains current-file, not imported-byte proof.
+    installed = {}
+    for dist in distributions():
+        for file in dist.files or ():
+            if file.hash and file.hash.mode == 'sha256':
+                installed.setdefault(Path(dist.locate_file(file)).resolve(), []).append(file.hash.value)
+    total = 0
+    for item in modules:
+        name = item['module']
+        assert isinstance(name, str) and len(name) <= 200 and re.fullmatch(r'[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*', name)
+        safe = {'module': name, 'loaded': item.get('loaded') is True}
+        proof['modules'].append(safe)
+        if not safe['loaded']:
+            assert name not in required, 'Required worker module absent'
+            continue
+        assert item.get('fileStatus') == 'observed' and item.get('importedBytesVerified') is False
+        origin = Path(item['origin']).resolve(strict=True)
+        if name in CAPTURE_FILES:
+            expected = capture_package/CAPTURE_FILES[name]
+            assert origin in {expected.resolve(strict=True), installed_capture/CAPTURE_FILES[name]}, 'Capture origin differs'
+            kind = 'capture'
+        elif name in WORKER_SOURCE_FILES:
+            expected = ROOT/WORKER_SOURCE_FILES[name]
+            assert origin == expected.resolve(strict=True), 'Current source origin differs'
+            kind = 'current-source'
+        elif origin in authored:
+            expected, kind = origin, 'scripted-provider-or-tool'
+        elif origin.is_relative_to(ROOT/'amplifier_web'):
+            expected, kind = origin, 'current-source'
+        else:
+            assert origin.is_relative_to(Path(sys.prefix).resolve()), 'Undeclared worker origin'
+            expected, kind = origin, 'installed-host'
+        with expected.open('rb') as stream:
+            data = stream.read(2*1024*1024+1)
+        total += len(data)
+        assert len(data) <= 2*1024*1024 and total <= 16*1024*1024
+        digest = hashlib.sha256(data).hexdigest()
+        if kind == 'installed-host' or origin.is_relative_to(installed_capture):
+            record = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).decode().rstrip('=')
+            assert installed.get(origin) and all(value == record for value in installed[origin]), 'Installed RECORD differs'
+        safe.update(originClass=kind, currentFileSha256=digest, bytes=len(data),
+                    originPathSha256=hashlib.sha256(str(origin).encode()).hexdigest())
+        assert item.get('currentFileSha256') == digest and item.get('bytes') == len(data), 'Worker source bytes differ'
+    proof['passed'] = True
 
 
 def cli_environment(root, store):
@@ -317,10 +491,9 @@ def record_cli_tool_entry(root, cli, timing):
 
 async def main(args):
     inputs = read_cli_sources(args.cli_sources, args.cli_sources_sha256)
+    host_inputs = read_host_sources(args.host_sources, args.host_sources_sha256)
     root = args.root.resolve()
-    store = Path(inputs['store'])
-    if root == store or root.is_relative_to(store) or store.is_relative_to(root):
-        raise ValueError('Native work and prepared source store must be separate')
+    separate_source_work(root, inputs, host_inputs)
     root.mkdir(parents=True)
     # This receipt survives handled failures without copying exception text,
     # consumer rows, prompts or private logs. Forced outer termination can still
@@ -329,7 +502,7 @@ async def main(args):
               'timing': {'firstCliTool': None, 'finalCliTool': None,
                          'toolEntryAt': None, 'phases': {}}}
     try:
-        await run_probe(args, root, inputs, result)
+        await run_probe(args, root, inputs, host_inputs, result)
     except BaseException as error:
         result['passed'] = False
         # A failure in cleanup must not turn the success-only payload into
@@ -343,7 +516,7 @@ async def main(args):
         (root/'result.json').write_text(json.dumps(result, indent=2, allow_nan=False)+'\n')
 
 
-async def run_probe(args, root, inputs, result):
+async def run_probe(args, root, inputs, host_inputs, result):
     timing = result['timing']
     def phase(name):
         result['phase'] = name
@@ -356,10 +529,19 @@ async def run_probe(args, root, inputs, result):
     sys.path.insert(0, str(ROOT))
     registry = root/'status'
     os.environ.update(AMPLIFIER_STATUS_DIR=str(registry), AMPLIFIER_HOME=str(root/'shared'),
-                      AMPLIFIER_WEB_HOME=str(root/'app'), AMPLIFIER_SESSION_STATE_HOME=str(root/'ownership'))
+                      AMPLIFIER_WEB_HOME=str(root/'app'), AMPLIFIER_SESSION_STATE_HOME=str(root/'ownership'),
+                      AMPLIFIER_SOURCE_STORE=host_inputs['store'], PYTHONDONTWRITEBYTECODE='1',
+                      UV_OFFLINE='true', GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
+                      GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='protocol.allow',
+                      GIT_CONFIG_VALUE_0='never', GIT_TERMINAL_PROMPT='0')
+    sys.dont_write_bytecode = True
     settings = root/'shared/settings.yaml'; settings.parent.mkdir()
     from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
-    settings.write_text(json.dumps({'bundle': {'app': []}, 'web_bundles': {'excluded': list(DEFAULT_BEHAVIORS)}}))
+    settings.write_text(json.dumps(host_settings(DEFAULT_BEHAVIORS, host_inputs)))
+    phase('host_sources')
+    capture_source = await prepare_host_sources(root, host_inputs)
+    result['hostSources'] = {'inputSha256': args.host_sources_sha256,
+                             'captureCommit': host_inputs['captureCommit']}
     provider = root/'provider/amplifier_module_provider_statusfixture'; provider.mkdir(parents=True)
     provider.joinpath('__init__.py').write_text('''from amplifier_core import ProviderInfo
 from amplifier_core.message_models import ChatResponse, TextBlock, ToolCall, Usage
@@ -442,6 +624,9 @@ async def mount(coordinator,config=None):
     try:
         phase('runtime_start')
         await app.management.ensure_runtime(session)
+        phase('worker_provenance')
+        result['workerProvenance'] = {}
+        await observe_worker(runtime, sid, root, capture_source, result['workerProvenance'])
         # Public CLI entry point, installed in an environment without Unified.
         phase('cli_registration')
         registration = await asyncio.create_subprocess_exec(os.environ['CLI_PYTHON'], '-m', 'amplifier_app_cli.main', 'bundle', 'add', bundle.as_uri(), '--name', 'status-proof', cwd=workspace, env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -531,10 +716,14 @@ if __name__ == '__main__':
     parser.add_argument('root', type=Path)
     parser.add_argument('--cli-sources', type=Path, required=True)
     parser.add_argument('--cli-sources-sha256', required=True)
+    parser.add_argument('--host-sources', type=Path)
+    parser.add_argument('--host-sources-sha256')
     parser.add_argument('--prepare-cli', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.prepare_cli:
         asyncio.run(prepare_cli(args.root, read_cli_sources(args.cli_sources, args.cli_sources_sha256),
                                 args.cli_sources_sha256))
     else:
+        if args.host_sources is None or args.host_sources_sha256 is None:
+            parser.error('native execution requires --host-sources and --host-sources-sha256')
         asyncio.run(main(args))
