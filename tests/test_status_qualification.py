@@ -814,6 +814,8 @@ async def test_native_host_missing_input_refuses_before_work(tmp_path, native_pr
 @pytest.mark.parametrize('bad', [
     None, 'changed-worker', 'session', 'unstable', 'unknown', 'absent-ci',
     'file-unknown', 'hash', 'record', 'foreign-ci', 'ready-outside', 'duplicate-stamp',
+    'scheduling-installed', 'scheduling-source', 'scheduling-bytes',
+    'scheduling-record', 'scheduling-missing-record', 'scheduling-foreign',
 ])
 async def test_native_host_provenance_joins_current_worker_without_loading_modules(
         tmp_path, native_probe, monkeypatch, bad):
@@ -838,6 +840,15 @@ async def test_native_host_provenance_joins_current_worker_without_loading_modul
         native_probe.CAPTURE_MODULE: file(capture/'modules/hook-context-intelligence'/
                                          native_probe.CAPTURE_MODULE/'__init__.py'),
     }
+    scheduling = bad is not None and bad.startswith('scheduling-')
+    if scheduling:
+        selected = file(source/native_probe.WORKER_SOURCE_FILES['amplifier_scheduling.store'])
+        installed_path = file(prefix/'amplifier_scheduling/store.py')
+        origins['amplifier_scheduling.store'] = selected if bad == 'scheduling-source' else installed_path
+        if bad == 'scheduling-bytes':
+            installed_path.write_bytes(b'different wheel bytes')
+        elif bad == 'scheduling-foreign':
+            origins['amplifier_scheduling.store'] = file(prefix/'foreign/store.py')
     for path in origins.values():
         records[path] = base64.urlsafe_b64encode(hashlib.sha256(path.read_bytes()).digest()).decode().rstrip('=')
     dist = SimpleNamespace(files=[SimpleNamespace(hash=SimpleNamespace(mode='sha256', value=value), path=path)
@@ -846,8 +857,18 @@ async def test_native_host_provenance_joins_current_worker_without_loading_modul
     if bad == 'record':
         next(item for item in dist.files if item.path == origins['amplifier_core']).hash.value = 'wrong'
     monkeypatch.setattr(importlib.metadata, 'distributions', lambda: [dist])
-    monkeypatch.setattr(importlib.metadata, 'distribution', lambda name: SimpleNamespace(
-        locate_file=lambda name: prefix/name))
+    class WheelFile:
+        def __init__(self):
+            self.hash = SimpleNamespace(mode='sha256', value=records.get(prefix/'amplifier_scheduling/store.py'))
+        def __str__(self):
+            return 'amplifier_scheduling/store.py'
+    wheel_file = WheelFile()
+    if bad == 'scheduling-record':
+        wheel_file.hash.value = 'wrong'
+    wheel = SimpleNamespace(files=[] if bad == 'scheduling-missing-record' else [wheel_file],
+                            locate_file=lambda name: prefix/name, read_text=lambda name: None)
+    monkeypatch.setattr(importlib.metadata, 'distribution', lambda name:
+                        wheel if name == 'amplifier-unified' else SimpleNamespace(locate_file=lambda name: prefix/name))
     path = root/'settings-not-created.yaml'
     if bad == 'ready-outside':
         path = tmp_path/'outside'
@@ -886,7 +907,7 @@ async def test_native_host_provenance_joins_current_worker_without_loading_modul
                     'modules': evidence}
     evidence = modules
     proof = {}
-    if bad:
+    if bad not in {None, 'scheduling-installed', 'scheduling-source'}:
         with pytest.raises(AssertionError):
             await native_probe.observe_worker(Runtime(), 'sid', root, capture, proof)
         assert proof['passed'] is False
@@ -896,6 +917,9 @@ async def test_native_host_provenance_joins_current_worker_without_loading_modul
         assert proof['readySettingsSha256'] is None and not proof['readySettingsPresent']
         assert not proof['importedBytesVerified'] and not proof['exhaustive']
         assert next(item for item in proof['modules'] if item['module'] == native_probe.CAPTURE_MODULE)['originClass'] == 'capture'
+        if scheduling:
+            expected_kind = 'current-source' if bad == 'scheduling-source' else 'installed-selected-source'
+            assert next(item for item in proof['modules'] if item['module'] == 'amplifier_scheduling.store')['originClass'] == expected_kind
         assert 'unexpected-real-source' not in json.dumps(proof)
     assert len(calls) == (0 if bad in {'ready-outside', 'duplicate-stamp'} else 1)
     if calls:

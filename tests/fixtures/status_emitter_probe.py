@@ -232,14 +232,28 @@ async def observe_worker(runtime, sid, root, capture_source, proof):
             continue
         assert item.get('fileStatus') == 'observed' and item.get('importedBytesVerified') is False
         origin = Path(item['origin']).resolve(strict=True)
+        owner_record = None
         if name in CAPTURE_FILES:
             expected = capture_package/CAPTURE_FILES[name]
             assert origin in {expected.resolve(strict=True), installed_capture/CAPTURE_FILES[name]}, 'Capture origin differs'
             kind = 'capture'
         elif name in WORKER_SOURCE_FILES:
             expected = ROOT/WORKER_SOURCE_FILES[name]
-            assert origin == expected.resolve(strict=True), 'Current source origin differs'
             kind = 'current-source'
+            if name == 'amplifier_scheduling.store' and origin != expected.resolve(strict=True):
+                # Worker bootstrap exposes only Web/Operations/Kernels from
+                # source. Scheduling can come from the normal Unified wheel.
+                dist = distribution('amplifier-unified')
+                direct = json.loads(dist.read_text('direct_url.json') or '{}')
+                assert direct.get('dir_info', {}).get('editable') is not True
+                relative = 'amplifier_scheduling/store.py'
+                assert origin == Path(dist.locate_file(relative)).resolve(strict=True), 'Selected package origin differs'
+                entries = [file for file in dist.files or () if str(file) == relative]
+                assert len(entries) == 1 and entries[0].hash and entries[0].hash.mode == 'sha256'
+                owner_record = entries[0].hash.value
+                kind = 'installed-selected-source'
+            else:
+                assert origin == expected.resolve(strict=True), 'Current source origin differs'
         elif origin in authored:
             expected, kind = origin, 'scripted-provider-or-tool'
         elif origin.is_relative_to(ROOT/'amplifier_web'):
@@ -252,8 +266,10 @@ async def observe_worker(runtime, sid, root, capture_source, proof):
         total += len(data)
         assert len(data) <= 2*1024*1024 and total <= 16*1024*1024
         digest = hashlib.sha256(data).hexdigest()
-        if kind == 'installed-host' or origin.is_relative_to(installed_capture):
+        if owner_record is not None or kind == 'installed-host' or origin.is_relative_to(installed_capture):
             record = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).decode().rstrip('=')
+            if owner_record is not None:
+                assert owner_record == record, 'Selected package RECORD differs'
             assert installed.get(origin) and all(value == record for value in installed[origin]), 'Installed RECORD differs'
         safe.update(originClass=kind, currentFileSha256=digest, bytes=len(data),
                     originPathSha256=hashlib.sha256(str(origin).encode()).hexdigest())
