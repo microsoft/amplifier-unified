@@ -80,6 +80,22 @@ def test_exact_bound_client_monotonic_demand_and_scope(owner):
     assert owner.snapshot('one')['instances']['nav']['resources'].keys() == {'context'}
 
 
+def test_compact_bootstrap_sends_recent_rows_once_and_preserves_explicit_readers(owner):
+    scope = resources.scope_for(owner.shell.service.state)
+    def recent():
+        return owner.snapshot('one')['instances']['nav']['resources']['recentNavigation']['value']
+
+    register(owner)
+    full = recent()
+    assert full['recentShortcuts'] == full['recentNavigation']['items']
+    owner.register('one', 1, ['recentNavigation'], scope, compact=True)
+    assert recent() == {'recentNavigation': full['recentNavigation']}
+    register(owner, demand=2)
+    assert recent() == {'recentNavigation': full['recentNavigation']}
+    owner.register('one', 2, ['recentNavigation'], scope, compact=False)
+    assert recent() == full
+
+
 def test_quiet_progress_reuses_pages_and_context_without_catalog_or_payload_work(owner, monkeypatch):
     register(owner, ('recentNavigation','sidebarSearch'))
     first = owner.snapshot('one'); old = deepcopy(first)
