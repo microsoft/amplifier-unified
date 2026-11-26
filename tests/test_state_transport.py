@@ -617,3 +617,77 @@ async def test_real_http_receipt_delta_reconnect_and_legacy_client(authenticated
     del client.session.headers['X-Amplifier-State-Transport']
     old = await (await client.post('/api/actions', json={'action': 'view.update', 'args': {'patch': {'navWidth': 302}}})).json()
     assert old['state']['view']['navWidth'] == 302
+
+
+def _selected_page(identity, revision):
+    return {'revision': revision, 'selectedSessionId': identity, 'sessions': [{
+        'id': identity, 'messageWindow': {'windowKey': 'window', 'revision': 'source'},
+        'messages': [{'id': 'm', 'text': 'original'}]}]}
+
+
+def test_return_to_one_warm_page_requires_exact_departed_stream_state():
+    from amplifier_web.state_transport import WarmPageDelta
+
+    first = _selected_page('A', 1)
+    next_chat = _selected_page('B', 2)
+    returning = _selected_page('A', 3)
+    returning['sessions'][0]['messageWindow']['before'] = 'new cursor'
+    returning['sessions'][0]['title'] = 'Changed title'
+    stream = WarmPageDelta()
+    assert stream.build(first, next_chat) == delta(first, next_chat)
+    packet = stream.build(next_chat, returning)
+    assert packet['reuseMessages'] == {
+        'sessionId': 'A', 'revision': 'source', 'windowKey': 'window', 'fromRevision': 1}
+    row, = next(c['value'] for c in packet['changes'] if c['path'] == ['sessions'])
+    assert 'messages' not in row
+    assert row['title'] == 'Changed title' and row['messageWindow']['before'] == 'new cursor'
+    assert returning['sessions'][0]['messages'] == first['sessions'][0]['messages']
+    # The other half of A↔B remains reusable. Fresh streams have no page proof.
+    assert stream.build(returning, _selected_page('B', 4))['reuseMessages']['fromRevision'] == 2
+    assert WarmPageDelta().build(next_chat, returning) == delta(next_chat, returning)
+
+
+@pytest.mark.parametrize('change', ['edit', 'new reply', 'reaction', 'window', 'error', 'loading', 'older visit'])
+def test_changed_or_displaced_page_is_fully_delivered(change):
+    from amplifier_web.state_transport import WarmPageDelta
+
+    first = _selected_page('A', 1)
+    other = _selected_page('B', 2)
+    returning = deepcopy(first)
+    returning['revision'] = 4
+    row, = returning['sessions']
+    stream = WarmPageDelta()
+    stream.build(first, other)
+    if change == 'edit':
+        row['messages'][0]['text'] = 'same id with changed text'
+    elif change == 'new reply':
+        row['messages'].append({'id': 'next', 'text': 'new reply'})
+    elif change == 'reaction':
+        row['messages'][0]['reactions'] = ['heart']
+    elif change == 'window':
+        row['messageWindow']['windowKey'] = 'different'
+    elif change == 'error':
+        row['historyError'] = 'unavailable'
+    elif change == 'loading':
+        row['historyLoading'] = True
+    elif change == 'older visit':
+        third = _selected_page('C', 3)
+        stream.build(other, third)
+        other = third
+    assert stream.build(other, returning) == delta(other, returning)
+
+
+def test_json_compatible_custom_row_falls_back_without_an_unverified_match():
+    from amplifier_web.state_transport import WarmPageDelta
+
+    class DisplayText(str):
+        pass
+
+    first = _selected_page('A', 1)
+    first['sessions'][0]['messages'][0]['text'] = DisplayText('screen')
+    other = _selected_page('B', 2)
+    returning = deepcopy(first)
+    returning['revision'] = 3
+    stream = WarmPageDelta()
+    assert json.dumps(stream.build(first, other))
+    assert stream.build(other, returning) == delta(other, returning)
