@@ -25,10 +25,10 @@ async def setup(authenticated_client, tmp_path):
     return client, service, scope
 
 
-async def bootstrap(client, scope, resources=('recentNavigation',), demand=1):
+async def bootstrap(client, scope, resources=('recentNavigation',), demand=1, **query):
     return await client.get('/api/shell', params={
         'bundled': '1', 'clientId': 'resource-browser', 'demandId': str(demand),
-        'navigationResources': json.dumps(resources), 'scope': json.dumps(scope)})
+        'navigationResources': json.dumps(resources), 'scope': json.dumps(scope), **query})
 
 
 async def test_bootstrap_has_no_unused_snapshots_and_view_updates_stream_with_receipts(
@@ -63,6 +63,23 @@ async def test_bootstrap_has_no_unused_snapshots_and_view_updates_stream_with_re
     assert any(item['path'][0] == 'shellResources' for item in changes)
     assert not any('recentNavigation' in item['path'] for item in changes)
     service.unsubscribe(queue)
+
+
+async def test_recent_items_encoding_preserves_older_bundled_reads(authenticated_client, tmp_path):
+    client, service, scope = await setup(authenticated_client, tmp_path)
+    for encoding in ('1', 'recent-items', '1'):
+        response = await bootstrap(client, scope, compact=encoding)
+        assert response.status == 200
+        await response.read()
+        await settled_resources(service, 'resource-browser')
+        with service.clients.bind('resource-browser'):
+            instances = service.browser_state()['shellResources']['instances']
+        for entry in instances.values():
+            page = entry['resources']['recentNavigation']['value']
+            if encoding == 'recent-items':
+                assert 'recentShortcuts' not in page
+            else:
+                assert page['recentShortcuts'] == page['recentNavigation']['items']
 
 
 async def test_scope_and_demand_fences_reject_stale_or_cross_client_reads_before_building(

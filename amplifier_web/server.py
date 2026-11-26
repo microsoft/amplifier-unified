@@ -778,7 +778,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             if bundled:
                 service.shell.resources.register(client_id, demand_id, navigation_resources, scope,
                                                  recovery=request.query.get('recovery') == '1',
-                                                 compact=request.query.get('compact') == '1')
+                                                 compact=request.query.get('compact') == 'recent-items')
                 service._client_snapshots.pop(client_id, None)
             result = service.shell.inspect(client_id, snapshots=True, recovery=request.query.get('recovery') == '1',
                                            navigation_resources=navigation_resources, bundled=bundled)
