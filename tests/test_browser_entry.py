@@ -599,15 +599,6 @@ async def test_open_without_a_wait_asks_every_local_address_once_and_never_pause
     assert calls == [("get", "ClientConnectionError")] * 2 and calls.starts == [0.0, 2.0]
 
 
-async def test_the_typed_code_command_shares_the_owner_request_and_does_not_wait(tmp_path, monkeypatch):
-    # `amplifier-unified browsers code` answers a person at a terminal: one look
-    # at each local address, no pause, then its own text.
-    calls = restarting_host(monkeypatch, tmp_path, [away], cost=2.0, addresses=2)
-    with pytest.raises(entry.BrowserEntryUnavailable, match="amplifier-unified browsers code"):
-        await entry.owner_browser_code(tmp_path, {}, "https://pc.example.ts.net")
-    assert calls == [("get", "ClientConnectionError")] * 2 and calls.starts == [0.0, 2.0]
-
-
 async def test_a_host_on_the_second_local_address_gets_the_one_grant_request(tmp_path, monkeypatch):
     calls = restarting_host(monkeypatch, tmp_path, [away, __version__], addresses=2)
     url = await entry.owner_browser_url(tmp_path, {}, wait=entry.HOST_WAIT)

@@ -3,6 +3,7 @@ import asyncio
 import json
 from aiohttp import WSMsgType, web
 from .auth import with_history_scope
+from .state_transport import WarmPageDelta, delta
 
 
 async def _reject_commands(socket):
@@ -56,14 +57,15 @@ async def serve(request, service, streams):
             service._task(service.history.refresh_session(selected['id']))
         previous = None
         compact = request.query.get('transport') == 'delta-v1'
+        build_delta = (WarmPageDelta().build if compact and request.query.get('reuse') == 'message-page'
+                       else delta)
         while True:
             snapshot = with_history_scope(request, snapshot)
             if 'shellClientId' in snapshot:
                 event, payload = 'shell', snapshot
             else:
-                from .state_transport import delta
                 event = 'state-delta' if compact and previous is not None else 'state'
-                payload = delta(previous, snapshot) if event == 'state-delta' else snapshot
+                payload = build_delta(previous, snapshot) if event == 'state-delta' else snapshot
                 previous = snapshot
             if socket:
                 await response.send_json({'event': event, 'data': payload})

@@ -310,9 +310,9 @@ The obsolete Edge root-store policy is not a workaround.
 
 A Windows host does not sign you in with the password of your Windows account.
 On the PC, the launcher opens the browser. A browser on another device signs
-in with a password that you set in Amplifier on the PC, or with a one-use code
-that you make at the PC. Remote access is off until you do the steps below,
-and you can turn it off again. Local use on the PC needs none of this.
+in with a password that you set in Amplifier on the PC. Remote access is off
+until you do the steps below, and you can turn it off again. Local use on the
+PC needs none of this.
 
 The steps use Tailscale. Amplifier listens only on this PC's own address,
 `127.0.0.1`, and a Tailscale forwarding rule sends connections from your other
@@ -337,9 +337,10 @@ device to it. For a LAN address without Tailscale, see
   Unified** in the Start menu.
 - With another kind of installation, pass the same `--data-dir` value to every
   Amplifier command if Amplifier uses a non-default data directory.
-- Sign-in with a code needs a version after 0.98.7. Sign-in with a saved key
-  needs version 0.128.0 or a later one. Sign-in with a password that you set
-  in the app needs version 0.130.0 or a later one.
+- Sign-in with a password that you set in the app needs version 0.130.0 or a
+  later one. Sign-in with a saved key needs version 0.128.0 or a later one.
+  Version 0.131.0 removed the one-use code of earlier versions
+  (`amplifier-unified browsers code`).
   `amplifier-unified --version` shows the version.
 - `<port>` is the port that Amplifier uses. `amplifier-unified config get port`
   shows it. Type the number in place of `<port>`, without the angle brackets.
@@ -404,36 +405,29 @@ With a LAN address, run the command of step 3 of
 7. Move the file to the other device and trust it there (see
    [Trust the CA on each client](#trust-the-ca-on-each-client)).
 
-### Sign in from the other device
-
-1. On the PC, make a code.
-
-   ```
-   amplifier-unified browsers code
-   ```
-
-   The command shows the address to open and a code such as `ABCDE-FGHJK`.
-2. On the other device, open `https://<pc>.<tailnet>.ts.net:<port>`.
-3. Type the code within two minutes. Select **Sign in**.
-
-The code works once. A typing mistake does not use it up: check the code and
-type it again. After two minutes, or after one use, make a new code.
-
-If more than one address for other devices is configured, name the one that the
-other device opens: `amplifier-unified browsers code --origin https://<address>`.
-
 ### Sign in with a password
 
-A code needs you at the PC each time. A password does not: you set it once in
-Amplifier on the PC, and type it on any device, also when you are not at the PC.
+You set the password once in Amplifier on the PC. Then you type it on any
+device, also when you are not at the PC.
 
 1. On the PC, open Amplifier.
-2. Open Settings, then **Install app**, then **Devices & apps**.
-3. Select **Set a password**.
-4. Type a password of at least 12 characters, two times. Select
+2. Open Settings, then **Advanced**, then **Performance & runtime**, then
+   **Install app**.
+3. Select the link **Devices & apps**. It opens a new page.
+4. Select **Set a password**.
+5. Type a password of at least 12 characters, two times. Select
    **Set password**.
-5. On the other device, open the address of the PC. Type the password in the
-   field **Password**. Select **Sign in**.
+6. On the other device, open `https://<pc>.<tailnet>.ts.net:<port>`. Type the
+   password in the field **Password**. Select **Sign in**.
+
+A shorter way in place of steps 2 to 4: in the browser on the PC that shows
+Amplifier, open the address of that window with `/connect/sign-in` after the
+port, for example `https://127.0.0.1:<port>/connect/sign-in`. If the window
+has no address bar, open the same browser and type the address there.
+
+When Amplifier finds that no password and no sign-in key is set, the sign-in
+page on another device has no field. It says that no password is set and
+where to set one.
 
 The password works at every address for other devices, as often as you need
 it. Amplifier must be running. It uses a new address only after the steps of
@@ -445,16 +439,18 @@ for something else.
 - To change or remove the password, open the same page on the PC. A change
   counts at once. Browsers that are signed in stay signed in.
 - The page works only in a browser on the PC that signed in there. A browser
-  that signed in with a password, a key or a code cannot set the password.
+  that signed in with the password or a key cannot set the password.
 - Wrong passwords are slowed down. After five wrong passwords in a row,
   Amplifier checks no password for a time: 2 seconds at first, and two times
   as long after each further wrong password, to 5 minutes at most. During
-  that time it does not check the right password either; a code from the PC
-  still works. One hour with no wrong password, the right password, or a
-  change of the password on the PC starts the count again. The wait is the
-  same for every device. So a person
-  on your network who sends wrong passwords can keep you from signing in with
-  the password. That person gets in no faster.
+  that time it does not check the right password either. One hour with no
+  wrong password, or the right password, starts the count again. To end the
+  wait at once, set the password again on the PC; the same password is
+  enough. The wait is the same for every device. So a person on your network
+  who sends wrong passwords can keep you from signing in from another
+  device. That person gets in no faster. Amplifier on the PC itself still
+  works then, and a device that is signed in stays signed in. A key from a
+  command has no such wait (see the next section).
 - [Sign out all browsers from the PC](#sign-out-all-browsers-from-the-pc) also
   removes the password.
 - If another person may have the password, sign out all browsers first. Then
@@ -502,16 +498,16 @@ one of those addresses can sign in.
    amplifier-unified browsers sign-out
    ```
 
-2. Wait a few seconds. Until then, a new sign-in on the PC, a new code, a
-   new password or a new key opens nothing.
+2. Wait a few seconds. Until then, a new sign-in on the PC, a new password
+   or a new key opens nothing.
 3. To use Amplifier again, open it on the PC. For another device, set a new
-   password or make a new code.
+   password there.
 
 If the command says that it could not confirm the sign-out, run it again.
-The command also drops every code that is not used yet, and it removes the
-saved password or sign-in key. If it says that it could not confirm that
-removal, run `amplifier-unified browsers key --remove`. There is no sign-out
-for one device. More: [Sign out all browsers](#sign-out-all-browsers).
+The command also removes the saved password or sign-in key. If it says that
+it could not confirm that removal, run
+`amplifier-unified browsers key --remove`. There is no sign-out for one
+device. More: [Sign out all browsers](#sign-out-all-browsers).
 
 ### Turn remote access off
 
@@ -529,7 +525,7 @@ for one device. More: [Sign out all browsers](#sign-out-all-browsers).
    ```
 
 3. Stop Amplifier. Then start it again. Amplifier now refuses the Tailscale
-   address, and no code can be made.
+   address, and the password opens nothing from another device.
 4. Sign out all browsers, so that no sign-in from another device stays valid
    if you turn remote access on again later. This also signs out the browser
    on this PC.
@@ -689,19 +685,21 @@ calls behind it are measured on a private test list of certificates).
 - Never use Tailscale Funnel. It puts the address on the public internet.
 - `tailscale cert` is not used. It publishes the name of the PC in a public
   certificate log for good.
-- Each code is for one address, lasts two minutes and works once. Wrong codes
-  do not lock anyone out; see the
+- The password is the one way in for a browser on another device. While
+  Amplifier checks no password after wrong ones, no other device can sign in.
+  The reasons are in the
   [design](design/native-windows-installation.md#remote-browser-sign-in-on-a-windows-host).
-- The code command and the key command have no Start-menu entry and no button
-  in the app. They need a terminal. The password needs none.
-- The way to the password page goes through the Settings page **Install app**
-  and its link **Devices & apps**. Settings has no entry of its own for it.
+- The key command has no Start-menu entry and no button in the app. It needs
+  a terminal. The password needs none.
+- The way to the password page goes through the Settings section
+  **Advanced**, its group **Performance & runtime**, the page **Install app**
+  and the link **Devices & apps**. Settings has no entry of its own for it.
 - A sign-in lasts seven days (`session_ttl_seconds`). After that, the device
-  signs in again with the password, the key or a code.
+  signs in again with the password or the key.
 - The password was not tried with a password manager or on a phone. The
   field is a password field, so that a password manager can save and fill it.
-- Linux, macOS and WSL hosts do not use these passwords, codes or keys. Sign
-  in there with the host account password on the sign-in page.
+- Linux, macOS and WSL hosts do not use these passwords or keys. Sign in
+  there with the host account password on the sign-in page.
 
 ## Sign out all browsers
 
@@ -717,13 +715,13 @@ The command saves a time in the owner's private configuration
 (`config/auth/session-epoch`). It needs no running host, no password and no
 network request: the ability to write that private folder is the authority.
 A running host applies the change within a few seconds. It then refuses every
-session from before that time, drops pending sign-in tickets and codes, and ends open
+session from before that time, drops pending sign-in tickets, and ends open
 live-update connections so that a signed-out browser cannot keep watching.
 On a Windows host it also refuses a saved password or sign-in key from before
-that time. A sign-in ticket, code, password or key that is made or used during
+that time. A sign-in ticket, password or key that is made or used during
 those few seconds opens no session, so that one from before the sign-out cannot
 outlast it. Wait a few seconds after the command. Then open Amplifier again on
-the PC, or set a new password or make a new code for another device.
+the PC, and set a new password there for another device.
 If the command says that it could not confirm the sign-out, run it again.
 Sign in again in the usual way for your platform.
 

@@ -541,9 +541,9 @@ async def test_page_devices_and_apps_has_the_password_card_first_on_the_pc_and_r
 
 
 @pytest.mark.parametrize("method,path", [
-    ("GET", "/login"), ("POST", "/api/browser-entry/code"), ("POST", "/api/browser-entry/code/redeem"),
-    ("POST", "/api/browser-entry/key/redeem")])
-async def test_default_host_serves_no_sign_in_by_code_at_an_address_for_other_devices(aiohttp_client, tmp_path, method, path):
+    ("GET", "/login"), ("POST", "/api/browser-entry/key/redeem"),
+    ("POST", "/api/browser-entry/code"), ("POST", "/api/browser-entry/code/redeem")])    # Two paths of earlier versions.
+async def test_default_host_serves_no_sign_in_at_an_address_for_other_devices(aiohttp_client, tmp_path, method, path):
     """Remote access is off by default: the host answers only at this computer's own names."""
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
                            voice=False, background_updates=False)
@@ -551,9 +551,9 @@ async def test_default_host_serves_no_sign_in_by_code_at_an_address_for_other_de
     assert app["permitted_hosts"] == frozenset({"127.0.0.1", "localhost", "::1"})
     client = await aiohttp_client(app)
     other = "pc.tail1234.ts.net:8941"
-    response = await client.request(method, path, allow_redirects=False, data="csrf=x&code=ABCDEFGHJK", headers={
+    response = await client.request(method, path, allow_redirects=False, data="csrf=x&password=ABCDEFGHJK", headers={
         "Host": other, "Origin": "https://" + other, "Content-Type": "application/x-www-form-urlencoded",
         "Authorization": "Bearer " + app["control_token"]})
-    # Refused at the host boundary, before the sign-in page or either code endpoint runs.
+    # Refused at the host boundary, before the sign-in page or the password endpoint runs.
     assert response.status == 403 and (await response.json())["error"] == "This Host is not configured."
     assert "Set-Cookie" not in response.headers

@@ -1,4 +1,6 @@
 """Opt-in browser transport. Authoritative app/agent snapshots stay unchanged."""
+import hashlib
+import marshal
 
 
 def changes(previous, current, path=()):
@@ -31,3 +33,57 @@ def changes(previous, current, path=()):
 def delta(previous, current):
     return {'baseRevision': previous['revision'], 'revision': current['revision'],
             'changes': changes(previous, current)}
+
+
+def _message_page(snapshot):
+    sessions = snapshot['sessions']
+    if len(sessions) != 1:
+        return None
+    row = sessions[0]
+    window = row.get('messageWindow') or {}
+    if (row.get('id') != snapshot.get('selectedSessionId') or row.get('historyLoading')
+            or row.get('historyError') or not row.get('messages')
+            or not window.get('revision') or not window.get('windowKey')):
+        return None
+    return {'sessionId': row['id'], 'revision': window['revision'], 'windowKey': window['windowKey']}
+
+
+def _row_digest(snapshot):
+    # Window revisions identify canonical source. Reactions, permissions and
+    # other display annotations can change independently of that source.
+    # A process-local, typed encoding avoids JSON string escaping on the hot
+    # path. Format 2 has no reference-sharing dependency. Never load or export
+    # these bytes. Unrecognized JSON-compatible subclasses use normal delivery.
+    try:
+        rows = marshal.dumps(snapshot['sessions'][0]['messages'], 2)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return hashlib.sha256(rows).digest()
+
+
+class WarmPageDelta:
+    """One departed-page proof per connection. Never retain departed row bodies."""
+
+    def __init__(self):
+        self.departed = None
+
+    def build(self, previous, current):
+        payload = delta(previous, current)
+        if previous.get('selectedSessionId') == current.get('selectedSessionId'):
+            return payload
+
+        retained = self.departed
+        self.departed = None
+        leaving = _message_page(previous)
+        if leaving:
+            digest = _row_digest(previous)
+            if digest is not None:
+                self.departed = (leaving, previous['revision'], digest)
+
+        replacement = next((change for change in payload['changes'] if change['path'] == ['sessions']), None)
+        if (retained and replacement and _message_page(current) == retained[0]
+                and _row_digest(current) == retained[2]):
+            row = current['sessions'][0]
+            replacement['value'] = [{key: value for key, value in row.items() if key != 'messages'}]
+            payload['reuseMessages'] = {**retained[0], 'fromRevision': retained[1]}
+        return payload
