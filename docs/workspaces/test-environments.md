@@ -286,12 +286,18 @@ test outcome and partial exports remain unchanged.
 Prospective local Docker cleanup uses the retained Smart Tool interpreter, not
 necessarily the serving application's Python. Its fixed launcher compiles the
 exact captured worker and retention source buffers after comparing them with
-members of the serving generation's original qualified release wheel. The wheel
+members of the wheel selected for the serving installation. For a release, its
 digest comes from the existing authenticated download and private qualification
 receipt, never from action input, installed RECORD, a source stamp or prefix alone.
 The host caches only immutable verified member bytes; it revalidates serving
 eligibility for each invocation. The first capture streams the wheel once and
 retains bounded selected ZIP reads, not a second wheel or dependency-closure scan.
+
+An installed, stamped candidate can run local Docker cleanup before publication.
+Start the test host with `amplifier-unified serve --candidate-wheel PATH SHA256`
+using the wheel and checksum selected for that installation. The host checks the
+installed revision and cleanup files, and captures the wheel members before
+accepting requests. Chats use the ordinary environment actions.
 
 The same live helper reports bounded payload-free readiness, then waits for a
 nonce/lifecycle-bound permit. Before delivery the host durably records that permit
@@ -308,7 +314,7 @@ liveness, a dispatch acknowledgement or retroactive proof for older releases.
 No source contents, operation payload, settings, environment variables or chat
 content enter that evidence. The proof covers the two named app inputs only,
 not Python, stdlib, DTU or other helper/dependency bytes. Local Docker cleanup
-without the qualified serving-wheel context is refused; ordinary non-cleanup
+requires either the qualified release wheel or the launch-selected candidate; ordinary non-cleanup
 actions are unchanged. Incus/common-loader and registered-runner cleanup retain
 their existing routes and make no same-process loaded-input attestation claim.
 
@@ -484,3 +490,5 @@ policy at submission. Their full local workspace export can expire only after
 confirmed removal and the captured duration; initial source, results and receipts
 stay. Manual environments, legacy records, `keepWorkspace` checks and uncertain
 cleanup remain protected. See [temporary workspace retention](../STORAGE.md#temporary-queued-test-workspace-copies).
+
+The signed-in user can stop and remove a registered environment from any chat. An agent with workspace-wide Full access can do the same for that workspace, and app-wide Full access covers this installation’s registered workspaces. Pass the resource’s original session and workspace identifiers. Its creation record stays with that chat, while the cleanup request records the acting chat.

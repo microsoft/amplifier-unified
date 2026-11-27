@@ -1,14 +1,15 @@
 """Serving-wheel binding and same-invocation gate for local Docker cleanup.
 
 Private adapter only: no action accepts hashes, paths, code or permits. The
-updater's original authenticated download/qualification is the trust root, not
-RECORD, direct_url, a source stamp, or a caller assertion. This does not attest
+host uses the updater's authenticated wheel or the installed candidate wheel
+selected at server launch. Chats cannot select the executable cleanup inputs. This does not attest
 the interpreter or the DTU/stdlib dependency closure.
 """
 import copy
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import selectors
 import time
@@ -79,8 +80,33 @@ def send(process, value, *, seconds=10, maximum=524288, before_commit=None):
         os.set_blocking(fd, True)
 
 
+def bind_candidate(app, path, checksum):
+    """Select the installed test wheel once, before accepting any requests."""
+    manager = app.update_manager
+    identity = manager.running_identity
+    if (manager._running_artifact is not None or not identity.get('instanceId')
+            or not re.fullmatch('[0-9a-f]{40}', identity.get('revision') or '')
+            or not re.fullmatch('[0-9a-f]{64}', checksum)):
+        raise ValueError('Candidate cleanup needs a stamped candidate installation and its wheel checksum.')
+    names = ['amplifier_web/' + name for name in (*NAMES, LAUNCHER)]
+    raw = artifacts.pinned_members(Path(path).absolute(), checksum, identity['version'], identity['revision'], names)
+    installed = Path(__file__).parent
+    if any((installed / Path(name).name).read_bytes() != data for name, data in raw.items()):
+        raise ValueError('The candidate cleanup code differs from the running installation.')
+    saved = {'serving': dict(identity), 'hostInstanceId': app.instance_id,
+             'artifact': {'sha256': checksum}, 'installation': {'package': str(installed)},
+             'qualification': {'kind': 'launch-selected-wheel', 'revision': identity['revision']}}
+    manager._candidate_cleanup = saved
+    manager._cleanup_members = (digest(saved), tuple(raw.items()))
+
+
 def context(app):
     manager = app.update_manager
+    candidate = getattr(manager, '_candidate_cleanup', None)
+    if candidate is not None:
+        if candidate['serving'] != manager.running_identity or candidate['hostInstanceId'] != app.instance_id:
+            raise ValueError('The serving candidate changed during cleanup.')
+        return candidate
     captured = getattr(manager, '_running_artifact', None)
     current = (update_readiness._observed_artifact(
         manager, captured['qualification'], captured['installation']) if captured else None)

@@ -65,8 +65,8 @@ def definitions(schema, string):
             [*scope, 'id', 'expectedRevision'])),
         'workspace.environments.start': ('Copy this task’s current Git working area into a DTU Compose environment. Optionally select an ordinary trusted Compose file from that source; otherwise use the Python/browser/app preset. Network and normal dependency commands are available unless offline is explicit. No implicit host mounts or credentials. Keep requestId stable; unknown launches never replay.', schema({**request, 'profileId': {'enum': [item['id'] for item in profiles.catalog()]}, **profiles.compose_fields(string)}, [*request, 'profileId'])),
         'workspace.environments.execute': ('Run a command in this task’s environment, retaining bounded output. Docker uses normal dependency/build commands; copied source has no Git metadata. Keep selected evidence in /artifacts and verify installed artifacts outside source/PYTHONPATH. Keep requestId stable. Timeout means the command may still be running, not cancelled.', schema({**owned, 'command': {**string(16384), 'minLength': 1}, 'timeoutSeconds': {'type': 'integer', 'minimum': 1, 'maximum': profiles.MAX_SECONDS}}, [*owned, 'command'])),
-        'workspace.environments.stop': ('Stop this task’s containers at an exact revision and observe the result. Keeps source, artifacts, containers and volumes; never implies removal.', schema(owned)),
-        'workspace.environments.remove': ('Remove an already stopped owned environment after preserving its selected evidence and original source snapshot. New disposable Docker copies export full guest source only when preserveSource was explicit; old owners retain their contract. Optional full retention preserves the complete Incus environment. Unknown export or teardown never replays.', schema({**owned, 'retentionMode': {'enum': ['files', 'full']}}, list(owned))),
+        'workspace.environments.stop': ('Stop the selected environment. With workspace or app Full access, sessionId can identify the chat that created it. Keeps source, artifacts, containers and volumes; never implies removal.', schema(owned)),
+        'workspace.environments.remove': ('Remove the selected stopped environment, including one created by another chat under workspace or app Full access, after preserving its selected evidence and original source snapshot. New disposable Docker copies export full guest source only when preserveSource was explicit; old owners retain their contract. Optional full retention preserves the complete Incus environment. Unknown export or teardown never replays.', schema({**owned, 'retentionMode': {'enum': ['files', 'full']}}, list(owned))),
         'workspace.environments.finishCleanup': ('Finish cleanup of an exact stopped owned environment after a failed or uncertain removal. Preserve complete bounded archives without following guest links, then verify removal and release ownership. The original request and test result stay unchanged. For interrupted local Docker cleanup, the host first verifies that the previous local executor is settled and the exact owner is stopped. This is a new cleanup attempt, not a replay or a claim about the old outcome. Requires its previousRequestId; keep the new requestId stable.', schema({**owned, 'previousRequestId': {**string(200), 'minLength': 1}})),
         'workspace.environments.reconcile': ('Inspect this exact owned environment and repair its metadata without starting, stopping, deleting or replaying backend work. Retire ownership only after the original backend proves physical absence; earlier uncertain operations stay uncertain.', schema(owned)),
         'workspace.environments.exportArtifacts': ('Recover a bounded, verified artifacts archive from this exact stopped owned environment. No workspace export, restart, command execution or deletion. Does not satisfy preservation required for removal. Unknown exports never replay.', schema(owned)),
@@ -1481,38 +1481,60 @@ async def dispatch(app, action, args, origin, caller, authority):
     from .errors import AppError
     from .collaboration import BINDING, PRINCIPAL
     sid, user = args['sessionId'], origin in {'ui', 'user'}
-    if not user and sid != caller:
+    peer = not user and sid != caller
+    if peer and (not caller or action not in {'workspace.environments.read', 'workspace.environments.stop',
+                                              'workspace.environments.remove', 'workspace.environments.finishCleanup'}):
         raise AppError('Test environments belong to the calling conversation.', 403)
-    source = app._session(sid, hydrate=False)
+    source = app._session(caller if peer else sid, hydrate=False)
+    owner_session = app._session(sid, hydrate=False) if peer else source
+
+    def require_cleanup_access():
+        access = app.access_mode.snapshot(source)
+        grants = access['overrides']
+        same_workspace = source['workspace'] == owner_session['workspace']
+        workspace_mode = app.access_mode.snapshot(owner_session)['overrides']['workspace']['mode']
+        app_wide = grants['app']['mode'] == 'full' and workspace_mode != 'ask'
+        workspace_wide = same_workspace and grants['workspace']['mode'] == 'full'
+        if access['mode'] != 'full' or not (app_wide or workspace_wide):
+            raise AppError('Peer cleanup requires Full access covering the environment from the calling conversation.', 403)
+
+    if peer:
+        require_cleanup_access()
     if (not user and app.access_mode.full(source) and action in {
             'workspace.environments.setup', 'workspace.environments.setup.reconcile', 'workspace.environments.setup.cleanup'}):
         return await dispatch_full_setup(app, action, args, origin, caller, authority)
-    principal = source.get('runtimeSessionId') or source.get('nativeIdentity') or sid
+    principal = source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']
     full_revision = None
     attribution = None
     if not user and app.access_mode.full(source):
-        app.configuration_authority.source(args, origin, caller,
+        app.configuration_authority.source({'sessionId': source['id']}, origin, caller,
             active=not action.endswith('.read') or origin == 'system', allow_descendant=True)
         full_revision = app.access_mode.snapshot(source)['revision']
-        attribution = {'sessionId': sid, 'origin': origin, 'principal': PRINCIPAL.get(),
+        attribution = {'sessionId': source['id'], 'origin': origin, 'principal': PRINCIPAL.get(),
                        'generationId': (BINDING.get() or {}).get('_generationId')}
     elif source.get('sessionKind', 'root') != 'root' or not user and PRINCIPAL.get() != principal:
         raise AppError('Test environments require their host-bound root owner.', 403)
     workspace = next((w for w in app.state['workspaces'] if w['id'] == args['workspaceId']), None)
-    if not workspace or source['workspace'] != workspace['path']:
+    if not workspace or owner_session['workspace'] != workspace['path']:
         raise AppError('Choose this conversation’s current workspace.', 403)
     captured = tuple(source.get(key) for key in ('workspace', 'workingDirectory', 'executionRevision', 'interruptionRevision'))
     config, availability, reason = configuration(app)
     historical = action.rsplit('.', 1)[-1] in {'execute', 'stop', 'remove', 'finishCleanup', 'reconcile', 'exportArtifacts'}
     row = None
     def guard():
-        current = app._session(sid, hydrate=False)
+        current = app._session(source['id'], hydrate=False)
+        if peer:
+            require_cleanup_access()
+            if app._session(sid, hydrate=False)['workspace'] != workspace['path']:
+                raise AppError('The environment workspace changed.', 409)
+            app.configuration_authority.source({'sessionId': current['id']}, origin, caller,
+                active=not action.endswith('.read') or origin == 'system', allow_descendant=True)
         if captured != tuple(current.get(key) for key in ('workspace', 'workingDirectory', 'executionRevision', 'interruptionRevision')):
             raise AppError('The task moved or stopped before environment admission.', 409)
         if not user:
             if full_revision is not None:
                 if (not app.access_mode.full(current, full_revision)
-                        or (current.get('runtimeSessionId') or current.get('nativeIdentity') or sid) != principal):
+                        or (current.get('runtimeSessionId') or current.get('nativeIdentity') or current['id']) != principal):
                     raise AppError('Full access or its execution owner changed before the next environment effect.', 409)
             else:
                 app.collaboration.active_binding(current)
@@ -1541,6 +1563,18 @@ async def dispatch(app, action, args, origin, caller, authority):
             return {'accepted': True, 'result': value}
         if action.endswith('.read'):
             offset, limit = args.get('offset', 0), args.get('limit', 10)
+            if peer:
+                # Peer discovery needs only registered resources in the authorized workspace.
+                # Leave the original chat's check history and backend probes to its own read.
+                with closing(storage.connect(app.data_dir)) as db:
+                    rows = db.execute(
+                        "SELECT body FROM allocations WHERE root=? AND json_extract(body,'$.kind')=? "
+                        "AND json_extract(body,'$.workspaceId')=? ORDER BY rowid DESC LIMIT ? OFFSET ?",
+                        (sid, KIND, workspace['id'], limit + 1, offset)).fetchall()
+                guard()
+                return {'accepted': True, 'result': {
+                    'items': [public(app.data_dir, json.loads(record[0])) for record in rows[:limit]],
+                    'offset': offset, 'nextOffset': offset + limit if len(rows) > limit else None}}
             items = await asyncio.to_thread(read, app, sid, config, offset, limit)
             with closing(storage.connect(app.data_dir)) as db:
                 count = db.execute("SELECT COUNT(*) FROM allocations WHERE root=? AND json_extract(body,'$.kind')=?", (sid, KIND)).fetchone()[0]
@@ -1558,14 +1592,14 @@ async def dispatch(app, action, args, origin, caller, authority):
         guard()
         # The conversation remains the resource/request owner across native actors.
         # Keep its historical fingerprint; actual Full attribution is separate.
-        actor = {'sessionId': sid, 'principal': principal}
+        actor = {'sessionId': source['id'], 'principal': principal}
         previous = app.operations.requests.existing(sid, action, args, actor)
         if previous:
             row = get(app.data_dir, sid, previous['resourceId']) if previous.get('resourceId') else None
             return {'accepted': True, 'duplicate': True, 'result': {'resource': public(app.data_dir, row) if row else None, 'request': previous}}
         if not action.endswith('.start'):
             row = await asyncio.to_thread(get, app.data_dir, sid, args['id'])
-            if row['workspaceId'] != workspace['id'] or not user and row['owner']['principal'] != principal:
+            if row['workspaceId'] != workspace['id'] or (not user and not peer and row['owner']['principal'] != principal):
                 raise AppError('The environment belongs to another execution owner.', 403)
             if row['revision'] != args['expectedRevision']:
                 raise AppError('The environment changed. Inspect its current revision.', 409)

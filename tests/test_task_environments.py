@@ -646,3 +646,27 @@ async def test_next_effect_repairs_prior_confirmed_projection_before_admission(a
     removed = await act(app, 'remove', stopped['resource'], 'after-saved-stop')
     assert removed['request']['state'] == 'completed' and removed['resource']['status'] == 'removed'
     assert [action for action, _ in backend] == ['prepare', 'start', 'stop', 'remove']
+
+
+async def test_workspace_agent_cleans_up_another_chats_registered_environment(app, backend):
+    from test_access_mode import save as save_access
+    creator, cleaner = app.state['sessions']
+    cleaner['collaborationGeneration'] = {'id': 'cleaner-generation', 'inputIds': ['cleanup'], 'terminal': False}
+    resource = (await start(app))['resource']
+    args = {**scope(app), 'id': resource['id'], 'expectedRevision': resource['revision'], 'requestId': 'peer-stop'}
+    with pytest.raises(AppError, match='Full access'):
+        await agent(app, cleaner, 'workspace.environments.stop', args, 'before-shared-access')
+    await save_access(app, cleaner, scope='workspace')
+    listed = (await agent(app, cleaner, 'workspace.environments.read', scope(app), 'peer-list'))['result']
+    assert [item['id'] for item in listed['items']] == [resource['id']]
+    with pytest.raises(AppError, match='calling conversation'):
+        await agent(app, cleaner, 'workspace.environments.execute', {**args, 'command': 'pwd'}, 'foreign-execute')
+    stopped = (await agent(app, cleaner, 'workspace.environments.stop', args, 'peer-stop'))['result']
+    assert stopped['resource']['status'] == 'stopped'
+    assert stopped['request']['attribution']['sessionId'] == cleaner['id']
+    args.update(expectedRevision=stopped['resource']['revision'], requestId='peer-remove')
+    removed = (await agent(app, cleaner, 'workspace.environments.remove', args, 'peer-remove'))['result']
+    assert removed['resource']['status'] == 'removed'
+    assert removed['request']['attribution']['sessionId'] == cleaner['id']
+    assert removed['resource']['sessionId'] == creator['id']
+    assert [op for op, _ in backend].count('remove') == 1

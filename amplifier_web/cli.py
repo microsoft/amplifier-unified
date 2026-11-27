@@ -43,7 +43,9 @@ def _parse() -> argparse.Namespace:
     _connection_options(parser)
     parser.add_argument("--version", action="version", version="amplifier-unified " + __version__)
     subcommands = parser.add_subparsers(dest="command")
-    subcommands.add_parser("serve", help="Run the authenticated web host")
+    serve = subcommands.add_parser("serve", help="Run the authenticated web host")
+    serve.add_argument("--candidate-wheel", nargs=2, metavar=("PATH", "SHA256"),
+                       help="Test an installed candidate, including Docker cleanup, using its original wheel and digest")
     subcommands.add_parser("open", help="Open an already running owned web host")
     acp = subcommands.add_parser("acp", help="Attach ACP stdio to an already running Unified host")
     acp.add_argument("--server", help="Existing host HTTP(S) origin; defaults to this installation")
@@ -430,11 +432,14 @@ def _serve_listeners(args, data_dir, config, secure, sockets, *, task_runner=Non
     from .mcp_oauth import SafeAccessLogger
     from amplifier_publishing import PublishingError
     try:
+        options = {'workspace': args.workspace, 'server_config': config}
+        if getattr(args, 'candidate_wheel', None):
+            options['candidate_wheel'] = args.candidate_wheel
         if task_runner is None:
-            app = create_app(data_dir, workspace=args.workspace, server_config=config)
+            app = create_app(data_dir, **options)
         else:
             async def managed_app():
-                app = await create_app(data_dir, workspace=args.workspace, server_config=config)
+                app = await create_app(data_dir, **options)
                 task_runner.attach(app)
                 # The definition of the Windows task that started this host. The
                 # host compared it with the Task Scheduler's before it served.
