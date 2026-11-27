@@ -273,7 +273,8 @@ async def test_pending_configuration_is_decided_by_actual_worker_before_admissio
     {'accepted': False, 'effect': 'none', 'configurationRequired': True},
     {'accepted': False, 'disposition': 'unknown'},
 ])
-async def test_manager_pending_configuration_uses_finite_owner_admission_only(owner_result):
+@pytest.mark.parametrize('live_answer', [False, True])
+async def test_manager_pending_configuration_uses_finite_owner_admission_only(owner_result, live_answer):
     from amplifier_web.runtime import RuntimeManager
     manager = RuntimeManager()
     ready = asyncio.get_running_loop().create_future()
@@ -285,6 +286,10 @@ async def test_manager_pending_configuration_uses_finite_owner_admission_only(ow
     manager._request = AsyncMock(return_value={'accepted': True, 'inputId': 'ordinary'})
     snapshot = {'id': 'chat', 'status': 'idle',
                 'pendingModelSelection': {'instance': 'next', 'model': 'next-model'}}
+    if live_answer:
+        snapshot.pop('pendingModelSelection')
+        snapshot.update(collaborationGeneration={'id': 'running', 'terminal': False},
+                        messages=[{'inputId': 'ordinary', 'questionId': 'question'}])
     result = await manager.send(snapshot, 'ordinary', 'ordinary', AsyncMock())
     assert manager._admit.call_args.args[1] == 'send'
     assert manager._admit.call_args.args[2]['configuration_if_idle'] is True
@@ -296,7 +301,8 @@ async def test_manager_pending_configuration_uses_finite_owner_admission_only(ow
         manager._request.assert_awaited_once()
     assert result == (owner_result if not owner_result.get('configurationRequired')
                       else {'accepted': True, 'inputId': 'ordinary'})
-    assert snapshot['pendingModelSelection']['model'] == 'next-model'
+    if not live_answer:
+        assert snapshot['pendingModelSelection']['model'] == 'next-model'
 
 
 async def test_active_configuration_capture_survives_normal_completion_during_preparation(monkeypatch):

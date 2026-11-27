@@ -523,3 +523,10 @@ def test_inspection_omits_stale_execution_and_sorts_only_causal_lifecycle(tmp_pa
     assert 'recentExecution' not in report
     assert [row.get('at') for row in report['timeline']] == [100, 105, 110]
     assert report['requestOutcome']['event'] == 'generation.failed'
+
+
+def test_busy_worker_reports_the_actual_reason_for_an_unsent_input():
+    from amplifier_web.runtime import _PREVIOUS_SETTINGS_IN_USE
+    from amplifier_web.session_health import failure_details
+    detail = failure_details(_PREVIOUS_SETTINGS_IN_USE + ' Your message has been saved.', 'RuntimeStartupError')
+    assert detail['summary'] == 'The chat was still busy using its earlier settings.'

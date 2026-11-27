@@ -1788,7 +1788,11 @@ class RuntimeManager:
                     or session.get('pendingModelSelection') or session.get('pendingBundleSelection')):
                 raise RuntimeStartupError('This recovery allowance requires a new ordinary message from this chat.')
             arguments['recovery_allowance'] = message['recoveryAllowance']
-        if session.get('pendingModelSelection') or session.get('pendingBundleSelection') or session.get('fileAccessPending'):
+        generation = session.get('collaborationGeneration') or {}
+        live_answer = message.get('questionId') and generation.get('id') and not generation.get('terminal')
+        if live_answer or session.get('pendingModelSelection') or session.get('pendingBundleSelection') or session.get('fileAccessPending'):
+            # Answers belong with the work already in progress. The worker can
+            # accept them under its mounted settings, or decline if it is idle.
             # Future settings must not interrupt live guidance. Ask the actual
             # owner to admit with its mounted configuration, or prove no effect
             # while idle. Host display status/generation never picks the route.
@@ -1960,8 +1964,7 @@ class RuntimeManager:
                     raise
                 except Exception as exc:
                     raise RuntimeStartupError(
-                        'Could not verify the saved connection. No input was sent. '
-                        'Review its account and endpoint, reconnect if needed, and save the model again.') from exc
+                        'This attempt could not verify the chat’s saved connection. No input was sent.') from exc
             if requested:
                 await self.control(session['id'],'provider.select',{
                     **requested, **({'expectedConnectionKey':session['modelConnectionKey']} if session.get('modelConnectionKey') else {})
