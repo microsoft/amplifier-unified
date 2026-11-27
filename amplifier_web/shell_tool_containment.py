@@ -81,7 +81,7 @@ def neutralize(module):
             failed.append(name)
     report = {"replaced": replaced, "missing": missing, "failed": failed}
     try:
-        changed = getattr(module, _REPORT, None) != report
+        changed = bool(getattr(module, _REPORT, None) != report)
         setattr(module, _REPORT, report)
     except Exception:
         changed = True

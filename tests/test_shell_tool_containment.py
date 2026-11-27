@@ -224,12 +224,20 @@ def test_neutralize_does_not_raise_for_an_odd_object_or_an_odd_earlier_report(st
             raise RuntimeError("this report cannot be compared")
         __eq__ = __ne__
         __hash__ = None
+    class NoTruth:
+        def __bool__(self):
+            raise RuntimeError("this answer is neither true nor false")
+    class OddAnswer:                                        # The comparison works; its answer cannot be used.
+        def __ne__(self, other):
+            return NoTruth()
+        __hash__ = None
     (standin / "__init__.py").write_text(SOURCE + "\ndel _assign_to_windows_job\n", encoding="utf-8")
     module = importlib.import_module(TARGET)                # No hook is installed in this test.
-    setattr(module, "__unified_shell_tool_containment__", Unequal())
-    assert containment.neutralize(module) == {
-        "replaced": [NAMES[0], NAMES[2], NAMES[3]], "missing": [NAMES[1]], "failed": []}
-    assert capsys.readouterr().err == containment.MESSAGE + "missing _assign_to_windows_job\n"
+    for earlier in (Unequal(), OddAnswer()):
+        setattr(module, "__unified_shell_tool_containment__", earlier)
+        assert containment.neutralize(module) == {
+            "replaced": [NAMES[0], NAMES[2], NAMES[3]], "missing": [NAMES[1]], "failed": []}
+        assert capsys.readouterr().err == containment.MESSAGE + "missing _assign_to_windows_job\n"
 
 
 def test_loader_without_exec_module_is_left_as_it_is():
