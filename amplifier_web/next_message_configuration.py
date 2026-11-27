@@ -223,7 +223,7 @@ def guard_for(service, captured, *, frozen=False):
             raise RuntimeStartupError('Next message settings or execution placement changed. No input was sent.')
         if service.state.get('configurationRevision', 0) != configuration_revision:
             raise RuntimeStartupError('Connection settings changed during input preparation. No input was sent.')
-        if service.management.unresolved_configuration(current) or current.get('configurationOperationFence'):
+        if current.get('configurationOperationFence') or (service.management and service.management.unresolved_configuration(current)):
             raise RuntimeStartupError('The original configuration operation is unresolved. No input was sent.')
         if current.get('fileAccessPending'):
             raise RuntimeStartupError('File permissions are awaiting application. No input was sent.')

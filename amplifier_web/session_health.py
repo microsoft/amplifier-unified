@@ -209,6 +209,9 @@ def failure_details(error, error_type=None):
         category, summary, guidance = 'authentication', 'The provider rejected its credentials.', 'Check the selected provider in Settings before continuing.'
     elif 'rate limit' in text or 'ratelimit' in text:
         category, summary, guidance = 'rate_limit', 'The provider rate limit was reached.', 'Wait for the provider limit to reset before continuing.'
+    elif kind == 'RuntimeStartupError' and text.startswith("this chat's worker is still using its previous settings."):
+        category, summary = 'worker_startup', 'The chat was still busy using its earlier settings.'
+        guidance = 'Your message is saved. You can retry it when the chat is free.'
     elif kind == 'RuntimeStartupError':
         category, summary, guidance = 'worker_startup', 'The conversation worker could not start.', 'Open conversation details for the runtime message and any saved diagnostic location. This attempt did not send your message.'
     return {'category': category, 'errorType': kind, 'summary': summary, 'guidance': guidance, 'replayed': False}

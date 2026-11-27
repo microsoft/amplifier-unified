@@ -765,6 +765,27 @@ async def test_changed_configuration_never_cancels_held_work_or_admits_input(man
     assert 'send' not in writes and 'stop' not in writes
 
 
+async def test_followup_answer_uses_running_worker_after_settings_change(manager, tmp_path):
+    from amplifier_web.shared_state import mounted_configuration_stamp
+    manager.home = tmp_path / 'app'
+    session = {'id': 'chat', 'workspace': str(tmp_path)}
+    await manager.start(session, manager.emit)
+    worker = manager.workers['chat']
+    settings = tmp_path / 'settings.yaml'
+    settings.write_text('before')
+    worker['configurationInputs'] = [str(settings)]
+    worker['configurationStamp'] = mounted_configuration_stamp(
+        tmp_path, 'chat', manager.home, extra_paths=[settings])
+    await manager._request('chat', 'send', text='first answer', input_id='first')
+    settings.write_text('changed while answering')
+    session.update(collaborationGeneration={'id': 'active', 'terminal': False},
+                   messages=[{'inputId': 'second', 'questionId': 'question-two'}])
+    assert (await manager.send(session, 'second answer', 'second', manager.emit))['accepted']
+    assert manager.workers['chat'] is worker
+    assert sum(kind == 'runtime.status' and data.get('event') == 'input.delivered' and data.get('inputId') == 'second'
+               for kind, data in manager.events) == 1
+
+
 @pytest.mark.parametrize('op,args', [
     ('retry', {'text': 'duplicate', 'input_id': 'same'}),
     ('resume', {}), ('worker.message', {'worker_id': 'settled', 'text': 'no-op'}),

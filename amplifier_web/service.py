@@ -2921,7 +2921,7 @@ class AppService:
             if action in {"question.answer","conversation.send","conversation.retry","worker.spawn","worker.steer","worker.message","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
                 if action != 'question.answer' and current and self.assignments.blocked(current):
-                    raise AppError('This assignment is stopped. Open Shared tasks and assignment in the commissioning chat and choose Resume assignment before sending new work.', 409, code='assignment_stopped')
+                    raise AppError('This assignment is stopped.', 409, code='assignment_stopped')
                 if (current.get('configurationBusy') or self.management and self.management.unresolved_configuration(current)) and action != 'question.answer':
                     raise AppError('Applying or reconciling conversation settings; new input must wait.',409)
                 if action != 'question.answer' and current.get('fileAccessPending'):
@@ -4993,8 +4993,14 @@ class AppService:
             sender = self.runtime.retry if retry else self.runtime.send
             # The native manager invokes this existing host-only callback after
             # registering a newly created owner as well as before submission.
+            question_guard = None
+            if original.get('questionId') and not retry and not session.get('fileAccessPending'):
+                from .next_message_configuration import guard_for
+                question_guard = guard_for(self, session, frozen=True)
             def admission_check():
                 observe_send_owner()
+                if question_guard:
+                    question_guard()
                 if original.get('handoffOrigin'):
                     self.handoffs.input_guard(sid, input_id)
             admission = ({'admission_check': admission_check}
@@ -6647,7 +6653,7 @@ class AppService:
             session = self._session(session_id)
             self._check_voice_owner(session['id'], transfer_id)
             if self.assignments.blocked(session):
-                raise AppError('This assignment is stopped. Open Shared tasks and assignment in the commissioning chat and choose Resume assignment before sending new work.', 409, code='assignment_stopped')
+                raise AppError('This assignment is stopped.', 409, code='assignment_stopped')
             if session.get('configurationBusy') or self.management and self.management.unresolved_configuration(session):
                 raise AppError('Applying or reconciling conversation settings; new input must wait.', 409)
             if session.get('fileAccessPending'):
