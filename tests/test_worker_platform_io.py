@@ -33,7 +33,7 @@ else:
 module.configure_protocol()
 if backend == 'threaded':
     # Exercise the Windows branch on POSIX without changing asyncio's platform.
-    module.sys = SimpleNamespace(platform='win32', stdin=sys.stdin)
+    module.sys = SimpleNamespace(platform='win32', stdin=sys.stdin, stderr=sys.stderr)
 if limit != 'default':
     module.MAX_MESSAGE_BYTES = int(limit)
 class Probe(module.Worker):
@@ -636,11 +636,13 @@ class WorkerSubprocessTests(unittest.IsolatedAsyncioTestCase):
         probe = PROBE
         if model_identity:
             self.assertNotEqual(os.name, "nt", "portable identity model is not native evidence")
+            # Model Windows construction too, including its stderr start report.
             # Fake only the unavailable kernel identity sensor on POSIX. Keep
             # the real Worker.run/read, subprocess, payload and byte oracles.
             probe = probe.replace(
                 "module.configure_protocol()\n",
                 "module.configure_protocol()\n"
+                "module.os = SimpleNamespace(name='nt')\n"
                 "module.publish_process_identity = lambda: module.publish("
                 "{'type':'runtime.identity','pid':os.getpid(),'created':17})\n")
         proc = await asyncio.create_subprocess_exec(
