@@ -39,7 +39,8 @@ _REPLACEMENTS = {
 _REQUIRED = ("_get_windows_job_object", "_assign_to_windows_job")
 # The other two names are the walk over the process table. Without a job the
 # walk can assign nothing; it is replaced to save its work. The tool's own
-# repair removes the walk, so its absence is no fault and gets no message.
+# repair (not merged when this was written) removes the walk, so its absence
+# is no fault and gets no message.
 
 
 # One beginning for every message, so that a reader can find them all.
@@ -56,15 +57,16 @@ def _say(detail):
 
 
 def neutralize(module):
-    """Replace the present entry points and report the result. Never raises.
+    """Replace the present entry points and report the result.
 
-    "missing" lists required names that the module does not have. "failed"
-    lists names that could not be replaced. With either, the tool's own job
-    can be active in this process.
+    It does not raise: each step that touches the module is contained, and
+    both callers contain it once more. "missing" lists required names that
+    the module does not have. "failed" lists names that could not be
+    replaced. With either, the tool's own job can be active in this process.
     """
     replaced, missing, failed = [], [], []
     try:
-        present = vars(module)
+        present = dict(vars(module))  # A copy that is a real dict, whatever the object is.
     except Exception:
         present = {}
     for name, replacement in _REPLACEMENTS.items():
@@ -79,11 +81,11 @@ def neutralize(module):
             failed.append(name)
     report = {"replaced": replaced, "missing": missing, "failed": failed}
     try:
-        previous = getattr(module, _REPORT, None)
+        changed = getattr(module, _REPORT, None) != report
         setattr(module, _REPORT, report)
     except Exception:
-        previous = None
-    if (missing or failed) and "BashTool" in present and report != previous:
+        changed = True
+    if (missing or failed) and "BashTool" in present and changed:
         _say("; ".join(text for text in (
             "missing " + ", ".join(missing) if missing else "",
             "could not replace " + ", ".join(failed) if failed else "") if text))
@@ -102,7 +104,7 @@ class _Loader:
         self.loader.exec_module(module)  # The tool's own errors go to its importer.
         try:
             neutralize(module)
-        except Exception as error:  # It does not raise. This keeps the import whole if it ever does.
+        except Exception as error:  # Nothing known reaches this. It keeps the import whole.
             _say(type(error).__name__)
 
     def __getattr__(self, name):

@@ -207,8 +207,29 @@ def test_a_guard_fault_after_the_tool_code_never_fails_the_import(standin, monke
         assert module._get_windows_job_object() is None    # Every other name is replaced.
     else:
         assert report == {"replaced": [NAMES[0], NAMES[2], NAMES[3]], "missing": [NAMES[1]], "failed": []}
+        captured = capsys.readouterr()
+        assert captured.out == "" and captured.err == ""   # Not on stdout in place of stderr either.
     # A second look gives the same result and does not raise either.
     assert containment.install()["loaded"] == report
+
+
+def test_neutralize_does_not_raise_for_an_odd_object_or_an_odd_earlier_report(standin, capsys):
+    """A direct call must hold too, not only a call that a caller contains."""
+    class Slots:                                            # vars() refuses this object.
+        __slots__ = ("BashTool",)
+    assert containment.neutralize(Slots()) == {
+        "replaced": [], "missing": [NAMES[0], NAMES[1]], "failed": list()}
+    class Unequal:
+        def __ne__(self, other):
+            raise RuntimeError("this report cannot be compared")
+        __eq__ = __ne__
+        __hash__ = None
+    (standin / "__init__.py").write_text(SOURCE + "\ndel _assign_to_windows_job\n", encoding="utf-8")
+    module = importlib.import_module(TARGET)                # No hook is installed in this test.
+    setattr(module, "__unified_shell_tool_containment__", Unequal())
+    assert containment.neutralize(module) == {
+        "replaced": [NAMES[0], NAMES[2], NAMES[3]], "missing": [NAMES[1]], "failed": []}
+    assert capsys.readouterr().err == containment.MESSAGE + "missing _assign_to_windows_job\n"
 
 
 def test_loader_without_exec_module_is_left_as_it_is():

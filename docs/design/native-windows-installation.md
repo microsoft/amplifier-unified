@@ -114,19 +114,22 @@ only entry points to its job (`_get_windows_job_object`,
 no process, whatever else it does. If a module that has `BashTool` lacks one of
 them, stderr names it and the result lists it. The other two names are the walk
 over the process table. They are replaced when present. The tool's own repair
-removes the walk, so their absence is no fault. A renamed entry point needs
-review: this guard cannot disable an unknown replacement.
+(a separate change, not merged when this was written) removes the walk, so
+their absence is no fault. A renamed entry point needs review: this guard
+cannot disable an unknown replacement.
 No step of the guard can fail the tool's import. A name that cannot be
-replaced, or a message that cannot be written, leaves the tool loaded as it
-was. The result lists the name. Errors of the tool's own code still reach its
-importer. The shell tool's own repair is a separate change.
+replaced, or a message that cannot be written, leaves the tool loaded. The
+names that could be replaced stay replaced, and the result lists the one that
+could not. Errors of the tool's own code still reach its importer.
 The helper programs `update_probe.py` and `module_validate.py` mount tools
 without a worker and have no guard. Their ordinary paths run no shell command.
-A command that the tool runs through WSL is contained too. Measured on one
-Windows 11 PC with throwaway commands: every Windows process of such a command
-is born in the job of the process that started it, and its Linux process ends
-within a second after a job ends them. Job containment does not cover a process
-that another service starts on its own account.
+A command that the tool runs through WSL is expected to be contained too.
+Measured on one Windows 11 PC with throwaway foreground commands, not in a
+Unified worker: every Windows process of such a command is born in the job of
+the process that started it, and its Linux process ends within a second after
+a job ends them. A Linux process that detaches itself was not measured. Job
+containment does not cover a process that another service starts on its own
+account.
 
 The existing `test_windows_runtime_identity_transport_and_stop_model` and
 `test_windows_runtime_identity_failure_never_admits_input` in
