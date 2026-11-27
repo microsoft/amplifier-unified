@@ -53,6 +53,15 @@ def publish_process_identity():
 
 class Worker:
     def __init__(self):
+        if os.name == "nt":
+            if __package__:
+                from .shell_tool_containment import install
+            else:
+                from shell_tool_containment import install
+            # Before any session/tool imports, including lazy module activation.
+            self.shell_tool_containment = install()
+            print("Unified shell tool containment: " + json.dumps(self.shell_tool_containment),
+                  file=sys.stderr, flush=True)
         self.session = self.runtime = self.execution = None
         self.approvals = {}
         self.approval_contexts = {}

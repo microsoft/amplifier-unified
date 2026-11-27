@@ -86,6 +86,37 @@ Limits. This is a default, not a sandbox:
   set `GIT_TERMINAL_PROMPT=0` or a time limit.
 - Ending the hidden console's `conhost.exe` ends the host.
 
+### The shell tool uses the host's worker job
+
+On November 27, 2026, a Windows host ended silently when it retired an idle
+worker. The shell tool's process walk could take unrelated processes after
+Windows reused a parent process ID. Closing the tool's kill-on-close job could
+then end the launcher and its app with exit code 0. The links of this mechanism
+were measured separately; the original reused-ID trigger left no record.
+Unified now turns off the tool's own job and descendant walk in Windows workers.
+Every Windows worker starts inside a job held by the host, with kill-on-close
+and no breakaway flag (`WindowsOwnedProcess` in `windows_jobs.py`).
+The host settles that job when the worker ends, so directly created descendants
+remain contained without a process-table walk.
+
+`shell_tool_containment.install()` runs at the start of `Worker.__init__`,
+before session or tool creation. It covers an already imported
+`amplifier_module_tool_bash` and later normal imports, including reload.
+It changes no other module. Its start result is one line on the worker's stderr.
+The four function names belong to another repository. If that module has
+`BashTool` but lacks a name, stderr names the missing function and the result
+lists it. A renamed function needs review; this guard cannot disable an unknown
+replacement. The shell tool's own process-identity repair is a separate change.
+Job containment does not cover processes started through external services.
+
+The existing `test_windows_runtime_identity_transport_and_stop_model` and
+`test_windows_runtime_identity_failure_never_admits_input` in
+`tests/test_runtime.py` pin the host-owned launch and cleanup path.
+`ABITests.test_job_checked_noninherit_and_no_breakaway` and
+`ABITests.test_query_length_limits_and_inherit_fail_closed` in
+`tests/test_windows_owned_process.py` pin the job's flags and their verification.
+These portable models are not a native Windows run of this change.
+
 ### Stable launcher and update recovery
 
 The supervised candidate keeps the owner-logon task's `pythonw.exe` as a stable
