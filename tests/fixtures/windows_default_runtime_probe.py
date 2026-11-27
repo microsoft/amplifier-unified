@@ -34,7 +34,7 @@ import zipfile
 
 APP_FILES = ("__init__.py", "runtime.py", "runtime_worker.py", "runtime_bootstrap.py",
              "runtime_environment.py", "windows_jobs.py", "windows_launch_guard.py",
-             "worker_diagnostics.py")
+             "worker_diagnostics.py", "shell_tool_containment.py")
 IMPORTS = {
     "amplifier_core": "amplifier-core",
     "amplifier_foundation": "amplifier-foundation",
