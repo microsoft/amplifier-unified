@@ -10,7 +10,7 @@ def outcome(app, receipt):
         return None
     sid, rid = receipt['senderSessionId'], job['resourceId']
     try:
-        row = environments.get(app.data_dir, sid, rid)
+        row = environments.get(app.data_dir, sid, rid, read_only=True)
         if (row.get('sessionId') != sid or row.get('id') != rid
                 or row.get('kind') != environments.KIND
                 or row.get('commandId') != receipt['requestId'] + ':start:' + str(job.get('attempt', 0))
@@ -56,7 +56,7 @@ def outcome(app, receipt):
             if (result.get('ok') is not True or not isinstance(execution, dict)
                     or type(execution.get('exit_code')) is not int or execution['exit_code'] != 0):
                 state = 'unknown'
-        if (environments.get(app.data_dir, sid, rid) != row
+        if (environments.get(app.data_dir, sid, rid, read_only=True) != row
                 or app.operations.requests.read(sid, cleanup['requestId']) != cleanup
                 or check and app.operations.requests.read(sid, check_id) != check):
             return None

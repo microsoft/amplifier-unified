@@ -238,6 +238,20 @@ retain their own current actor; they do not replace the original setup actor.
 Ask-mode setup actor checks are unchanged. Routine environment operations use the
 shared resource and request ownership described above.
 
+For an exact Docker backend on a fresh Amplifier installation, install the
+Digital Twin Universe Smart Tool from its [public repository](https://github.com/microsoft/amplifier-smart-tool-digital-twin-universe)
+before setting up local testing. For launch witnesses, select the
+[0.6.12 release](https://github.com/microsoft/amplifier-smart-tool-digital-twin-universe/releases/tag/v0.6.12)
+at source revision `2100c34600036680e9b5c8bf484da9c6f106a7e4`, with no optional
+extras. Docker setup reuses the eligible installation; without one it installs
+from the repository's `main` branch.
+
+If local testing is already set up to follow a branch, use the normal Smart
+Tool update for the selected runner and verify that the offered revision
+includes witness support. A separately installed package or a repeat of setup
+does not switch a ready runner. A runner pinned to an older revision stays on
+that revision. Keep its original installation for existing environments.
+
 Keep the exact managed core installation and configuration until all of its
 owned environments have been removed. Managed uninstall and replacement refuse
 to delete an installation with unresolved environment references. Changing the backend pin or endpoint does

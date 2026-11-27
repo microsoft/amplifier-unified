@@ -105,11 +105,14 @@ def read_private_record(path, *, max_bytes=4096):
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
         return None
-    with os.fdopen(fd) as stream:
+    with os.fdopen(fd, 'rb') as stream:
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o077 or info.st_size > max_bytes:
             raise ValueError('A retained backend proof is unsafe.')
-        return json.load(stream)
+        content = stream.read(max_bytes + 1)
+        if len(content) > max_bytes:
+            raise ValueError('A retained backend proof exceeds its bound.')
+        return json.loads(content)
 
 
 def write_private_record(path, value):
@@ -185,6 +188,46 @@ def docker_backend(payload):
     if not isinstance(daemon.get('ID'), str) or not daemon['ID']:
         raise ValueError('The actual Docker daemon is unavailable.')
     return {'backend': 'docker', 'daemon': daemon['ID']}
+
+
+def read_launch_witness(payload, lib, config, root):
+    """Attribute historical evidence without contacting the current Docker daemon."""
+    try:
+        read = getattr(lib, 'launch_terminal_witness', None)
+        operation, project = payload['operationId'], payload['universeId']
+        host, backend = payload['dockerHost'], payload['expectedBackendIdentity']
+        state_root = root / 'backend'
+        info = root.stat()
+        if (not callable(read) or not isinstance(operation, str) or not 1 <= len(operation) <= 512
+                or not isinstance(host, str) or not host.startswith('unix:///')
+                or not isinstance(project, str) or not re.fullmatch(r'dtu-op-[a-f0-9]{32}', project)
+                or not isinstance(backend, dict) or set(backend) != {'backend', 'daemon'}
+                or backend['backend'] != 'docker'
+                or not isinstance(backend['daemon'], str)
+                or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9:-]{0,127}', backend['daemon'])
+                or [info.st_dev, info.st_ino] != payload['directoryIdentity']
+                or state_root.resolve(strict=True) != state_root or not state_root.is_dir()
+                or lib.launch_id(operation, config=config) != project
+                or read_private_record(root / 'backend-binding.json') != binding(payload, project, backend)):
+            return {'ok': False}
+        witness = read(operation, config=config)
+        if (witness is None or type(witness.version) is not int or witness.version != 1
+                or witness.operation_id != operation or witness.project != project
+                or witness.docker_endpoint_sha256 != hashlib.sha256(host.encode()).hexdigest()
+                or witness.engine_id != backend['daemon']
+                or type(witness.socket_device) is not int or witness.socket_device < 0
+                or type(witness.socket_inode) is not int or witness.socket_inode <= 0
+                or witness.phase != 'final-up' or witness.rollback != 'not-dispatched-by-dtu'
+                or witness.error_category not in (None, 'post-dispatch-failed')
+                or type(witness.completed) is not tuple or witness.completed not in (
+                    ('final-up',), ('bootstrap-up', 'final-up'),
+                    ('bootstrap-up', 'buildx-bake', 'final-up'))):
+            return {'ok': False}
+        return {'ok': True, 'postDispatchFailed': witness.error_category == 'post-dispatch-failed'}
+    except Exception:
+        # Optional evidence must not introduce a new error surface or a reason
+        # to replay. Never forward the witness or backend exception itself.
+        return {'ok': False}
 
 
 def docker_reconcile(payload, universe, backend, source):
@@ -364,6 +407,10 @@ def docker_capacity(payload):
         'storage': {'free_bytes': free}, 'blockers': blockers, 'available': not blockers}
 
 
+class DockerAdmissionBusy(BlockingIOError):
+    pass
+
+
 @contextmanager
 def docker_admission(payload):
     """Serialize cooperating local callers by daemon identity, not socket alias."""
@@ -375,8 +422,14 @@ def docker_admission(payload):
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_nlink != 1:
             raise ValueError('The admission lock must be a private regular file.')
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        yield docker_capacity(payload)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise DockerAdmissionBusy from error
+        current = docker_capacity(payload)
+        if current['scope']['daemon'] != observed['scope']['daemon']:
+            raise ValueError('The Docker daemon changed while acquiring admission.')
+        yield current
     finally:
         os.close(fd)
 
@@ -900,7 +953,7 @@ def compose_file(root, payload):
     return path
 
 
-def execute_call(payload):
+def execute_call(payload, *, launch_phase=lambda phase: None):
     if '_captured_retention' in globals():
         # Only the two captured app inputs execute before the private permit.
         # Other helper/dependency imports are outside that narrow attestation.
@@ -912,6 +965,8 @@ def execute_call(payload):
     action = payload['action']
     identity = payload.get('universeId')
     snapshot = payload.get('snapshot')
+    if action == 'launch_witness':
+        return read_launch_witness(payload, lib, config, root)
     try:
         if action == 'capacity':
             return {'ok': True, 'capacity': docker_capacity(payload)}
@@ -944,6 +999,7 @@ def execute_call(payload):
             return {'ok': True, 'universeId': identity, 'snapshot': snapshot, 'backendIdentity': backend,
                     'hostTarget': host_resources.local_target(payload.get('dockerHost'), {'dockerd'})}
         if action == 'start':
+            launch_phase('preflight')
             source_identity(identity, snapshot)
             with ExitStack() as transfer:
                 try:
@@ -966,24 +1022,32 @@ def execute_call(payload):
                             return {'ok': False, 'admissionDenied': True, 'status': 'not-started', 'capacity': capacity,
                                 'message': 'Capacity changed before launch. No backend effect was admitted.'}
                         reservation = reserve_admission(payload, capacity)
+                        launch_phase('compose-launch')
                         universe = lib.launch(compose, operation_id=payload['operationId'], timeout_seconds=600, config=config)
+                        launch_phase('backend-record')
                         retain_settlement(payload, identity, backend, 'launched')
                         reservation.unlink()
-                except BlockingIOError:
+                except DockerAdmissionBusy:
                     return {'ok': False, 'admissionDenied': True, 'status': 'not-started',
                         'message': 'Another cooperating launch owns admission. No environment was started.'}
                 identity = universe.id
+                launch_phase('source-transfer')
                 lib.push_files(identity, upload, destination, config=config)
+                launch_phase('source-unpack')
                 unpack = lib.execute(identity, source_transfer.command(destination, size, snapshot, chunked),
                     workdir='/', timeout_seconds=60, max_output_bytes=32768, config=config)
                 if unpack.exit_code != 0:
                     return {'ok': False, 'universeId': identity, 'snapshot': snapshot, 'status': 'unknown',
-                            'message': 'The environment launched but source preparation did not complete. Inspect it; launch was not replayed.', 'result': serialize(unpack)}
+                            'code': 'source-unpack-failed',
+                            'message': 'The environment launched but source preparation did not complete. Inspect it; launch was not replayed.'}
+                launch_phase('guest-initialization')
                 initialized = lib.execute(identity, jobs.initialize_command(prepared_runtime(payload)),
                     workdir='/', timeout_seconds=120, max_output_bytes=32768, config=config)
                 if initialized.exit_code != 0:
                     return {'ok': False, 'universeId': identity, 'sourceReady': False, 'status': 'unknown',
+                            'code': 'guest-initialization-failed',
                             'message': 'The owned source and dependency initialization did not complete. It was not repeated.'}
+                launch_phase('source-ready-record')
                 retain_source_ready(root, identity, snapshot)
                 return {'ok': True, 'universeId': identity, 'sourceReady': True,
                         'status': universe.state, 'services': [serialize(item) for item in universe.services],
@@ -1058,6 +1122,14 @@ def execute_call(payload):
         if action in {'remove', 'finishCleanup'}:
             return {'ok': False, 'status': 'unknown', 'code': 'backend_unconfirmed',
                     'message': 'The original removal could not be confirmed. Inspect retained evidence; do not replay.'}
+        if action == 'start':
+            code = exc.code if exc.code in {
+                'build-failed', 'profile-invalid', 'launch-failed', 'port-in-use', 'unhealthy',
+                'timeout', 'allocation-failed', 'operation-incomplete', 'operation-conflict',
+                'operation-removed', 'build-secret-inline',
+            } else 'backend_unconfirmed'
+            return {'ok': False, 'status': 'unknown', 'universeId': identity, 'snapshot': snapshot,
+                    'code': code, 'message': 'The test environment did not finish starting. Inspect the retained launch details; it was not retried.'}
         return {'ok': False, 'status': 'unknown', 'universeId': identity or exc.universe_id,
                 'snapshot': snapshot, 'code': exc.code,
                 'message': 'The backend did not confirm this operation. A command may still be running; inspect the retained environment without replaying the request.'}
@@ -1067,7 +1139,12 @@ def main():
     value = None
     try:
         payload = json.loads(sys.stdin.buffer.read(65537))
-        value = execute_call(payload)
+        def launch_phase(phase):
+            # Stdout belongs to this helper protocol. Emit before the phase,
+            # so the host can retain the last checkpoint even without a receipt.
+            print(json.dumps({'launchPhase': phase}), flush=True)
+
+        value = execute_call(payload, launch_phase=launch_phase)
     except RemovalFailure as exc:
         value = exc.receipt
     except Exception as error:  # noqa: BLE001 - subprocess boundary returns uncertainty, never raw private diagnostics.

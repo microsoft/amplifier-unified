@@ -35,7 +35,7 @@ def test_policies_have_distinct_blockers(monkeypatch, tmp_path, change, code):
 def test_socket_aliases_share_the_actual_daemon_admission_lock(monkeypatch, tmp_path):
     payload = observation(monkeypatch, tmp_path, [])
     with worker.docker_admission(payload):
-        with pytest.raises(BlockingIOError):
+        with pytest.raises(worker.DockerAdmissionBusy):
             with worker.docker_admission({**payload, 'dockerHost': 'unix:///alias/docker.sock'}):
                 pytest.fail('second admission must not enter')
     with worker.docker_admission(payload) as result:
@@ -52,6 +52,16 @@ def test_capacity_is_rechecked_under_lock(monkeypatch, tmp_path):
     with worker.docker_admission(payload) as result:
         assert not result['available']
     assert len(reads) == 2
+
+
+def test_recheck_cannot_use_capacity_from_another_daemon(monkeypatch, tmp_path):
+    payload = observation(monkeypatch, tmp_path, [])
+    daemons = iter(['first-daemon', 'second-daemon'])
+    monkeypatch.setattr(worker, 'docker_capacity',
+                        lambda args: {'available': True, 'scope': {'daemon': next(daemons)}})
+    with pytest.raises(ValueError, match='daemon changed'):
+        with worker.docker_admission(payload):
+            pytest.fail('a lock on the first daemon cannot authorize the second')
 
 
 def test_interrupted_launch_keeps_slot_until_exact_owner_cleanup(monkeypatch, tmp_path):

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import closing, nullcontext
 import json
+from itertools import islice
 import os
 from pathlib import Path
 import re
@@ -129,7 +130,7 @@ def local_configuration(app):
         return None, 'unavailable', 'The managed Linux test host needs setup, or its approved backend configuration changed.'
 
 
-def validate_configuration_value(app, value, *, _qualification=False):
+def validate_configuration_value(app, value, *, _qualification=False, _witness_read=False):
     """Qualify operator-owned fields independently of the currently selected file."""
     if not isinstance(value, dict):
         raise ValueError('The operator configuration must be an object.')
@@ -147,7 +148,12 @@ def validate_configuration_value(app, value, *, _qualification=False):
         raise ValueError('The managed backend has no exact revision.')
     manager = getattr(app, 'smart_tools', None)
     backend = value.get('backend', 'docker')
-    installation = next((row for row in manager.state['installations'] if row['id'] == value.get('installationId')), None) if manager else None
+    installations = manager.state['installations'] if manager else ()
+    if _witness_read:
+        # Optional evidence must not turn an exact result read into an
+        # unbounded installation search. Older unavailable routes stay unknown.
+        installations = islice(reversed(installations), 64)
+    installation = next((row for row in installations if row['id'] == value.get('installationId')), None)
     if not installation or installation.get('status') != 'installed' or installation.get('commit') != commit or installation.get('repository', '').removesuffix('.git') != REPOSITORY or (backend == 'incus' and installation.get('extras')):
         raise ValueError('Install the qualified DTU core without provider extras before enabling it.')
     dynamic = backend == 'incus' and installation.get('runnerCandidate') is True
@@ -228,8 +234,17 @@ def public(home, row):
     }.items() if value is not None}
 
 
-def get(home, sid, identity):
-    with closing(storage.connect(home)) as db:
+def get(home, sid, identity, *, read_only=False):
+    if read_only:
+        # Inspection must not initialize or chmod the owner's ledger.
+        folder = home / 'workspace-resources'
+        target = folder / 'reservations.sqlite3'
+        if folder.is_symlink() or not stat.S_ISREG(target.lstat().st_mode):
+            raise ValueError('The retained resource ledger is unavailable.')
+        db = sqlite3.connect(target.as_uri() + '?mode=ro', uri=True, timeout=0)
+    else:
+        db = storage.connect(home)
+    with closing(db):
         row = storage.get(db, sid, identity)
     if row['kind'] != KIND:
         raise ValueError('This resource is not an owned test environment.')
@@ -364,9 +379,66 @@ def cleanup_refusal_code(exc):
     }.get(str(exc), 'cleanup_admission_refused')
 
 
+class LaunchDiagnostics:
+    """Bounded advisory evidence. Never used to classify or settle backend effects."""
+
+    # Only these helper-authored frames and a fixed vocabulary derived from
+    # untrusted progress are retained. Never persist backend text, paths or args.
+    PHASES = ('preflight', 'compose-launch', 'backend-record', 'source-transfer',
+              'source-unpack', 'guest-initialization', 'source-ready-record')
+    FRAMES = {json.dumps({'launchPhase': phase}).encode(): phase for phase in PHASES}
+    SIGNALS = {
+        'build-progress-reported': re.compile(rb'(?m)^#\d+ (?:\[[^\n]{1,120}\]|DONE\b)'),
+        'image-export-reported': re.compile(rb'exporting to image|naming to|unpacking to'),
+        'image-built-reported': re.compile(rb'(?m)^[ \t]*Image [^\n]{1,120} Built\b'),
+        'container-create-reported': re.compile(rb'(?m)^[ \t]*Container [^\n]{1,120} Creat(?:ing|ed)\b'),
+        'container-start-reported': re.compile(rb'(?m)^[ \t]*Container [^\n]{1,120} (?:Starting|Started|Waiting)\b'),
+        'build-error-reported': re.compile(rb'failed to solve'),
+        'port-conflict-reported': re.compile(rb'port is already allocated|address already in use'),
+        'unhealthy-container-reported': re.compile(rb'container [^\n]{1,120} is unhealthy', re.I),
+        'startup-timeout-reported': re.compile(rb'application not healthy after'),
+        'mount-error-reported': re.compile(rb'invalid mount config|error while mounting'),
+        'network-error-reported': re.compile(rb'failed to (?:create network|set up container networking)'),
+    }
+
+    def __init__(self):
+        self.phases = []
+        self.signals = set()
+        self._tail = b''
+
+    def take_frames(self, output):
+        # Remove only complete, recognized checkpoints from the start of
+        # stdout. Legacy helpers still return an ordinary single JSON object.
+        while len(self.phases) < len(self.PHASES):
+            end = output.find(b'\n', 0, 64)
+            if end == -1:
+                break
+            phase = self.FRAMES.get(bytes(output[:end]))
+            if phase != self.PHASES[len(self.phases)]:
+                break
+            self.phases.append(phase)
+            del output[:end + 1]
+
+    def observe_stderr(self, chunk):
+        if len(self.signals) == len(self.SIGNALS):
+            return
+        window = self._tail + chunk
+        self.signals.update(name for name, pattern in self.SIGNALS.items()
+                            if name not in self.signals and pattern.search(window))
+        self._tail = window[-256:]
+
+    def receipt(self, transport, exit_code=None):
+        return {'version': 1, 'phasesEntered': self.phases, 'progressReported': sorted(self.signals),
+                'helperReceipt': transport, **({'helperExitCode': exit_code} if exit_code else {})}
+
+
 def invoke(config, home, row, action, args, *, _qualification=False,
            _cleanup_gate=None, _cleanup_permit=None):
     """Bound helper output and lifetime; killing a helper is not command cancellation."""
+    witness_read = action == 'launch_witness'
+    if witness_read and (config.get('remoteRunner') or config.get('originSnapshotVersion')
+                         or config.get('backend', 'docker') != 'docker'):
+        return {'ok': False}
     try:
         if not _qualification and action not in {'capacity', 'read', 'reconcile', 'job_read'}:
             from .managed_runner_updates import validate_execution
@@ -409,6 +481,10 @@ def invoke(config, home, row, action, args, *, _qualification=False,
                **({'preparedRuntime': bool(row.get('preparedDependencies'))} if 'composeFile' in row else {}),
                'timeoutSeconds': args.get('timeoutSeconds', 60),
                **{key: config[key] for key in ('maxRunning', 'maxInstances', 'minFreeBytes', 'admissionRoot') if key in config}}
+    if witness_read:
+        payload = {key: payload[key] for key in (
+            'action', 'root', 'operationId', 'universeId', 'dockerHost', 'rootOwner', 'expectedBackendIdentity')}
+        payload['directoryIdentity'] = row['directoryIdentity']
     if config.get('remoteRunner'):
         return registered_runners.invoke(config, folder, payload)
     try:
@@ -416,7 +492,7 @@ def invoke(config, home, row, action, args, *, _qualification=False,
         if config.get('backend') == 'incus':
             helper = Path(__file__).with_name('incus_environment_worker.py')
             payload['incus'] = config['incus']
-        if row.get('preparedDependencies'):
+        if row.get('preparedDependencies') and not witness_read:
             prepared = dependencies.validate_receipt(row['preparedDependencies'], row['snapshot'], row['profileId'])
             if prepared['backend'] != config.get('backend', 'docker'):
                 raise ValueError('The prepared dependencies belong to a different backend.')
@@ -438,9 +514,16 @@ def invoke(config, home, row, action, args, *, _qualification=False,
         # Popen raises only after its failed child was reaped; no helper ran.
         # Once Popen returns, transport/process failures remain uncertain.
         return helper_not_started(row, action)
-    output, errors = bytearray(), bytearray()
+    output = bytearray()
+    launch = LaunchDiagnostics() if action == 'start' and config.get('backend', 'docker') == 'docker' else None
+
+    def unknown_launch(transport):
+        return {'ok': False, 'status': 'unknown', 'code': 'launch_result_unconfirmed',
+                'message': 'The test runner did not return a valid launch result. Inspect the retained launch details; it was not retried.',
+                'launchDiagnostics': launch.receipt(transport, process.returncode)}
+
     drained = False
-    deadline = time.monotonic() + (450 if action == 'exportArtifacts' else 650 if action == 'start' else 750 if action == 'finishCleanup' else 750 if action == 'remove' and row.get('preparedDependencies', {}).get('executionContract') else 650 if action == 'remove' and config.get('backend') == 'incus' else 300 if action == 'prepare' else 30 if action in {'read', 'capacity', 'reconcile', 'job_start', 'job_read', 'job_cancel'} else args.get('timeoutSeconds', 60) + 150)
+    deadline = time.monotonic() + (5 if witness_read else 450 if action == 'exportArtifacts' else 650 if action == 'start' else 750 if action == 'finishCleanup' else 750 if action == 'remove' and row.get('preparedDependencies', {}).get('executionContract') else 650 if action == 'remove' and config.get('backend') == 'incus' else 300 if action == 'prepare' else 30 if action in {'read', 'capacity', 'reconcile', 'job_start', 'job_read', 'job_cancel'} else args.get('timeoutSeconds', 60) + 150)
     try:
         if cleanup:
             try:
@@ -476,8 +559,8 @@ def invoke(config, home, row, action, args, *, _qualification=False,
             process.stdin.write(json.dumps(payload).encode())
         process.stdin.close()
         with selectors.DefaultSelector() as selector:
-            selector.register(process.stdout, selectors.EVENT_READ, output)
-            selector.register(process.stderr, selectors.EVENT_READ, errors)
+            selector.register(process.stdout, selectors.EVENT_READ)
+            selector.register(process.stderr, selectors.EVENT_READ)
             while selector.get_map():
                 if time.monotonic() >= deadline:
                     raise TimeoutError('The backend response timed out. The effect may still be running; inspect it without replay.')
@@ -485,18 +568,45 @@ def invoke(config, home, row, action, args, *, _qualification=False,
                     chunk = os.read(selected.fileobj.fileno(), 65536)
                     if not chunk:
                         selector.unregister(selected.fileobj)
-                    else:
-                        selected.data.extend(chunk[:max(0, OUTPUT_LIMIT - len(selected.data))])
-                        if selected.data is output and len(output) >= OUTPUT_LIMIT:
+                    elif selected.fileobj is process.stdout:
+                        output.extend(chunk)
+                        if launch:
+                            launch.take_frames(output)
+                        if len(output) >= (1024 if witness_read else OUTPUT_LIMIT):
+                            if launch:
+                                return unknown_launch('response-too-large')
                             raise ValueError('The backend response exceeded its bound; the outcome is unknown.')
+                    elif launch:
+                        launch.observe_stderr(chunk)
         drained = True
         process.wait(timeout=max(1, deadline - time.monotonic()))
         if process.returncode:
+            if launch:
+                return unknown_launch('helper-exited')
             raise ValueError('The managed backend exited without a valid result; inspect the retained environment.')
-        value = json.loads(output)
+        try:
+            value = json.loads(output)
+        except (ValueError, RecursionError):
+            if launch:
+                return unknown_launch('invalid-response')
+            raise
         if not isinstance(value, dict) or 'ok' not in value:
+            if launch:
+                return unknown_launch('invalid-response')
             raise ValueError('The managed backend returned an invalid receipt.')
+        if launch and type(value['ok']) is not bool:
+            return unknown_launch('invalid-response')
+        if launch and value['ok'] is False:
+            value['launchDiagnostics'] = launch.receipt('returned')
         return value
+    except (TimeoutError, subprocess.TimeoutExpired):
+        if launch:
+            return unknown_launch('timed-out')
+        raise
+    except OSError:
+        if launch:
+            return unknown_launch('transport-error')
+        raise
     finally:
         if process.poll() is None or not drained:
             try:
@@ -508,6 +618,24 @@ def invoke(config, home, row, action, args, *, _qualification=False,
             process.stdin.close()
         process.stdout.close()
         process.stderr.close()
+
+
+def launch_witness(app, row):
+    """Read this already-authorized allocation once, using only its retained route."""
+    try:
+        home = app.data_dir
+        if not SUPPORTED_HOST or storage.observe(home, row)['observation'] != 'present':
+            return None
+        config = backend_configs.resolve(app, row, None, witness_read=True)
+        result = invoke(config, home, row, 'launch_witness', {})
+        if (isinstance(result, dict) and result.get('ok') is True and set(result) == {'ok', 'postDispatchFailed'}
+                and type(result['postDispatchFailed']) is bool
+                and storage.observe(home, row)['observation'] == 'present'
+                and get(home, row['sessionId'], row['id'], read_only=True) == row):
+            return result['postDispatchFailed']
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, sqlite3.Error, subprocess.SubprocessError):
+        pass
+    return None
 
 
 def invoke_cleanup(app, config, row, action, args, permit):
@@ -1112,6 +1240,8 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
         request = app.operations.requests.finish(request, 'outcome_unknown' if uncertain else 'failed', resourceId=row['id'],
             result={'ok': False, 'status': 'not-started' if not admitted else 'unknown',
                     'preparationCleanup': preparation_cleanup,
+                    **({'launchDiagnostics': result['launchDiagnostics']} if action == 'start'
+                       and isinstance(result, dict) and 'launchDiagnostics' in result else {}),
                     **({'effectAdmitted': False, 'code': cleanup_refusal_code(exc)} if cleanup_not_started else {}),
                     **({'removal': {'version': 1, 'phase': 'host-persistence',
                                     'code': 'metadata_unconfirmed', 'destroyEffect': 'confirmed'}} if confirmation else {}),

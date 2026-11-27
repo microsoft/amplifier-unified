@@ -82,6 +82,59 @@ def payload(tmp_path, action):
             'admissionRoot': str(tmp_path / 'admission')}
 
 
+@pytest.mark.parametrize(('change', 'expected'), [
+    ('normal', {'ok': True, 'postDispatchFailed': False}),
+    ('post-dispatch', {'ok': True, 'postDispatchFailed': True}),
+    *[(change, {'ok': False}) for change in (
+        'old', 'missing', 'raises', 'unavailable-state-root', 'engine_id', 'operation_id',
+        'project', 'docker_endpoint_sha256', 'stale-binding', 'stale-root', 'version',
+        'phase', 'completed', 'error_category', 'rollback', 'socket_inode', 'derived-id')],
+])
+def test_launch_witness_only_attributes_exact_foreground_return(library, tmp_path, monkeypatch, change, expected):
+    lib, calls = library
+    data = payload(tmp_path, 'launch_witness')
+    root = tmp_path / 'backend'
+    root.mkdir()
+    data['directoryIdentity'] = storage.identity(tmp_path.stat())
+    project = 'dtu-op-' + hashlib.sha256(f'{root}\0{data["operationId"]}'.encode()).hexdigest()[:32]
+    data['universeId'] = project
+    binding = worker.binding(data, project, data['expectedBackendIdentity'])
+    proof = tmp_path / 'backend-binding.json'
+    worker.write_private_record(proof, {**binding, 'operationId': 'previous-launch'}
+                                if change == 'stale-binding' else binding)
+    config = {'state_root': root, 'docker_host': data['dockerHost']}
+    def derive(operation, *, config):
+        return 'wrong' if change == 'derived-id' else 'dtu-op-' + hashlib.sha256(
+            f'{config["state_root"]}\0{operation}'.encode()).hexdigest()[:32]
+    lib.launch_id = derive
+    witness = dict(version=1, operation_id=data['operationId'], project=project, socket_device=3,
+        socket_inode=7, engine_id='fixture-daemon', phase='final-up',
+        completed=('bootstrap-up', 'buildx-bake', 'final-up'),
+        docker_endpoint_sha256=hashlib.sha256(data['dockerHost'].encode()).hexdigest(),
+        error_category='post-dispatch-failed' if change == 'post-dispatch' else None,
+        rollback='not-dispatched-by-dtu')
+    if change in witness:
+        witness[change] = True if change == 'version' else 'wrong'
+    def read(operation, **kwargs):
+        assert (operation, kwargs) == (data['operationId'], {'config': config})
+        if change == 'raises':
+            raise RuntimeError('private exception must not escape')
+        return None if change == 'missing' else Value(**witness, ignored='private future field')
+    if change != 'old':
+        lib.launch_terminal_witness = read
+    if change == 'stale-root':
+        data['directoryIdentity'][1] += 1
+    if change == 'unavailable-state-root':
+        root.rmdir()
+    before = sorted(tmp_path.iterdir()), proof.read_bytes()
+    def unexpected(*args, **kwargs):
+        pytest.fail('A witness read must not query or launch Docker')
+    monkeypatch.setattr(worker, 'docker_backend', unexpected)
+    assert worker.execute_call(data) == expected
+    assert (sorted(tmp_path.iterdir()), proof.read_bytes()) == before
+    assert not calls
+
+
 def test_fixed_profile_has_no_host_mount_ports_or_privilege_escalation():
     profile = worker.profile(owner.APPROVED_IMAGE)
     twin = profile['services']['twin']
@@ -115,6 +168,40 @@ def test_start_copies_exact_snapshot_without_host_mount(library, tmp_path):
     assert worker.source_ready(tmp_path, 'owned', payload(tmp_path, 'read')['snapshot'])
 
 
+@pytest.mark.parametrize('failure', ['build-failed', 'blocking-error'])
+def test_uncertain_launch_never_becomes_admission_refusal_or_proves_absence(library, tmp_path, monkeypatch, failure):
+    lib, _ = library
+    value = payload(tmp_path, 'start')
+    phases, attempts = [], []
+    def fail(*args, **kwargs):
+        attempts.append(True)
+        # This could be the backend's best-effort failed state after a build
+        # or any other exception. It is deliberately not settlement evidence.
+        (tmp_path / 'state.json').write_text('{"phase":"failed"}')
+        if failure == 'blocking-error':
+            raise BlockingIOError('private backend error')
+        error = Failure('private backend error')
+        error.code = failure
+        raise error
+    lib.launch = fail
+    if failure == 'blocking-error':
+        with pytest.raises(BlockingIOError):
+            worker.execute_call(value, launch_phase=phases.append)
+    else:
+        result = worker.execute_call(value, launch_phase=phases.append)
+        assert result['status'] == 'unknown' and result['code'] == failure
+        assert not {'admissionDenied', 'effectAdmitted'} & result.keys()
+        assert 'private backend error' not in json.dumps(result)
+    assert phases == ['preflight', 'compose-launch']
+    monkeypatch.setattr(worker.subprocess, 'run', lambda *a, **kw: SimpleNamespace(stdout=''))
+    assert worker.execute_call({**value, 'action': 'reconcile'})['status'] == 'unknown'
+    assert not (tmp_path / 'backend-launched.json').exists()
+    assert not (tmp_path / 'source-ready.json').exists()
+    with pytest.raises(FileExistsError):
+        worker.execute_call(value)
+    assert attempts == [True]
+
+
 def test_failed_unpack_never_promotes_running_container_to_ready(library, tmp_path):
     lib, calls = library
     executions = []
@@ -123,7 +210,11 @@ def test_failed_unpack_never_promotes_running_container_to_ready(library, tmp_pa
         return Value(stdout='', stderr='outside symlink refused', exit_code=1)
     lib.execute = unpack
     lib.status = lambda *a, **k: Value(state='running', services=[])
-    assert not worker.execute_call(payload(tmp_path, 'start'))['ok']
+    phases = []
+    failed = worker.execute_call(payload(tmp_path, 'start'), launch_phase=phases.append)
+    assert not failed['ok'] and failed['code'] == 'source-unpack-failed'
+    assert 'outside symlink refused' not in json.dumps(failed)
+    assert phases == ['preflight', 'compose-launch', 'backend-record', 'source-transfer', 'source-unpack']
     observed = worker.execute_call(payload(tmp_path, 'read'))
     assert observed['status'] == 'unknown' and not observed['sourceReady']
     assert not worker.execute_call(payload(tmp_path, 'execute'))['ok']
@@ -260,6 +351,47 @@ def test_real_helper_output_is_bounded_and_stopped_on_overflow(tmp_path, monkeyp
     (tmp_path / 'test_environment_worker.py').write_text("import sys\nsys.stdout.write('x' * 1048576)\nsys.stdout.flush()\n")
     with pytest.raises(ValueError, match='exceeded its bound'):
         owner.invoke({'python': sys.executable, 'image': owner.APPROVED_IMAGE, 'dockerHost': 'unix:///socket'}, home, row, 'read', {})
+
+
+@pytest.mark.parametrize('end,transport', [
+    ("print('{\"ok\":false,\"status\":\"unknown\",\"code\":\"port-in-use\"}')", 'returned'),
+    ('sys.exit(7)', 'helper-exited'),
+    ("print('private corrupt response')", 'invalid-response'),
+    ("print('x' * 1048576)", 'response-too-large'),
+])
+def test_real_launch_transport_retains_bounded_phase_and_progress_without_raw_text(tmp_path, monkeypatch, end, transport):
+    home, row = allocated(tmp_path)
+    monkeypatch.setattr(owner, '__file__', str(tmp_path / 'owner.py'))
+    (tmp_path / 'test_environment_worker.py').write_text(
+        "import json, sys\njson.load(sys.stdin)\n"
+        "for phase in ('preflight', 'compose-launch'):\n"
+        "    print(json.dumps({'launchPhase': phase}), flush=True)\n"
+        "sys.stderr.write('#15 [3/3] private build command\\n#16 exporting to image\\n')\n"
+        "sys.stderr.write('private credential https://a:token@example.invalid ' * 8192)\n"
+        "sys.stderr.write('\\nError: port is already allocated; private /path\\n')\n"
+        "sys.stderr.flush()\n" + end + "\n")
+    value = owner.invoke({'python': sys.executable}, home, row, 'start', {})
+    assert value['status'] == 'unknown' and not value['ok']
+    assert not {'admissionDenied', 'effectAdmitted'} & value.keys()
+    assert 'private' not in json.dumps(value) and 'example.invalid' not in json.dumps(value)
+    assert value['launchDiagnostics'] == {
+        'version': 1, 'phasesEntered': ['preflight', 'compose-launch'],
+        'progressReported': ['build-progress-reported', 'image-export-reported', 'port-conflict-reported'],
+        'helperReceipt': transport, **({'helperExitCode': 7} if transport == 'helper-exited' else {}),
+    }
+
+
+def test_launch_diagnostic_frames_and_hints_can_span_pipe_chunks():
+    diagnostic = owner.LaunchDiagnostics()
+    output = bytearray(b'{"launchPh')
+    diagnostic.take_frames(output)
+    assert not diagnostic.phases
+    output.extend(b'ase": "preflight"}\n{"ok": false}')
+    diagnostic.take_frames(output)
+    assert diagnostic.phases == ['preflight'] and output == b'{"ok": false}'
+    diagnostic.observe_stderr(b'a private port is already al')
+    diagnostic.observe_stderr(b'located\n}')
+    assert diagnostic.receipt('returned')['progressReported'] == ['port-conflict-reported']
 
 
 def test_incus_helper_selection_preserves_exact_root_and_request(tmp_path, monkeypatch):
