@@ -68,6 +68,11 @@ The result does not satisfy a shared-task dependency or prove product acceptance
   it does not confirm the check result, current health, or cleanup. If evidence
   is unavailable or does not match, foreground completion stays unknown.
   Inspection never retries the launch or releases its reservation.
+  [DTU 0.6.12](https://github.com/microsoft/amplifier-smart-tool-digital-twin-universe/releases/tag/v0.6.12)
+  is the first release that writes this witness. See
+  [Docker runner setup and updates](workspaces/test-environments.md#operator-setup-and-upgrade-retention)
+  to select a supporting backend for future checks. Installing it does not add
+  witnesses to earlier launches.
 - Full-access reviewers and their currently admitted native children can use
   these two read actions directly with the producer's `sessionId` and
   `workspaceId`. Same-workspace evidence is the default; another registered
