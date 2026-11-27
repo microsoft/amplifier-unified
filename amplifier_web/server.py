@@ -93,7 +93,7 @@ async def boundaries(request, handler):
 
 
 async def create_app(data_dir, workspace=None, runtime=None, voice=True, background_updates=True,
-                     preload_providers=True, server_config=None, background_work=True):
+                     preload_providers=True, server_config=None, background_work=True, candidate_wheel=None):
     from .windows_proactor import install as install_socket_cleanup
     socket_cleanup = install_socket_cleanup()
     # Validate even with a supplied config. Resolving a Windows address first
@@ -180,6 +180,9 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         service.management.background(service.management.command("providers.list", {}))
     from .updates import UpdateManager
     service.update_manager = UpdateManager(service)
+    if candidate_wheel:
+        from .environment_cleanup_execution import bind_candidate
+        bind_candidate(service, *candidate_wheel)
     from .windows_launcher_follow import at_start; at_start(service.update_manager)
     if background_updates:
         service.update_manager.task = asyncio.create_task(service.update_manager.loop())

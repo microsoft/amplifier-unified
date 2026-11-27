@@ -136,6 +136,11 @@ def captured_members(descriptor, version, revision, names, *, limit=262144):
     different bytes, without copying the wheel or reading an installed closure.
     """
     value = validate_descriptor(descriptor, version)
+    return pinned_members(value['path'], value['sha256'], version, revision, names, limit=limit)
+
+
+def pinned_members(path, checksum, version, revision, names, *, limit=262144):
+    """Capture bounded members from the exact wheel selected by its installer."""
     names = tuple(names)
     if len(names) != len(set(names)) or not names or len(names) > 16:
         raise ValueError('Invalid application member selection')
@@ -168,7 +173,7 @@ def captured_members(descriptor, version, revision, names, *, limit=262144):
             return raw
 
     try:
-        fd = os.open(value['path'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, 'rb') as stream:
             if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                 raise ValueError('Application artifact is not a regular file')
@@ -189,7 +194,7 @@ def captured_members(descriptor, version, revision, names, *, limit=262144):
                         raise ValueError('Application artifact changed during capture')
                 digest.update(chunk)
                 offset += len(chunk)
-            if any(start + len(raw) > offset for start, raw in observed.reads) or digest.hexdigest() != value['sha256']:
+            if any(start + len(raw) > offset for start, raw in observed.reads) or digest.hexdigest() != checksum:
                 raise ValueError('Application release checksum verification failed')
         stamp = validate_stamp(json.loads(selected.pop(STAMP)), version, revision)
         if stamp['repository'] != REPOSITORY:

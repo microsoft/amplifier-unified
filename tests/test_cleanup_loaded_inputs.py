@@ -415,3 +415,25 @@ def test_stalled_readiness_timeout_is_not_restarted():
         process.stdin.close()
         process.stdout.close()
         process.stderr.close()
+
+def test_launch_selected_candidate_wheel_uses_real_cleanup_gate(tmp_path, monkeypatch):
+    installed = Path(execution.__file__).parent
+    members = {'amplifier_web/' + name: (installed / name).read_bytes()
+               for name in (*execution.NAMES, execution.LAUNCHER)}
+    descriptor = archive(tmp_path, members)
+    manager = SimpleNamespace(running_identity={'version': VERSION, 'revision': REVISION, 'instanceId': 'instance'},
+                              _running_artifact=None)
+    app = SimpleNamespace(update_manager=manager, instance_id='host')
+    with pytest.raises(ValueError, match='checksum'):
+        execution.bind_candidate(app, descriptor['path'], '0' * 64)
+    wrong = archive(tmp_path, {**members, MEMBER: b'other installed candidate'})
+    with pytest.raises(ValueError, match='differs from the running installation'):
+        execution.bind_candidate(app, wrong['path'], wrong['sha256'])
+    descriptor = archive(tmp_path, members)
+    execution.bind_candidate(app, descriptor['path'], descriptor['sha256'])
+    gate = execution.Gate(app)
+    assert gate.raw == members
+    assert gate.evidence({})['wheelSha256'] == descriptor['sha256']
+    manager.running_identity['instanceId'] = 'replacement'
+    with pytest.raises(ValueError, match='candidate changed'):
+        gate.recheck()
