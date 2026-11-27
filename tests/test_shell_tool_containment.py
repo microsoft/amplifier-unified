@@ -101,7 +101,7 @@ async def test_import_after_install_is_neutralized(standin, monkeypatch, capsys)
     assert module.executions == 1
     await assert_disabled(module, monkeypatch)
     assert getattr(module, "__unified_shell_tool_containment__") == {
-        "replaced": list(NAMES), "missing": []}
+        "replaced": list(NAMES), "missing": [], "failed": []}
     assert capsys.readouterr().err == ""
 
 
@@ -110,7 +110,7 @@ async def test_already_imported_module_is_neutralized(standin, monkeypatch):
     original = module._assign_to_windows_job
     result = containment.install()
     assert module._assign_to_windows_job is not original
-    assert result["loaded"] == {"replaced": list(NAMES), "missing": []}
+    assert result["loaded"] == {"replaced": list(NAMES), "missing": [], "failed": []}
     assert sys.modules[TARGET] is module
     await assert_disabled(module, monkeypatch)
 
@@ -147,12 +147,81 @@ def test_missing_names_are_returned_and_reported_once(standin, capsys, has_tool)
     containment.install()
     module = importlib.import_module(TARGET)
     result = containment.neutralize(module)
-    assert result == {
-        "replaced": [NAMES[0], NAMES[2]], "missing": [NAMES[1], NAMES[3]]}
+    # The job's entry point is required. The walk's name is not: see the next test.
+    assert result == {"replaced": [NAMES[0], NAMES[2]], "missing": [NAMES[1]], "failed": []}
     error = capsys.readouterr().err
-    assert error == ("Unified shell tool containment: missing "
-                     "_assign_to_windows_job, _protect_windows_descendants\n" if has_tool else "")
+    assert error == (containment.MESSAGE + "missing _assign_to_windows_job\n" if has_tool else "")
+    assert containment.MESSAGE == "Unified could not turn off the shell tool's own Windows job: "
     assert not hasattr(module, NAMES[1]) and not hasattr(module, NAMES[3])
+
+
+async def test_a_tool_without_the_walk_is_complete_and_silent(standin, monkeypatch, capsys):
+    """The tool's own repair removes the walk. Its two job entry points are what the guard needs."""
+    (standin / "__init__.py").write_text(
+        SOURCE + "\ndel _spawn_descendant_sweep, _protect_windows_descendants\n", encoding="utf-8")
+    containment.install()
+    module = importlib.import_module(TARGET)
+    assert module.__unified_shell_tool_containment__ == {
+        "replaced": [NAMES[0], NAMES[1]], "missing": [], "failed": []}
+    assert module._get_windows_job_object() is None and module._assign_to_windows_job(123) is False
+    assert module.calls == [] and capsys.readouterr().err == ""
+
+
+REFUSING = """
+import sys, types
+class _Refusing(types.ModuleType):
+    def __setattr__(self, name, value):
+        if name == "_assign_to_windows_job":
+            raise AttributeError("this module refuses " + name)
+        super().__setattr__(name, value)
+sys.modules[__name__].__class__ = _Refusing
+"""
+
+
+class _ClosedStream:
+    def write(self, text):
+        raise BrokenPipeError("closed")
+
+    def flush(self):
+        raise BrokenPipeError("closed")
+
+
+@pytest.mark.parametrize("fault", ["closed-stderr", "no-stderr", "refused-replacement"])
+def test_a_guard_fault_after_the_tool_code_never_fails_the_import(standin, monkeypatch, capsys, fault):
+    """The tool's code has run. Whatever the guard cannot do then, the tool must still load."""
+    if fault == "refused-replacement":
+        (standin / "__init__.py").write_text(SOURCE + REFUSING, encoding="utf-8")
+    else:
+        # A required name is missing, so the guard has a message, and the message cannot be written.
+        (standin / "__init__.py").write_text(SOURCE + "\ndel _assign_to_windows_job\n", encoding="utf-8")
+        monkeypatch.setattr(sys, "stderr", _ClosedStream() if fault == "closed-stderr" else None)
+    containment.install()
+    module = importlib.import_module(TARGET)               # Must not raise.
+    assert sys.modules[TARGET] is module and module.BashTool and module.untouched() == "unchanged"
+    report = module.__unified_shell_tool_containment__
+    if fault == "refused-replacement":
+        assert report == {"replaced": [NAMES[0], NAMES[2], NAMES[3]], "missing": [], "failed": [NAMES[1]]}
+        assert module._assign_to_windows_job(123) is True  # Not replaced: the result and stderr say so.
+        assert capsys.readouterr().err == (
+            containment.MESSAGE + "could not replace _assign_to_windows_job\n")
+        assert module._get_windows_job_object() is None    # Every other name is replaced.
+    else:
+        assert report == {"replaced": [NAMES[0], NAMES[2], NAMES[3]], "missing": [NAMES[1]], "failed": []}
+    # A second look gives the same result and does not raise either.
+    assert containment.install()["loaded"] == report
+
+
+def test_loader_without_exec_module_is_left_as_it_is():
+    """The import system runs such a loader in another way. A wrapper with exec_module would break it."""
+    class Legacy:
+        def load_module(self, fullname):
+            raise AssertionError("not loaded in this test")
+    legacy = Legacy()
+    class Finder:
+        def find_spec(self, fullname, path=None, target=None):
+            return importlib.util.spec_from_loader(fullname, legacy) if fullname == TARGET else None
+    sys.meta_path.insert(0, Finder())
+    assert containment._Finder().find_spec(TARGET).loader is legacy
 
 
 def test_other_modules_and_submodules_are_untouched(standin, tmp_path):
@@ -261,7 +330,7 @@ def test_finder_without_find_spec_is_passed_over(standin):
     containment.install()
     module = importlib.import_module(TARGET)
     assert module._get_windows_job_object() is None
-    assert module.__unified_shell_tool_containment__ == {"replaced": list(NAMES), "missing": []}
+    assert module.__unified_shell_tool_containment__ == {"replaced": list(NAMES), "missing": [], "failed": []}
 
 
 @pytest.mark.parametrize("direct", [False, True])
@@ -293,5 +362,5 @@ def test_a_failed_guard_never_ends_a_worker(standin, monkeypatch, capsys, direct
     if fault == "install-and-stderr":
         assert stderr == ""
     else:
-        assert stderr == ("Unified shell tool containment is not active: "
+        assert stderr == ("Unified could not turn off the shell tool's own Windows job: "
                           + ("ImportError" if fault == "import" else "OSError") + "\n")

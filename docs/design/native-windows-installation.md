@@ -102,15 +102,31 @@ remain contained without a process-table walk.
 `shell_tool_containment.install()` runs at the start of `Worker.__init__`,
 before session or tool creation. It covers an already imported
 `amplifier_module_tool_bash` and later normal imports, including reload.
-It changes no other module. It is silent when all is well: the host shows a
-worker's last stderr lines in its error texts. The guard can never end a
-worker. If it cannot be installed, the worker says so in one stderr line and
-runs as it did before the guard existed.
-The four function names belong to another repository. If that module has
-`BashTool` but lacks a name, stderr names the missing function and the result
-lists it. A renamed function needs review. This guard cannot disable an unknown
-replacement. The shell tool's own process-identity repair is a separate change.
-Job containment does not cover processes started through external services.
+It changes no other module. It is silent when all is well: the host saves a
+worker's last stderr lines in the private record of a failed start, and a line
+of every start would be in each such record. The guard can never end a worker.
+If it cannot be installed, the worker says so in one stderr line ("Unified
+could not turn off the shell tool's own Windows job: ...") and runs as it did
+before the guard existed.
+The function names belong to another repository. Two of them are the tool's
+only entry points to its job (`_get_windows_job_object`,
+`_assign_to_windows_job`). With both replaced the tool makes no job and assigns
+no process, whatever else it does. If a module that has `BashTool` lacks one of
+them, stderr names it and the result lists it. The other two names are the walk
+over the process table. They are replaced when present. The tool's own repair
+removes the walk, so their absence is no fault. A renamed entry point needs
+review: this guard cannot disable an unknown replacement.
+No step of the guard can fail the tool's import. A name that cannot be
+replaced, or a message that cannot be written, leaves the tool loaded as it
+was. The result lists the name. Errors of the tool's own code still reach its
+importer. The shell tool's own repair is a separate change.
+The helper programs `update_probe.py` and `module_validate.py` mount tools
+without a worker and have no guard. Their ordinary paths run no shell command.
+A command that the tool runs through WSL is contained too. Measured on one
+Windows 11 PC with throwaway commands: every Windows process of such a command
+is born in the job of the process that started it, and its Linux process ends
+within a second after a job ends them. Job containment does not cover a process
+that another service starts on its own account.
 
 The existing `test_windows_runtime_identity_transport_and_stop_model` and
 `test_windows_runtime_identity_failure_never_admits_input` in
