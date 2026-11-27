@@ -85,7 +85,7 @@ def test_worker_scripts_do_not_expose_host_site_packages(tmp_path, entrypoint, r
     (foundation / "transcript_guard.py").write_text(
         "class NativeTranscriptGuard: pass\nclass NativeTranscriptConflict(RuntimeError): pass\n"
     )
-    for name in (entrypoint, "runtime_protocol.py", "message_delivery.py", "response_completion.py", "ownership.py", "computer_episodes.py", "__init__.py", "runtime_bootstrap.py", "update_diagnostics.py", "runtime_qualification.py", "runtime_environment.py"):
+    for name in (entrypoint, "runtime_protocol.py", "shell_tool_containment.py", "message_delivery.py", "response_completion.py", "ownership.py", "computer_episodes.py", "__init__.py", "runtime_bootstrap.py", "update_diagnostics.py", "runtime_qualification.py", "runtime_environment.py"):
         if (PACKAGE / name).exists():
             shutil.copy2(PACKAGE / name, package / name)
     shutil.copytree(PACKAGE.parent / "amplifier_operations", outer / "amplifier_operations")
@@ -221,6 +221,21 @@ paths = list(sys.path)
         cwd=root, capture_output=True, text=True, timeout=15,
     )
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_installed_shell_containment_is_a_stdlib_only_worker_sibling(installed_app):
+    run_bootstrap_check(installed_app, """
+spec = importlib.util.spec_from_file_location(
+    "shell_tool_containment", site / "amplifier_web/shell_tool_containment.py")
+containment = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(containment)
+assert containment.install() == {
+    "module": "amplifier_module_tool_bash", "importHook": True, "loaded": None}
+assert "amplifier_web" not in sys.modules
+assert importlib.util.find_spec("aiohttp") is None
+assert importlib.util.find_spec("amplifier_foundation") is None
+assert sys.path == paths
+""")
 
 
 @pytest.mark.parametrize("preloaded_web", [False, True])

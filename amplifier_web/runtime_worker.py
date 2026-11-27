@@ -53,6 +53,25 @@ def publish_process_identity():
 
 class Worker:
     def __init__(self):
+        if os.name == "nt":
+            # Before any session/tool imports, including lazy module activation.
+            # This guard must never end a worker: without it the worker runs as
+            # it did before the guard existed. It is silent when all is well:
+            # the host saves a worker's last stderr lines in the record of a
+            # failed start, and a line of every start would be in each record.
+            try:
+                if __package__:
+                    from .shell_tool_containment import install
+                else:
+                    from shell_tool_containment import install
+                self.shell_tool_containment = install()
+            except Exception as error:
+                self.shell_tool_containment = {"error": type(error).__name__}
+                try:
+                    print("Unified could not turn off the shell tool's own Windows job: "
+                          + type(error).__name__, file=sys.stderr, flush=True)
+                except Exception:
+                    pass
         self.session = self.runtime = self.execution = None
         self.approvals = {}
         self.approval_contexts = {}
