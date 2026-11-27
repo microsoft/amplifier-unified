@@ -636,7 +636,7 @@ class WorkerSubprocessTests(unittest.IsolatedAsyncioTestCase):
         probe = PROBE
         if model_identity:
             self.assertNotEqual(os.name, "nt", "portable identity model is not native evidence")
-            # Model Windows construction too, including its stderr start report.
+            # Model Windows construction too, including its shell tool guard.
             # Fake only the unavailable kernel identity sensor on POSIX. Keep
             # the real Worker.run/read, subprocess, payload and byte oracles.
             probe = probe.replace(

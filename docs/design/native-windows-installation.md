@@ -102,7 +102,10 @@ remain contained without a process-table walk.
 `shell_tool_containment.install()` runs at the start of `Worker.__init__`,
 before session or tool creation. It covers an already imported
 `amplifier_module_tool_bash` and later normal imports, including reload.
-It changes no other module. Its start result is one line on the worker's stderr.
+It changes no other module. It is silent when all is well: the host shows a
+worker's last stderr lines in its error texts. The guard can never end a
+worker. If it cannot be installed, the worker says so in one stderr line and
+runs as it did before the guard existed.
 The four function names belong to another repository. If that module has
 `BashTool` but lacks a name, stderr names the missing function and the result
 lists it. A renamed function needs review. This guard cannot disable an unknown

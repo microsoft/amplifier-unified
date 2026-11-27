@@ -78,7 +78,10 @@ class _Finder:
         for finder in tuple(sys.meta_path):
             if finder is self:
                 continue
-            spec = finder.find_spec(fullname, path, target)
+            find = getattr(finder, "find_spec", None)
+            if find is None:
+                continue  # The import system also passes over such a finder.
+            spec = find(fullname, path, target)
             if spec is not None:
                 if spec.loader is not None:
                     spec.loader = _Loader(spec.loader)

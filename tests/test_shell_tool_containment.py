@@ -243,7 +243,7 @@ async def test_worker_installs_only_on_windows_before_sibling_construction(
     if platform == "nt":
         assert worker.shell_tool_containment == {
             "module": TARGET, "importHook": True, "loaded": None}
-        assert stderr.count("\n") == 1 and '"importHook": true' in stderr
+        assert stderr == ""                                 # Silent when all is well.
         await assert_disabled(module, monkeypatch)
     else:
         assert not hasattr(worker, "shell_tool_containment")
@@ -251,3 +251,47 @@ async def test_worker_installs_only_on_windows_before_sibling_construction(
         assert module._get_windows_job_object() == "original-job"
         assert not any(getattr(finder, "_unified_shell_tool_containment", False)
                        for finder in sys.meta_path)
+
+
+def test_finder_without_find_spec_is_passed_over(standin):
+    """The import system skips a meta-path finder that has no find_spec. The guard must do the same."""
+    class Legacy:                                           # No find_spec at all.
+        pass
+    sys.meta_path.insert(0, Legacy())
+    containment.install()
+    module = importlib.import_module(TARGET)
+    assert module._get_windows_job_object() is None
+    assert module.__unified_shell_tool_containment__ == {"replaced": list(NAMES), "missing": []}
+
+
+@pytest.mark.parametrize("direct", [False, True])
+@pytest.mark.parametrize("fault", ["install", "import", "install-and-stderr"])
+def test_a_failed_guard_never_ends_a_worker(standin, monkeypatch, capsys, direct, fault):
+    """A worker without the guard runs as before the guard existed. It says so once, and goes on."""
+    monkeypatch.syspath_prepend(str(PACKAGE))
+    namespace = runpy.run_path(str(PACKAGE / "runtime_worker.py"),
+        run_name="containment_worker_test" if direct else "amplifier_web._containment_worker_test")
+    scope = namespace["Worker"].__init__.__globals__
+    scope["os"] = SimpleNamespace(name="nt")
+    name = "shell_tool_containment" if direct else "amplifier_web.shell_tool_containment"
+    guard = importlib.import_module(name)
+    if fault == "import":
+        monkeypatch.delattr(guard, "install")              # The sibling is there, its entry point is not.
+    else:
+        monkeypatch.setattr(guard, "install", Mock(side_effect=OSError("no guard")))
+    if fault == "install-and-stderr":
+        class Closed:
+            def write(self, text):
+                raise ValueError("I/O operation on closed file")
+            def flush(self):
+                raise ValueError("I/O operation on closed file")
+        scope["sys"] = SimpleNamespace(stderr=Closed())
+    worker = namespace["Worker"]()                          # Must not raise.
+    assert worker.shell_tool_containment == {"error": "ImportError" if fault == "import" else "OSError"}
+    assert worker.session is None and worker.approvals == {}   # Construction went on to its end.
+    stderr = capsys.readouterr().err
+    if fault == "install-and-stderr":
+        assert stderr == ""
+    else:
+        assert stderr == ("Unified shell tool containment is not active: "
+                          + ("ImportError" if fault == "import" else "OSError") + "\n")
