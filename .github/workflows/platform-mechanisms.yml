@@ -103,6 +103,7 @@ on:
       - tests/test_windows_trust.py
       - tests/test_session_sign_out.py
       - tests/test_browser_code.py
+      - tests/test_windows_password.py
       - tests/test_windows_service.py
       - tests/test_windows_task_runtime.py
       - tests/test_windows_installation.py
@@ -357,6 +358,12 @@ jobs:
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider tests/test_windows_trust.py
           if ($LASTEXITCODE -ne 0) { throw 'Windows local-root trust checks failed.' }
+      - name: Sign in at the local address with a username and password over real HTTPS
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider tests/test_windows_password.py | Tee-Object -Variable report
+          if ($LASTEXITCODE -ne 0) { throw 'Windows local password sign-in failed.' }
+          if (-not ($report -match '^16 passed') -or ($report -match 'skipped')) { throw 'All password sign-in cases, including native HTTPS, must run.' }
       # Which replaced roots count, and their removal: the real crypt32 calls
       # on a private throwaway store (no trust change, no Windows question).
       # A skipped native case would hide the answer; on this lane it fails.

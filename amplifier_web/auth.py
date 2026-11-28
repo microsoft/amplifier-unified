@@ -757,8 +757,8 @@ def _other_device_address(request: web.Request) -> bool:
 
 
 async def login_page(request: web.Request) -> web.Response:
-    if browser_entry.is_windows() and _other_device_address(request):
-        # Another device cannot use the local launcher; it types the password that the owner set.
+    if browser_entry.is_windows():
+        # Windows uses one credential at both addresses. POSIX keeps PAM.
         return browser_entry.remote_login_page(request)
     secret = request.app["session_secret"]
     csrf = request.cookies.get(CSRF_COOKIE)

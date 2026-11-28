@@ -23,6 +23,8 @@ DEFAULT_SERVER = {
     "linked_instances": False,
     "session_ttl_seconds": 604800,
     "host_pam": None,
+    "sign_in_username": None,
+    "sign_in_setup_dismissed": False,
     "tls": {"method": "none", "cert": "", "key": ""},
     "runtime": DEFAULT_RETENTION,
     "debug": {"profiling": False},
@@ -149,6 +151,10 @@ def validate_server(value: dict) -> dict:
         raise ValueError("session_ttl_seconds must be a positive integer.")
     from .host_pam import validate as validate_host_pam
     config["host_pam"] = validate_host_pam(config["host_pam"])
+    if config["sign_in_username"] is not None:
+        config["sign_in_username"] = validate_sign_in_username(config["sign_in_username"])
+    if type(config["sign_in_setup_dismissed"]) is not bool:
+        raise ValueError("sign_in_setup_dismissed must be true or false.")
     origins = config["public_origins"]
     if not isinstance(origins, list):
         raise ValueError("public_origins must be a list.")
@@ -172,6 +178,12 @@ def validate_server(value: dict) -> dict:
         raise ValueError("HTTPS TLS configuration requires HTTPS public origins.")
     config["tls"] = tls
     return config
+
+
+def validate_sign_in_username(value: str) -> str:
+    if not isinstance(value, str) or not 1 <= len(value) <= 256 or not value.strip() or not value.isprintable():
+        raise ValueError("Use a username of 1 to 256 characters. Do not use control characters.")
+    return value
 
 
 def load_server_config(data_dir: Path, *, overrides: dict | None = None) -> dict:

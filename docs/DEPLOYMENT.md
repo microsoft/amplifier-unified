@@ -309,8 +309,8 @@ The obsolete Edge root-store policy is not a workaround.
 ## Windows host: reach Unified from another device
 
 A Windows host does not sign you in with the password of your Windows account.
-On the PC, the launcher opens the browser. A browser on another device signs
-in with a password that you set in Amplifier on the PC. Remote access is off
+Use your Amplifier username and password at the local address and on other
+devices. The launcher still opens the browser without typing them. Remote access is off
 until you do the steps below, and you can turn it off again. Local use on the
 PC needs none of this.
 
@@ -407,18 +407,50 @@ With a LAN address, run the command of step 3 of
 
 ### Sign in with a password
 
-You set the password once in Amplifier on the PC. Then you type it on any
-device, also when you are not at the PC.
+Choose an Amplifier username and password on the PC. The first time the launcher
+opens a browser with no password set, Amplifier asks you to choose them.
+**Not now** saves that choice. You can still set them later on **Devices & apps**.
+This does not turn on access from other devices.
+
+You can also set or change them from a command on the PC. No running host is
+needed. Use the same data folder as the host.
+
+```
+amplifier-unified browsers password --username Brian
+New Amplifier password:
+New Amplifier password again:
+```
+
+The two entries do not show as you type. The command prints the username and
+where the password works. Without `--username`, it keeps the saved name.
+Without a saved name, it uses the Windows account name. Names ignore case
+and equivalent Unicode character forms. An existing password keeps working
+with that default name after an update. This is not your Windows password or
+Hello PIN.
+
+For a script, `amplifier-unified browsers password --stdin --username Brian`
+reads one password line from standard input. Do not put the password in an
+argument or in a command saved in shell history. Remove it with
+`amplifier-unified browsers password --remove`. A browser that is signed in
+stays signed in.
+
+Amplifier never saves the password. The existing private file
+`config/auth/sign-in-key` holds a random salt and an scrypt hash
+(N = 2**15, r = 8, p = 1). Only the owner's account can read it. This is not
+reversible storage. The record format is unchanged, so an older app can still
+read it. The username is not a secret. It is saved as `sign_in_username` in
+`config/server.yaml`, and `config list` shows it. A running host reads a change
+at the next sign-in. Linux and macOS still use the host account and PAM.
 
 1. On the PC, open Amplifier.
 2. Open Settings, then **Advanced**, then **Performance & runtime**, then
    **Install app**.
 3. Select the link **Devices & apps**. It opens a new page.
 4. Select **Set a password**.
-5. Type a password of at least 12 characters, two times. Select
+5. Choose the username. Type a password of at least 12 characters, two times. Select
    **Set password**.
 6. On the other device, open `https://<pc>.<tailnet>.ts.net:<port>`. Type the
-   password in the field **Password**. Select **Sign in**.
+   username and password. Select **Sign in**. The local address has the same form.
 
 A shorter way in place of steps 2 to 4: in the browser on the PC that shows
 Amplifier, open the address of that window with `/connect/sign-in` after the
@@ -426,10 +458,10 @@ port, for example `https://127.0.0.1:<port>/connect/sign-in`. If the window
 has no address bar, open the same browser and type the address there.
 
 When Amplifier finds that no password and no sign-in key is set, the sign-in
-page on another device has no field. It says that no password is set and
+page at either address has no password field. It says that no password is set and
 where to set one.
 
-The password works at every address for other devices, as often as you need
+The password works at the local address and every address for other devices, as often as you need
 it. Amplifier must be running. It uses a new address only after the steps of
 [Turn remote access on](#turn-remote-access-on): the certificate must name the
 address, and Amplifier must start again. Everyone who has the password and can
@@ -439,17 +471,19 @@ for something else.
 - To change or remove the password, open the same page on the PC. A change
   counts at once. Browsers that are signed in stay signed in.
 - The page works only in a browser on the PC that signed in there. A browser
-  that signed in with the password or a key cannot set the password.
-- Wrong passwords are slowed down. After five wrong passwords in a row,
+  that signed in with the password or a key cannot set the password, even at
+  the local address. Use the launcher or the command to change it.
+- Wrong usernames and wrong passwords get the same answer and count together.
+  After five wrong entries in a row,
   Amplifier checks no password for a time: 2 seconds at first, and two times
   as long after each further wrong password, to 5 minutes at most. During
   that time it does not check the right password either. One hour with no
   wrong password, or the right password, starts the count again. To end the
   wait at once, set the password again on the PC; the same password is
   enough. The wait is the same for every device. So a person on your network
-  who sends wrong passwords can keep you from signing in from another
-  device. That person gets in no faster. Amplifier on the PC itself still
-  works then, and a device that is signed in stays signed in. A key from a
+  who sends wrong entries can keep you from signing in with the password,
+  also at the local address. That person gets in no faster. The launcher still
+  opens Amplifier, and a device that is signed in stays signed in. A key from a
   command has no such wait (see the next section).
 - [Sign out all browsers from the PC](#sign-out-all-browsers-from-the-pc) also
   removes the password.
@@ -473,7 +507,8 @@ it.
    The command shows a key such as `ABCDE-FGHJK-LMNPQ-RSTUV-WXYZ2`, once.
    Amplifier saves only a hash of the key and cannot show the key again.
 2. Save the key, for example in a password manager.
-3. On the other device, open the address of the PC. Type or paste the key in
+3. Open the local address or an address for other devices. Type the username
+   that the command showed. Type or paste the key in
    the field **Password**. Select **Sign in**.
 
 The key works as a password does: at every address for other devices, as often
