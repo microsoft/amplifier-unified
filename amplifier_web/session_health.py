@@ -91,7 +91,7 @@ def generation_failure(event):
             guidance = 'Check the summarization model and its output allowance before continuing. Original history is preserved; no empty summary was saved.'
         elif code == 'summary_work_paused':
             summary = 'Conversation preparation reached its local call allowance.'
-            guidance = 'Completed summary progress is saved. Further preparation requires separate admission; it was not automatically retried. Original history and the checkpoint are preserved.'
+            guidance = 'This attempt reached its limit of model calls. The original history and saved summary are kept. Some new summary work may need to be done again. Copy the chat diagnostics from Details & reporting and report this problem before trying again.'
         elif code == 'summary_progress_incompatible':
             summary = 'Saved summary progress cannot be used with the current source or policy.'
             guidance = 'No replacement summary work was started. Original history and the checkpoint are preserved. Review the source and policy mismatch before deciding how to proceed.'

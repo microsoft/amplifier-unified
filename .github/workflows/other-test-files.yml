@@ -70,6 +70,7 @@ on:
       - tests/test_effective_behavior_updates.py
       - tests/test_host_dependencies.py
       - tests/test_installation_health.py
+      - tests/test_provider_selection_lifecycle.py
       - tests/test_reset.py
       - tests/test_runtime_registry_updates.py
       - tests/test_tool_source_proof.py
@@ -159,6 +160,7 @@ jobs:
           tests/test_effective_behavior_updates.py
           tests/test_host_dependencies.py
           tests/test_installation_health.py
+          tests/test_provider_selection_lifecycle.py
           tests/test_reset.py
           tests/test_runtime_registry_updates.py
           tests/test_tool_source_proof.py
@@ -278,6 +280,7 @@ jobs:
           if not result.is_file():
               sys.exit(f"pytest ended with status {status} and wrote no result file")
           counts, problems = collections.defaultdict(collections.Counter), []
+          seconds = collections.defaultdict(float)
           failures, reasons = set(), set()  # The expected failures and the skip reasons that this run had.
           for case in tree.parse(result).getroot().iter("testcase"):
               # "tests.test_x", or "tests.test_x.Class" for a case in a class.
@@ -289,6 +292,7 @@ jobs:
                   file = "/".join(parts[:at + 1]) + ".py"
                   name = "::".join([file, *parts[at + 1:], case.get("name", "?")])
               found = {child.tag: child for child in case}
+              seconds[file] += float(case.get("time", "0"))
               if "failure" in found or "error" in found:
                   counts[file]["failed"] += 1
                   problems.append(f"failed: {name}")
@@ -314,6 +318,8 @@ jobs:
               total.update(row)
               print(f"{file}: {row['passed']} passed, {row['failed']} failed, {row['skipped']} skipped, "
                     f"{row['expected failures']} expected failures")
+              if file == "tests/test_provider_selection_lifecycle.py":
+                  print(f"{file}: {seconds[file]:.3f} seconds of pytest case time (including fixtures)")
               if not row["passed"]:
                   problems.append(f"no case of this file passed: {file}")
           for file, row in counts.items():  # A file that pytest could not load, or a file that is not listed.

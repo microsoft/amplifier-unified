@@ -20,13 +20,12 @@ infer a cause for older saved failures, or promote a different handled error.
 Stop and stale-generation checks still apply.
 
 `model_transition_required` means the selected model needs history preparation
-that the participating host did not admit. The notice asks the person to send
-again, and says that this takes a while and uses extra model calls; if that
-fails, select the previous model and connection, send a new message, and share
-diagnostics. A new worker can prepare the chosen model from
-originals, so this failure does not prove that sending again will always fail.
-It does not recommend deleting the checkpoint, resetting a preparation record,
-or automatically repeating summary calls.
+that the participating host did not admit. To continue with the previous model,
+the notice advises selecting that model and connection, then sending a new
+message. Trying the new model again may rebuild history and use extra model
+calls. It is not a promise that the next send will work or begin a rebuild.
+If it fails again, copy the chat diagnostics from Details & reporting and
+report the problem. Do not delete the checkpoint or reset a preparation record.
 
 The exact-count transition path and the uncounted ordinary path are different:
 the pinned streaming loop invokes `context.measured_request_view` only when the
@@ -37,23 +36,36 @@ carried can therefore still refuse. Handling that route requires coordinated
 context/loop support, not a synthetic exact count or removal of the host's paid
 call guards. This diagnostic change does not claim to repair that limitation.
 
-An offline experiment confirms that a cold worker can answer on the new model.
-It also shows why merely restarting on every such change is not a safe repair:
-if that uncounted rebuild stops after a confirmed summary call, a later cold
-worker can buy the same work again without a transition-journal reservation.
-This change does not add an automatic restart or claim durable continuation of
-that uncounted paid prefix.
-Sending again by hand runs the same rebuild: 12 summary calls in the
-experiment, and an interrupted rebuild starts again from the first call.
-In the experiment the saved checkpoint did not change after the successful
-reply. So the experiment does not show that the rebuilt summary is saved
-for a later cold start.
+Offline tests use the real runtime manager and worker subprocesses with
+synthetic model replies. At the failure notice, a send can still reach the
+closing worker and be refused. After that process exits, a fresh send starts a
+new worker. The tested history then completes with 12 summary calls and one
+foreground reply. Saving and reopening the app state, or retiring the source
+worker before the change, also retains the chosen target and admits only the
+new input. These results do not promise success for a different history.
 
-`summary_work_paused` has two distinct meanings. A native context failure reports
-its local call limit. The host's `ContextRecoveryError` reports a saved transition
-with an unconfirmed call and an offered continuation, even before that limit is
-used. Its notice keeps the “Review preparation” instruction; that control checks
-the current offer before the person can approve more calls.
+Merely restarting on every change is not a safe repair. On a connection without
+an exact request counter, new summary work in this cross-model rebuild is not
+saved between workers. An interrupted rebuild's next worker sent the same
+request as an earlier completed summary call. The old saved summary remained
+intact. The synthetic successful reply lacks the provider's completed-response
+marker needed to publish an eligible rebuilt summary; it does not establish
+whether a live successful reply would save that final summary. This change adds
+neither automatic resend nor durable continuation of unfinished rebuild work.
+
+`summary_work_paused` has two distinct meanings. The loop's notice reports this
+attempt's limit of model calls. The original history and saved summary are kept,
+but some new summary work may need to be done again. A larger synthetic
+uncounted rebuild reached the default limit of 16 summary calls with no
+foreground reply and no saved transition record. The limit does not guarantee
+that a later attempt can finish. Copy the chat diagnostics from Details &
+reporting and report the problem before trying again.
+
+The host's distinct `ContextRecoveryError` reports a saved native transition
+with an unconfirmed call and an offered continuation, even before the limit is
+used. Its notice still says “Review preparation”; that control checks the
+current offer before the person can approve more calls. These text changes do
+not repair the model change itself or grant more calls.
 
 The pinned live loop ends execution after a failed manager turn, including a
 context-preparation refusal. Unified preserves the cause and closes that worker;

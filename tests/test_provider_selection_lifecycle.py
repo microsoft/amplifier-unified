@@ -14,6 +14,27 @@ from amplifier_web.runtime_controls import RuntimeControls
 SELECTION = {'instance': 'terra', 'model': 'gpt-5.6-terra', 'effort': 'xhigh'}
 
 
+def test_provider_selection_lifecycle_has_automatic_linux_and_windows_coverage():
+    import ast
+    from pathlib import Path
+    import yaml
+    workflow = yaml.load((Path(__file__).resolve().parents[1] /
+        '.github/workflows/other-test-files.yml').read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    target = 'tests/test_provider_selection_lifecycle.py'
+    assert target in workflow['on']['pull_request']['paths']
+    job = workflow['jobs']['cases']
+    assert job['strategy']['matrix']['os'] == ['ubuntu-latest', 'windows-latest']
+    step, = [row for row in job['steps'] if row.get('name') == 'Run the listed files and require every case and every file']
+    source = ast.parse(step['run'])
+    files, = [node.value for node in ast.walk(source) if isinstance(node, ast.Assign)
+              and any(isinstance(name, ast.Name) and name.id == 'FILES' for name in node.targets)]
+    assert ast.literal_eval(files.func.value).split().count(target) == 1
+    exclusions, = [node.value for node in ast.walk(source) if isinstance(node, ast.Assign)
+                   and any(isinstance(name, ast.Name) and name.id == 'NOT_ON_WINDOWS' for name in node.targets)]
+    assert target not in [ast.literal_eval(key) for key in exclusions.keys]
+    assert 'seconds[file]' in step['run']  # The log records this file's added case time on each runner.
+
+
 class Info(SimpleNamespace):
     def model_copy(self, *, update):
         return Info(**{**vars(self), **update})
