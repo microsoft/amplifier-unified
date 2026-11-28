@@ -810,19 +810,21 @@ def identity_measure(stage, exchange, account, token, *, second=False):
              arguments=arguments, folder=str(exchange))
     deadline = time.monotonic() + 90
     before = read_json(exchange / "identity-first.json")
+    cutoff = before["completedAt"] if second and before else 0
     samples = []
     while time.monotonic() < deadline:
         samples = [v for p in exchange.glob("identity-sample-*.json") if (v := read_json(p))
-                   and sign_in_key(v["token"]) == sign_in_key(token)]
+                   and v["at"] > cutoff]
         if samples:
             break
         time.sleep(.5)
-    need(samples, "No native identity sample arrived from the time or sign-in trigger")
+    need(samples, "No native identity sample arrived from the time or sign-in trigger",
+         task("state", name))
     need(all(standard_token(v["token"], account) for v in samples),
          "The identity sample did not run as the signed-in standard user")
     need(all(sign_in_key(v["token"]) == sign_in_key(token) for v in samples),
-         "The time or sign-in task has another sign-in key")
-    result = {"finished": True, "onDemand": token, "direct": direct_token,
+         "The time or sign-in task has another sign-in key", samples)
+    result = {"finished": True, "completedAt": time.time(), "onDemand": token, "direct": direct_token,
               "logon" if second else "time": samples}
     if second:
         need(before and sign_in_key(before["onDemand"]) != sign_in_key(token),
