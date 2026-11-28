@@ -523,6 +523,7 @@ def _browser_password(args, data_dir):
         return _browser_key(args, data_dir)
     import getpass
     from .deployment import validate_sign_in_username
+    saving = False
     try:
         username = validate_sign_in_username(args.username) if args.username is not None else browser_entry.sign_in_username(data_dir)
         if args.stdin:
@@ -536,6 +537,7 @@ def _browser_password(args, data_dir):
                 confirm = getpass.getpass("New Amplifier password again: ")
             if password != confirm:
                 raise SystemExit("The two passwords are not the same. Nothing was changed.")
+        saving = True
         browser_entry.set_password(data_dir, password)
         browser_entry.save_sign_in_settings(data_dir, username=username, dismissed=True)
     except browser_entry.PasswordRefused as refused:
@@ -543,6 +545,8 @@ def _browser_password(args, data_dir):
     except browser_entry.BrowserEntryUnavailable as unavailable:
         raise SystemExit(str(unavailable)) from None
     except (EOFError, KeyboardInterrupt, getpass.GetPassWarning):
+        if saving:
+            raise SystemExit("Amplifier could not confirm the change. Set the username and password again.") from None
         raise SystemExit("The password was not read. Nothing was changed.") from None
     except (OSError, ValueError):
         raise SystemExit("Amplifier could not confirm the change. Set the username and password again.") from None

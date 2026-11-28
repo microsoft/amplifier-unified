@@ -221,6 +221,13 @@ def test_command_never_falls_back_to_echo_or_prints_input_errors(password_comman
     with pytest.raises(SystemExit) as stopped:
         password_command()
     assert PASSWORD not in str(stopped.value) + capsys.readouterr().out
+    monkeypatch.setattr(getpass, 'getpass', lambda prompt: PASSWORD)
+    def interrupted_save(*args):
+        raise KeyboardInterrupt(PASSWORD)
+    monkeypatch.setattr(entry, 'set_password', interrupted_save)
+    with pytest.raises(SystemExit, match='could not confirm') as stopped:
+        password_command()
+    assert PASSWORD not in str(stopped.value) + capsys.readouterr().out
 
 
 @pytest.mark.skipif(os.name != 'nt', reason='Native Windows private files and real HTTPS client')
