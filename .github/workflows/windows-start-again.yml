@@ -17,6 +17,9 @@ on:
       - amplifier_web/windows_installation.py
       - amplifier_web/windows_consumer.py
       - amplifier_web/windows_consumer_shell.py
+      - amplifier_web/windows_cli_path.py
+      - amplifier_web/windows_uninstall.py
+      - tests/test_windows_cli_path.py
       - amplifier_web/windows_service.py
       - amplifier_web/installation_runtime.py
       # Names the preparation folder that check 8 watches.
@@ -52,6 +55,14 @@ jobs:
           architecture: x64
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         timeout-minutes: 2
+      - name: Test command files and lossless user PATH edits
+        timeout-minutes: 6
+        shell: pwsh
+        run: |
+          uv sync --locked --group dev --python 3.13
+          if ($LASTEXITCODE -ne 0) { throw 'Test environment setup failed.' }
+          .venv/Scripts/python.exe -m pytest tests/test_windows_cli_path.py tests/test_windows_launcher_files.py -q --tb=short
+          if ($LASTEXITCODE -ne 0) { throw 'Command PATH tests failed.' }
       - name: Prepare the candidate launcher in setup's private layout
         timeout-minutes: 10
         shell: pwsh

@@ -297,6 +297,9 @@ def _windows_roots(data_dir: Path, configured: bool) -> None:
 
 def _serve(args, data_dir: Path, *, task_runner=None) -> None:
     from .reset import repair_lock
+    if sys.platform == "win32":
+        from .windows_cli_path import ensure
+        ensure(data_dir)
     if task_runner is not None:
         # The host that the Windows start-at-sign-in task started. It has started
         # nothing yet and does not hold its own lock yet: the one moment for a

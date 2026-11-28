@@ -761,6 +761,8 @@ async def _uninstall(root):
                 else:
                     uninstall(root / "app", progress=mark)
                     result = {}
+                from .windows_cli_path import remove as remove_cli_path
+                remove_cli_path(root / "app")
         except Refused:
             raise  # Another window starts or removes this installation; nothing was changed.
         except (OSError, ValueError, RuntimeError, TimeoutError) as error:
@@ -971,7 +973,10 @@ def integrate(root):
         if delivery_proof(root / "app") is None:
             raise ValueError("The consumer payload audit has not qualified this installation.")
         from .windows_consumer_shell import install
-        return install(root, value["version"])
+        result = install(root, value["version"])
+        from .windows_cli_path import ensure
+        ensure(root / "app")
+        return result
 
 
 def _setup_again(root):
