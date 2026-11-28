@@ -12,21 +12,84 @@ mkdir "$evidence" "$work"
 phase=immutable_source
 compose=()
 started=false
+probe_started=false
+probe_cleanup_attempted=false
+readonly probe_project="$project-probe"
+probe=(docker compose --project-name "$probe_project" -f "$work/probe.json")
+reason=not-observed
+stage_status=0
+clean_project() {
+    local name=$1; shift
+    local c n v i
+    timeout 90s "$@" down --volumes --remove-orphans --rmi local >"$work/down-$name.log" 2>&1 &&
+        c=$(docker ps -aq --filter "label=com.docker.compose.project=$name") &&
+        n=$(docker network ls -q --filter "label=com.docker.compose.project=$name") &&
+        v=$(docker volume ls -q --filter "label=com.docker.compose.project=$name") &&
+        i=$(docker image ls -q --filter "reference=$name-*") &&
+        [[ -z $c$n$v$i ]]
+}
+classify_launch() {
+    local log=$1
+    reason=unclassified
+    if (( stage_status == 124 )); then reason=timeout
+    elif grep -qiE 'overlap|address pool|could not find an available.*address' "$log"; then reason=address-pool-conflict
+    elif grep -qiE 'gateway mode|gateway_mode_ipv4' "$log"; then reason=bridge-gateway-mode
+    elif grep -qiE 'interface_name|rename.*interface|veth' "$log"; then reason=network-interface
+    elif grep -qiE 'conflict.*already in use|container name.*already' "$log"; then reason=container-name-conflict
+    elif grep -qiE 'failed to (create|set up).*network|Error.*(iptables|nftables)' "$log"; then reason=network-driver
+    elif grep -qiE 'tmpfs|mount.*(invalid|denied)|invalid mount' "$log"; then reason=container-mount
+    elif grep -qiE 'oci runtime|failed to (create|start).*task|failed to create shim' "$log"; then reason=container-runtime
+    elif grep -qiE 'permission denied|operation not permitted' "$log"; then reason=permission
+    elif grep -qiE 'no space left|disk quota' "$log"; then reason=storage
+    elif grep -qiE 'executable file not found|exec format error' "$log"; then reason=container-entrypoint
+    elif grep -qiE 'no such image|pull access denied|manifest unknown' "$log"; then reason=image-unavailable
+    fi
+}
+observe_launch() {
+    local phase_name=$1 project_name=$2
+    # Inspect only booleans and counts for our exact project, never inspect env or log payloads.
+    local networks=unavailable created=unavailable running=unavailable
+    local rows
+    if rows=$(docker network ls -q --filter "label=com.docker.compose.project=$project_name"); then
+        networks=$(printf '%s\n' "$rows" | grep -c . || true)
+    fi
+    if rows=$(docker ps -aq --filter "label=com.docker.compose.project=$project_name"); then
+        created=$(printf '%s\n' "$rows" | grep -c . || true)
+    fi
+    if rows=$(docker ps -q --filter "label=com.docker.compose.project=$project_name"); then
+        running=$(printf '%s\n' "$rows" | grep -c . || true)
+    fi
+    printf '{"stage":"%s","exitCode":%s,"reason":"%s","networkCount":"%s","containerCount":"%s","runningCount":"%s"}\n' \
+        "$phase_name" "$stage_status" "$reason" "$networks" "$created" "$running" > "$evidence/$phase_name.json"
+}
+launch_step() {
+    local name=$1 project_name=$2; shift 2
+    phase=$name
+    stage_status=0
+    reason=none
+    timeout 90s "$@" > "$work/$name.log" 2>&1 || stage_status=$?
+    if (( stage_status != 0 )); then classify_launch "$work/$name.log"; fi
+    observe_launch "$name" "$project_name"
+    return "$stage_status"
+}
 finish() {
-    local rc=$? cleaned=not-started
+    local rc=$? cleaned=not-started probe_cleaned=not-started
     trap - EXIT
     if [[ $started == true ]]; then
         cleaned=failed
-        if timeout 90s "${compose[@]}" down --volumes --remove-orphans --rmi local >"$work/down.log" 2>&1; then
-            local c n v i
-            if c=$(docker ps -aq --filter "label=com.docker.compose.project=$project") &&
-               n=$(docker network ls -q --filter "label=com.docker.compose.project=$project") &&
-               v=$(docker volume ls -q --filter "label=com.docker.compose.project=$project") &&
-               i=$(docker image ls -q --filter "reference=$project-*") && [[ -z $c$n$v$i ]]; then cleaned=confirmed; fi
-        fi
+        if clean_project "$project" "${compose[@]}"; then cleaned=confirmed; fi
         if [[ $cleaned != confirmed ]]; then rc=1; fi
     fi
-    printf '{"phase":"%s","exitCode":%d,"cleanup":"%s","host":"%s","client":"%s","fixture":"%s","workflow":"%s","run":"%s","attempt":"%s"}\n' "$phase" "$rc" "$cleaned" "$host" "$client" "$fixture" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$evidence/hosted-result.json"
+    if [[ $probe_started == true && $probe_cleanup_attempted == false ]]; then
+        probe_cleaned=failed
+        if clean_project "$probe_project" "${probe[@]}"; then probe_cleaned=confirmed; else rc=1; fi
+    elif [[ $probe_started == true ]]; then
+        probe_cleaned=failed
+        rc=1
+    elif [[ -f $evidence/probe-cleanup.json ]]; then
+        probe_cleaned=confirmed
+    fi
+    printf '{"phase":"%s","exitCode":%d,"cleanup":"%s","probeCleanup":"%s","host":"%s","client":"%s","fixture":"%s","workflow":"%s","run":"%s","attempt":"%s"}\n' "$phase" "$rc" "$cleaned" "$probe_cleaned" "$host" "$client" "$fixture" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$evidence/hosted-result.json"
     (cd "$evidence" && sha256sum -- *.json > SHA256SUMS)
     printf 'Pairing stage=%s exit=%d cleanup=%s\n' "$phase" "$rc" "$cleaned"
     exit "$rc"
@@ -40,6 +103,60 @@ context="$work/source"
 mkdir "$context"
 # Use only tracked source plus the reviewed fixture-only changes on this branch.
 git archive "$GITHUB_SHA" | tar -x -C "$context"
+compose=(docker compose --project-name "$project" -f "$context/tests/web/linked-fresh-install.compose.yaml")
+phase=compose_preflight
+engine=$(docker version --format '{{.Server.Version}}' 2>"$work/engine.log")
+compose_version=$(docker compose version --short 2>"$work/compose-version.log")
+version_pattern='^v?[0-9]+[.][0-9]+[.][0-9]+([+._-][a-zA-Z0-9+._-]+)?$'
+[[ $engine =~ $version_pattern && $compose_version =~ $version_pattern ]]
+printf '{"dockerEngine":"%s","dockerCompose":"%s"}\n' "$engine" "$compose_version" > "$evidence/platform.json"
+"${compose[@]}" config --format json > "$work/resolved.json" 2>"$work/config.log"
+python3 - "$work/resolved.json" "$work/probe.json" "$probe_project" <<'PY'
+import json, sys
+from pathlib import Path
+source, target = map(Path, sys.argv[1:3]); project = sys.argv[3]
+v = json.loads(source.read_bytes()); n = v['networks']['peer']; services = v['services']
+assert set(services) == {'twin', 'fresh-source', 'fresh-destination'}
+assert list(v['networks']) == ['peer'] and n['internal']
+assert n['driver_opts']['com.docker.network.bridge.gateway_mode_ipv4'] == 'isolated'
+assert services['twin']['network_mode'] == 'none'
+for name, service in services.items():
+    assert not service.get('ports') and not service.get('privileged') and service.get('network_mode') != 'host'
+    assert all(m['type'] == 'volume' for m in service.get('volumes', []))
+    if name != 'twin':
+        assert service['networks']['peer']['interface_name'] == 'peer0'
+    service.pop('build')
+    service.pop('entrypoint', None)
+    service['image'] = 'python:3.13-slim-bookworm'
+    service['command'] = ['sleep', '180']
+v['name'] = project
+n['name'] = project + '_peer'
+for name, volume in v['volumes'].items():
+    volume['name'] = project + '_' + name
+target.write_text(json.dumps(v))
+PY
+phase=probe_create
+probe_started=true
+launch_step probe_create "$probe_project" "${probe[@]}" create
+launch_step probe_start "$probe_project" "${probe[@]}" start
+phase=probe_readiness
+stage_status=0
+reason=none
+for guest in twin fresh-source fresh-destination; do
+    timeout 15s "${probe[@]}" exec -T "$guest" python -c '
+import socket, sys
+from pathlib import Path
+assert {name for _, name in socket.if_nameindex()} == ({"lo"} if sys.argv[1] == "twin" else {"lo", "peer0"})
+assert all(line.split()[1] != "00000000" for line in Path("/proc/net/route").read_text().splitlines()[1:])
+' "$guest" >> "$work/probe-readiness.log" 2>&1 || { stage_status=$?; reason=interface-or-route-not-confirmed; break; }
+done
+observe_launch probe_readiness "$probe_project"
+(( stage_status == 0 ))
+phase=probe_cleanup
+probe_cleanup_attempted=true
+clean_project "$probe_project" "${probe[@]}"
+probe_started=false
+printf '{"cleanup":"confirmed"}\n' > "$evidence/probe-cleanup.json"
 stage="$context/tests/web/linked-client-candidate"
 mkdir "$stage"
 node "$web/scripts/client-source.mjs" record "$stage/selection.json"
@@ -80,9 +197,6 @@ tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - -C "$work/c
 printf 'ready\n' > "$stage/fixture-mode"
 (cd "$stage" && sha256sum fixture-mode selection.json client-source.tar.gz static-component.tar.gz > SHA256SUMS)
 manifest=$(sha256sum "$stage/SHA256SUMS" | cut -d ' ' -f 1)
-compose=(docker compose --project-name "$project" -f "$context/tests/web/linked-fresh-install.compose.yaml")
-phase=compose_preflight
-"${compose[@]}" config --format json | python3 -c 'import json,sys; v=json.load(sys.stdin); n=v["networks"]["peer"]; assert list(v["networks"])==["peer"] and n["internal"] and n["driver_opts"]["com.docker.network.bridge.gateway_mode_ipv4"]=="isolated"; assert v["services"]["twin"]["network_mode"]=="none"; assert all(not s.get("ports") and not s.get("privileged") and s.get("network_mode")!="host" and all(m["type"]=="volume" for m in s.get("volumes",[])) for s in v["services"].values())'
 [[ -z $(docker ps -aq --filter "label=com.docker.compose.project=$project") ]]
 phase=image_build
 started=true
@@ -95,12 +209,32 @@ if ! timeout 900s "${compose[@]}" build > "$work/build.log" 2>&1; then
     fi
     exit 1
 fi
-phase=compose_launch
-if ! timeout 90s "${compose[@]}" up -d --no-build > "$work/launch.log" 2>&1; then
-    # Emit only coarse classifications, never arbitrary image/build/daemon logs.
-    if grep -qi 'overlap\|address pool' "$work/launch.log"; then phase=compose_address_pool; fi
-    exit 1
-fi
+launch_step compose_create "$project" "${compose[@]}" create --no-build
+launch_step compose_start "$project" "${compose[@]}" start
+phase=guest_readiness
+stage_status=0
+reason=none
+timeout 75s "${compose[@]}" exec -T twin .venv/bin/python -c '
+import time
+from pathlib import Path
+for _ in range(280):
+    roots = (Path("/run/link-source"), Path("/run/link-destination"))
+    if any((root / "fresh-failed.json").is_file() for root in roots):
+        raise SystemExit(3)
+    if all((root / "fresh-ready.json").is_file() for root in roots):
+        break
+    time.sleep(.25)
+else:
+    raise SystemExit(4)
+' > "$work/guest-readiness.log" 2>&1 || stage_status=$?
+case $stage_status in
+    0) ;;
+    3) reason=guest-reported-startup-failure ;;
+    4|124) reason=guest-readiness-timeout ;;
+    *) classify_launch "$work/guest-readiness.log" ;;
+esac
+observe_launch guest_readiness "$project"
+(( stage_status == 0 ))
 phase=browser
 set +e
 timeout 300s "${compose[@]}" exec -T \
