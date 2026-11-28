@@ -390,7 +390,10 @@ def command_path_proof(root):
     print("CLI PATH: find the command in a new cmd.exe", flush=True)
     found = execute([cmd, "/d", "/v:off", "/c", "where amplifier-unified"], env=env, cwd=root)
     assert found["exitCode"] == 0, found
-    assert ntpath.normcase(found["stdout"].splitlines()[0]) == ntpath.normcase(expected), found
+    # `where` also lists the extensionless Git Bash script. cmd.exe selects
+    # the .cmd through PATHEXT; the actual --help below proves that selection.
+    assert ntpath.normcase(expected) in [ntpath.normcase(row)
+                                        for row in found["stdout"].splitlines()], found
     print("CLI PATH: run --help in a new cmd.exe", flush=True)
     help_cmd = execute([cmd, "/d", "/v:off", "/c", "amplifier-unified --help"], env=env, cwd=root)
     assert help_cmd["exitCode"] == 0 and "usage:" in help_cmd["stdout"], help_cmd

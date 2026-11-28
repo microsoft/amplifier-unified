@@ -60,16 +60,18 @@ def test_limit_is_not_the_setx_1024_character_limit():
 
 def test_content_uses_own_folder_no_absolute_batch_literals(tmp_path):
     home = tmp_path / 'own ! ^ & café' / "app"
-    executable = home.parent / "tools/amplifier-unified/Scripts/amplifier-unified.exe"
+    executable = home.parent / "tools/amplifier-unified/Scripts/python.exe"
     files = commands.scripts(home, executable)
     assert set(files) == commands.NAMES
     cmd, bash = files["amplifier-unified.cmd"], files["amplifier-unified"]
     assert b'setlocal DisableDelayedExpansion\r\n' in cmd
     assert b'%%~fI' in cmd  # Canonical data path: the private reader refuses "..".
-    assert b'--data-dir "%AMPLIFIER_CLI_HOME%" %*\r\n@exit /b %errorlevel%\r\n' in cmd
+    assert b'"%AMPLIFIER_CLI_HOME%" %*\r\n@exit /b %errorlevel%\r\n' in cmd
+    assert b'-I -B "%~dp0amplifier-unified.py"' in cmd
     assert b"%~dp0.." in cmd and str(home).encode() not in cmd
-    assert b'exec "$bin"/' in bash and b'--data-dir "$home" "$@"\n' in bash
-    assert b"amplifier-unified.exe" in cmd and b"amplifier-unified.exe" in bash
+    assert b'exec "$bin"/' in bash and b'"$home" "$@"\n' in bash
+    assert b"python.exe" in cmd and b"python.exe" in bash
+    assert files["amplifier-unified.py"] == commands.DISPATCH.encode()
 
 
 @pytest.mark.parametrize("part", ["bad%name", "bad!name", "bad^name", "bad&name", 'bad"name', "café"])
@@ -87,6 +89,8 @@ def test_unrepresentable_path_entry_is_refused(tmp_path, part):
 @pytest.fixture
 def model(tmp_path, monkeypatch):
     from amplifier_web import windows_files, windows_uninstall, deployment
+    # Import on the real platform before the portable model selects Windows.
+    from amplifier_web.app_updates import version_tuple  # noqa: F401
     home = tmp_path / "app"
     home.mkdir()
     state = SimpleNamespace(home=home, value="%TOOLS%\\bin;;C:\\other;",
@@ -243,20 +247,25 @@ def test_pending_commit_with_changed_value_is_not_adopted(model, monkeypatch):
 
 
 def test_new_generation_and_rollback_change_only_small_files(model, monkeypatch):
+    from amplifier_web import application_generations
     commands.ensure(model.home)
     bin_path = model.home / "bin"
     before = {p.name: p.read_bytes() for p in bin_path.iterdir()}
-    monkeypatch.setattr(commands.sys, "prefix", str(model.home / "updates/a/new/tools/amplifier-unified"))
+    bootstrap = commands.sys.prefix
+    generation = model.home / "updates/a/new/tools/amplifier-unified"
+    monkeypatch.setattr(commands.sys, "prefix", str(generation))
+    monkeypatch.setattr(application_generations, "active", lambda home: {
+        "prefix": generation, "bootstrap": {"prefix": bootstrap}})
     commands.ensure(model.home)
     after = {p.name: p.read_bytes() for p in bin_path.iterdir()}
-    assert before != after and len(model.writes) == 1 and set(after) == commands.NAMES
-    assert b"new" in after["amplifier-unified.cmd"]
+    assert before == after and len(model.writes) == 1 and set(after) == commands.NAMES
     times = {p.name: p.stat().st_mtime_ns for p in bin_path.iterdir()}
     commands.ensure(model.home)
     assert {p.name: p.stat().st_mtime_ns for p in bin_path.iterdir()} == times
-    monkeypatch.setattr(commands.sys, "prefix", str(model.home / "updates/a/old/tools/amplifier-unified"))
+    monkeypatch.setattr(application_generations, "active", lambda home: None)
+    monkeypatch.setattr(commands.sys, "prefix", bootstrap)
     commands.ensure(model.home)
-    assert b"old" in (bin_path / "amplifier-unified.cmd").read_bytes()
+    assert {p.name: p.read_bytes() for p in bin_path.iterdir()} == before
     assert len(model.writes) == 1
 
 
@@ -313,3 +322,28 @@ def test_native_fixture_environment_block_stops_at_nul():
     spec.loader.exec_module(native)
     assert native.environment_values("Path=C:\\one;C:\\two\0EMPTY=\0=C:=C:\\\0\0") == {
         "Path": "C:\\one;C:\\two", "EMPTY": ""}
+
+
+@pytest.mark.parametrize("selection", ["bootstrap", "new", "old", "foreign", "manual-upgrade"])
+def test_dispatch_selects_active_version_at_call_time_and_waits(model, monkeypatch, selection):
+    from amplifier_web import application_generations, app_updates
+    import subprocess
+    bootstrap = Path(commands.sys.prefix)
+    target = None if selection == "bootstrap" else {
+        "prefix": model.home / ("selected-" + selection),
+        "bootstrap": {"prefix": "foreign" if selection == "foreign" else str(bootstrap)},
+        "version": "0.0.1" if selection == "manual-upgrade" else "999.0.0"}
+    checked, called = [], []
+    monkeypatch.setattr(application_generations, "active", lambda home: target)
+    monkeypatch.setattr(application_generations, "bootstrap_identity", lambda prefix: {"prefix": str(bootstrap)})
+    monkeypatch.setattr(application_generations, "verify_candidate", lambda value: checked.append(value))
+    monkeypatch.setattr(commands.sys, "argv", ["helper", str(model.home), 'space "quotes"', "100% ! ^ &"])
+    monkeypatch.setattr(subprocess, "call", lambda argv: called.append(argv) or 17)
+    with pytest.raises(SystemExit) as ended:
+        exec(commands.DISPATCH, {"__name__": "__main__"})
+    assert ended.value.code == 17
+    selected = selection in {"new", "old"}
+    assert checked == ([target] if selected else [])
+    prefix = target["prefix"] if selected else bootstrap
+    assert called == [[str(prefix / "Scripts/amplifier-unified.exe"), "--data-dir",
+                       str(model.home), 'space "quotes"', "100% ! ^ &"]]

@@ -19,8 +19,41 @@ import sys
 
 RECORD = "cli-path.json"
 LIMIT = 32767  # Environment value, including its terminating NUL, in UTF-16 units.
-NAMES = {"amplifier-unified.cmd", "amplifier-unified"}
+NAMES = {"amplifier-unified.cmd", "amplifier-unified", "amplifier-unified.py"}
 log = logging.getLogger(__name__)
+# Run by the stable bootstrap's Python, also after a rollback to an app that
+# predates this module. Use its existing qualified-generation reader and graph
+# check. Do not use its old hand_over/execv: older Windows launchers returned 0
+# before the child ended. subprocess.call inherits all three standard handles.
+DISPATCH = """\
+import subprocess
+import sys
+import json
+from pathlib import Path
+from amplifier_web import __version__
+from amplifier_web import application_generations as generations
+from amplifier_web.app_updates import version_tuple
+
+home = Path(sys.argv[1])
+prefix = Path(sys.prefix)
+target = generations.active(home)
+if (target and target.get('bootstrap') == generations.bootstrap_identity(prefix)
+        and version_tuple(__version__) <= version_tuple(target['version'])):
+    check = getattr(generations, 'verify_candidate', None)
+    if check is not None:
+        check(target)
+    else:
+        # The graph check was inline in the first generation-aware launchers.
+        from amplifier_web.app_component_graph import GRAPH_PROBE, digest, normalized
+        result = subprocess.run([str(target['prefix'] / 'Scripts/python.exe'), '-I', '-c', GRAPH_PROBE],
+                                capture_output=True, text=True, timeout=30, check=False,
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        if result.returncode or digest(normalized(json.loads(result.stdout))) != target['componentDigest']:
+            raise ValueError('Active app packages changed; its generation was preserved')
+    prefix = target['prefix']
+executable = prefix / 'Scripts/amplifier-unified.exe'
+raise SystemExit(subprocess.call([str(executable), '--data-dir', str(home), *sys.argv[2:]]))
+"""
 
 
 class UnsupportedPath(ValueError):
@@ -70,13 +103,15 @@ def scripts(home, executable):
         raise UnsupportedPath("This folder cannot hold the Windows command files.")
     cmd = ('@setlocal DisableDelayedExpansion\r\n'
            '@for %%I in ("%~dp0..") do @set "AMPLIFIER_CLI_HOME=%%~fI"\r\n'
-           f'@"%~dp0{relative}" --data-dir "%AMPLIFIER_CLI_HOME%" %*\r\n'
+           f'@"%~dp0{relative}" -I -B "%~dp0amplifier-unified.py" "%AMPLIFIER_CLI_HOME%" %*\r\n'
            '@exit /b %errorlevel%\r\n')
     bash = ('#!/bin/sh\nbin=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit\n'
             'home=$(CDPATH= cd -- "$bin/.." && pwd -W) || exit\n'
             f'exec "$bin"/{shlex.quote(relative.replace(chr(92), "/"))} '
-            '--data-dir "$home" "$@"\n')
-    return {"amplifier-unified.cmd": cmd.encode("ascii"),
+            '-I -B "$bin/amplifier-unified.py" "$home" "$@"\n')
+    # Publish the helper before either command can name it.
+    return {"amplifier-unified.py": DISPATCH.encode("ascii"),
+            "amplifier-unified.cmd": cmd.encode("ascii"),
             "amplifier-unified": bash.encode("ascii")}
 
 
@@ -253,10 +288,17 @@ def _best_effort(home, action):
         log.warning("Windows command setup did not complete (%s).", type(error).__name__)
 
 
+def _bootstrap(home):
+    from .application_generations import active
+    target = active(home)
+    if target and Path(sys.prefix) == target["prefix"]:
+        return Path(target["bootstrap"]["prefix"])
+    return Path(sys.prefix)
+
+
 def ensure(home):
-    """Setup and each host start use their own app version, including after rollback."""
-    _best_effort(home, lambda folder: _ensure(
-        folder, Path(sys.prefix) / "Scripts/amplifier-unified.exe"))
+    """Setup and host starts bind stable commands; invocation selects the active app."""
+    _best_effort(home, lambda folder: _ensure(folder, _bootstrap(folder) / "Scripts/python.exe"))
 
 
 def remove(home):

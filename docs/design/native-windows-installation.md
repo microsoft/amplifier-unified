@@ -178,12 +178,21 @@ after an update. `amplifier-unified --help`, `doctor`, `service` and `config`
 then use this installation's data folder.
 
 The app writes two small commands in `<data>\bin`: `amplifier-unified.cmd`
-for PowerShell and cmd.exe, and `amplifier-unified` for Git Bash. They pass
-arguments, standard handles and the exit code to this app version. Each host
-start writes them only when their content differs. An update or rollback
-therefore changes the target without changing the folder on PATH. Setup uses
-the same function. A hand-built installation gets it at its first host start.
-No Python or Git executable goes in that folder.
+for PowerShell and cmd.exe, and `amplifier-unified` for Git Bash. A small
+`amplifier-unified.py` beside them uses the stable bootstrap's Python. It
+reads the active generation at each call, checks its bootstrap and qualified
+graph, then waits for that app's executable with this installation's
+`--data-dir`. Arguments, standard handles and the exit code pass through.
+Each host start writes the three files only when their content differs.
+Setup uses the same function. A hand-built installation gets it at its first
+host start. No Python or Git executable goes in that folder.
+
+Reading the target at each call also covers a rollback to a release from
+before this feature: that old app cannot rewrite the command files. With no
+active generation, the command uses the bootstrap. A newer manual bootstrap
+upgrade takes precedence over an older selected app, as in the existing CLI.
+No stable launcher code must change to run a command. The stable bootstrap
+and its generation reader must remain installed.
 
 Only the user's `HKCU\Environment\Path` changes. The original text, type,
 order and empty entries stay. A private `config\services\cli-path.json`
