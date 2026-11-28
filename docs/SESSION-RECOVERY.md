@@ -6,6 +6,39 @@
 
 Both actions are shared by the UI and agent action surface. Details and copyable IDs remain available under the conversation settings after an error notice is dismissed. Recovery is disabled while work or configuration changes are active.
 
+## Model changes and context-preparation failures
+
+The chat notice and Details & reporting use `failure.summary` and `guidance`.
+Unified keeps context failure codes only when they match `[a-z_]{1,80}`. It never
+uses an exception message as the explanation. Known codes have fixed guidance;
+an unknown fixed code stays in diagnostics with a request to share those details.
+
+Some loop versions omit newer context codes from `generation.failed`. Unified
+can supplement the saved failure from the real immediate exception, bound to the
+same failed generation and input IDs. It does not rewrite the native event,
+infer a cause for older saved failures, or promote a different handled error.
+Stop and stale-generation checks still apply.
+
+`model_transition_required` means the selected model needs history preparation
+that the participating host did not admit. The notice recommends selecting the
+previous model and connection, sending a new message, and sharing diagnostics
+before trying the new model again. It does not recommend deleting the checkpoint,
+resetting a preparation record, or automatically repeating summary calls.
+
+The exact-count transition path and the uncounted ordinary path are different:
+the pinned streaming loop invokes `context.measured_request_view` only when the
+provider advertises an exact counter. The pinned context module invokes the
+host's journaled transition entry there, but not from `context.request_retention`.
+An uncounted warm model change with an older checkpoint that cannot be safely
+carried can therefore still refuse. Handling that route requires coordinated
+context/loop support, not a synthetic exact count or removal of the host's paid
+call guards. This diagnostic change does not claim to repair that limitation.
+
+The pinned live loop ends execution after a failed manager turn, including a
+context-preparation refusal. Unified preserves the cause and closes that worker;
+the next message can need a cold start. This change does not restart the loop,
+reuse its closed runtime, or automatically send the failed input again.
+
 ## Bundle ID casing and legacy Work chats
 
 New standalone bundle registrations use lowercase IDs with dashes, separate from

@@ -731,7 +731,7 @@ class Worker:
             }[event['type']]
             generation = getattr(self.runtime, 'generation', None)
             self.failed_generation = (
-                {**{key: event.get(key) for key in ('generation_id', 'input_ids', 'error_type', 'error_category', 'error_stage')},
+                {**{key: event.get(key) for key in ('generation_id', 'input_ids', 'error_type', 'error_category', 'error_code', 'error_stage')},
                  '_runtime': self.runtime, '_generation': generation, '_stopRevision': self.stop_revision}
                 if event['type'] == 'generation.failed' and generation
                     and generation.get('id') == event.get('generation_id')
@@ -1524,7 +1524,7 @@ class Worker:
                             and type(primary).__name__ == 'ManagerTurnError'
                             and isinstance(getattr(primary, 'failure', None), dict)
                             and all(primary.failure.get(key) == terminal.get(key) for key in
-                                    ('error_type', 'error_category', 'error_stage'))
+                                    ('error_type', 'error_category', 'error_code', 'error_stage'))
                             and terminal is not previous_failure
                             and primary.__cause__ is not None and self.stop_revision == epoch
                             and self.runtime is runtime and not runtime.stop_requested
