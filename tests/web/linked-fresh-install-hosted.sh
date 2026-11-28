@@ -84,9 +84,19 @@ compose=(docker compose --project-name "$project" -f "$context/tests/web/linked-
 phase=compose_preflight
 "${compose[@]}" config --format json | python3 -c 'import json,sys; v=json.load(sys.stdin); n=v["networks"]["peer"]; assert list(v["networks"])==["peer"] and n["internal"] and n["driver_opts"]["com.docker.network.bridge.gateway_mode_ipv4"]=="isolated"; assert v["services"]["twin"]["network_mode"]=="none"; assert all(not s.get("ports") and not s.get("privileged") and s.get("network_mode")!="host" and all(m["type"]=="volume" for m in s.get("volumes",[])) for s in v["services"].values())'
 [[ -z $(docker ps -aq --filter "label=com.docker.compose.project=$project") ]]
-phase=compose_launch
+phase=image_build
 started=true
-if ! timeout 900s "${compose[@]}" up -d --build > "$work/launch.log" 2>&1; then
+if ! timeout 900s "${compose[@]}" build > "$work/build.log" 2>&1; then
+    if grep -qiE 'could not read Username|authentication failed|repository not found' "$work/build.log"; then phase=image_public_dependency_unavailable
+    elif grep -qi 'no space left on device' "$work/build.log"; then phase=image_storage_exhausted
+    elif grep -qiE 'failed to resolve source metadata|pull access denied|manifest unknown' "$work/build.log"; then phase=image_base_unavailable
+    elif grep -qi 'no installation candidate\\|unable to locate package' "$work/build.log"; then phase=image_system_dependency_unavailable
+    elif grep -qiE 'could not import|ModuleNotFoundError|ImportError' "$work/build.log"; then phase=image_import_failed
+    fi
+    exit 1
+fi
+phase=compose_launch
+if ! timeout 90s "${compose[@]}" up -d --no-build > "$work/launch.log" 2>&1; then
     # Emit only coarse classifications, never arbitrary image/build/daemon logs.
     if grep -qi 'overlap\|address pool' "$work/launch.log"; then phase=compose_address_pool; fi
     exit 1
