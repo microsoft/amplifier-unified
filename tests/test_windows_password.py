@@ -17,7 +17,6 @@ import pytest
 from amplifier_web import auth, browser_entry as entry, cli, deployment
 from test_browser_code import (LOCAL, REMOTE, PASSWORD, FORM, call, files, home, host,
                                local_ticket, open_ticket, owner_page, signed_in, with_key)
-from test_windows_auth import native_root
 
 
 def test_username_is_required_normalized_and_counted_like_a_password(host, capsys, caplog):
@@ -225,10 +224,11 @@ def test_command_never_falls_back_to_echo_or_prints_input_errors(password_comman
 
 
 @pytest.mark.skipif(os.name != 'nt', reason='Native Windows private files and real HTTPS client')
-def test_native_windows_local_https_username_password(native_root, unused_tcp_port):
+def test_native_windows_local_https_username_password(home, unused_tcp_port):
     """Runs in windows-local-connection with real private records, TLS and requests."""
     from amplifier_web import tls
     from amplifier_web.instance_branding import InstanceBranding
+    native_root = home
     async def journey():
         config = deployment.load_server_config(native_root, overrides={'port': unused_tcp_port})
         config = tls.setup_local_ca(native_root, config)
