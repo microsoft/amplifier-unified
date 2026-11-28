@@ -304,3 +304,12 @@ def test_changed_value_with_nul_is_never_rewritten(model):
     before = model.value
     commands.remove(model.home)
     assert model.value == before and len(model.writes) == 1
+
+
+def test_native_fixture_environment_block_stops_at_nul():
+    fixture = Path(__file__).parent / "fixtures/windows_start_again_native.py"
+    spec = importlib.util.spec_from_file_location("cli_path_native_fixture", fixture)
+    native = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(native)
+    assert native.environment_values("Path=C:\\one;C:\\two\0EMPTY=\0=C:=C:\\\0\0") == {
+        "Path": "C:\\one;C:\\two", "EMPTY": ""}

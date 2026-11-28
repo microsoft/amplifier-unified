@@ -336,6 +336,18 @@ async def listener_answers(home):
     return False
 
 
+def environment_values(text):
+    """Read a Windows environment block. A NUL character is a truthy Python string."""
+    rows, index = [], 0
+    while text[index] != "\0":
+        start = index
+        while text[index] != "\0":
+            index += 1
+        rows.append("".join(text[start:index]))
+        index += 1
+    return dict(row.split("=", 1) for row in rows if not row.startswith("="))
+
+
 def fresh_user_environment():
     """Ask Windows for a new user's environment, not the test host's old PATH."""
     import ctypes as C
@@ -355,14 +367,7 @@ def fresh_user_environment():
         assert user.CreateEnvironmentBlock(C.byref(block), token, False)
         try:
             text = C.cast(block, C.POINTER(C.c_wchar))
-            rows, index = [], 0
-            while text[index]:
-                start = index
-                while text[index]:
-                    index += 1
-                rows.append("".join(text[start:index]))
-                index += 1
-            return dict(row.split("=", 1) for row in rows if not row.startswith("="))
+            return environment_values(text)
         finally:
             user.DestroyEnvironmentBlock(block)
     finally:
