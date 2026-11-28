@@ -59,16 +59,24 @@ new turn or triggers this policy. Other clients observe the same host-owned work
 
 ### Connection coverage of this host policy
 
-These are source findings for a plain connection failure before any output,
-not live service tests. All the guards above still apply. The allowed field set
-is deliberately not widened for other error formats.
+These are source findings for a failure before any output, not live service
+tests. All the guards above still apply. The allowed field set is deliberately
+not widened for other error formats.
+
+The host retries only `LLMTimeoutError` and `ProviderUnavailableError` (with
+its subclass `NetworkError`). A provider module that raises the base class
+`LLMError` for a connection error gets no host retry for it, even with
+`retryable=True`. Measured on November 27, 2026 with the installed OpenAI and
+Anthropic modules, the real SDKs and local servers: a refused connection and a
+connection that the far side closed gave no host retry; a request that got no
+answer was retried.
 
 | Connection | Does the host retry? | Source behavior |
 | --- | --- | --- |
-| ChatGPT subscription | Yes | Metadata-only error response, then retryable timeout/unavailable. |
-| Anthropic | Yes | Same allowed error fields and typed retryable connection failures. |
-| Gemini | Yes | Same allowed error fields and typed retryable connection failures. |
-| OpenAI API | Yes for a plain failure with no returned/billed response | Allowed error fields when no billing evidence exists. Error responses with `usage`, `known_cost_usd` or `response_details` block host retry. |
+| ChatGPT subscription | Yes | Metadata-only error response. A time-out is `LLMTimeoutError`; a transport error is `ProviderUnavailableError`. |
+| Anthropic | Only after a time-out that the module raises as `LLMTimeoutError`, or an unavailable (5xx, overloaded) answer | Same allowed error fields. A connection error (refused, closed, DNS, TLS) is raised as the base class `LLMError` with `retryable=True`; the host does not retry it. |
+| Gemini | Only after a time-out that the module raises as `LLMTimeoutError`, or an unavailable answer | Same allowed error fields. By reading: a connection error falls through to the base class `LLMError` with `retryable=True`; the host does not retry it. |
+| OpenAI API | Only after a time-out that the module raises as `LLMTimeoutError`, or an unavailable answer, and with no returned/billed response | Allowed error fields when no billing evidence exists. The SDK's connection and time-out errors (`openai.APIConnectionError`, `openai.APITimeoutError`) are raised as the base class `LLMError` with `retryable=True`; the host does not retry them. Error responses with `usage`, `known_cost_usd` or `response_details` block host retry. |
 | Azure OpenAI | Same as OpenAI API | Inherits the OpenAI completion/error path. The same extra fields block host retry. |
 | GitHub Copilot | No after an in-flight failure | `RequestContext.emit_response_error` emits `llm:response` with `error_type` and `error_message`; both are outside the allowed fields. The provider and its observability context call it on terminal failure. |
 | Chat-completions / OpenAI-compatible API | No after an in-flight failure | Its error response includes `error_type`, outside the allowed fields. |
