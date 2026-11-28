@@ -2452,6 +2452,7 @@ def journey(stage, exchange, account, token):
         from amplifier_web import windows_consumer as consumer
         from amplifier_web import windows_consumer_shell as shell, windows_installation, windows_service
         from amplifier_web import windows_uninstall
+        from amplifier_web import windows_service_lifetime as lifetime
         from amplifier_web.deployment import write_private
         from amplifier_web.updates import process
 
@@ -2500,6 +2501,12 @@ def journey(stage, exchange, account, token):
             steps.report["firstStart"]["taskOutput"] = attempt(lambda: host_output(home))
         steps.save()
         need(state.get("managed") is True, "The task was not registered. The launcher said", started["json"] or started)
+        _, installed_spec = windows_service._read(home)
+        need(installed_spec.repeat_start is None, "Slice 1 must keep the installed task's legacy layout")
+        native_key = lifetime.native_sign_in(installed_spec.sid)
+        need(sign_in_key(native_key) == sign_in_key(token),
+             "The installed lifetime helper has another sign-in key", native_key)
+        steps.report["lifetimeKey"] = native_key
         steps.passed(JOURNEY[2], task=state.get("taskPath"))
         need(started["exitCode"] == 0 and (started["json"] or {}).get("background") is True,
              "The launcher did not finish the start. It said", started["json"] or started)
@@ -2532,6 +2539,13 @@ def journey(stage, exchange, account, token):
              and not (status["json"] or {}).get("responding", False)
              and not asyncio.run(again.listener_answers(home)),
              "The app still runs after Stop", {"result": stopped, "task": state, "status": status["json"]})
+        with lifetime.store(installed_spec) as pinned:
+            need(lifetime.read(pinned, installed_spec)["stopped"], "The installed Stop was not saved")
+        down_stop = again.cli(root, "service", "stop")
+        need(down_stop["exitCode"] == 0, "Stop while down failed", down_stop)
+        with lifetime.store(installed_spec) as pinned:
+            need(lifetime.read(pinned, installed_spec)["stopped"], "Stop while down was not saved")
+        steps.report["lifetimeStopWhileDown"] = True
         steps.passed(JOURNEY[6], result=stopped, task=state)
 
         steps.begin(JOURNEY[7])
@@ -2545,6 +2559,8 @@ def journey(stage, exchange, account, token):
         steps.report["secondStart"] = {"launcher": again_started, "task": state, "serviceStatus": status}
         steps.save()
         accept_start(steps, "secondStart", again, home, root, again_started, state, status, "The second start failed")
+        with lifetime.store(installed_spec) as pinned:
+            need(not lifetime.read(pinned, installed_spec)["stopped"], "Explicit Start did not clear Stop")
         need(again.process_identity(status["json"]) != again.process_identity(started["json"]["health"])
              and windows_installation.saved_port(home) == port,
              "The second start did not give a new host on the same port")
