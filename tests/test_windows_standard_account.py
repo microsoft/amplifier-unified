@@ -2259,12 +2259,15 @@ def test_the_cleanup_passes_when_every_part_is_done(case, monkeypatch, tmp_path)
         "credential": "absent", "viewers": "ended", "signedOut": True, "helperTask": "absent",
         "amplifierTask": "absent", "profile": "absent", "account": "absent", "viewerSetting": "unchanged"}
     assert calls == ["viewers", "sign_out", "programs", "remove AmplifierStandardAccountCheck",
+                     "remove AmplifierStandardAccountIdentity-" + OWNED["sid"],
                      "remove " + AMPLIFIER_TASK, "profile", "delete_user"]
 
 
 @pytest.mark.parametrize("part, label", [
     ("credential", "credential"), ("viewers", "viewers"), ("signedOut", "signedOut"),
-    ("AmplifierStandardAccountCheck", "helperTask"), (AMPLIFIER_TASK, "amplifierTask"), ("profile", "profile")])
+    ("AmplifierStandardAccountCheck", "helperTask"),
+    ("AmplifierStandardAccountIdentity-" + OWNED["sid"], "identityTask"),
+    (AMPLIFIER_TASK, "amplifierTask"), ("profile", "profile")])
 def test_a_part_that_fails_does_not_stop_the_other_parts_and_fails_the_cleanup(case, monkeypatch, tmp_path, part, label):
     passed, result, calls = clean_up(case, monkeypatch, tmp_path, broken=(part,))
     assert passed is False
@@ -2369,7 +2372,8 @@ def test_the_task_and_the_profile_of_a_deleted_account_are_read_by_its_sid(case,
     assert passed is False and result["account"] == "absent" and "delete_user" in calls
     # The next cleanup finds no account. It still reads the task and the profile by the recorded SID.
     passed, result, calls = clean_up(case, monkeypatch, tmp_path, comment=None, profile="left: in use")
-    assert calls == ["viewers", "sign_out", "remove AmplifierStandardAccountCheck", "remove " + AMPLIFIER_TASK, "profile"]
+    assert calls == ["viewers", "sign_out", "remove AmplifierStandardAccountCheck",
+                     "remove AmplifierStandardAccountIdentity-" + OWNED["sid"], "remove " + AMPLIFIER_TASK, "profile"]
     assert passed is False and result["profile"] == "left: in use"
     # When Windows lists none of them any more, that cleanup passes.
     passed, result, _ = clean_up(case, monkeypatch, tmp_path, comment=None)

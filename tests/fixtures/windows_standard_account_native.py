@@ -508,7 +508,8 @@ class _LsaString(C.Structure):
 
 class _LogonSession(C.Structure):
     _fields_ = [("size", W.ULONG), ("logon", _Luid), ("user", _LsaString), ("domain", _LsaString),
-                ("package", _LsaString), ("type", W.ULONG), ("session", W.ULONG), ("sid", C.c_void_p)]
+                ("package", _LsaString), ("type", W.ULONG), ("session", W.ULONG), ("sid", C.c_void_p),
+                ("logonTime", C.c_int64)]
 
 
 def token_facts():
@@ -538,7 +539,7 @@ def token_facts():
         integrity = _adv.GetSidSubAuthority(level, _adv.GetSidSubAuthorityCount(level).contents.value - 1).contents.value
         statistics = _Statistics.from_buffer(numbers)  # TokenStatistics
         logon = _Luid(statistics.authentication.low, statistics.authentication.high)
-        facts = {"sid": user,
+        facts = {"sid": user, "authenticationId": f"{logon.high & 0xffffffff:08x}:{logon.low:08x}",
                  # 1: the account has one token and no administrator token beside it.
                  "elevationType": W.DWORD.from_buffer(kind).value,
                  "elevated": bool(W.DWORD.from_buffer(raised).value),
@@ -559,6 +560,8 @@ def token_facts():
     if secur.LsaGetLogonSessionData(C.byref(logon), C.byref(data)) == 0:
         # 2 Interactive (at the screen), 10 RemoteInteractive (Remote Desktop).
         facts["logonType"] = data.contents.type
+        facts["logonTime"] = str(data.contents.logonTime)
+        need(sid_text(data.contents.sid) == user, "LSA and TokenUser name different users")
         secur.LsaFreeReturnBuffer.argtypes = [C.c_void_p]
         secur.LsaFreeReturnBuffer(data)
     session = W.DWORD()
@@ -734,15 +737,22 @@ function Find($name) {
         return $null
     }
 }
-if ($p.op -eq 'start') {
+if ($p.op -in @('start', 'identity-create')) {
     $d = $s.NewTask(0)
     # The user's own token in the user's own desktop session; no password; not elevated.
     $d.Principal.UserId = $p.sid; $d.Principal.LogonType = 3; $d.Principal.RunLevel = 0
     $d.Settings.DisallowStartIfOnBatteries = $false; $d.Settings.StopIfGoingOnBatteries = $false
     $d.Settings.ExecutionTimeLimit = 'PT1H'
+    if ($p.op -eq 'identity-create') {
+        if ($null -ne (Find $p.name)) { throw 'The identity probe task already exists' }
+        $l = $d.Triggers.Create(9); $l.UserId = $p.sid
+        $t = $d.Triggers.Create(1)
+        $t.StartBoundary = [DateTimeOffset]::Now.AddSeconds(15).ToString("yyyy-MM-dd'T'HH:mm:sszzz")
+    }
     $a = $d.Actions.Create(0); $a.Path = $p.program; $a.Arguments = $p.arguments; $a.WorkingDirectory = $p.folder
-    $t = $f.RegisterTaskDefinition($p.name, $d, 6, $p.sid, $null, 3, $null)
-    $null = $t.Run($null)
+    $flags = if ($p.op -eq 'identity-create') { 2 } else { 6 }
+    $t = $f.RegisterTaskDefinition($p.name, $d, $flags, $p.sid, $null, 3, $null)
+    if ($p.op -eq 'start') { $null = $t.Run($null) }
 } elseif ($p.op -eq 'remove') {
     if ($null -ne (Find $p.name)) { $f.DeleteTask($p.name, 0) }
 }
@@ -766,6 +776,61 @@ def read_json(path):
         return json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None  # Absent, or the writer is at work.
+
+
+def sign_in_key(token):
+    """The two native values under measurement, not a wall-clock guess."""
+    value = (token.get("authenticationId"), token.get("logonTime"))
+    need(isinstance(value[0], str) and re.fullmatch(r"[0-9a-f]{8}:[0-9a-f]{8}", value[0])
+         and isinstance(value[1], str) and value[1].isdigit() and int(value[1]) > 0,
+         "The native sign-in key is incomplete", token)
+    return value
+
+
+def identity_sample(stage, exchange, token):
+    # Called only after standard() verified this run's protected account record.
+    target = exchange / ("identity-sample-" + uuid.uuid4().hex + ".json")
+    target.write_text(json.dumps({"token": token, "at": time.time()}), encoding="utf-8")
+    return True
+
+
+def identity_measure(stage, exchange, account, token, *, second=False):
+    name = "AmplifierStandardAccountIdentity-" + account["sid"]
+    # This helper was started on demand. Its child is a direct user process.
+    command = [sys.executable, "-I", "-B", str(stage / FILES[0]), "standard",
+               "--stage", str(stage), "--exchange", str(exchange), "--phase", "identity-direct"]
+    direct = execute(command, timeout=60)
+    need(direct["exitCode"] == 0, "The direct identity process failed", direct)
+    direct_token = read_json(exchange / "identity-direct.json")["token"]
+    need(sign_in_key(direct_token) == sign_in_key(token),
+         "Direct and on-demand sign-in keys differ")
+    if not second:
+        arguments = subprocess.list2cmdline(command[:-1] + ["identity-sample"])
+        task("identity-create", name, sid=account["sid"], program=sys.executable,
+             arguments=arguments, folder=str(exchange))
+    deadline = time.monotonic() + 90
+    before = read_json(exchange / "identity-first.json")
+    samples = []
+    while time.monotonic() < deadline:
+        samples = [v for p in exchange.glob("identity-sample-*.json") if (v := read_json(p))
+                   and sign_in_key(v["token"]) == sign_in_key(token)]
+        if samples:
+            break
+        time.sleep(.5)
+    need(samples, "No native identity sample arrived from the time or sign-in trigger")
+    need(all(standard_token(v["token"], account) for v in samples),
+         "The identity sample did not run as the signed-in standard user")
+    need(all(sign_in_key(v["token"]) == sign_in_key(token) for v in samples),
+         "The time or sign-in task has another sign-in key")
+    result = {"finished": True, "onDemand": token, "direct": direct_token,
+              "logon" if second else "time": samples}
+    if second:
+        need(before and sign_in_key(before["onDemand"]) != sign_in_key(token),
+             "A new sign-in kept the old sign-in key")
+        task("remove", name)
+    (exchange / ("identity-second.json" if second else "identity-first.json")).write_text(
+        json.dumps(result), encoding="utf-8")
+    return True
 
 
 def in_session(sid, program, phase, stage, exchange, *, timeout):
@@ -1265,6 +1330,9 @@ def run():
         save("result.json", report)
         viewer, session = sign_in(name, password)
         report["firstSignIn"] = {"desktopSession": session}
+        report["identityFirst"] = in_session(
+            sid, prepared["python"], "identity-first", stage, exchange, timeout=180)
+        print("Sign-in identity first: " + json.dumps(report["identityFirst"]), flush=True)
         report["stage"] = "the steps after the first sign-in"
         first = in_session(sid, prepared["python"], "first", stage, exchange, timeout=40 * 60)
         report["steps"][:len(FIRST)] = first["steps"]
@@ -1288,6 +1356,9 @@ def run():
         viewer, session = sign_in(name, password)
         del password
         report["secondSignIn"] = {"desktopSession": session}
+        report["identitySecond"] = in_session(
+            sid, prepared["python"], "identity-second", stage, exchange, timeout=180)
+        print("Sign-in identity second: " + json.dumps(report["identitySecond"]), flush=True)
         report["stage"] = "the steps after the second sign-in"
         second = in_session(sid, first["python"], "second", stage, exchange, timeout=15 * 60)
         report["steps"][len(FIRST):len(FIRST) + len(SECOND)] = second["steps"]
@@ -1618,6 +1689,7 @@ def cleanup():
                 part("programs", lambda: ask_to_end_programs(name) if state == "this run's"
                      else "not asked: Windows has no account with this name")
                 part("helperTask", lambda: gone(HELPER))
+                part("identityTask", lambda: by_sid(lambda sid: gone("AmplifierStandardAccountIdentity-" + sid)))
                 part("amplifierTask", lambda: by_sid(lambda sid: gone("AmplifierUnified-" + sid)))
                 part("profile", lambda: by_sid(remove_profile))
                 if state == "this run's":
@@ -1632,7 +1704,7 @@ def cleanup():
     part("saved", lambda: save("cleanup.json", result) or "yes")
     print(json.dumps(result), flush=True)
     # The runner is deleted after the job. What `cleaned` names must be done before it ends.
-    return cleaned(result, owned)
+    return cleaned(result, owned) and result.get("identityTask", "absent") == "absent"
 
 
 # ---- As the standard user, in the user's own desktop session.
@@ -2926,6 +2998,13 @@ def standard(stage, exchange, phase):
     account = json.loads(content.decode("utf-8"))
     token = token_facts()
     admit_standard(account, token, owner, changeable or read_protected(record.parent, folder=True)[2])
+    if phase == "identity-sample":
+        return identity_sample(stage, exchange, token)
+    if phase == "identity-direct":
+        (exchange / "identity-direct.json").write_text(json.dumps({"token": token}), encoding="utf-8")
+        return True
+    if phase in ("identity-first", "identity-second"):
+        return identity_measure(stage, exchange, account, token, second=phase == "identity-second")
     # One run for each phase: a second start of the helper task changes nothing.
     try:
         with open(exchange / f"{phase}.started", "x", encoding="utf-8") as marker:
@@ -2941,7 +3020,8 @@ if __name__ == "__main__":
     parser.add_argument("operation", choices=("prepare", "run", "cleanup", "standard"))
     parser.add_argument("--stage")
     parser.add_argument("--exchange")
-    parser.add_argument("--phase", choices=("first", "journey", "certificate", "second", "third"))
+    parser.add_argument("--phase", choices=("first", "journey", "certificate", "second", "third",
+                                          "identity-first", "identity-second", "identity-direct", "identity-sample"))
     args = parser.parse_args()
     if args.operation == "standard":
         raise SystemExit(0 if standard(args.stage, args.exchange, args.phase) else 1)
