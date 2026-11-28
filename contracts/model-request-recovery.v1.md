@@ -4,17 +4,39 @@ The host's portable provider boundary may retry an unreturned model request in
 its still-running execution. Browser reconnect restores views; it never sends a
 new turn or triggers this policy. Other clients observe the same host-owned work.
 
-- Retry only provider-declared retryable timeout/unavailable errors, at most two
-  additional attempts with bounded backoff (2 and 5 seconds, respecting provider
-  retry-after up to 30 seconds). Provider/SDK internal retry policies remain their
-  own responsibility; these bounds count host attempts, not physical API calls.
+- Retry only `LLMTimeoutError` / `ProviderUnavailableError` with `retryable is True`.
+  Wait 5, 10, 20, then 30 seconds between host attempts, at most 22 retries.
+  This tries soon after a short interruption, then avoids a tight request loop.
+  A 600-second elapsed budget counts from entry to the original provider call,
+  including provider/SDK retries, host waits and later provider calls. The last
+  wait is shortened to the remaining time and no request starts at that deadline.
+  Valid provider retry-after values up to 30 seconds are minimum waits; if the
+  budget ends sooner, stop without another request.
+- After a retryable connection failure starts recovery, a retried call that has
+  not exposed output is cancelled at that same deadline. A permanent outage
+  therefore fails after about ten minutes from the original call's entry, not
+  ten minutes plus another round of provider retries. Scheduling and cooperative
+  provider cancellation can add cleanup time. The original healthy call retains
+  its provider-owned timeout: quiet generation alone does not start recovery.
+  If that first call itself fails after ten minutes, no host retry is made.
+  Once any output is exposed, the host recovery deadline no longer cuts off the
+  response. Provider/SDK policies still own physical API calls.
 - Retain the exact prepared request, selected connection/model, options, current
   generation and completed tool results. Never restart the orchestrator, repeat
   a tool or append the human message again. Changed requests or authority decline
-  retry. User Stop cancels the current request or its backoff.
+  retry, as do a closed runtime and a request bound to available Work requirements.
+  User Stop cancels the current request or its backoff.
 - Any yielded streaming event, exposed response/output hook, or tool invocation
   prevents generic retry. Stateful native transports retain their provider-owned
   reconciliation policy. They are never resubmitted through this wrapper.
+- A metadata-only `llm:response` with `status=error` is a failure diagnostic,
+  not model output. Its allowed fields are status, error, provider, model,
+  duration and request/session correlation. A response with content, tool data,
+  raw payloads or unknown fields still blocks retry. So do all yielded stream
+  events and progressive output hooks, even if an error diagnostic follows.
+- The existing retry status says, "Waiting for the connection; retrying the same
+  model request", with attempt counts. Only that unreturned model call is retried;
+  a goal run inside the window keeps its current turn rather than starting over.
 - Authentication, invalid input, unknown errors, cancellation and exhausted retries
   keep the existing truthful failure/recovery path. Attempt diagnostics contain
   metadata only, never request or response bodies.
@@ -27,9 +49,12 @@ checkpoint/receipt qualified by its execution owner before automatic continuatio
 A provider may have performed and billed inference before a response was lost;
 retry does not promise exactly-once remote inference or unchanged generated text.
 
-Tests exercise retry exhaustion, Stop, changed authority, partial output,
-provider opt-out, exact input retention, and root/child adapter installation with
-synthetic providers. Physical sleep and paid inference require separate evidence.
+Tests exercise the real subscription provider's terminal error hook, the full
+selected-provider adapter chain, elapsed exhaustion, Stop, changed authority,
+partial output, provider opt-out, exact input retention and root/child adapter
+installation. Synthetic transport in the real Live and Streaming goal loops
+recovers a five-minute outage, retains the completed tool result and continues
+the goal. Physical Wi-Fi loss, sleep and paid inference need separate evidence.
 
 ## A changed fitted request before transport
 

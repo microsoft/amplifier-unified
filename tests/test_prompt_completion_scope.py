@@ -53,6 +53,14 @@ async def test_model_activity_uses_same_thinking_label_without_changing_phase(mo
     assert retry['phase']=='retrying'
     assert retry['retryAttempt']==2 and retry['retryMax']==3
     assert 'retrying (2 of 3)' in retry['detail']
+    await co.hooks.emit('provider:retry', {
+        'session_id': identity, 'attempt': 3, 'max_retries': 22,
+        'recovery': 'unreturned_model_request', 'delay': 20,
+        'error': 'private connection detail'})
+    retry = [row for row in observed if row.get('type') == event_type][-1]
+    assert retry['phase'] == 'retrying' and retry['retryAttempt'] == 3 and retry['retryMax'] == 22
+    assert retry['detail'] == 'Waiting for the connection; retrying the same model request (3 of 22).'
+    assert 'private' not in str(retry)
 
 
 async def test_completion_evaluation_is_private_but_usage_and_response_payload_survive(monkeypatch):

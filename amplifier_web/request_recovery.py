@@ -3,10 +3,38 @@ import asyncio
 from contextvars import ContextVar
 import copy
 import math
+from time import monotonic
 
 _ACTIVE = ContextVar('unified_request_recovery', default=None)
-DELAYS = (2, 5)
+# Try soon for short interruptions, then at most twice a minute. The elapsed
+# budget also counts time spent inside provider/SDK retries, not just our sleeps.
+DELAYS = (5, 10, 20) + (30,) * 19
+RECOVERY_SECONDS = 600
+_ERROR_DIAGNOSTIC_FIELDS = frozenset((
+    'status', 'error', 'provider', 'model', 'duration_ms',
+    'request_id', 'unified_call_id', 'session_id', 'parent_id', 'timestamp'))
 _UNCOPYABLE = object()
+
+
+class _RecoveryExpired(Exception):
+    pass
+
+
+async def _before_output(awaitable, scope, bounded):
+    if not bounded:
+        return await awaitable
+    timer = asyncio.timeout(max(0, scope['deadline'] - monotonic()))
+    try:
+        async with timer:
+            scope['timer'] = timer
+            try:
+                return await awaitable
+            finally:
+                scope.pop('timer', None)
+    except TimeoutError:
+        if timer.expired():
+            raise _RecoveryExpired from None
+        raise
 
 
 def snapshot(value):
@@ -22,13 +50,22 @@ def install(coordinator):
         return
     from amplifier_core import HookResult
     async def exposed(event, data):
+        # A terminal failure diagnostic is not a returned model response.
+        # Unknown fields (including raw/content/tool payloads) stay conservative.
+        if (event == 'llm:response' and data.get('status') == 'error'
+                and data.keys() <= _ERROR_DIAGNOSTIC_FIELDS):
+            return HookResult()
         scope = _ACTIVE.get()
         if scope is not None:
             scope['exposed'] = True
+            timer = scope.get('timer')
+            if timer is not None:
+                timer.reschedule(None)  # Never cut off an exposed response.
         return HookResult()
     # Some complete() implementations emit progressive output through hooks.
     # Once anything escapes, replay needs provider-specific reconciliation.
     for event in ('content_block:start', 'content_block:delta', 'content_block:end',
+                  'llm:stream_block_start', 'llm:stream_block_delta', 'llm:stream_block_end',
                   'provider:response', 'llm:response', 'tool:pre'):
         coordinator.hooks.register(event, exposed, name='unified-request-recovery', priority=-200)
     coordinator.register_capability('web.request_recovery', True)
@@ -68,25 +105,40 @@ class RecoveringProvider:
             if not isinstance(advised, (int, float)) or not math.isfinite(advised) or advised < 0 or advised > 30:
                 return False
             delay = max(delay, advised)
+        remaining = scope['deadline'] - monotonic()
+        if remaining <= 0:
+            return False
+        delay = min(delay, remaining)
         try:
-            await self.coordinator.hooks.emit('provider:retry', {
-                'attempt': attempt + 1, 'max_retries': len(DELAYS),
-                'delay': delay, 'error_type': type(error).__name__,
-                'recovery': 'unreturned_model_request', 'tools_replayed': False})
-        except Exception:
-            pass  # Diagnostic failure cannot change the request outcome.
-        await asyncio.sleep(delay)  # User Stop cancels this same executing task.
-        return generation == self._generation() and not scope['exposed'] and request == saved and kwargs == saved_kwargs
+            async with asyncio.timeout(remaining):
+                try:
+                    await self.coordinator.hooks.emit('provider:retry', {
+                        'attempt': attempt + 1, 'max_retries': len(DELAYS),
+                        'delay': delay, 'error_type': type(error).__name__,
+                        'recovery': 'unreturned_model_request', 'tools_replayed': False})
+                except Exception:
+                    pass  # Diagnostic failure cannot change the request outcome.
+                await asyncio.sleep(delay)  # Stop cancels this same executing task.
+        except TimeoutError:
+            return False
+        return (monotonic() < scope['deadline'] and generation == self._generation()
+                and not scope['exposed'] and request == saved and kwargs == saved_kwargs)
 
     async def complete(self, request, **kwargs):
         saved, saved_kwargs = snapshot(request), snapshot(kwargs)
         generation = self._generation()
+        deadline, last_error = monotonic() + RECOVERY_SECONDS, None
         for attempt in range(len(DELAYS) + 1):
-            scope = {'exposed': False}
+            scope = {'exposed': False, 'deadline': deadline}
             token = _ACTIVE.set(scope)
             try:
-                return await self.original.complete(request, **kwargs)
+                # Leave the original healthy call's timeout with its provider.
+                # Once recovery starts, all subsequent transport time is bounded.
+                return await _before_output(self.original.complete(request, **kwargs), scope, attempt > 0)
+            except _RecoveryExpired:
+                raise last_error from None
             except Exception as error:
+                last_error = error
                 if not await self._retry(error, attempt, scope, generation, request, saved, kwargs, saved_kwargs):
                     raise
             finally:
@@ -95,8 +147,9 @@ class RecoveringProvider:
     async def _stream(self, method, request, kwargs):
         saved, saved_kwargs = snapshot(request), snapshot(kwargs)
         generation = self._generation()
+        deadline, last_error = monotonic() + RECOVERY_SECONDS, None
         for attempt in range(len(DELAYS) + 1):
-            scope = {'exposed': False}
+            scope = {'exposed': False, 'deadline': deadline}
             iterator = None
             try:
                 try:
@@ -108,7 +161,8 @@ class RecoveringProvider:
                     while True:
                         token = _ACTIVE.set(scope)
                         try:
-                            event = await anext(iterator)
+                            event = await _before_output(
+                                anext(iterator), scope, attempt > 0 and not scope['exposed'])
                         except StopAsyncIteration:
                             return
                         finally:
@@ -124,6 +178,13 @@ class RecoveringProvider:
                             await iterator.aclose()
                         finally:
                             _ACTIVE.reset(token)
+            except _RecoveryExpired:
+                raise last_error from None
             except Exception as error:
-                if not await self._retry(error, attempt, scope, generation, request, saved, kwargs, saved_kwargs):
-                    raise
+                last_error = error
+                token = _ACTIVE.set(scope)
+                try:
+                    if not await self._retry(error, attempt, scope, generation, request, saved, kwargs, saved_kwargs):
+                        raise
+                finally:
+                    _ACTIVE.reset(token)

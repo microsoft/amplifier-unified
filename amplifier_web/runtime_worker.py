@@ -953,6 +953,8 @@ class Worker:
                 if suffix:
                     retry = {"retryAttempt": attempt, "retryMax": maximum}
                 detail = "The model request was interrupted; retrying" + suffix + "."
+                if data.get("recovery") == "unreturned_model_request":
+                    detail = "Waiting for the connection; retrying the same model request" + suffix + "."
             elif event.startswith("tool:"):
                 phase = "tools"
                 tool = data.get("tool_name")
