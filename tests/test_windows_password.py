@@ -224,20 +224,20 @@ def test_command_never_falls_back_to_echo_or_prints_input_errors(password_comman
 
 
 @pytest.mark.skipif(os.name != 'nt', reason='Native Windows private files and real HTTPS client')
-def test_native_windows_local_https_username_password(home, unused_tcp_port):
+def test_native_windows_local_https_username_password(home):
     """Runs in windows-local-connection with real private records, TLS and requests."""
     from amplifier_web import tls
     from amplifier_web.instance_branding import InstanceBranding
     native_root = home
     async def journey():
-        config = deployment.load_server_config(native_root, overrides={'port': unused_tcp_port})
+        config = deployment.load_server_config(native_root)
         config = tls.setup_local_ca(native_root, config)
-        origin = f'https://127.0.0.1:{unused_tcp_port}'
+        origins = set()
         app = web.Application(middlewares=[auth.auth_required])
         app['control_token'] = auth.control_token(native_root)
         app['session_secret'] = auth.session_secret(native_root)
         app['server_config'] = config
-        app['allowed_origins'] = frozenset({origin})
+        app['allowed_origins'] = origins
         app['sessions'] = auth.Sessions()
         app['service'] = SimpleNamespace(data_dir=native_root, instance_branding=InstanceBranding(native_root, config),
             update_manager=SimpleNamespace(running_identity={'instanceId': 'b' * 32}))
@@ -249,7 +249,9 @@ def test_native_windows_local_https_username_password(home, unused_tcp_port):
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
         try:
-            await web.TCPSite(runner, '127.0.0.1', unused_tcp_port, ssl_context=tls.ssl_context(native_root, config)).start()
+            await web.TCPSite(runner, '127.0.0.1', 0, ssl_context=tls.ssl_context(native_root, config)).start()
+            origin = f'https://127.0.0.1:{runner.addresses[0][1]}'
+            origins.add(origin)
             context = ssl.create_default_context(cadata=tls.exported_ca_bytes(native_root).decode("ascii"))
             async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=context),
                                              cookie_jar=aiohttp.CookieJar(unsafe=True)) as client:
