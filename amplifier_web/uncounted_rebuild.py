@@ -110,10 +110,12 @@ async def open_rebuild(host, *, provider, summarizer, through, policy):
     def persist():
         try:
             host._write_recovery()
-        except BaseException:
+        except BaseException as error:
             # A failed save/readback has an unknown effect. Re-read the same
             # durable record next time; never trust an in-memory completion.
             host._journal = None
+            if isinstance(error, Exception):
+                raise ContextRecoveryError("recovery_save_unconfirmed") from error
             raise
         current()
 

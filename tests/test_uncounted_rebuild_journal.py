@@ -111,6 +111,9 @@ async def test_rebuild_across_real_worker_lifecycle(tmp_path, monkeypatch, failu
             terminal = await asyncio.wait_for(terminals.get(), 20)
             assert terminal['event'] == 'generation.failed'
         await asyncio.wait_for(ended.get(), 20)
+        if failure == 'save-failed':
+            assert 'recovery_save_unconfirmed' in json.dumps([
+                payload for kind, payload in events if kind == 'runtime.error'])
         first_requests = requests()[before:]
         assert all(row['summary'] for row in first_requests)
         recovery = tmp_path / 'native' / 'context-recovery.json'
