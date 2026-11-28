@@ -23,15 +23,21 @@ NAMES = {"amplifier-unified.cmd", "amplifier-unified"}
 log = logging.getLogger(__name__)
 
 
+class UnsupportedPath(ValueError):
+    """A name cannot be used literally by both PATH and the command files."""
+
+
 def _length(value):
     return len(value.encode("utf-16-le")) // 2 + 1
 
 
-def _key(value):
-    # Expand for comparison ONLY. Never publish the expanded user's value.
-    env = {key.casefold(): item for key, item in os.environ.items()}
+def _expanded(value, env):
+    return re.sub(r"%([^%]+)%", lambda m: env.get(m[1].casefold(), m[0]), value)
+
+
+def _key(value, env):
     value = value.strip().strip('"')
-    value = re.sub(r"%([^%]+)%", lambda m: env.get(m[1].casefold(), m[0]), value)
+    value = _expanded(value, env)  # Comparison only; never publish expanded text.
     return ntpath.normcase(value.replace("/", "\\").rstrip("\\"))
 
 
@@ -39,10 +45,15 @@ def append(value, kind, folder):
     """Return a new value, or None. Keep all original text and its registry type."""
     if kind not in (1, 2) or not isinstance(value, str) or "\0" in value:
         raise ValueError("The user Path is not a string.")
-    if any(_key(entry) == _key(folder) for entry in value.split(";")):
+    env = {key.casefold(): item for key, item in os.environ.items()}
+    target = _key(folder, env)
+    if any(_key(entry, env) == target for entry in value.split(";")):
         return None
     result = value + (";" if value else "") + folder
-    if _length(result) > LIMIT:
+    # Protect raw, expanded and currently inherited combined PATH lengths.
+    # Read no machine registry value, and never write the process environment.
+    if max(_length(result), _length(_expanded(result, env)),
+           _length(os.environ.get("PATH", "") + ";" + folder)) > LIMIT:
         raise ValueError("The user Path is too long. Nothing was cut.")
     return result
 
@@ -54,10 +65,10 @@ def scripts(home, executable):
     # CMD cannot safely store every possible path literal. Data-folder special
     # characters are expanded once by %~dp0, inside quotes, with delayed
     # expansion off. A literal in the relative executable path must be plain.
-    if (any(c in str(home) for c in ';"\r\n\0')
+    if (any(c in str(home) for c in '%;"\r\n\0')
             or not relative.isascii() or any(c in relative for c in '%!^&"\r\n\0')):
-        raise ValueError("This folder cannot hold the Windows command files.")
-    cmd = ('@echo off\r\n@setlocal DisableDelayedExpansion\r\n'
+        raise UnsupportedPath("This folder cannot hold the Windows command files.")
+    cmd = ('@setlocal DisableDelayedExpansion\r\n'
            '@for %%I in ("%~dp0..") do @set "AMPLIFIER_CLI_HOME=%%~fI"\r\n'
            f'@"%~dp0{relative}" --data-dir "%AMPLIFIER_CLI_HOME%" %*\r\n'
            '@exit /b %errorlevel%\r\n')
@@ -207,7 +218,7 @@ def _remove(home):
             result = row["before"]
         elif row["state"] == "adding":
             return  # Interrupted commit: a changed value does not prove ownership.
-        elif isinstance(value, str) and kind in (1, 2):
+        elif isinstance(value, str) and "\0" not in value and kind in (1, 2):
             parts = value.split(";")
             exact = [index for index, entry in enumerate(parts) if entry == row["folder"]]
             if len(exact) != 1:
@@ -235,6 +246,8 @@ def _best_effort(home, action):
         # A busy setup/start must not wait for another optional command step.
         with named("Global\\AmplifierUnified-cli-path-", home, wait=0):
             action(home)
+    except UnsupportedPath:
+        log.warning("Windows command files were not added. The folder name cannot be used on PATH.")
     except Exception as error:
         # No exception text: native errors can contain private paths.
         log.warning("Windows command setup did not complete (%s).", type(error).__name__)
@@ -256,8 +269,9 @@ def doctor(home):
     try:
         with environment() as (handle, _):
             value, kind = _read(handle)
+        env = {key.casefold(): item for key, item in os.environ.items()}
         if isinstance(value, str) and kind in (1, 2) and any(
-                _key(entry) == _key(folder) for entry in value.split(";")):
+                _key(entry, env) == _key(folder, env) for entry in value.split(";")):
             return {"ok": True, "message": "Command folder is on your user PATH. "
                     "The first matching command on PATH is used. Open a new terminal window."}
     except Exception:

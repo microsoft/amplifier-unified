@@ -74,7 +74,7 @@ jobs:
         shell: pwsh
         run: |
           & "$env:START_AGAIN_PYTHON" -I -B tests/fixtures/windows_start_again_native.py run
-          if ($LASTEXITCODE -ne 0) { throw 'The case failed; inspect result.json and task-attempt.json.' }
+          if ($LASTEXITCODE -ne 0) { throw "The case failed (exit $LASTEXITCODE); inspect result.json and task-attempt.json." }
       - name: Remove only this case's task, entries and folder
         if: always()
         timeout-minutes: 4

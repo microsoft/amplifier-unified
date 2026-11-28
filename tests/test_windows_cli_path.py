@@ -59,7 +59,7 @@ def test_limit_is_not_the_setx_1024_character_limit():
 
 
 def test_content_uses_own_folder_no_absolute_batch_literals(tmp_path):
-    home = tmp_path / 'own % ! ^ & café' / "app"
+    home = tmp_path / 'own ! ^ & café' / "app"
     executable = home.parent / "tools/amplifier-unified/Scripts/amplifier-unified.exe"
     files = commands.scripts(home, executable)
     assert set(files) == commands.NAMES
@@ -78,7 +78,7 @@ def test_unsafe_literal_relative_path_is_refused(tmp_path, part):
         commands.scripts(tmp_path / "app", tmp_path / part / "amplifier-unified.exe")
 
 
-@pytest.mark.parametrize("part", ["bad;name", 'bad"name', "bad\nname"])
+@pytest.mark.parametrize("part", ["bad;name", 'bad"name', "bad\nname", "bad%name"])
 def test_unrepresentable_path_entry_is_refused(tmp_path, part):
     with pytest.raises(ValueError):
         commands.scripts(tmp_path / part, tmp_path / "exe")
@@ -284,3 +284,20 @@ def test_doctor_on_and_off_path_is_read_only(model):
     result = commands.doctor(model.home)
     assert result["ok"] is True and "first matching command" in result["message"]
     assert len(model.writes) == 1
+
+
+def test_expansion_and_combined_path_cannot_cross_environment_limit(monkeypatch):
+    monkeypatch.setenv("LONG_CLI_TEST", "x" * 32760)
+    with pytest.raises(ValueError, match="too long"):
+        commands.append("%LONG_CLI_TEST%", 2, "C:\\app\\bin")
+    monkeypatch.setenv("PATH", "x" * 32760)
+    with pytest.raises(ValueError, match="too long"):
+        commands.append("C:\\a", 1, "C:\\app\\bin")
+
+
+def test_changed_value_with_nul_is_never_rewritten(model):
+    commands.ensure(model.home)
+    model.value += ";a\0b"
+    before = model.value
+    commands.remove(model.home)
+    assert model.value == before and len(model.writes) == 1

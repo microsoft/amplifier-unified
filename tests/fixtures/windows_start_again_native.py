@@ -349,6 +349,7 @@ def fresh_user_environment():
     user.CreateEnvironmentBlock.restype = W.BOOL
     user.DestroyEnvironmentBlock.argtypes = [C.c_void_p]
     token, block = W.HANDLE(), C.c_void_p()
+    print("CLI PATH: build a fresh Windows user environment", flush=True)
     assert adv.OpenProcessToken(kernel.GetCurrentProcess(), 0xa, C.byref(token))
     try:
         assert user.CreateEnvironmentBlock(C.byref(block), token, False)
@@ -381,13 +382,16 @@ def command_path_proof(root):
     windows_ps = system / "WindowsPowerShell/v1.0/powershell.exe"
     pwsh = Path("C:/Program Files/PowerShell/7/pwsh.exe")
     expected = str(home / "bin/amplifier-unified.cmd")
+    print("CLI PATH: find the command in a new cmd.exe", flush=True)
     found = execute([cmd, "/d", "/v:off", "/c", "where amplifier-unified"], env=env, cwd=root)
     assert found["exitCode"] == 0, found
     assert ntpath.normcase(found["stdout"].splitlines()[0]) == ntpath.normcase(expected), found
+    print("CLI PATH: run --help in a new cmd.exe", flush=True)
     help_cmd = execute([cmd, "/d", "/v:off", "/c", "amplifier-unified --help"], env=env, cwd=root)
     assert help_cmd["exitCode"] == 0 and "usage:" in help_cmd["stdout"], help_cmd
     proof["cmdHelp"] = "PASS: new cmd.exe found the stable command; --help returned 0"
     for name, ps in (("PowerShell51", windows_ps), ("PowerShell7", pwsh)):
+        print(f"CLI PATH: run --help in {name}", flush=True)
         result = execute([ps, "-NoProfile", "-NonInteractive", "-Command",
             "$c=Get-Command amplifier-unified; Write-Output $c.Source; "
             "amplifier-unified --help; exit $LASTEXITCODE"], env=env, cwd=root)
@@ -397,6 +401,7 @@ def command_path_proof(root):
     # A missing setting returns a known nonzero status. Compare stderr to the
     # real executable to prove exact argument text and status, not just a launch.
     for argument in ('CLI space "quoted"', "CLI 100% ! ^ & text"):
+        print("CLI PATH: compare arguments and failure status", flush=True)
         direct = execute([root / "tools/amplifier-unified/Scripts/amplifier-unified.exe",
             "--data-dir", home, "config", "get", argument], env=env, cwd=root)
         line = subprocess.list2cmdline(["amplifier-unified", "config", "get", argument])
@@ -486,6 +491,7 @@ def run():
             assert windows_uninstall.completed(root)
             assert not windows_service._read()[0]["exists"], "A pre-existing task must not be changed"
             begin(1)
+            print("CLI PATH: save the runner's original user Path", flush=True)
             from amplifier_web import windows_cli_path
             with windows_cli_path.environment() as (handle, _):
                 original_path = windows_cli_path._read(handle)
@@ -493,6 +499,7 @@ def run():
             # Setup's order: the entries first, then the start.
             entries = launcher(root, "--integrate")
             assert entries["exitCode"] == 0 and shell.listed(root), entries
+            print("CLI PATH: setup integration finished", flush=True)
             report["commandPath"] = command_path_proof(root)
             first = launcher(root, "--no-open")
             report["firstStart"] = first
@@ -678,6 +685,8 @@ def cleanup():
 
 
 if __name__ == "__main__":
+    import faulthandler
+    faulthandler.enable()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("prepare", "run", "cleanup"))
     shared().require_ci()
