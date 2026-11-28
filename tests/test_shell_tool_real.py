@@ -71,6 +71,9 @@ def test_the_real_shell_tool_is_turned_off_and_still_runs_a_command(clean_import
         assert getattr(module, name).__module__ == containment.__name__, name
     assert module._get_windows_job_object() is None
     assert module._assign_to_windows_job(os.getpid()) is False
+    # The tool's job for one command stays the tool's own: it has no
+    # kill-on-close flag and ends only that command's tree.
+    assert module._create_windows_command_job.__module__ == TARGET
     assert capsys.readouterr().err == ""                    # The guard has nothing to report.
     config = {"working_dir": str(tmp_path)}
     if sys.platform == "win32":

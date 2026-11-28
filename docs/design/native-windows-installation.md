@@ -120,6 +120,12 @@ suspended, put into the tool's job and then resumed, so its children are born
 in that job). An installation follows the tool's `main` branch: it takes that
 commit with its component update, not with an app release. A renamed entry
 point needs review: this guard cannot disable an unknown replacement.
+Since its commit `3ca72d0` the tool also gives each foreground command a job
+of its own (`_create_windows_command_job`). That job has no kill-on-close
+flag, and the command is put into it while it is still suspended, so it can
+hold only what the command starts. The tool uses it to end a command's whole
+tree at a time limit or a Stop. The guard leaves it in place: it is inside
+the worker's job, and it cannot outlive or take anything else.
 No step of the guard can fail the tool's import. A name that cannot be
 replaced, or a message that cannot be written, leaves the tool loaded. The
 names that could be replaced stay replaced, and the result lists the one that
