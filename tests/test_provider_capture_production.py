@@ -57,6 +57,9 @@ async def production(tmp_path, *, legacy=False, immutable=False, streaming=True)
             state.calls+=1;state.transports.append(value.model_dump_json());state.dispatch_options.append(copy.deepcopy(kwargs))
             if state.retry and state.calls==1:
                 from amplifier_core.llm_errors import LLMTimeoutError
+                # Match the subscription provider's exhausted-transport event.
+                await c.hooks.emit('llm:response', {
+                    'status':'error','provider':'fixture','error':'synthetic timeout','duration_ms':94500})
                 raise LLMTimeoutError('synthetic timeout',provider='fixture',retryable=True)
             return ChatResponse(content=[TextBlock(text='Done')],usage=Usage(input_tokens=100,output_tokens=1,total_tokens=101))
         async def stream(self,value,**kwargs):
@@ -202,6 +205,7 @@ async def test_production_recovery_retries_without_reusing_consumed_ticket(tmp_p
         value=request('R'*1_000_100);await selected.request_budget(value)
         await selected.complete(value);await inspector.drain()
         rows=inspector.store.index();assert state.calls==2 and len(rows)==2
+        assert state.transports[0]==state.transports[1] and state.dispatch_options[0]==state.dispatch_options[1]
         assert sum(r['budgetStatus']=='captured' for r in rows)==1
         assert rows[0]['budget']=={}
 

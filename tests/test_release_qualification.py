@@ -846,7 +846,7 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     selection = workflow['on']['workflow_dispatch']['inputs']['suite']
     assert selection['type'] == 'choice' and selection['default'] == 'full'
-    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'fresh-cleanup-native', 'prepared-runtime-native', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'cold-control-restore', 'goal-peer-publisher-0410', 'updater-omitted-ref', 'updater-public-selected-source', 'updater-synthetic-acquisition', 'updater-expanded-lock', 'native-child-fixtures', 'question-answer-resume', 'question-answer-installed', 'live-first-send', 'live-first-accepted-graph']
+    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'fresh-cleanup-native', 'prepared-runtime-native', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'cold-control-restore', 'goal-peer-publisher-0410', 'updater-omitted-ref', 'updater-public-selected-source', 'updater-synthetic-acquisition', 'updater-expanded-lock', 'native-child-fixtures', 'question-answer-resume', 'question-answer-installed', 'live-first-send', 'live-first-accepted-graph', 'model-request-recovery']
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['on']['workflow_call']['secrets'] == {'LOOP_LIVE_CI_READ_KEY': {'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
@@ -1326,6 +1326,7 @@ def test_offline_preflight_does_not_run_import_or_independent_install_probes():
 @pytest.mark.parametrize(('suite', 'targets'), [
     ('full', []),
     ('inline-chat-card', ['tests/test_chat_references.py']),
+    ('model-request-recovery', ['tests/test_request_recovery.py', 'tests/test_prompt_completion_scope.py', 'tests/test_provider_capture_production.py']),
     ('queued-configuration', ['tests/test_queued_configuration_boundary.py', 'tests/test_configuration_recovery_ui.py']),
     ('security-redaction', ['tests/test_agent_state.py', 'tests/test_provider_environment.py', 'tests/test_runtime_controls.py']),
     ('patch-placement-recovery', ['tests/test_patch_placement_recovery.py', 'tests/test_file_source_guard.py', 'tests/test_file_source_native_children.py', 'tests/test_workspace_writer_modules.py']),
