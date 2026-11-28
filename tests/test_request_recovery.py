@@ -104,19 +104,21 @@ async def test_real_hooks_progressive_output_then_error_blocks_replay(real_host,
     assert len(calls) == 1 and len(seen) == 1 and seen[0]['text'] == 'Already shown'
 
 
+@pytest.mark.parametrize('streaming', [False, True])
+@pytest.mark.parametrize('error_class', [ProviderUnavailableError, LLMTimeoutError])
 @pytest.mark.parametrize('kind,extra,recover', [
     ('chatgpt', {'error': 'offline', 'model': 'fixture'}, True),
     ('anthropic', {'error': 'offline', 'model': 'fixture'}, True),
     ('gemini', {'error': 'offline', 'model': 'fixture'}, True),
     ('openai', {'error': 'offline', 'model': 'fixture'}, True),
     ('azure-openai', {'error': 'offline', 'model': 'fixture'}, True),
-    ('github-copilot', {'error_type': 'ProviderUnavailableError', 'error_message': 'offline'}, False),
-    ('chat-completions', {'error_type': 'APIConnectionError'}, False),
+    ('github-copilot', {'model': 'fixture', 'error_type': 'ProviderUnavailableError', 'error_message': 'offline'}, True),
+    ('chat-completions', {'error_type': 'APIConnectionError'}, True),
     ('openai-with-usage', {'error': 'offline', 'usage': {}}, False),
     ('openai-with-cost', {'error': 'offline', 'known_cost_usd': '0.01'}, False),
     ('openai-with-details', {'error': 'offline', 'response_details': {}}, False),
 ])
-async def test_real_hooks_connection_error_shapes_keep_conservative_policy(real_host, kind, extra, recover):
+async def test_real_hooks_connection_error_shapes_keep_conservative_policy(real_host, kind, extra, recover, error_class, streaming):
     """Source-derived payloads; not live qualification of these connections."""
     calls = []
     async def complete(request):
@@ -124,15 +126,79 @@ async def test_real_hooks_connection_error_shapes_keep_conservative_policy(real_
         if len(calls) == 1:
             await real_host.hooks.emit('llm:response', {
                 'provider': kind, 'status': 'error', 'duration_ms': 5, **extra})
-            raise ProviderUnavailableError('offline')
+            raise error_class('offline', retryable=True)
         return 'Recovered'
-    wrapped = RecoveringProvider(SimpleNamespace(complete=complete), real_host)
+    async def stream(request):
+        yield await complete(request)
+    wrapped = RecoveringProvider(SimpleNamespace(complete=complete, stream=stream), real_host)
+    async def consume():
+        if streaming:
+            return [item async for item in wrapped.stream({})]
+        return [await wrapped.complete({})]
     if recover:
-        assert await wrapped.complete({}) == 'Recovered'
+        assert await consume() == ['Recovered']
         assert len(calls) == 2
     else:
-        with pytest.raises(ProviderUnavailableError): await wrapped.complete({})
+        with pytest.raises(error_class): await consume()
         assert len(calls) == 1
+
+
+@pytest.mark.parametrize('streaming', [False, True])
+@pytest.mark.parametrize('payload', [
+    {'status': 'error', 'error_type': 'APIConnectionError', 'unknown': True},
+    {'status': 'ok', 'error_type': 'APIConnectionError', 'error_message': 'offline'},
+    {'error_type': 'APIConnectionError', 'error_message': 'offline'},
+])
+async def test_real_hooks_error_fields_do_not_hide_output(real_host, streaming, payload):
+    calls = []
+    async def complete(request):
+        calls.append(request)
+        await real_host.hooks.emit('llm:response', payload)
+        raise ProviderUnavailableError('after response', retryable=True)
+    async def stream(request):
+        yield await complete(request)
+    wrapped = RecoveringProvider(SimpleNamespace(complete=complete, stream=stream), real_host)
+    with pytest.raises(ProviderUnavailableError):
+        if streaming:
+            async for _ in wrapped.stream({}): pytest.fail('unexpected output')
+        else: await wrapped.complete({})
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('streaming', [False, True])
+async def test_real_hooks_late_output_from_first_attempt_blocks_third_request(real_host, streaming):
+    """A provider task inherits the first attempt's scope, not the next token."""
+    second_attempt = asyncio.Event()
+    calls, tasks = [], []
+    error = ProviderUnavailableError('after late output', retryable=True)
+    async def late_output():
+        await second_attempt.wait()
+        await real_host.hooks.emit('content_block:start', {'type': 'text'})
+    async def complete(request):
+        calls.append(request)
+        if len(calls) == 1:
+            tasks.append(asyncio.create_task(late_output()))
+            raise LLMTimeoutError('first loss', retryable=True)
+        if len(calls) == 2:
+            second_attempt.set()
+            await tasks[0]  # Output from attempt 1 arrives during attempt 2.
+            raise error
+        return 'duplicate'
+    async def stream(request):
+        yield await complete(request)
+    wrapped = RecoveringProvider(SimpleNamespace(complete=complete, stream=stream), real_host)
+    try:
+        with pytest.raises(ProviderUnavailableError) as caught:
+            async with asyncio.timeout(2):
+                if streaming:
+                    async for _ in wrapped.stream({}): pytest.fail('unexpected output')
+                else: await wrapped.complete({})
+        assert caught.value is error
+        assert len(calls) == 2
+    finally:
+        for task in tasks:
+            if not task.done(): task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @pytest.fixture

@@ -237,6 +237,84 @@ def test_new_notices_use_real_places_and_do_not_blame_only_the_source():
         "Copy the chat diagnostics from Details & reporting and report this problem.")
 
 
+@pytest.mark.parametrize("codes,summary,guidance", [
+    (("transition_operation_unconfirmed", "transition_call_unconfirmed"),
+     "A model-change preparation call has no confirmed outcome.",
+     "Keep this chat and copy its diagnostics from Details & reporting. Check the earlier call before you send again; it may already have been charged."),
+    (("transition_candidate_invalid", "recovery_candidate_invalid"),
+     "Amplifier could not verify the prepared history.",
+     "Keep the original chat. Copy its diagnostics from Details & reporting and report this problem before you send again."),
+    (("transition_contract_changed", "recovery_contract_changed", "recovery_identity_changed", "recovery_request_changed"),
+     "The chat settings or prepared request changed during history preparation.",
+     "Check the selected model, connection and chat settings. Copy the chat diagnostics from Details & reporting before you send again; earlier work was not automatically repeated."),
+    (("transition_allowance_changed",),
+     "The approval for more model-change preparation no longer matches this chat.",
+     "Copy the chat diagnostics from Details & reporting and report this problem. An earlier approval cannot be used again after you change the model, change the message or press Stop."),
+    (("transition_budget_exhausted",),
+     "Model-change preparation cannot start another call.",
+     "Copy the chat diagnostics from Details & reporting and report this problem. Sending the same message again does not reset the call limit."),
+    (("recovery_retention_changed", "checkpoint_retention_incompatible"),
+     "Amplifier could not confirm that the saved summary keeps everything that this message needs.",
+     "Keep the original chat. Copy the chat diagnostics from Details & reporting and report this problem. Nothing was removed from this chat."),
+    (("recovery_install_unconfirmed", "recovery_save_unconfirmed"),
+     "Amplifier could not confirm that its preparation work was saved.",
+     "Keep this chat. Copy its diagnostics from Details & reporting and report this problem before continuing."),
+    (("recovery_outcome_unknown",),
+     "Earlier history preparation has an unknown outcome.",
+     "Keep this chat and copy its diagnostics from Details & reporting. Check saved results before you send again; an earlier call may already have completed."),
+    (("recovery_guard_unavailable", "recovery_contract_unavailable", "recovery_stop_unavailable", "recovery_writer_unavailable"),
+     "Amplifier could not verify that history preparation can run safely.",
+     "Keep this chat. Copy its diagnostics from Details & reporting and report this problem before you send again."),
+    (("recovery_interrupted",),
+     "History preparation was interrupted.",
+     "Copy the chat diagnostics from Details & reporting and report this problem. If you pressed Stop, the Stop still applies. Amplifier does not repeat a model call that has no confirmed result."),
+    (("recovery_arguments_invalid", "recovery_command_changed"),
+     "The history-preparation request is invalid or differs from its saved request.",
+     "Copy the chat diagnostics from Details & reporting and report this problem."),
+    (("recovery_preparation_failed",),
+     "History preparation could not finish.",
+     "Copy the chat diagnostics from Details & reporting and report this problem before you send again. Earlier calls were not automatically repeated."),
+    (("recovery_journal_unavailable",),
+     "The saved history-preparation record could not be read.",
+     "Keep the original chat. Copy its diagnostics from Details & reporting and report this problem before you send again. Do not delete saved records to reset preparation."),
+    (("summary_candidate_oversized",),
+     "The new conversation summary does not fit the full request.",
+     "Keep this chat. Copy its diagnostics from Details & reporting and report this problem before you send again. The new summary was not used."),
+    (("summary_no_fitting_prefix",),
+     "No complete older exchange fits one summary request.",
+     "Keep this chat. Copy its diagnostics from Details & reporting and report this problem before you send again."),
+    (("request_context_unavailable", "invalid_native_contract"),
+     "The connection could not supply the details that Amplifier needs to shorten this chat's history.",
+     "Keep this chat. Copy its diagnostics from Details & reporting and report this problem."),
+])
+def test_plain_context_notices_keep_exact_words_at_public_boundaries(codes, summary, guidance):
+    from amplifier_module_context_managed.errors import CompactionError
+    from amplifier_web.context_continuity import ContextRecoveryError
+    from amplifier_web.context_failures import CONTEXT_FAILURE_MESSAGES
+    from amplifier_web.session_health import exception_details, generation_failure
+    for code in codes:
+        assert CONTEXT_FAILURE_MESSAGES[code] == (summary, guidance)
+        details = [generation_failure({"error_category": "context_compaction", "error_code": code})]
+        details.extend(exception_details(error) for error in (
+            CompactionError(code, "PRIVATE"), ContextRecoveryError(code)))
+        for detail in details:
+            assert detail["code"] == code
+            assert (detail["summary"], detail["guidance"]) == (summary, guidance)
+            assert detail["retryable"] is False and detail["replayed"] is False
+            assert "PRIVATE" not in json.dumps(detail)
+
+
+def test_unknown_context_notice_names_the_next_send_not_preparation():
+    from amplifier_web.context_failures import UNKNOWN_CONTEXT_MESSAGE
+    from amplifier_web.session_health import generation_failure
+    assert UNKNOWN_CONTEXT_MESSAGE == (
+        "Conversation preparation stopped.",
+        "Original history is preserved. Copy the chat diagnostics from Details & reporting before you send again. "
+        "Earlier work was not automatically repeated.")
+    detail = generation_failure({"error_category": "context_compaction", "error_code": "future_code"})
+    assert (detail["summary"], detail["guidance"]) == UNKNOWN_CONTEXT_MESSAGE
+
+
 @pytest.mark.parametrize("mismatch", [False, True])
 async def test_worker_certifies_code_snapshot_and_rejects_wrapper_code_mismatch(monkeypatch, mismatch):
     from amplifier_module_context_managed.errors import CompactionError
