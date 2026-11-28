@@ -222,6 +222,19 @@ def test_new_notices_use_real_places_and_do_not_blame_only_the_source():
     assert CONTEXT_FAILURE_MESSAGES["disabled"] == (
         "This chat is set not to use the connection's own way to shorten history.",
         "Amplifier did not use another way. Copy the chat diagnostics from Details & reporting and report this problem.")
+    # Sending again runs the history preparation again on a new worker. The
+    # notice must say that it takes time and model calls, and must not say
+    # that sending again cannot help (an experiment showed that it can).
+    assert CONTEXT_FAILURE_MESSAGES["model_transition_required"] == (
+        "This chat could not prepare its saved history for the model you chose.",
+        "Send your message again. Amplifier then prepares this chat's history for the new model. "
+        "This can take a while and uses extra model calls. If it fails again, select the previous model "
+        "and connection, then send a new message. Then copy the chat diagnostics from Details & reporting "
+        "and report this problem.")
+    # The context module refuses this step at both of its raise sites; nothing is paused.
+    assert CONTEXT_FAILURE_MESSAGES["ordinary_compaction_deferred"] == (
+        "Amplifier did not start new summary work for this message. Saved work was kept.",
+        "Copy the chat diagnostics from Details & reporting and report this problem.")
 
 
 @pytest.mark.parametrize("mismatch", [False, True])

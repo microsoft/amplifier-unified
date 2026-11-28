@@ -21,8 +21,9 @@ Stop and stale-generation checks still apply.
 
 `model_transition_required` means the selected model needs history preparation
 that the participating host did not admit. The notice asks the person to send
-again; if that fails, select the previous model and connection, send a new
-message, and share diagnostics. A new worker can prepare the chosen model from
+again, and says that this takes a while and uses extra model calls; if that
+fails, select the previous model and connection, send a new message, and share
+diagnostics. A new worker can prepare the chosen model from
 originals, so this failure does not prove that sending again will always fail.
 It does not recommend deleting the checkpoint, resetting a preparation record,
 or automatically repeating summary calls.
@@ -42,6 +43,11 @@ if that uncounted rebuild stops after a confirmed summary call, a later cold
 worker can buy the same work again without a transition-journal reservation.
 This change does not add an automatic restart or claim durable continuation of
 that uncounted paid prefix.
+Sending again by hand runs the same rebuild: 12 summary calls in the
+experiment, and an interrupted rebuild starts again from the first call.
+In the experiment the saved checkpoint did not change after the successful
+reply. So the experiment does not show that the rebuilt summary is saved
+for a later cold start.
 
 `summary_work_paused` has two distinct meanings. A native context failure reports
 its local call limit. The host's `ContextRecoveryError` reports a saved transition
