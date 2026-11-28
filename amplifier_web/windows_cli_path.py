@@ -1,0 +1,322 @@
+"""Small per-installation commands and one opt-out-respecting user PATH addition.
+
+Only HKCU is used. Registry transactions refuse concurrent edits rather than
+overwriting them. All entry points are best effort; none can fail its caller.
+"""
+from __future__ import annotations
+
+from contextlib import contextmanager
+import ctypes as C
+from ctypes import wintypes as W
+import json
+import logging
+import ntpath
+import os
+from pathlib import Path
+import re
+import shlex
+import sys
+
+RECORD = "cli-path.json"
+LIMIT = 32767  # Environment value, including its terminating NUL, in UTF-16 units.
+NAMES = {"amplifier-unified.cmd", "amplifier-unified", "amplifier-unified.py"}
+log = logging.getLogger(__name__)
+# Run by the stable bootstrap's Python, also after a rollback to an app that
+# predates this module. Use its existing qualified-generation reader and graph
+# check. Do not use its old hand_over/execv: older Windows launchers returned 0
+# before the child ended. subprocess.call inherits all three standard handles.
+DISPATCH = """\
+import subprocess
+import sys
+import json
+from pathlib import Path
+from amplifier_web import __version__
+from amplifier_web import application_generations as generations
+from amplifier_web.app_updates import version_tuple
+
+home = Path(sys.argv[1])
+prefix = Path(sys.prefix)
+target = generations.active(home)
+if (target and target.get('bootstrap') == generations.bootstrap_identity(prefix)
+        and version_tuple(__version__) <= version_tuple(target['version'])):
+    check = getattr(generations, 'verify_candidate', None)
+    if check is not None:
+        check(target)
+    else:
+        # The graph check was inline in the first generation-aware launchers.
+        from amplifier_web.app_component_graph import GRAPH_PROBE, digest, normalized
+        result = subprocess.run([str(target['prefix'] / 'Scripts/python.exe'), '-I', '-c', GRAPH_PROBE],
+                                capture_output=True, text=True, timeout=30, check=False,
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        if result.returncode or digest(normalized(json.loads(result.stdout))) != target['componentDigest']:
+            raise ValueError('Active app packages changed; its generation was preserved')
+    prefix = target['prefix']
+executable = prefix / 'Scripts/amplifier-unified.exe'
+raise SystemExit(subprocess.call([str(executable), '--data-dir', str(home), *sys.argv[2:]]))
+"""
+
+
+class UnsupportedPath(ValueError):
+    """A name cannot be used literally by both PATH and the command files."""
+
+
+def _length(value):
+    return len(value.encode("utf-16-le")) // 2 + 1
+
+
+def _expanded(value, env):
+    return re.sub(r"%([^%]+)%", lambda m: env.get(m[1].casefold(), m[0]), value)
+
+
+def _key(value, env):
+    value = value.strip().strip('"')
+    value = _expanded(value, env)  # Comparison only; never publish expanded text.
+    return ntpath.normcase(value.replace("/", "\\").rstrip("\\"))
+
+
+def append(value, kind, folder):
+    """Return a new value, or None. Keep all original text and its registry type."""
+    if kind not in (1, 2) or not isinstance(value, str) or "\0" in value:
+        raise ValueError("The user Path is not a string.")
+    env = {key.casefold(): item for key, item in os.environ.items()}
+    target = _key(folder, env)
+    if any(_key(entry, env) == target for entry in value.split(";")):
+        return None
+    result = value + (";" if value else "") + folder
+    # Protect raw, expanded and currently inherited combined PATH lengths.
+    # Read no machine registry value, and never write the process environment.
+    if max(_length(result), _length(_expanded(result, env)),
+           _length(os.environ.get("PATH", "") + ";" + folder)) > LIMIT:
+        raise ValueError("The user Path is too long. Nothing was cut.")
+    return result
+
+
+def scripts(home, executable):
+    """Use the batch file's own folder: no code-page-dependent absolute literals."""
+    home, executable = Path(home), Path(executable)
+    relative = os.path.relpath(executable, home / "bin")
+    # CMD cannot safely store every possible path literal. Data-folder special
+    # characters are expanded once by %~dp0, inside quotes, with delayed
+    # expansion off. A literal in the relative executable path must be plain.
+    if (any(c in str(home) for c in '%;"\r\n\0')
+            or not relative.isascii() or any(c in relative for c in '%!^&"\r\n\0')):
+        raise UnsupportedPath("This folder cannot hold the Windows command files.")
+    cmd = ('@setlocal DisableDelayedExpansion\r\n'
+           '@for %%I in ("%~dp0..") do @set "AMPLIFIER_CLI_HOME=%%~fI"\r\n'
+           f'@"%~dp0{relative}" -I -B "%~dp0amplifier-unified.py" "%AMPLIFIER_CLI_HOME%" %*\r\n'
+           '@exit /b %errorlevel%\r\n')
+    bash = ('#!/bin/sh\nbin=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit\n'
+            'home=$(CDPATH= cd -- "$bin/.." && pwd -W) || exit\n'
+            f'exec "$bin"/{shlex.quote(relative.replace(chr(92), "/"))} '
+            '-I -B "$bin/amplifier-unified.py" "$home" "$@"\n')
+    # Publish the helper before either command can name it.
+    return {"amplifier-unified.py": DISPATCH.encode("ascii"),
+            "amplifier-unified.cmd": cmd.encode("ascii"),
+            "amplifier-unified": bash.encode("ascii")}
+
+
+@contextmanager
+def environment(*, write=False):
+    """Read HKCU, or stage a conflict-detecting edit of its existing Environment key."""
+    import winreg
+    if not write:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as handle:
+            yield handle, None
+        return
+    ktm, adv = C.WinDLL("ktmw32", use_last_error=True), C.WinDLL("advapi32", use_last_error=True)
+    kernel = C.WinDLL("kernel32", use_last_error=True)
+    ktm.CreateTransaction.argtypes = [C.c_void_p, C.c_void_p, W.DWORD, W.DWORD, W.DWORD, W.DWORD, W.LPWSTR]
+    ktm.CreateTransaction.restype = W.HANDLE
+    for name in ("CommitTransaction", "RollbackTransaction"):
+        getattr(ktm, name).argtypes, getattr(ktm, name).restype = [W.HANDLE], W.BOOL
+    kernel.CloseHandle.argtypes, kernel.CloseHandle.restype = [W.HANDLE], W.BOOL
+    adv.RegOpenKeyTransactedW.argtypes = [
+        W.HKEY, W.LPCWSTR, W.DWORD, W.DWORD, C.POINTER(W.HKEY), W.HANDLE, C.c_void_p]
+    adv.RegOpenKeyTransactedW.restype = W.LONG
+    transaction = ktm.CreateTransaction(None, None, 0, 0, 0, 0, None)
+    if not transaction or transaction == C.c_void_p(-1).value:
+        raise C.WinError(C.get_last_error())
+    handle, committed = W.HKEY(), False
+    try:
+        hive = W.HKEY(C.c_int32(int(winreg.HKEY_CURRENT_USER)).value)
+        error = adv.RegOpenKeyTransactedW(hive, "Environment", 0,
+            winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE, C.byref(handle), transaction, None)
+        if error:
+            raise C.WinError(error)
+        def commit():
+            nonlocal committed
+            if not ktm.CommitTransaction(transaction):
+                raise C.WinError(C.get_last_error())
+            committed = True
+        yield handle.value, commit
+    finally:
+        if handle.value:
+            winreg.CloseKey(handle.value)
+        if not committed:
+            ktm.RollbackTransaction(transaction)
+        kernel.CloseHandle(transaction)
+
+
+def _read(handle):
+    import winreg
+    try:
+        return winreg.QueryValueEx(handle, "Path")
+    except FileNotFoundError:
+        return None, 2  # An absent value is not the same as an empty value.
+
+
+def _set(handle, value, kind):
+    import winreg
+    if value is None:
+        winreg.DeleteValue(handle, "Path")
+    else:
+        winreg.SetValueEx(handle, "Path", 0, kind, value)
+
+
+def _broadcast():
+    send = C.WinDLL("user32", use_last_error=True).SendMessageTimeoutW
+    send.argtypes = [W.HWND, W.UINT, W.WPARAM, W.LPCWSTR, W.UINT, W.UINT, C.POINTER(C.c_size_t)]
+    send.restype = W.LPARAM
+    # HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG; 100 ms per window.
+    send(0xffff, 0x1a, 0, "Environment", 2, 100, C.byref(C.c_size_t()))
+
+
+def _load(home):
+    from .windows_files import directory
+    with directory(home / "config/services", owned_root=home) as owned:
+        row = json.loads(owned.read_private(RECORD, limit=512 * 1024))
+    if (not isinstance(row, dict) or row.get("schema") != 1
+            or row.get("folder") != str(home / "bin")
+            or row.get("state") not in {"files", "adding", "added", "present", "removed"}):
+        raise ValueError("The Windows command record is invalid.")
+    if row["state"] in {"adding", "added"}:
+        before = row.get("before")
+        if (row.get("kind") not in (1, 2) or (before is not None and not isinstance(before, str))
+                or row.get("after") != (before + ";" if before else "") + row["folder"]):
+            raise ValueError("The Windows PATH addition record is invalid.")
+    return row
+
+
+def _save(home, row):
+    from .deployment import write_private
+    write_private(home / "config/services" / RECORD, json.dumps(row), owned_root=home)
+
+
+def _ensure(home, executable):
+    from .windows_files import directory
+    from .deployment import write_private
+    content = scripts(home, executable)
+    try:
+        row = _load(home)
+    except FileNotFoundError:
+        row = {"schema": 1, "folder": str(home / "bin"), "state": "files"}
+        with directory(home / "bin", owned_root=home, create=True):
+            if list((home / "bin").iterdir()):
+                raise ValueError("The command folder is not empty.")
+        _save(home, row)  # No registry effect when a private record cannot be written.
+    with directory(home / "bin", owned_root=home, create=True) as owned:
+        if any(path.name not in NAMES for path in (home / "bin").iterdir()):
+            raise ValueError("The command folder holds other files.")
+        for name, raw in content.items():
+            try:
+                current = owned.read_private(name, limit=8192)
+            except FileNotFoundError:
+                current = None
+            if current != raw:
+                write_private(home / "bin" / name, raw, owned_root=home)
+    if row["state"] != "files":
+        return  # Includes manual removal and an interrupted/uncertain registry write.
+    with environment(write=True) as (handle, commit):
+        before, kind = _read(handle)
+        after = append("" if before is None else before, kind, row["folder"])
+        row.update(state="present" if after is None else "adding",
+                   before=before, kind=kind, after=after)
+        _save(home, row)  # Once only, even if the process ends during the registry commit.
+        if after is None:
+            return
+        _set(handle, after, kind)
+        commit()
+    row["state"] = "added"
+    try:
+        _save(home, row)
+    finally:
+        _broadcast()
+
+
+def _remove(home):
+    row = _load(home)
+    if row["state"] not in {"added", "adding"}:
+        return
+    with environment(write=True) as (handle, commit):
+        value, kind = _read(handle)
+        if value == row["after"] and kind == row["kind"]:
+            result = row["before"]
+        elif row["state"] == "adding":
+            return  # Interrupted commit: a changed value does not prove ownership.
+        elif isinstance(value, str) and "\0" not in value and kind in (1, 2):
+            parts = value.split(";")
+            exact = [index for index, entry in enumerate(parts) if entry == row["folder"]]
+            if len(exact) != 1:
+                return  # A changed spelling or duplicates are not adopted.
+            del parts[exact[0]]
+            result = ";".join(parts)
+        else:
+            return
+        _set(handle, result, kind)
+        commit()
+    row["state"] = "removed"
+    try:
+        _save(home, row)
+    finally:
+        _broadcast()
+
+
+def _best_effort(home, action):
+    if sys.platform != "win32":
+        return
+    try:
+        from .windows_files import address
+        from .windows_uninstall import named
+        home = address(home)
+        # A busy setup/start must not wait for another optional command step.
+        with named("Global\\AmplifierUnified-cli-path-", home, wait=0):
+            action(home)
+    except UnsupportedPath:
+        log.warning("Windows command files were not added. The folder name cannot be used on PATH.")
+    except Exception as error:
+        # No exception text: native errors can contain private paths.
+        log.warning("Windows command setup did not complete (%s).", type(error).__name__)
+
+
+def _bootstrap(home):
+    from .application_generations import active
+    target = active(home)
+    if target and Path(sys.prefix) == target["prefix"]:
+        return Path(target["bootstrap"]["prefix"])
+    return Path(sys.prefix)
+
+
+def ensure(home):
+    """Setup and host starts bind stable commands; invocation selects the active app."""
+    _best_effort(home, lambda folder: _ensure(folder, _bootstrap(folder) / "Scripts/python.exe"))
+
+
+def remove(home):
+    """Optional uninstall step. A refusal never changes the uninstall's result."""
+    _best_effort(home, _remove)
+
+
+def doctor(home):
+    folder = str(Path(home) / "bin")
+    try:
+        with environment() as (handle, _):
+            value, kind = _read(handle)
+        env = {key.casefold(): item for key, item in os.environ.items()}
+        if isinstance(value, str) and kind in (1, 2) and any(
+                _key(entry, env) == _key(folder, env) for entry in value.split(";")):
+            return {"ok": True, "message": "Command folder is on your user PATH. "
+                    "The first matching command on PATH is used. Open a new terminal window."}
+    except Exception:
+        pass
+    return {"ok": False, "message": f"Command folder is not confirmed on your user PATH. "
+            f"Add {folder} to your user Path in Environment Variables. Open a new terminal window."}

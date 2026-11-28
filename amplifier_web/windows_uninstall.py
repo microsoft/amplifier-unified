@@ -451,6 +451,9 @@ def remove(root, *, stop, certificate, progress, choice="delete", data=remove_da
                 trust = certificate()
                 progress("journal")
                 token = begin(root, choice, wait=wait, **fields)
+                # Before data removes the private PATH record. Failure is optional.
+                from .windows_cli_path import remove as remove_cli_path
+                remove_cli_path(Path(root) / "app")
                 progress("setup-record")
                 forget_setup(owned, wait=wait)
                 progress("data")

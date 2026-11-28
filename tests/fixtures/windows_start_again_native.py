@@ -336,6 +336,121 @@ async def listener_answers(home):
     return False
 
 
+def environment_values(text):
+    """Read a Windows environment block. A NUL character is a truthy Python string."""
+    rows, index = [], 0
+    while text[index] != "\0":
+        start = index
+        while text[index] != "\0":
+            index += 1
+        rows.append("".join(text[start:index]))
+        index += 1
+    return dict(row.split("=", 1) for row in rows if not row.startswith("="))
+
+
+def fresh_user_environment():
+    """Ask Windows for a new user's environment, not the test host's old PATH."""
+    import ctypes as C
+    from ctypes import wintypes as W
+    kernel, adv, user = C.WinDLL("kernel32"), C.WinDLL("advapi32"), C.WinDLL("userenv")
+    kernel.GetCurrentProcess.restype = W.HANDLE
+    kernel.CloseHandle.argtypes = [W.HANDLE]
+    adv.OpenProcessToken.argtypes = [W.HANDLE, W.DWORD, C.POINTER(W.HANDLE)]
+    adv.OpenProcessToken.restype = W.BOOL
+    user.CreateEnvironmentBlock.argtypes = [C.POINTER(C.c_void_p), W.HANDLE, W.BOOL]
+    user.CreateEnvironmentBlock.restype = W.BOOL
+    user.DestroyEnvironmentBlock.argtypes = [C.c_void_p]
+    token, block = W.HANDLE(), C.c_void_p()
+    print("CLI PATH: build a fresh Windows user environment", flush=True)
+    assert adv.OpenProcessToken(kernel.GetCurrentProcess(), 0xa, C.byref(token))
+    try:
+        assert user.CreateEnvironmentBlock(C.byref(block), token, False)
+        try:
+            text = C.cast(block, C.POINTER(C.c_wchar))
+            return environment_values(text)
+        finally:
+            user.DestroyEnvironmentBlock(block)
+    finally:
+        kernel.CloseHandle(token)
+
+
+def command_path_proof(root):
+    """Real new cmd, Windows PowerShell, PowerShell 7 and Git Bash processes."""
+    import ntpath
+    from amplifier_web import windows_cli_path
+    home, proof = root / "app", {}
+    env = fresh_user_environment()
+    env.update(AMPLIFIER_WEB_HOME=str(home), AMPLIFIER_HOME=str(root / "shared"),
+               PYTHONUTF8="1", PYTHONDONTWRITEBYTECODE="1")
+    system = Path(os.environ["SystemRoot"]) / "System32"
+    cmd = system / "cmd.exe"
+    windows_ps = system / "WindowsPowerShell/v1.0/powershell.exe"
+    pwsh = Path("C:/Program Files/PowerShell/7/pwsh.exe")
+    expected = str(home / "bin/amplifier-unified.cmd")
+    print("CLI PATH: find the command in a new cmd.exe", flush=True)
+    found = execute([cmd, "/d", "/v:off", "/c", "where amplifier-unified"], env=env, cwd=root)
+    assert found["exitCode"] == 0, found
+    # `where` also lists the extensionless Git Bash script. cmd.exe selects
+    # the .cmd through PATHEXT; the actual --help below proves that selection.
+    assert ntpath.normcase(expected) in [ntpath.normcase(row)
+                                        for row in found["stdout"].splitlines()], found
+    print("CLI PATH: run --help in a new cmd.exe", flush=True)
+    help_cmd = execute([cmd, "/d", "/v:off", "/c", "amplifier-unified --help"], env=env, cwd=root)
+    assert help_cmd["exitCode"] == 0 and "usage:" in help_cmd["stdout"], help_cmd
+    proof["cmdHelp"] = "PASS: new cmd.exe found the stable command; --help returned 0"
+    for name, ps in (("PowerShell51", windows_ps), ("PowerShell7", pwsh)):
+        print(f"CLI PATH: run --help in {name}", flush=True)
+        result = execute([ps, "-NoProfile", "-NonInteractive", "-Command",
+            "$c=Get-Command amplifier-unified; Write-Output $c.Source; "
+            "amplifier-unified --help; exit $LASTEXITCODE"], env=env, cwd=root)
+        assert result["exitCode"] == 0 and expected.lower() in result["stdout"].lower(), result
+        assert "usage:" in result["stdout"], result
+        proof[name] = f"PASS: new {name} found the stable command; --help returned 0"
+    # A missing setting returns a known nonzero status. Compare stderr to the
+    # real executable to prove exact argument text and status, not just a launch.
+    for argument in ('CLI space "quoted"', "CLI 100% ! ^ & text"):
+        print("CLI PATH: compare arguments and failure status", flush=True)
+        direct = execute([root / "tools/amplifier-unified/Scripts/amplifier-unified.exe",
+            "--data-dir", home, "config", "get", argument], env=env, cwd=root)
+        line = subprocess.list2cmdline(["amplifier-unified", "config", "get", argument])
+        via = execute([cmd, "/d", "/v:off", "/s", "/c", line], env=env, cwd=root)
+        assert direct["exitCode"] != 0 and via["exitCode"] == direct["exitCode"], (direct, via)
+        assert via["stdout"] == direct["stdout"] and via["stderr"] == direct["stderr"], (direct, via)
+    proof["argumentsAndExit"] = "PASS: spaces, quotes, %, !, ^ and &; failure output and exit code unchanged"
+    # The saved, non-default data folder must be the one the bare command reads.
+    expected_port = cli(root, "config", "get", "port")
+    actual_port = execute([cmd, "/d", "/c", "amplifier-unified config get port"], env=env, cwd=root)
+    assert actual_port["exitCode"] == 0 and actual_port["stdout"] == expected_port["stdout"]
+    proof["dataFolder"] = "PASS: bare command read this installation's non-default data folder"
+    bash = execute([root / "git/bin/bash.exe", "--noprofile", "--norc", "-c",
+        'export PATH="$(cygpath -u "$CLI_BIN"):$PATH"; amplifier-unified --help'],
+        env={**env, "CLI_BIN": str(home / "bin")}, cwd=root)
+    assert bash["exitCode"] == 0 and "usage:" in bash["stdout"], bash
+    proof["GitBash"] = "PASS: Git Bash ran the extensionless command; --help returned 0"
+    assert windows_cli_path.doctor(home)["ok"] is True
+    for line in proof.values():
+        print(line, flush=True)
+    return proof
+
+
+def restore_runner_path(root):
+    """Always restore the runner value byte for byte, including absence and type."""
+    from amplifier_web import windows_cli_path
+    backup = root / "runner-path-backup.json"
+    if not backup.exists():
+        return
+    value, kind = json.loads(backup.read_text(encoding="utf-8"))
+    with windows_cli_path.environment(write=True) as (handle, commit):
+        current, current_kind = windows_cli_path._read(handle)
+        if (current, current_kind) != (value, kind):
+            windows_cli_path._set(handle, value, kind)
+            commit()
+    windows_cli_path._broadcast()
+    with windows_cli_path.environment() as (handle, _):
+        assert windows_cli_path._read(handle) == (value, kind)
+    print("PASS: runner user Path restored exactly, including its type or absence", flush=True)
+
+
 def run():
     report = {"status": "FAIL", "scheduledTask": "real", "stage": "records",
               "checks": [{"name": name, "status": "FAIL", "reason": "Not reached"} for name in CHECKS]}
@@ -384,9 +499,16 @@ def run():
             assert windows_uninstall.completed(root)
             assert not windows_service._read()[0]["exists"], "A pre-existing task must not be changed"
             begin(1)
+            print("CLI PATH: save the runner's original user Path", flush=True)
+            from amplifier_web import windows_cli_path
+            with windows_cli_path.environment() as (handle, _):
+                original_path = windows_cli_path._read(handle)
+            write_private(root / "runner-path-backup.json", json.dumps(original_path), owned_root=root)
             # Setup's order: the entries first, then the start.
             entries = launcher(root, "--integrate")
             assert entries["exitCode"] == 0 and shell.listed(root), entries
+            print("CLI PATH: setup integration finished", flush=True)
+            report["commandPath"] = command_path_proof(root)
             first = launcher(root, "--no-open")
             report["firstStart"] = first
             state, status = task_facts(home), cli(root, "service", "status", "--json")
@@ -442,6 +564,10 @@ def run():
             begin(5)
             notices = []
             removed = uninstall(root, notices)
+            with windows_cli_path.environment() as (handle, _):
+                assert windows_cli_path._read(handle) == original_path
+            print("PASS: real keep-folder uninstall removed only its PATH addition; other entries identical",
+                  flush=True)
             assert kept_folder_question(notices), notices
             state, status = task_facts(home), cli(root, "service", "status", "--json")
             assert removed["ok"] and not state["managed"]
@@ -536,6 +662,7 @@ def cleanup():
         with shared().helpers().token_user_default_owner():
             # _read(home) refuses a task bound to any other installation.
             windows_service.uninstall(root / "app")
+            restore_runner_path(root)
             folder = None
             if (root / shell.FILE).exists():
                 folder = Path(json.loads((root / shell.FILE).read_text())["folder"])
@@ -566,6 +693,8 @@ def cleanup():
 
 
 if __name__ == "__main__":
+    import faulthandler
+    faulthandler.enable()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("prepare", "run", "cleanup"))
     shared().require_ci()

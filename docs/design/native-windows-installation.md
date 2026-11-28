@@ -173,6 +173,43 @@ files and that workflow do not name one and the same revision of the tool.
 
 ### Stable launcher and update recovery
 
+On Windows, open a new terminal window after setup or the first host start
+after an update. `amplifier-unified --help`, `doctor`, `service` and `config`
+then use this installation's data folder.
+
+The app writes two small commands in `<data>\bin`: `amplifier-unified.cmd`
+for PowerShell and cmd.exe, and `amplifier-unified` for Git Bash. A small
+`amplifier-unified.py` beside them uses the stable bootstrap's Python. It
+reads the active generation at each call, checks its bootstrap and qualified
+graph, then waits for that app's executable with this installation's
+`--data-dir`. Arguments, standard handles and the exit code pass through.
+Each host start writes the three files only when their content differs.
+Setup uses the same function. A hand-built installation gets it at its first
+host start. No Python or Git executable goes in that folder.
+
+Reading the target at each call also covers a rollback to a release from
+before this feature: that old app cannot rewrite the command files. With no
+active generation, the command uses the bootstrap. A newer manual bootstrap
+upgrade takes precedence over an older selected app, as in the existing CLI.
+No stable launcher code must change to run a command. The stable bootstrap
+and its generation reader must remain installed.
+
+Only the user's `HKCU\Environment\Path` changes. The original text, type,
+order and empty entries stay. A private `config\services\cli-path.json`
+records the one attempt before the registry write. Removing the entry yourself
+opts out; a later start does not put it back. Registry transactions refuse a
+concurrent edit. A setting-change notice has a 100 ms timeout per window.
+Failures leave the start, setup, update and uninstall result unchanged.
+Uninstall removes only the exact entry this record owns. Ambiguous duplicates
+or an uncertain write with a changed value stay. The folder goes with the
+data when the person chooses to delete it. A launcher from before this change
+cannot remove the new entry; it needs the normal launcher refresh first.
+
+`doctor` reports whether this folder is on the user's PATH. With two
+installations it reports that the first matching command on PATH is used;
+neither installation moves another entry. An existing terminal keeps its old
+environment. No process PATH, machine PATH, Linux or macOS setting changes.
+
 The supervised candidate keeps the owner-logon task's `pythonw.exe` as a stable
 launcher. Each app generation runs as a contained child, not a detached helper.
 An ordinary service installation command may itself be delegated to the active

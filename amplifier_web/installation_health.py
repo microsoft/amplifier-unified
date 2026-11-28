@@ -38,6 +38,8 @@ def doctor(home):
     except (OSError, ValueError, yaml.YAMLError) as error:
         return {"ok": False, "checks": [{"ok": False, "message": "Settings need attention. Check config/server.yaml.", "detail": str(error)}]}
     if sys.platform == 'win32':
+        from .windows_cli_path import doctor as command_path
+        checks.append(command_path(home))
         checks.append({"ok": False, "message": "Windows owner-browser sign-in and task/host identity "
                        "qualification remain pending. PAM is not used on Windows."})
     else:
