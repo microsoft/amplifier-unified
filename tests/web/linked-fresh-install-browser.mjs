@@ -142,24 +142,68 @@ function assertPeerOrigin(origin, host) {
   return address;
 }
 async function enable(page, host) {
-  const initial = await setup(page);
+  const states = new Set(['off','active','pending','unavailable']);
+  const listeners = new Set(['none','configured','peer-only']);
+  const codes = new Set(['link_invalid','link_setup_conflict','link_unsupported','app_tls_required',
+    'peer_identity_unavailable','peer_interface_ambiguous','peer_interface_unavailable',
+    'peer_listener_unavailable','peer_listener_unsupported','peer_port_unavailable']);
+  const known = (allowed,value) => value == null ? null : allowed.has(value) ? value : 'other';
+  const summarize = ({http,code,result:state}) => ({
+    http:Number.isInteger(http) && http>=100 && http<=599 ? http : null, code:known(codes,code),
+    status:known(states,state?.status), listener:known(listeners,state?.listener),
+    blockers:Array.isArray(state?.blockers) ? state.blockers.slice(0,8).map(value=>known(codes,value)) : null,
+  });
+  const evidence = result.enable = {};
+  stage = 'off setup API readback';
+  const initialReceipt = await localApi(page,'setup',{});
+  evidence.initial = summarize(initialReceipt);
+  assert.equal(initialReceipt.http,200);
+  const initial = initialReceipt.result;
+  assert.match(initial.revision,/^[a-f0-9]{64}$/);
   assert.equal(initial.status,'off');
   assert.equal(initial.enabled,false);
   assert.equal(initial.peerListener,false);
   assert.equal(initial.listener,'none');
   assert.deepEqual(initial.origins,[]);
   assert.deepEqual(initial.discovery,{lan:false,tailscale:false});
-  const hidden = await links(page);
+  assert.equal(initial.lanExpiresAt,null);
+  stage = 'off empty links readback';
+  const listReceipt = await localApi(page,'list',{});
+  evidence.list = summarize(listReceipt);
+  assert.equal(listReceipt.http,200);
+  const hidden = listReceipt.result;
   assert.deepEqual(hidden.origins,[]);
   assert.deepEqual(hidden.links,[]);
-  await expect(button(page,'Create invitation')).toHaveCount(0);
+  stage = 'off controls loaded and inert';
+  await expect(page.getByText('Linking is off on this Amplifier.',{exact:true})).toBeVisible();
+  await expect(page.getByText('No links in the last loaded list.',{exact:true})).toBeVisible();
+  for (const name of ['Create invitation','Join with invitation']) {
+    await expect(button(page,name)).toBeVisible();
+    await expect(button(page,name)).toBeDisabled();
+  }
+  for (const name of ['Find nearby Amplifiers','Make this Amplifier discoverable','Browse Tailscale devices'])
+    await expect(button(page,name)).toHaveCount(0);
+  await expect(page.getByRole('textbox',{name:'Amplifier invitation',exact:true})).toHaveCount(0);
+  evidence.offControls = 'loaded-disabled';
+  stage = 'select nearby option before consent';
   await page.getByText('Discovery options',{exact:true}).click();
   await page.getByRole('checkbox',{name:'Allow nearby discovery',exact:true}).check();
-  const enabled = await clickReceipt(page,button(page,'Allow linking from other devices'),'setup-save');
+  assert.deepEqual(await setup(page),initial);
+  stage = 'visible owner consent control enabled';
+  const consent = button(page,'Allow linking from other devices');
+  await expect(consent).toBeVisible();
+  await expect(consent).toBeEnabled();
+  stage = 'owner consent setup-save receipt';
+  const enabled = await clickReceipt(page,consent,'setup-save');
+  evidence.save = summarize(enabled);
   assert.equal(enabled.http,200);
   assert.deepEqual(enabled.request,{enabled:true,lan:true,tailscale:false,peerListener:true,expectedRevision:initial.revision});
-  await expect(page.getByText('Linking is ready on this Amplifier.',{exact:true})).toBeVisible();
-  const live = await setup(page);
+  stage = 'owner consent active setup readback';
+  const activeReceipt = await localApi(page,'setup',{});
+  evidence.active = summarize(activeReceipt);
+  assert.equal(activeReceipt.http,200);
+  const live = activeReceipt.result;
+  assert.match(live.revision,/^[a-f0-9]{64}$/);
   assert.equal(live.status,'active');
   assert.equal(live.enabled,true);
   assert.equal(live.listener,'peer-only');
@@ -170,6 +214,8 @@ async function enable(page, host) {
   assert.equal(live.lanExpiresAt,null);
   assert.equal(live.origins.length,1);
   assertPeerOrigin(live.origins[0],host);
+  stage = 'enabled UI confirms ready';
+  await expect(page.getByText('Linking is ready on this Amplifier.',{exact:true})).toBeVisible();
   checkpoints.push('fresh-loopback-owner-opt-in-opens-one-distinct-peer-origin-without-advertising');
   return live;
 }

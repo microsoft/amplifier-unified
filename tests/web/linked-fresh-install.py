@@ -384,7 +384,7 @@ async def coordinate():
             if path.is_file():
                 report = read(path)
                 if report.get("run") == run:
-                    result["guests"][role] = {k: report[k] for k in ("role", "checkPassed", "stage", "checkpoints", "error", "browserVersion", "recovery")
+                    result["guests"][role] = {k: report[k] for k in ("role", "checkPassed", "stage", "checkpoints", "error", "browserVersion", "recovery", "enable")
                                               if k in report}
         publish(artifact_dir / "linked-fresh-install-result.json", result)
 
