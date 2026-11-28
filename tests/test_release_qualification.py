@@ -846,7 +846,7 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     selection = workflow['on']['workflow_dispatch']['inputs']['suite']
     assert selection['type'] == 'choice' and selection['default'] == 'full'
-    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'fresh-cleanup-native', 'prepared-runtime-native', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'cold-control-restore', 'goal-peer-publisher-0410', 'updater-omitted-ref', 'updater-public-selected-source', 'updater-synthetic-acquisition', 'updater-expanded-lock', 'native-child-fixtures', 'question-answer-resume', 'question-answer-installed', 'live-first-send', 'live-first-accepted-graph', 'model-request-recovery']
+    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'fresh-cleanup-native', 'prepared-runtime-native', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'cold-control-restore', 'goal-peer-publisher-0410', 'updater-omitted-ref', 'updater-public-selected-source', 'updater-synthetic-acquisition', 'updater-expanded-lock', 'native-child-fixtures', 'question-answer-resume', 'question-answer-installed', 'live-first-send', 'live-first-accepted-graph', 'model-request-recovery', 'uncounted-rebuild-journal']
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['on']['workflow_call']['secrets'] == {'LOOP_LIVE_CI_READ_KEY': {'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
@@ -1079,7 +1079,7 @@ def test_goal_peer_publisher_installed_graph_must_match_locked_export(publisher_
 def test_cold_control_restore_is_exclusive_manual_locked_and_bounded():
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert set(workflow['on']) == {'workflow_dispatch', 'workflow_call'}
-    assert set(workflow['on']['workflow_dispatch']['inputs']) == {'suite', 'core_wheels', 'candidate_ref'}
+    assert set(workflow['on']['workflow_dispatch']['inputs']) == {'suite', 'core_wheels', 'candidate_ref', 'context_candidate_ref'}
     assert workflow['on']['workflow_dispatch']['inputs']['suite']['default'] == 'full'
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
@@ -1327,6 +1327,7 @@ def test_offline_preflight_does_not_run_import_or_independent_install_probes():
     ('full', []),
     ('inline-chat-card', ['tests/test_chat_references.py']),
     ('model-request-recovery', ['tests/test_request_recovery.py', 'tests/test_prompt_completion_scope.py', 'tests/test_provider_capture_production.py']),
+    ('uncounted-rebuild-journal', ['tests/test_uncounted_rebuild_journal.py', 'tests/test_context_continuity.py']),
     ('queued-configuration', ['tests/test_queued_configuration_boundary.py', 'tests/test_configuration_recovery_ui.py']),
     ('security-redaction', ['tests/test_agent_state.py', 'tests/test_provider_environment.py', 'tests/test_runtime_controls.py']),
     ('patch-placement-recovery', ['tests/test_patch_placement_recovery.py', 'tests/test_file_source_guard.py', 'tests/test_file_source_native_children.py', 'tests/test_workspace_writer_modules.py']),
@@ -1387,13 +1388,14 @@ def test_python_selection_rejects_arbitrary_input_before_commands(tmp_path, monk
     assert not (tmp_path / 'output').exists()
 
 
-def test_manager_boundary_uses_locked_live_runtime(monkeypatch, capsys):
+@pytest.mark.parametrize('suite', ['manager-exception-boundary', 'uncounted-rebuild-journal'])
+def test_manager_boundary_uses_locked_live_runtime(monkeypatch, capsys, suite):
     import tomllib
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     step, = [row for row in workflow['jobs']['python']['steps'] if row.get('id') == 'runtime-dependency']
     script = '\n'.join(step['run'].splitlines()[1:-1])
     monkeypatch.chdir(ROOT)
-    monkeypatch.setenv('CHECK_SUITE', 'manager-exception-boundary')
+    monkeypatch.setenv('CHECK_SUITE', suite)
     exec(compile(script, 'workflow-runtime-selection', 'exec'), {})
     locked = tomllib.loads((ROOT / 'uv.lock').read_text())
     loop, = [row for row in locked['package'] if row['name'] == 'amplifier-module-loop-live']

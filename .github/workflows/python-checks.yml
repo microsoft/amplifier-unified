@@ -33,6 +33,11 @@ on:
           - live-first-send
           - live-first-accepted-graph
           - model-request-recovery
+          - uncounted-rebuild-journal
+      context_candidate_ref:
+        description: Full Context commit SHA for the uncounted-rebuild-journal candidate-graph suite only
+        type: string
+        default: ''
       candidate_ref:
         description: Optional full same-repository candidate SHA for prepared-runtime-native (tests remain at the selected workflow revision)
         type: string
@@ -78,6 +83,7 @@ jobs:
               'full': [],
               'inline-chat-card': ['tests/test_chat_references.py'],
               'model-request-recovery': ['tests/test_request_recovery.py', 'tests/test_prompt_completion_scope.py', 'tests/test_provider_capture_production.py'],
+              'uncounted-rebuild-journal': ['tests/test_uncounted_rebuild_journal.py', 'tests/test_context_continuity.py'],
               'queued-configuration': ['tests/test_queued_configuration_boundary.py', 'tests/test_configuration_recovery_ui.py'],
               'security-redaction': ['tests/test_agent_state.py', 'tests/test_provider_environment.py', 'tests/test_runtime_controls.py'],
               'patch-placement-recovery': ['tests/test_patch_placement_recovery.py', 'tests/test_file_source_guard.py', 'tests/test_file_source_native_children.py', 'tests/test_workspace_writer_modules.py'],
@@ -143,7 +149,7 @@ jobs:
           p = tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb"))
           locked = tomllib.load(open("uv.lock", "rb"))
           loop, = [row for row in locked["package"] if row["name"] == "amplifier-module-loop-live"]
-          revision = (loop["source"]["git"].rsplit("#", 1)[1] if os.environ["CHECK_SUITE"] in {"manager-exception-boundary", "live-first-send", "live-first-accepted-graph"}
+          revision = (loop["source"]["git"].rsplit("#", 1)[1] if os.environ["CHECK_SUITE"] in {"manager-exception-boundary", "live-first-send", "live-first-accepted-graph", "uncounted-rebuild-journal"}
                       else p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])
           print("revision=" + revision)
           PY
@@ -176,6 +182,26 @@ jobs:
               if not callable(mount) or mount is not module.mount:
                   raise RuntimeError('Native module entry point is not its canonical mount: ' + name)
           PY
+      - name: Install and record the explicit Context candidate graph
+        if: ${{ env.CHECK_SUITE == 'uncounted-rebuild-journal' }}
+        env:
+          CONTEXT_CANDIDATE_REF: ${{ inputs.context_candidate_ref }}
+        run: |
+          python - <<'PY'
+          import os, re
+          assert re.fullmatch(r'[0-9a-f]{40}', os.environ['CONTEXT_CANDIDATE_REF']), 'An exact Context SHA is required'
+          PY
+          uv pip install --python .venv/bin/python --no-deps \
+            "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@${CONTEXT_CANDIDATE_REF}#subdirectory=modules/context-managed"
+          uv run --no-sync python - <<'PY' > output/python-checks/context-candidate.json
+          import importlib.metadata as md, inspect, json, os
+          from amplifier_module_context_managed.boundary import BoundaryContextManager
+          source = json.loads(md.distribution('amplifier-module-context-managed').read_text('direct_url.json'))
+          assert source['vcs_info']['commit_id'] == os.environ['CONTEXT_CANDIDATE_REF']
+          assert 'journal' in inspect.signature(BoundaryContextManager._summarize).parameters
+          print(json.dumps(source))
+          PY
+          echo "UNCOUNTED_REBUILD_REQUIRE_CONTEXT=1" >> "$GITHUB_ENV"
       - name: Select the prepared native-controls interpreter
         if: ${{ env.CHECK_SUITE == 'patch-placement-native' }}
         run: echo "UNIFIED_RUNTIME_PYTHON=$GITHUB_WORKSPACE/.venv/bin/python" >> "$GITHUB_ENV"

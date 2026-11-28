@@ -138,6 +138,10 @@ class ContextContinuity:
         coordinator.register_capability("web.continuity.status", self.public)
         coordinator.register_capability("web.continuity.recovery", self)
         coordinator.register_capability("context.recovery.run_pending", self.run_pending)
+        from .uncounted_rebuild import open_rebuild
+        async def summary_journal(**kwargs):
+            return await open_rebuild(self, **kwargs)
+        coordinator.register_capability("context.summary_journal", summary_journal)
         coordinator.register_capability("context.transition_policy", lambda: "host-managed" if callable(
             coordinator.get_capability("web.context_transition.foreground")) else None)
 
@@ -241,6 +245,10 @@ class ContextContinuity:
 
     async def preserve(self, messages):
         restore_allowed = self._ordinary_restore_allowed()
+        record = self._recovery_record() if self._journal is not None else None
+        if (record and "uncountedVersion" in record
+                and self.coordinator.get_capability("context.summary_journal.version") != 1):
+            raise ContextRecoveryError("recovery_journal_unavailable")
         guard = self._recovery_guard
         previous_identity = self._preserved_identity
         await _guarded(guard, self.refresh_identity)
@@ -422,6 +430,8 @@ class ContextContinuity:
                                        or call["report"].get("sourceCheckpointSha256") != row.get("sourceCheckpointSha256")
                                        for call in calls)):
                             raise ValueError()
+                    from .uncounted_rebuild import validate
+                    validate(row)
             except FileNotFoundError:
                 journal = {"version": 1, "current": None, "attempts": {}}
             except (ValueError, OSError, TypeError, AttributeError, KeyError):
@@ -959,6 +969,8 @@ class ContextContinuity:
             if exc.code != "recovery_journal_unavailable":
                 raise
             return None  # Ordinary fitting uses canonical history, never this journal.
+        if record and "uncountedVersion" in record and record["state"] != "committed":
+            raise ContextRecoveryError("recovery_unreconciled")
         historical_recovery = (record is not None and record.get("kind") != "model-transition"
                                and record["state"] not in {"pending", "committed"})
         policy = self.coordinator.get_capability("context.transition_policy")
