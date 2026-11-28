@@ -4,6 +4,7 @@ import ast
 import copy
 import json
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -163,7 +164,7 @@ def test_host_and_loop_pause_keep_their_distinct_full_payloads():
         "category": "context_compaction", "code": "summary_work_paused",
         "errorType": "CompactionError", "stage": "context_preparation",
         "summary": "Conversation preparation reached its local call allowance.",
-        "guidance": "Completed summary progress is saved. Further preparation requires separate admission; it was not automatically retried. Original history and the checkpoint are preserved.",
+        "guidance": "This attempt reached its limit of model calls. The original history and saved summary are kept. Some new summary work may need to be done again. Copy the chat diagnostics from Details & reporting and report this problem before trying again.",
         "effects": "not_rolled_back", "replayed": False, "retryable": False}
     assert generation_failure({"error_category": "context_compaction", "error_type": "CompactionError",
                                "error_code": "summary_work_paused"}) == loop
@@ -222,15 +223,13 @@ def test_new_notices_use_real_places_and_do_not_blame_only_the_source():
     assert CONTEXT_FAILURE_MESSAGES["disabled"] == (
         "This chat is set not to use the connection's own way to shorten history.",
         "Amplifier did not use another way. Copy the chat diagnostics from Details & reporting and report this problem.")
-    # Sending again runs the history preparation again on a new worker. The
-    # notice must say that it takes time and model calls, and must not say
-    # that sending again cannot help (an experiment showed that it can).
+    # A fresh Send can reach a closing worker. A cold rebuild can also exhaust
+    # its call limit; neither starting nor completing it is guaranteed.
     assert CONTEXT_FAILURE_MESSAGES["model_transition_required"] == (
         "This chat could not prepare its saved history for the model you chose.",
-        "Send your message again. Amplifier then prepares this chat's history for the new model. "
-        "This can take a while and uses extra model calls. If it fails again, select the previous model "
-        "and connection, then send a new message. Then copy the chat diagnostics from Details & reporting "
-        "and report this problem.")
+        "To continue with the previous model, select that model and connection, then send a new message. "
+        "Trying the new model again may rebuild this chat's history and use extra model calls. "
+        "If it fails again, copy the chat diagnostics from Details & reporting and report this problem.")
     # The context module refuses this step at both of its raise sites; nothing is paused.
     assert CONTEXT_FAILURE_MESSAGES["ordinary_compaction_deferred"] == (
         "Amplifier did not start new summary work for this message. Saved work was kept.",
@@ -378,6 +377,214 @@ async def test_host_pause_can_offer_saved_progress_before_the_call_limit(tmp_pat
     assert len(row["calls"]) == 2  # A notice does not admit or retry a paid call.
 
 
+@pytest.mark.parametrize("code", ["model_transition_required", "summary_work_paused"])
+@pytest.mark.parametrize("invalid", [None, "bad-code", "private/path", "x" * 81, ["private"], {"private": True}])
+def test_lifecycle_failure_notices_keep_private_and_invalid_content_out(code, invalid):
+    """Acceptance 7: fixed notices, certified types and bounded codes only."""
+    from amplifier_module_context_managed.errors import CompactionError
+    from amplifier_web.context_continuity import ContextRecoveryError
+    from amplifier_web.session_health import exception_details, generation_failure
+    private = "PRIVATE transcript /private/path credential provider-body"
+    event = {"error_category": "context_compaction", "error_code": code, "error_message": private}
+    expected = generation_failure(event)
+    assert "PRIVATE" not in json.dumps(expected)
+    for error in (CompactionError(code, private), ContextRecoveryError(code)):
+        detail = exception_details(error)
+        assert "PRIVATE" not in json.dumps(detail)
+        if code == "model_transition_required" or type(error) is CompactionError:
+            assert detail["guidance"] == expected["guidance"]
+        error.code = invalid
+        assert "code" not in exception_details(error)
+    assert "code" not in generation_failure({**event, "error_code": invalid})
+    forged = type("CompactionError", (RuntimeError,), {"code": code})(private)
+    assert "code" not in exception_details(forged)
+    assert "PRIVATE" not in json.dumps(exception_details(forged))
+
+
+@pytest.mark.parametrize("overlay", ["maintained-fixture", "unified-defaults"])
+@pytest.mark.parametrize("mode", ["closing", "settled", "app-restart", "retired-before-switch", "call-limit"])
+async def test_real_manager_model_change_lifecycle(tmp_path, monkeypatch, overlay, mode):
+    """Acceptance 1–5: real manager, pipe reader, admission and worker processes.
+
+    The subprocess uses the maintained Context/SDK fixture, not a fake runtime.
+    Only bootstrap, fixture storage/idle ownership and a bounded closing barrier
+    are supplied. No manager method, process-exit policy or send result is mocked.
+    """
+    from amplifier_web.session_health import generation_failure, terminal_exception_failure
+    for key in ("AMPLIFIER_WEB_HOME", "AMPLIFIER_HOME", "AMPLIFIER_SHARED_HOME", "AMPLIFIER_WORKSPACES_HOME"):
+        monkeypatch.setenv(key, str(tmp_path / "home" / key))
+    for key in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"):
+        monkeypatch.setenv(key, "http://127.0.0.1:9")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "1")
+    source_model = {"instance": "openai", "model": "gpt-6.1-sol", "effort": "high"}
+    target = {**source_model, "model": "gpt-6.1-astra"}
+    session = {"id": "ordinary-recovery", "workspace": str(tmp_path),
+               "selection": source_model, "interruptionRevision": 0}
+    events, processes, rows = [], [], []
+    failed, finished, ended = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    release = tmp_path / "release-close"
+    if mode == "closing":
+        (tmp_path / "hold-close").touch()
+
+    async def emit(kind, data):
+        events.append((kind, copy.deepcopy(data)))
+        if kind == "runtime.modelSelectionApplied":
+            session["selection"] = session.pop("pendingModelSelection")
+        if kind == "runtime.generation":
+            if data.get("event") == "generation.failed":
+                failed.set()
+            if data.get("event") == "generation.finished" and "fresh" in data.get("input_ids", []):
+                finished.set()
+        if kind == "runtime.ended":
+            ended.set()
+
+    def manager_for_fixture():
+        manager = RuntimeManager(command=[sys.executable, "-B",
+            str(Path(__file__).parent / "fixtures/model_change_lifecycle_worker.py"),
+            str(tmp_path), overlay], startup_timeout=30)
+        manager.home = tmp_path / "home"
+        manager.retention.wake = lambda: None  # Sweep explicitly, with no background timer.
+        return manager
+
+    def remember(manager):
+        row = manager.workers[session["id"]]
+        if row["process"] not in processes:
+            processes.append(row["process"])
+            rows.append(row)
+        return row["process"]
+
+    def requests():
+        return [json.loads(line) for line in (tmp_path / "requests.jsonl").read_text(encoding="utf-8").splitlines()]
+
+    def notice():
+        terminal = next(data for kind, data in reversed(events)
+                        if kind == "runtime.generation" and data.get("event") == "generation.failed")
+        detail = {**generation_failure(terminal), "generationId": terminal["generation_id"],
+                  "inputIds": terminal["input_ids"]}
+        captures = [data["terminalFailure"] for kind, data in events
+                    if kind == "runtime.error" and "terminalFailure" in data]
+        if captures:
+            detail = terminal_exception_failure(
+                {"id": session["id"], "generations": [terminal], "failure": detail}, captures[-1])
+        return terminal, detail
+
+    manager, app = manager_for_fixture(), None
+    try:
+        await manager.start(session, emit)
+        original = remember(manager)
+        checkpoint = tmp_path / "native/context-checkpoint.json"
+        source = checkpoint.read_bytes()
+        assert json.loads(source)["summary"]
+        prior = len(requests())
+        session["pendingModelSelection"] = target
+        if mode in {"retired-before-switch", "call-limit"}:
+            manager.retention.clock = lambda: 10**12
+            await manager.retention.sweep()
+            assert original.returncode == 0 and session["id"] not in manager.workers
+            source = checkpoint.read_bytes()  # Retirement may stamp the settled source note.
+            if mode == "call-limit":
+                (tmp_path / "over-call-limit").touch()
+        else:
+            result = await manager.send(session, "Continue with the selected model.", "failed-target", emit)
+            assert result["accepted"] is True
+            await asyncio.wait_for(failed.wait(), 20)
+            assert len(requests()) == prior  # Acceptance 1: zero target requests.
+            assert checkpoint.read_bytes() == source
+            assert not (tmp_path / "native/context-recovery.json").exists()
+            if mode == "closing":
+                async with asyncio.timeout(10):
+                    while not (tmp_path / "closing").exists():
+                        await asyncio.sleep(.01)
+                assert original.returncode is None
+                terminal, detail = notice()
+                assert terminal["input_ids"] == ["failed-target"]
+                assert detail["code"] == "model_transition_required"
+                assert detail["guidance"].startswith("To continue with the previous model,")
+                assert "may rebuild" in detail["guidance"]
+                assert "Amplifier then prepares" not in detail["guidance"]
+                # Acceptance 2: a refused fresh input is not secretly sent to a new worker.
+                result = await manager.send(session, "Continue with the selected model.", "fresh", emit)
+                remember(manager)
+                assert result == {"accepted": False, "delivery": "failed", "effect": "none",
+                                  "reason": "This input was stopped before admission. Nothing was sent."}
+                assert manager.workers[session["id"]]["process"] is original
+                assert len(requests()) == prior
+                release.touch()
+                await asyncio.wait_for(ended.wait(), 20)
+                assert original.returncode == 0 and not finished.is_set()
+                retained = manager.workers.get(session["id"])
+                assert retained is None or retained["process"] is original
+                assert len(requests()) == prior and checkpoint.read_bytes() == source
+                return
+            await asyncio.wait_for(ended.wait(), 20)
+            terminal, detail = notice()
+            assert terminal["input_ids"] == ["failed-target"]
+            assert detail["code"] == "model_transition_required"
+            assert "may rebuild" in detail["guidance"]  # Acceptance 3: no permanent-failure claim.
+            if mode == "app-restart":
+                # Acceptance 4: real AppService storage and a new manager, not copied process state.
+                app = AppService(tmp_path / "saved-app", manager, workspace=tmp_path)
+                saved = app._new_session({"title": "Synthetic lifecycle", "bundle": "anchors"})
+                saved.update(copy.deepcopy(session))
+                app.state["sessions"] = [saved]
+                app._save()
+                await app.close()
+                manager = manager_for_fixture()
+                app = AppService(tmp_path / "saved-app", manager, workspace=tmp_path)
+                session = app._session(session["id"])
+                assert session["selection"] == target and not session.get("pendingModelSelection")
+        failed.clear()
+        result = await manager.send(session, "Continue with the selected model.", "fresh", emit)
+        assert result["accepted"] is True
+        replacement = remember(manager)
+        assert original.returncode == 0 and replacement.pid != original.pid
+        assert session["selection"] == target
+        if mode == "call-limit":
+            await asyncio.wait_for(failed.wait(), 30)
+            await asyncio.wait_for(ended.wait(), 20)
+            terminal, detail = notice()
+            assert terminal["input_ids"] == ["fresh"]
+            assert detail["code"] == "summary_work_paused"
+            assert "Some new summary work may need to be done again." in detail["guidance"]
+            assert "Completed summary progress is saved." not in detail["guidance"]
+            expected_calls = 16
+        else:
+            await asyncio.wait_for(finished.wait(), 30)
+            successes = [data for kind, data in events if kind == "runtime.generation"
+                         and data.get("event") == "generation.finished" and "fresh" in data.get("input_ids", [])]
+            assert len(successes) == 1 and successes[0]["input_ids"] == ["fresh"]
+            expected_calls = 12
+        target_requests = requests()[prior:]
+        assert sum(row["summary"] for row in target_requests) == expected_calls
+        assert sum(not row["summary"] for row in target_requests) == (0 if mode == "call-limit" else 1)
+        assert checkpoint.read_bytes() == source
+        assert not (tmp_path / "native/context-recovery.json").exists()
+        print("MODEL_CHANGE_LIFECYCLE", json.dumps({"mode": mode, "config": overlay,
+            "summaryCalls": expected_calls, "foregroundCalls": int(mode != "call-limit"),
+            "oldPid": original.pid, "newPid": replacement.pid, "inputId": "fresh"}))
+    finally:
+        release.touch()  # Release only this fixture's closing barrier, including on assertion failure.
+        if app is not None:
+            await app.close()
+        else:
+            await manager.close()
+        assert all(process.returncode is not None for process in processes)
+        # The real provider warns once per semantic summary about this fixture
+        # model's reasoning setting. No other stderr line is expected.
+        expected_warnings = {
+            f"[PROVIDER] Ignoring 'reasoning_effort'='{effort}': model gpt-6.1-astra does not support reasoning."
+            for effort in ("low", "high")}
+        unexpected_stderr = [line for row in rows for line in row["stderr"]
+                             if line.strip() not in expected_warnings]
+        assert not unexpected_stderr, unexpected_stderr
+        sentinels = [json.loads(path.read_text(encoding="utf-8"))
+                     for path in tmp_path.glob("sentinels-*.json")]
+        assert len(sentinels) == len(processes)
+        assert sum(row["effects"] for row in sentinels) == 1
+        assert all(row["unknown"] == 0 for row in sentinels)
+
+
 @pytest.mark.parametrize("counter", [False, True], ids=["subscription-route", "counted-route"])
 async def test_picker_change_preserves_original_failure_or_prepares_transition(tmp_path, monkeypatch, counter):
     """The subscription route has no request_budget; it never enters run_pending."""
@@ -490,7 +697,7 @@ async def test_picker_change_preserves_original_failure_or_prepares_transition(t
                 }, capture)
                 assert detail["code"] == "model_transition_required"
                 assert "model you chose" in detail["summary"]
-                assert "previous model and connection" in detail["guidance"]
+                assert "previous model, select that model and connection" in detail["guidance"]
                 # Feed the real worker's JSON-lines through the host reader and
                 # saved UI projection, not just the pure formatting function.
                 stdout = asyncio.StreamReader()

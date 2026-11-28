@@ -26,7 +26,7 @@ _GROUPS = (
      "This preparation step stopped before a model request. Copy the chat diagnostics from Details & reporting."),
     (("model_transition_required",),
      "This chat could not prepare its saved history for the model you chose.",
-     "Send your message again. Amplifier then prepares this chat's history for the new model. This can take a while and uses extra model calls. If it fails again, select the previous model and connection, then send a new message. Then copy the chat diagnostics from Details & reporting and report this problem."),
+     "To continue with the previous model, select that model and connection, then send a new message. Trying the new model again may rebuild this chat's history and use extra model calls. If it fails again, copy the chat diagnostics from Details & reporting and report this problem."),
     (("transition_persistence_required",),
      "This chat cannot safely save preparation for the new model.",
      "Select the previous model and connection, then send a new message. Copy the chat diagnostics from Details & reporting and report this problem."),
