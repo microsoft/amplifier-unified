@@ -287,10 +287,13 @@ def test_doctor_on_and_off_path_is_read_only(model):
 
 
 def test_expansion_and_combined_path_cannot_cross_environment_limit(monkeypatch):
-    monkeypatch.setenv("LONG_CLI_TEST", "x" * 32760)
+    # A modeled environment: Windows refuses the oversized key=value itself.
+    # The production code only reads it; no real process PATH need change.
+    env = dict(os.environ, LONG_CLI_TEST="x" * 32760)
+    monkeypatch.setattr(commands.os, "environ", env)
     with pytest.raises(ValueError, match="too long"):
         commands.append("%LONG_CLI_TEST%", 2, "C:\\app\\bin")
-    monkeypatch.setenv("PATH", "x" * 32760)
+    env["PATH"] = "x" * 32760
     with pytest.raises(ValueError, match="too long"):
         commands.append("C:\\a", 1, "C:\\app\\bin")
 
