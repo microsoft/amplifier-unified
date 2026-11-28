@@ -368,7 +368,7 @@ async function destination(page, host) {
   assert.match(payload.instanceId,/^[a-f0-9]{32}$/);
   await expect.poll(async () => (await nativeRecords()).map(
     ([iface,family,name,type,domain,_dns,address,port])=>[iface,family,name,type,domain,address,port]),
-    {timeout:15000}).toEqual([['peer0','IPv4',`Amplifier-${payload.instanceId}`,'_amplifier-link._tcp','local',src.address,addr.port]]);
+    {timeout:15000}).toEqual([['eth0','IPv4',`Amplifier-${payload.instanceId}`,'_amplifier-link._tcp','local',src.address,addr.port]]);
   checkpoints.push('native-avahi-resolved-only-expected-peer-address-and-tls-port');
   await refuseTcp(src.address,src.mainPort);
   const mainPeerStatus = await page.evaluate(async path => (await fetch(path,{

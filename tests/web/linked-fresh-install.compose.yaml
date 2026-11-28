@@ -32,7 +32,6 @@ services:
     command: [guest, source]
     networks:
       peer:
-        interface_name: peer0
         aliases: [fresh-source-peer]
     volumes:
       - source-ready:/run/link-source
@@ -49,7 +48,6 @@ services:
     command: [guest, destination]
     networks:
       peer:
-        interface_name: peer0
         aliases: [fresh-destination-peer]
     volumes:
       - source-ready:/run/link-source:ro

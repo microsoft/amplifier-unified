@@ -34,6 +34,7 @@ classify_launch() {
     if (( stage_status == 124 )); then reason=timeout
     elif grep -qiE 'overlap|address pool|could not find an available.*address' "$log"; then reason=address-pool-conflict
     elif grep -qiE 'gateway mode|gateway_mode_ipv4' "$log"; then reason=bridge-gateway-mode
+    elif grep -Fqi 'interface_name requires Docker Engine v28.1 or later' "$log"; then reason=engine-interface-name-unsupported
     elif grep -qiE 'interface_name|rename.*interface|veth' "$log"; then reason=network-interface
     elif grep -qiE 'conflict.*already in use|container name.*already' "$log"; then reason=container-name-conflict
     elif grep -qiE 'failed to (create|set up).*network|Error.*(iptables|nftables)' "$log"; then reason=network-driver
@@ -124,7 +125,8 @@ for name, service in services.items():
     assert not service.get('ports') and not service.get('privileged') and service.get('network_mode') != 'host'
     assert all(m['type'] == 'volume' for m in service.get('volumes', []))
     if name != 'twin':
-        assert service['networks']['peer']['interface_name'] == 'peer0'
+        # Compose 2.38 rejects custom interface names on Docker Engine 28.0.
+        assert set(service['networks']) == {'peer'} and not service['networks']['peer'].get('interface_name')
     service.pop('build')
     service.pop('entrypoint', None)
     service['image'] = 'python:3.13-slim-bookworm'
@@ -146,7 +148,7 @@ for guest in twin fresh-source fresh-destination; do
     timeout 15s "${probe[@]}" exec -T "$guest" python -c '
 import socket, sys
 from pathlib import Path
-assert {name for _, name in socket.if_nameindex()} == ({"lo"} if sys.argv[1] == "twin" else {"lo", "peer0"})
+assert {name for _, name in socket.if_nameindex()} == ({"lo"} if sys.argv[1] == "twin" else {"lo", "eth0"})
 assert all(line.split()[1] != "00000000" for line in Path("/proc/net/route").read_text().splitlines()[1:])
 ' "$guest" >> "$work/probe-readiness.log" 2>&1 || { stage_status=$?; reason=interface-or-route-not-confirmed; break; }
 done

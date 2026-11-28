@@ -49,7 +49,7 @@ async def wait_for(path, seconds):
 
 async def start_guest_discovery(role, home, processes):
     """Start native discovery only after proving the guest has no other link."""
-    assert {name for _, name in socket.if_nameindex()} == {"lo", "peer0"}
+    assert {name for _, name in socket.if_nameindex()} == {"lo", "eth0"}
     async with asyncio.timeout(5):
         probe = await asyncio.create_subprocess_exec(
             "ip", "-j", "route", "show", "default", stdout=asyncio.subprocess.PIPE,
@@ -72,7 +72,7 @@ async def start_guest_discovery(role, home, processes):
     with config.open("x") as file:
         file.write(f"""[server]
 host-name=fresh-{role}
-allow-interfaces=peer0
+allow-interfaces=eth0
 use-ipv4=yes
 use-ipv6=no
 enable-dbus=yes
@@ -123,8 +123,8 @@ async def app(role, home, restarted):
     own = directory(role)
     local = socket.gethostbyname(f"fresh-{role}-peer")
     assert ipaddress.IPv4Address(local) in PEER_NET
-    assert {name for _, name in socket.if_nameindex()} == {"lo", "peer0"}
-    expected = linked_peer_listener.Binding("peer0", ipaddress.IPv4Interface(f"{local}/{PEER_NET.prefixlen}"), "lan")
+    assert {name for _, name in socket.if_nameindex()} == {"lo", "eth0"}
+    expected = linked_peer_listener.Binding("eth0", ipaddress.IPv4Interface(f"{local}/{PEER_NET.prefixlen}"), "lan")
     assert await linked_peer_listener.select_binding(tailscale=False) == ({expected}, set())
     # Use the public in-guest sign-in form; only the guest PAM decision is fake.
     auth.authenticate_pam = lambda name, password: (name, password) == (
