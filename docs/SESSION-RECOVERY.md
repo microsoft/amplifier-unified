@@ -20,10 +20,12 @@ infer a cause for older saved failures, or promote a different handled error.
 Stop and stale-generation checks still apply.
 
 `model_transition_required` means the selected model needs history preparation
-that the participating host did not admit. The notice recommends selecting the
-previous model and connection, sending a new message, and sharing diagnostics
-before trying the new model again. It does not recommend deleting the checkpoint,
-resetting a preparation record, or automatically repeating summary calls.
+that the participating host did not admit. The notice asks the person to send
+again; if that fails, select the previous model and connection, send a new
+message, and share diagnostics. A new worker can prepare the chosen model from
+originals, so this failure does not prove that sending again will always fail.
+It does not recommend deleting the checkpoint, resetting a preparation record,
+or automatically repeating summary calls.
 
 The exact-count transition path and the uncounted ordinary path are different:
 the pinned streaming loop invokes `context.measured_request_view` only when the
@@ -33,6 +35,19 @@ An uncounted warm model change with an older checkpoint that cannot be safely
 carried can therefore still refuse. Handling that route requires coordinated
 context/loop support, not a synthetic exact count or removal of the host's paid
 call guards. This diagnostic change does not claim to repair that limitation.
+
+An offline experiment confirms that a cold worker can answer on the new model.
+It also shows why merely restarting on every such change is not a safe repair:
+if that uncounted rebuild stops after a confirmed summary call, a later cold
+worker can buy the same work again without a transition-journal reservation.
+This change does not add an automatic restart or claim durable continuation of
+that uncounted paid prefix.
+
+`summary_work_paused` has two distinct meanings. A native context failure reports
+its local call limit. The host's `ContextRecoveryError` reports a saved transition
+with an unconfirmed call and an offered continuation, even before that limit is
+used. Its notice keeps the “Review preparation” instruction; that control checks
+the current offer before the person can approve more calls.
 
 The pinned live loop ends execution after a failed manager turn, including a
 context-preparation refusal. Unified preserves the cause and closes that worker;

@@ -4,6 +4,7 @@ import ast
 import copy
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -52,7 +53,9 @@ def test_every_context_code_has_fixed_guidance(code):
         error.args = ("PRIVATE",)
         actual = exception_details(error)
         assert actual["code"] == code
-        assert actual["summary"] == detail["summary"]
+        assert actual["summary"] == (
+            "Conversation preparation can continue from saved progress."
+            if code == "summary_work_paused" and type(error) is ContextRecoveryError else detail["summary"])
         assert "PRIVATE" not in json.dumps(actual)
 
 
@@ -95,7 +98,7 @@ def test_compaction_class_is_certified_not_its_name_or_older_cause():
     code = "model_transition_required"
     error = CompactionError(code, "PRIVATE")
     forged = type("CompactionError", (RuntimeError,), {"code": code})("PRIVATE")
-    subclass = type("OtherCompaction", (CompactionError,), {})(code, "PRIVATE")
+    subclass = type("CompactionError", (CompactionError,), {})(code, "PRIVATE")
     wrapped = RuntimeError("Unrelated final error")
     wrapped.__cause__ = error
     for invalid in (forged, subclass, wrapped):
@@ -121,7 +124,8 @@ def captured_failure():
         "exceptionChain": exception_chain(wrapper)}
 
 
-@pytest.mark.parametrize("change", ["none", "generation", "input", "type", "stage", "code", "stop", "older_cause"])
+@pytest.mark.parametrize("change", ["none", "generation", "input", "type", "stage", "code", "stop", "older_cause",
+                                  "event_category"])
 def test_only_matching_terminal_can_explain_a_dropped_compaction_code(change):
     from amplifier_web.session_health import terminal_exception_failure
     session, capture = captured_failure()
@@ -139,11 +143,148 @@ def test_only_matching_terminal_can_explain_a_dropped_compaction_code(change):
         session["status"] = "stopped"
     elif change == "older_cause":
         capture["exceptionChain"].insert(1, {"errorType": "RuntimeError", "frames": []})
+    elif change == "event_category":
+        session["generations"][0]["error_category"] = "unknown"
     before = copy.deepcopy(session)
     detail = terminal_exception_failure(session, capture)
     assert bool(detail and detail.get("code") == "model_transition_required") is (change == "none")
+    if change == "event_category":
+        assert detail == {**before["failure"], "exceptionChain": capture["exceptionChain"]}
     assert session == before  # Native terminal facts are never rewritten.
     assert "PRIVATE" not in json.dumps(detail)
+
+
+def test_host_and_loop_pause_keep_their_distinct_full_payloads():
+    from amplifier_web.session_health import exception_details, generation_failure, terminal_exception_failure
+    from amplifier_web.context_continuity import ContextRecoveryError
+    from amplifier_module_loop_live.failures import ManagerTurnError, turn_failure
+    from amplifier_web.support_diagnostics import exception_chain
+    loop = {
+        "category": "context_compaction", "code": "summary_work_paused",
+        "errorType": "CompactionError", "stage": "context_preparation",
+        "summary": "Conversation preparation reached its local call allowance.",
+        "guidance": "Completed summary progress is saved. Further preparation requires separate admission; it was not automatically retried. Original history and the checkpoint are preserved.",
+        "effects": "not_rolled_back", "replayed": False, "retryable": False}
+    assert generation_failure({"error_category": "context_compaction", "error_type": "CompactionError",
+                               "error_code": "summary_work_paused"}) == loop
+    error = ContextRecoveryError("summary_work_paused")
+    host = {**loop, "errorType": "ContextRecoveryError",
+        "summary": "Conversation preparation can continue from saved progress.",
+        "guidance": "Review preparation to approve calls for your next message. One earlier call remains unconfirmed and counts against the original allowance."}
+    assert exception_details(error) == {**host, "exceptionChain": [{
+        "errorType": "ContextRecoveryError", "frames": [], "contextRecoveryCode": "summary_work_paused"}]}
+    native = turn_failure(error)
+    wrapper = ManagerTurnError(native)
+    wrapper.__cause__ = error
+    terminal = {**native, "event": "generation.failed", "generation_id": "g", "input_ids": ["i"]}
+    current = {**generation_failure(native), "generationId": "g", "inputIds": ["i"]}
+    capture = {"generationId": "g", "inputIds": ["i"], "errorType": "RuntimeError",
+               "exceptionChain": exception_chain(wrapper)}
+    assert terminal_exception_failure({"id": "root", "status": "error", "generations": [terminal],
+                                      "failure": current}, capture) == {
+        **current, **host, "errorType": "RuntimeError",
+        "exceptionChain": capture["exceptionChain"],
+        "nativeFailure": {key: current[key] for key in ("category", "errorType", "stage", "retryable")}}
+
+
+def test_other_old_host_payloads_stay_unchanged():
+    from amplifier_web.session_health import _context_recovery_details
+    # These literals are the pre-PR host meanings, not the loop's projection.
+    expected = {
+        "transition_unsupported": ("provider_selection",
+            "Managed Context needs an update to switch models in this chat.",
+            "Select the previous model and connection, or update Managed Context in Settings and send again."),
+        "transition_intent_required": ("provider_selection", "Choose a model and connection for this chat.",
+            "Select the connection and model you want to use, then send a new message."),
+        "recovery_checkpoint_rejected": ("persistence",
+            "The saved checkpoint could not be validated for this model change.",
+            "Keep the original chat history and restore a compatible, validated checkpoint before continuing."),
+        "recovery_unreconciled": ("context_compaction", "Earlier conversation preparation could not be resumed.",
+            "This preparation step stopped before a model request. Copy the chat diagnostics from Details & reporting.")}
+    for code, (category, summary, guidance) in expected.items():
+        assert _context_recovery_details(code) == {
+            "category": category, "code": code, "stage": "context_preparation",
+            "summary": summary, "guidance": guidance, "retryable": False,
+            "effects": "not_rolled_back", "replayed": False}
+
+
+def test_new_notices_use_real_places_and_do_not_blame_only_the_source():
+    from amplifier_web.context_failures import CONTEXT_FAILURE_MESSAGES
+    summary, guidance = CONTEXT_FAILURE_MESSAGES["transition_source_invalid"]
+    assert summary == "Amplifier could not validate the history needed for this model change."
+    assert guidance == ("Keep the original chat. Copy its diagnostics from Details & reporting and report this problem before trying the model change again.")
+    old_codes = {"transition_unsupported", "transition_intent_required",
+                 "recovery_checkpoint_rejected", "recovery_unreconciled"}
+    for code, texts in CONTEXT_FAILURE_MESSAGES.items():
+        if code not in old_codes:
+            for word in ("Managed Context", "native compaction", "admission", "allowance", "contract"):
+                assert word not in " ".join(texts), (code, word)
+    assert CONTEXT_FAILURE_MESSAGES["disabled"] == (
+        "This chat is set not to use the connection's own way to shorten history.",
+        "Amplifier did not use another way. Copy the chat diagnostics from Details & reporting and report this problem.")
+
+
+@pytest.mark.parametrize("mismatch", [False, True])
+async def test_worker_certifies_code_snapshot_and_rejects_wrapper_code_mismatch(monkeypatch, mismatch):
+    from amplifier_module_context_managed.errors import CompactionError
+    from amplifier_module_loop_live.failures import ManagerTurnError, turn_failure
+    publications = []
+    monkeypatch.setattr("amplifier_web.runtime_worker.publish", publications.append)
+    worker = Worker()
+    generation = {"id": "g", "input_ids": ["i"]}
+    worker.runtime = SimpleNamespace(session_id="root", generation=generation, stop_requested=False)
+    error = CompactionError("summary_failed", "PRIVATE")
+    failure = turn_failure(error)
+    assert failure["error_code"] == "summary_failed"  # Forwarded by the installed loop.
+    class Loop:
+        async def execute(self):
+            worker.observe({"type": "generation.failed", "session_id": "root",
+                            "generation_id": "g", "input_ids": ["i"], **failure})
+            if not mismatch:
+                assert worker.failed_generation["error_code"] == "summary_failed"
+            worker.runtime.generation = None
+            wrapper = ManagerTurnError({**failure, **({"error_code": "native_failed"} if mismatch else {})})
+            raise wrapper from error
+    loop = Loop()
+    worker.session = SimpleNamespace(session_id="root", coordinator=SimpleNamespace(
+        get=lambda name: loop if name == "orchestrator" else None, get_capability=lambda _: None))
+    worker.capture_manager_failures()
+    with pytest.raises(ManagerTurnError):
+        await loop.execute()
+    captures = [row for row in publications if row.get("terminalFailure")]
+    assert len(captures) == (0 if mismatch else 1)
+    if captures:
+        assert captures[0]["terminalFailure"]["exceptionChain"][1]["compactionCode"] == "summary_failed"
+
+
+async def test_host_pause_can_offer_saved_progress_before_the_call_limit(tmp_path):
+    from test_context_continuity import target_transition_fixture
+    from amplifier_web.context_continuity import ContextRecoveryError
+    from amplifier_web.session_health import exception_details
+    case = await target_transition_fixture(tmp_path, research_parts=9)
+    case.coordinator.context.config["summary_max_calls"] = 4
+    case.coordinator.register_capability("context.recovery.additional_call_allowance", lambda: 2)
+    case.coordinator.register_capability("web.provider_catalog", {
+        "connectionKeys": {"fixture": "fixture-connection"}})
+    compact = case.raw.compact_context
+    async def interrupt(request):
+        if case.raw.compactions:
+            raise OSError("Synthetic unknown call")
+        return await compact(request)
+    case.raw.compact_context = interrupt
+    with pytest.raises(OSError):
+        await case.prepare()
+    row = case.adapter._recovery_record()
+    assert row["maxCalls"] == 4 and len(row["calls"]) == 2 and row["completedParts"] == 1
+    assert [call["state"] for call in row["calls"]] == ["completed", "reserved"]
+    case.origin.update(inputId="fresh-send", generationId="fresh-generation", inputIds=["fresh-send"])
+    with pytest.raises(ContextRecoveryError) as paused:
+        await case.prepare()
+    assert paused.value.code == "summary_work_paused"
+    detail = exception_details(paused.value)
+    assert detail["summary"] == "Conversation preparation can continue from saved progress."
+    assert detail["guidance"].startswith("Review preparation to approve calls for your next message.")
+    assert len(row["calls"]) == 2  # A notice does not admit or retry a paid call.
 
 
 @pytest.mark.parametrize("counter", [False, True], ids=["subscription-route", "counted-route"])
@@ -245,6 +386,7 @@ async def test_picker_change_preserves_original_failure_or_prepares_transition(t
                 assert not case.adapter.recovery_path.exists()
                 assert case.adapter.path.read_bytes() == original
                 assert len(wire.completions) == before
+                canonical = copy.deepcopy(await case.context.get_messages())
                 with pytest.raises(RuntimeError, match="Execution failed: ManagerTurnError"):
                     await asyncio.wait_for(worker.execution, 5)
                 from amplifier_web.session_health import generation_failure, terminal_exception_failure
@@ -291,5 +433,93 @@ async def test_picker_change_preserves_original_failure_or_prepares_transition(t
                     from amplifier_module_loop_live.runtime import Input
                     await case.runtime.submit(Input("stop", activation=case.activation))
                     await asyncio.wait_for(worker.execution, 5)
+        if not counter:
+            # The failed loop is closed. A new mount gets the same canonical
+            # messages, checkpoint and selected B, not a cleared checkpoint.
+            interrupted_hashes = []
+            for phase in ("fresh", "summary-interrupted", "after-interruption"):
+                before = (len(wire.summaries), len(wire.completions), wire.effects)
+                async with ordinary_recovery_case(tmp_path / "native", wire, canonical, live=True,
+                    selection=target, provider_config={"base_url": "https://offline.invalid/v1"}) as cold:
+                    cold.raw.request_budget = None
+                    cold.raw.supports_native_compaction = lambda: False
+                    assert cold.context.summary is None
+                    assert cold.adapter.path.read_bytes() == original
+                    new_worker = Worker()
+                    new_worker.session, new_worker.runtime, new_worker.controls = cold.session, cold.runtime, cold.controls
+                    new_worker.activation_gate, new_worker.activation = cold.gate, cold.activation
+                    new_worker.start_config = {"interruptionRevision": 0}
+                    cold.runtime.capture_activation = cold.gate.current
+                    cold.runtime.observer = new_worker.observe
+                    coord = cold.session.coordinator
+                    coord.register_capability("web.context_transition.input", new_worker.transition_input)
+                    coord.register_capability("web.provider_catalog", {"connectionKeys": {"openai": "same-account"}})
+                    cold_errors = []
+                    cold_retaining = coord.get_capability("context.request_retention")
+                    async def observe_cold_retention(**kwargs):
+                        try:
+                            return await cold_retaining(**kwargs)
+                        except Exception as error:
+                            cold_errors.append({"type": type(error).__name__, "code": getattr(error, "code", None)})
+                            raise
+                    coord.register_capability("context.request_retention", observe_cold_retention)
+                    await cold.controls.perform("provider.select", {**target, "expectedConnectionKey": "same-account"})
+                    transport = wire.transport
+                    requests = []
+                    async def observe_original(request):
+                        import httpx
+                        assert cold.adapter.path.read_bytes() == original
+                        body = json.loads(request.content)
+                        summary = (request.url.path.endswith("/responses") and not body.get("tools")
+                                   and "Prepare a factual continuation note" in str(body.get("instructions")))
+                        if phase == "summary-interrupted" and summary and requests:
+                            raise httpx.ConnectError("Synthetic connection loss", request=request)
+                        prior_summaries = len(wire.summaries)
+                        response = await transport(request)
+                        if len(wire.summaries) > prior_summaries:
+                            requests.append(digest(body))
+                        return response
+                    monkeypatch.setattr(cold.raw.client._client._transport, "handler", observe_original)
+                    token = cold.gate.bind(cold.activation)
+                    try:
+                        new_worker.execution = asyncio.create_task(cold.session.execute(""))
+                    finally:
+                        cold.gate.reset(token)
+                    try:
+                        await new_worker._command_serial({"op": "send", "id": "command-" + phase,
+                            "input_id": "input-" + phase, "text": "Continue with the selected model.",
+                            "interruptionRevision": 0})
+                        terminal = await cold.runtime.wait_for(lambda event:
+                            event["type"] in {"generation.finished", "generation.failed"}, timeout=10)
+                        print("COLD_EXPERIMENT", json.dumps({
+                            "phase": phase, "terminal": terminal["type"], "code": terminal.get("error_code"),
+                            "summaryCalls": len(wire.summaries) - before[0],
+                            "foregroundCalls": len(wire.completions) - before[1],
+                            "contextErrors": cold_errors,
+                            "effects": wire.effects, "checkpointChanged": cold.adapter.path.read_bytes() != original,
+                            "repeatedConfirmedRequests": len(set(requests) & set(interrupted_hashes))}))
+                        assert wire.effects == before[2] == 1 and wire.unknown_invocations == 0
+                        assert not cold.adapter.recovery_path.exists()
+                        assert cold.adapter.path.read_bytes() == original
+                        if phase == "summary-interrupted":
+                            assert terminal["type"] == "generation.failed"
+                            assert len(requests) == 1 and len(wire.completions) == before[1]
+                            interrupted_hashes = requests[:]
+                            canonical = copy.deepcopy(await cold.context.get_messages())
+                            with pytest.raises(RuntimeError, match="Execution failed"):
+                                await asyncio.wait_for(new_worker.execution, 5)
+                        else:
+                            assert terminal["type"] == "generation.finished"
+                            assert len(wire.completions) == before[1] + 1
+                            assert len(requests) == 12
+                            if phase == "after-interruption":
+                                # Restart alone loses the unjournaled paid prefix.
+                                # Therefore it cannot meet the repair's no-rebuy rule.
+                                assert set(requests) & set(interrupted_hashes)
+                    finally:
+                        if not new_worker.execution.done() and not cold.runtime.closed:
+                            from amplifier_module_loop_live.runtime import Input
+                            await cold.runtime.submit(Input("stop", activation=cold.activation))
+                        await asyncio.gather(new_worker.execution, return_exceptions=True)
     finally:
         await app.close()

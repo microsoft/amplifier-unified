@@ -241,6 +241,12 @@ def _context_recovery_details(code):
     category = {'transition_unsupported': 'provider_selection',
                 'transition_intent_required': 'provider_selection',
                 'recovery_checkpoint_rejected': 'persistence'}.get(code, 'context_compaction')
+    if code == 'summary_work_paused':
+        # This host refusal is an offered continuation of an interrupted native
+        # transition, not the module's exhausted per-preparation call limit.
+        detail.update(
+            summary='Conversation preparation can continue from saved progress.',
+            guidance='Review preparation to approve calls for your next message. One earlier call remains unconfirmed and counts against the original allowance.')
     return {**{key: value for key, value in detail.items() if key != 'errorType'}, 'category': category}
 
 
@@ -319,6 +325,7 @@ def terminal_exception_failure(session, value):
     compaction = terminal_compaction_code(capture['exceptionChain'])
     if (compaction and capture['errorType'] == 'CompactionError'
             and existing.get('category') == 'context_compaction'
+            and latest.get('error_category') == 'context_compaction'
             and existing.get('stage') == 'context_preparation'
             and existing.get('code') in (None, compaction)):
         # The pinned loop omits newer codes. Preserve its immutable terminal;
