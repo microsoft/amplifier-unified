@@ -32,6 +32,7 @@ on:
           - question-answer-installed
           - live-first-send
           - live-first-accepted-graph
+          - model-request-recovery
       candidate_ref:
         description: Optional full same-repository candidate SHA for prepared-runtime-native (tests remain at the selected workflow revision)
         type: string
@@ -76,6 +77,7 @@ jobs:
           suites = {
               'full': [],
               'inline-chat-card': ['tests/test_chat_references.py'],
+              'model-request-recovery': ['tests/test_request_recovery.py', 'tests/test_prompt_completion_scope.py', 'tests/test_provider_capture_production.py'],
               'queued-configuration': ['tests/test_queued_configuration_boundary.py', 'tests/test_configuration_recovery_ui.py'],
               'security-redaction': ['tests/test_agent_state.py', 'tests/test_provider_environment.py', 'tests/test_runtime_controls.py'],
               'patch-placement-recovery': ['tests/test_patch_placement_recovery.py', 'tests/test_file_source_guard.py', 'tests/test_file_source_native_children.py', 'tests/test_workspace_writer_modules.py'],
