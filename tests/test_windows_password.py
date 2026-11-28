@@ -45,6 +45,10 @@ def test_username_is_required_normalized_and_counted_like_a_password(host, capsy
         assert owner_page(host, session=session.value)[0].status == 403
     assert PASSWORD not in capsys.readouterr().out + caplog.text
     assert all(PASSWORD.encode() not in path.read_bytes() for path in root.rglob('*') if path.is_file())
+    # URL encoding can use nine bytes per character in both 256-character fields.
+    entry.save_sign_in_settings(root, username='名' * 256)
+    entry.set_password(root, '詞' * 256)
+    assert signed_in(with_key(host, '詞' * 256, username='名' * 256, at=LOCAL))
 
 
 def test_key_needs_the_same_username_and_removed_or_signed_out_password_never_opens(host):

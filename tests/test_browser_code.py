@@ -1271,7 +1271,7 @@ def test_failed_precondition_is_refused_before_the_key_record_is_looked_at(host,
 
 def test_oversize_key_form_and_a_host_that_cannot_be_confirmed_open_nothing(host, monkeypatch):
     key = new_key(host)
-    assert with_key(host, key, body="csrf=" + "x" * 4096 + "&password=" + key).status == 413
+    assert with_key(host, key, body="csrf=" + "x" * 16384 + "&password=" + key).status == 413
     read = entry.read_owner_control_token
     monkeypatch.setattr(entry, "read_owner_control_token", lambda *a: "d" * 64)    # The private credential changed.
     assert wrong_key(with_key(host, key)) and host["browser_key"].failures == 0

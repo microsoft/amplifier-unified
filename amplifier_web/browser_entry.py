@@ -761,7 +761,7 @@ async def issue(request):
 async def _signed_form(request, field, *, extra=()):
     """Return the one named form value, or None unless the signed CSRF pair matches."""
     from .auth import CSRF_COOKIE, _verified
-    form = await request.clone(client_max_size=4096).post()
+    form = await request.clone(client_max_size=16384 if extra else 4096).post()
     csrf = request.cookies.get(CSRF_COOKIE)
     try:
         valid_csrf = (csrf and hmac.compare_digest(str(form.get("csrf", "")).encode(), csrf.encode())
