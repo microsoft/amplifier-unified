@@ -367,6 +367,7 @@ def test_internal_recovery_stop_does_not_impersonate_owner_stop(controls, monkey
     assert not runtime.stop_requested(spec(), record())
     runner = runtime.Runner.__new__(runtime.Runner)
     runner.spec, runner.record = spec(), record()
+    runner.intent = None
     assert runner.stop_requested()  # Still normal app cleanup, not a force kill.
 
 
@@ -404,6 +405,7 @@ def test_new_run_after_request_is_not_stopped_again(controls, monkeypatch):
 def test_runner_ignores_stale_request_after_phase_change(monkeypatch):
     runner = runtime.Runner.__new__(runtime.Runner)
     runner.spec, runner.record = spec(), record()
+    runner.intent = None
     monkeypatch.setattr(runtime, "read", lambda *a: record(phase="starting"))
     assert runner.stop_requested()
     monkeypatch.setattr(runtime, "read", lambda *a: record(run="c" * 32))

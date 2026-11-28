@@ -41,6 +41,7 @@ on:
       - amplifier_web/windows_consumer_shell.py
       - amplifier_web/windows_installation.py
       - amplifier_web/windows_service.py
+      - amplifier_web/windows_service_lifetime.py
       - amplifier_web/windows_task_runtime.py
       - amplifier_web/windows_files.py
       - amplifier_web/windows_jobs.py

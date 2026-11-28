@@ -56,6 +56,7 @@ on:
       - amplifier_web/windows_tls.py
       - amplifier_web/windows_trust.py
       - amplifier_web/windows_service.py
+      - amplifier_web/windows_service_lifetime.py
       - amplifier_web/windows_task_runtime.py
       - amplifier_web/windows_installation.py
       - amplifier_web/windows_ports.py
@@ -104,6 +105,7 @@ on:
       - tests/test_session_sign_out.py
       - tests/test_browser_code.py
       - tests/test_windows_service.py
+      - tests/test_windows_service_lifetime.py
       - tests/test_windows_task_runtime.py
       - tests/test_windows_installation.py
       - tests/test_windows_ports.py
@@ -273,7 +275,7 @@ jobs:
       - name: Check private configuration, TLS and service policy without task registration
         shell: pwsh
         run: |
-          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_deployment.py tests/test_windows_tls.py tests/test_windows_service.py tests/test_windows_task_runtime.py -k "not native_synthetic_task_create_run_stop_remove and not stop_reads_the_receipt_while_the_host_writes_its_phases"
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_deployment.py tests/test_windows_tls.py tests/test_windows_service.py tests/test_windows_service_lifetime.py tests/test_windows_task_runtime.py -k "not native_synthetic_task_create_run_stop_remove and not stop_reads_the_receipt_while_the_host_writes_its_phases"
           if ($LASTEXITCODE -ne 0) { throw 'Windows configuration, TLS or service policy checks failed.' }
       # setup-tls force records the root that it replaces, and a full record
       # stops it with nothing changed: the real private file store, and the

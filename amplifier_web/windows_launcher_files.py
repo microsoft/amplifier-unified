@@ -65,6 +65,7 @@ FILES = ('amplifier_web/__init__.py',
  'amplifier_web/windows_read_files.py',
  'amplifier_web/windows_removal.py',
  'amplifier_web/windows_service.py',
+ 'amplifier_web/windows_service_lifetime.py',
  'amplifier_web/windows_start.py',
  'amplifier_web/windows_task_runtime.py',
  'amplifier_web/windows_tls.py',
@@ -113,7 +114,7 @@ DYNAMIC = {
     'amplifier_web/windows_jobs.py::WindowsOwnedProcess::__file__::str(Path(__file__).resolve().with_name("windows_launch_guard.py")),': ('amplifier_web/windows_launch_guard.py',),  # Starts the standalone process guard.
     'amplifier_web/windows_launcher_task.py::helper_xml::-m::"-I", "-m", "amplifier_web.windows_launcher_refresh", "--automatic", payload])': (),  # The helper task's action. It runs with the app generation's Python.
     'amplifier_web/windows_service.py::TaskSpec::-m::command = subprocess.list2cmdline(["-I", "-m", "amplifier_web.windows_service", "--run", self.encoded()])': ('amplifier_web/windows_service.py',),  # Starts the launcher supervisor.
-    'amplifier_web/windows_service.py::_launch_owned_host::-m::[python, "-I", "-m", "amplifier_web.windows_service", "--host", spec.encoded()],': (),  # Runs the app generation's host.
+    'amplifier_web/windows_service.py::_launch_owned_host::-m::[python, "-I", "-m", "amplifier_web.windows_service", "--host", spec.encoded(),': (),  # Runs the app generation's host, with its captured lifetime intent.
 }
 # END LAUNCHER FILE LISTS
 

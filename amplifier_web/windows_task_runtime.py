@@ -32,7 +32,7 @@ FAILURE = "task-failure.json"
 # Error classes whose text is a FIXED sentence that this product wrote for the
 # owner. Do not add a class whose text can hold a path, an address or another
 # value: the CLI's SystemExit text, for example, names the data folder.
-_OWNER_SENTENCES = {"WindowsServiceError", "TaskNotConfirmed", "HiddenConsoleError",
+_OWNER_SENTENCES = {"WindowsServiceError", "TaskNotConfirmed", "HiddenConsoleError", "Paused",
                     "MissingHostDependency"}
 # The one start failure that a person can cause and repair. A fixed sentence:
 # the address and the port themselves are not saved.
@@ -405,8 +405,9 @@ def stop_requested(spec, record, *, name=STOP):
 
 
 class Runner:
-    def __init__(self, spec):
+    def __init__(self, spec, *, intent=None):
         self.spec = spec
+        self.intent = intent
         self.exit_code = 0
         with process(os.getpid()) as actual:
             if not actual or actual["exited"]():
@@ -421,7 +422,9 @@ class Runner:
         publish(self.spec, self.record)
 
     def stop_requested(self):
-        return (stop_requested(self.spec, self.record)
+        from .windows_service_lifetime import allowed
+        return (not allowed(self.spec, self.intent)
+                or stop_requested(self.spec, self.record)
                 or stop_requested(self.spec, self.record, name=RECOVERY_STOP))
 
     async def watch(self):

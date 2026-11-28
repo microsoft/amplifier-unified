@@ -3653,3 +3653,49 @@ def test_second_sign_in_log_snapshot_accepts_the_real_public_helpers_plain_text_
         {"tailLine": 0, "marker": "Started server process"},
         {"tailLine": 1, "marker": "Application startup complete."}]
     assert "PRIVATE-SENTINEL" not in json.dumps(facts)
+
+
+@pytest.mark.parametrize("change", [
+    {"authenticationId": None}, {"authenticationId": "1:2"}, {"authenticationId": "00000000:0000000G"},
+    {"logonTime": 123}, {"logonTime": "0"}, {"logonTime": "-1"}, {"logonTime": None},
+])
+def test_identity_measurement_requires_both_native_values(case, change):
+    with pytest.raises(AssertionError, match="key is incomplete"):
+        case.sign_in_key({"authenticationId": "00000000:00000001", "logonTime": "123", **change})
+
+
+@pytest.mark.parametrize("second, mismatch", [
+    (False, None), (False, "direct"), (False, "time"), (True, None), (True, "unchanged"),
+])
+def test_identity_gate_checks_direct_demand_time_and_new_sign_in(
+        case, monkeypatch, tmp_path, second, mismatch):
+    old = {"authenticationId": "00000000:00000001", "logonTime": "123"}
+    new = {"authenticationId": "00000000:00000002", "logonTime": "456"}
+    token = new if second and mismatch != "unchanged" else old
+    direct = new if mismatch == "direct" else token
+    sample = new if mismatch == "time" else token
+    if second:
+        (tmp_path / "identity-first.json").write_text(json.dumps({"onDemand": old, "completedAt": 1}))
+
+    def execute(argv, **_):
+        (tmp_path / "identity-direct.json").write_text(json.dumps({"token": direct}))
+        return {"exitCode": 0}
+
+    def task(operation, name, **values):
+        if operation == "identity-create":
+            assert name.startswith("AmplifierStandardAccountIdentity-S-1-")
+            assert "identity-sample" in values["arguments"]
+        return {}
+
+    (tmp_path / "identity-sample-1.json").write_text(json.dumps({"token": sample, "at": 2}))
+    monkeypatch.setattr(case, "execute", execute)
+    monkeypatch.setattr(case, "task", task)
+    monkeypatch.setattr(case, "standard_token", lambda *a: True)
+    if mismatch:
+        with pytest.raises(AssertionError):
+            case.identity_measure(tmp_path, tmp_path, RECORD, token, second=second)
+    else:
+        assert case.identity_measure(tmp_path, tmp_path, RECORD, token, second=second)
+        result = json.loads((tmp_path / ("identity-second.json" if second else "identity-first.json")).read_text())
+        assert result["finished"] and result["direct"] == result["onDemand"] == token
+        assert result["logon" if second else "time"][0]["token"] == token

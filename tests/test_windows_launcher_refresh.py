@@ -675,7 +675,8 @@ def test_task_service_reads_the_owned_task_and_uses_the_normal_stop(tmp_path, mo
                            registration_id="r" * 32)
     task, commands = {"instances": 1}, []
     monkeypatch.setattr(windows_service, "_read", lambda home: (task, spec))
-    monkeypatch.setattr(windows_service, "command", lambda name, home: commands.append((name, home)))
+    monkeypatch.setattr(windows_service, "command",
+                        lambda name, home, **kw: commands.append((name, home, kw)))
     service = refresher.TaskService(tmp_path / "app")
     assert service.launcher == tmp_path / "tools/amplifier-unified" and service.launch_roots == {"UV_TOOL_BIN_DIR": "bin"}
     assert service.running()
@@ -683,7 +684,8 @@ def test_task_service_reads_the_owned_task_and_uses_the_normal_stop(tmp_path, mo
     assert not service.running()
     service.stop()
     service.start()
-    assert commands == [("stop", tmp_path / "app"), ("start", tmp_path / "app")]
+    assert commands == [("stop", tmp_path / "app", {"internal": True}),
+                        ("start", tmp_path / "app", {"internal": True})]
     monkeypatch.setattr(windows_app_recovery, "read", lambda value: {"status": "prepared"})
     assert service.handoff_in_flight()
     monkeypatch.setattr(windows_app_recovery, "read", lambda value: {"status": "acknowledged"})

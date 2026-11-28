@@ -4880,6 +4880,59 @@ Use absolute executable/data/workspace/shared-state paths and explicit quoting.
 Configure indefinite execution, restart-on-failure and battery behavior
 deliberately. Automatic logon startup must not open a browser.
 
+#### Recovery preparation: lifetime record (slice 1)
+
+The standard-account fixture measures the token authentication LUID and native
+LSA logon time for direct, on-demand, timed and next-sign-in starts. Within one
+sign-in the pair must agree. After sign-out and sign-in it must differ. A failure
+stops the qualification; it is not a skipped pass.
+
+`windows_service_lifetime` owns one private `task-lifetime.json` and one lock in
+`config/services`. The closed record holds the registration, owner SID, sign-in
+pair, random intent, Stop, one explicit-start allowance and at most three saved
+automatic-start times. Only explicit Start clears Stop. Neither six hours nor a
+new sign-in clears it. Explicit Start does not need a successful read of the old
+record or the new sign-in key. It replaces unreadable record content through the
+existing private writer; it does not bypass private-file ownership checks.
+
+The limit is **three automatic start reservations in any six hours**, not three
+per sign-in. Save a reservation before spawning any app child. Keep these times
+across sign-ins and explicit starts. An explicit start is not an automatic
+reservation. A clock that went back pauses automatic starts until the saved time
+is reached. A forward clock change can age times early; this is a wall-clock
+reservation rule, not a monotonic six-hour promise across a clock correction.
+An automatic start needs a readable record and one confirmed interactive sign-in
+for the owner. A second session, even disconnected, is ambiguous. An unknown
+identity pauses automatic starts and never clears Stop.
+
+Slice 1 can read both the exact legacy task and a supervised two-trigger layout
+with a saved offset-bearing boundary and indefinite PT5M repetition. It selects
+neither migration nor repetition: fresh installs and existing legacy tasks keep
+their current XML. Legacy automatic entries keep their old path without a new
+record read; explicit controls save the future migration's Stop choice when the
+launcher is recognised. An unreadable new record cannot block legacy Start.
+Unknown launchers are not opted in. The new admission gate applies to each entry
+of the repeating layout, which this slice never installs. Its child and host
+checks retain a later Stop across spawn and update gaps. Internal launcher
+maintenance does not call an owner Start or owner Stop.
+
+The record is bounded to 4096 bytes and three reservation times. Admission reads
+one record and writes one reservation or consumes one explicit-start allowance
+under the existing file lock. A running tracked host checks that record with its
+existing quarter-second Stop check; no native session enumeration occurs in that
+loop. No session history, network call or separate interruption log is added.
+No Scheduler result is treated as health. A failed private write grants no
+automatic start.
+
+Delivery remains a later slice: launcher refresh must journal the exact old and
+new XML with the launcher and binding, disable dispatch before replacement, and
+restore the compatible pair after a cut or failure. Do not enable the new layout
+without that migration and its independent recovery helper. An installed-app
+standard-user case must then prove code-zero recovery within seven minutes while
+awake and signed in, Stop across a real five-minute tick, explicit Start, the
+rolling limit, and interrupted migration. Windows 11 screen and power checks
+remain separate. No wake, catch-up, second watchdog or force termination is added.
+
 **The task after a computer rename (measured November 15, 2026).** The app
 registers the task with the owner SID in the principal and in the sign-in
 trigger. Task Scheduler keeps the principal as the SID. It stores the trigger's

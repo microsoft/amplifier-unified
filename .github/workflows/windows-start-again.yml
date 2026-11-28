@@ -18,6 +18,7 @@ on:
       - amplifier_web/windows_consumer.py
       - amplifier_web/windows_consumer_shell.py
       - amplifier_web/windows_service.py
+      - amplifier_web/windows_service_lifetime.py
       - amplifier_web/installation_runtime.py
       # Names the preparation folder that check 8 watches.
       - amplifier_web/runtime_environment.py
