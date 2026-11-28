@@ -5,6 +5,7 @@ import copy
 import ipaddress
 import os
 from pathlib import Path
+import re
 import tempfile
 from urllib.parse import urlsplit
 
@@ -14,6 +15,9 @@ from .runtime_retention import DEFAULT_RETENTION, validate_retention
 
 _WINDOWS = os.name == "nt"
 _SERVER_LIMIT = 1024 * 1024
+LINK_INSTANCE_ID = re.compile(r"[0-9a-f]{32}")
+LINK_DEVICE_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+LINK_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._()'-]{0,63}")
 
 DEFAULT_SERVER = {
     "schema_version": 1,
@@ -21,6 +25,8 @@ DEFAULT_SERVER = {
     "port": 8941,
     "public_origins": [],
     "linked_instances": False,
+    "linked_instances_peer_listener": False,
+    "linked_instances_discovery": {},
     "session_ttl_seconds": 604800,
     "host_pam": None,
     "tls": {"method": "none", "cert": "", "key": ""},
@@ -121,6 +127,32 @@ def validate_origin(value: str) -> str:
     return f"{parsed.scheme}://{host}{f':{port}' if port is not None and port != default_port else ''}"
 
 
+def validate_discovery(value):
+    if not isinstance(value, dict) or value.keys() - {"lan", "tailscale", "label", "tailscale_endpoints"}:
+        raise ValueError("Invalid linked_instances_discovery settings.")
+    config = {"lan": False, "tailscale": False, "label": "", "tailscale_endpoints": {}, **value}
+    mapping = config["tailscale_endpoints"]
+    label = config["label"]
+    if (any(type(config[key]) is not bool for key in ("lan", "tailscale"))
+            or not isinstance(label, str) or (label and not LINK_LABEL.fullmatch(label))
+            or not isinstance(mapping, dict) or len(mapping) > 64):
+        raise ValueError("Invalid linked_instances_discovery settings.")
+    for key, rows in mapping.items():
+        if (not isinstance(key, str) or not LINK_DEVICE_ID.fullmatch(key)
+                or not isinstance(rows, list) or not 1 <= len(rows) <= 8):
+            raise ValueError("Invalid selected-device service mapping.")
+        ids = set()
+        for row in rows:
+            if (not isinstance(row, dict) or row.keys() != {"instanceId", "port", "label"}
+                    or not isinstance(row["instanceId"], str) or not LINK_INSTANCE_ID.fullmatch(row["instanceId"])
+                    or type(row["port"]) is not int or not 1 <= row["port"] <= 65535
+                    or not isinstance(row["label"], str) or not LINK_LABEL.fullmatch(row["label"])
+                    or row["instanceId"] in ids):
+                raise ValueError("Invalid selected-device service profile.")
+            ids.add(row["instanceId"])
+    return config
+
+
 def validate_server(value: dict) -> dict:
     if not isinstance(value, dict):
         raise ValueError("Server configuration must be a mapping.")
@@ -145,6 +177,9 @@ def validate_server(value: dict) -> dict:
         raise ValueError("port must be an integer from 1 through 65535.")
     if type(config["linked_instances"]) is not bool:
         raise ValueError("linked_instances must be true or false.")
+    if type(config["linked_instances_peer_listener"]) is not bool:
+        raise ValueError("linked_instances_peer_listener must be true or false.")
+    config["linked_instances_discovery"] = validate_discovery(config["linked_instances_discovery"])
     if type(config["session_ttl_seconds"]) is not int or config["session_ttl_seconds"] <= 0:
         raise ValueError("session_ttl_seconds must be a positive integer.")
     from .host_pam import validate as validate_host_pam
@@ -174,7 +209,7 @@ def validate_server(value: dict) -> dict:
     return config
 
 
-def load_server_config(data_dir: Path, *, overrides: dict | None = None) -> dict:
+def load_server_config(data_dir: Path, *, overrides: dict | None = None, create: bool = True) -> dict:
     path = config_path(data_dir)
     requested_overrides = overrides
     if _WINDOWS:
@@ -187,8 +222,16 @@ def load_server_config(data_dir: Path, *, overrides: dict | None = None) -> dict
             missing = False
         loaded = yaml.safe_load(text) or {}
     else:
-        missing = not path.exists()
-        loaded = (yaml.safe_load(path.read_text()) or {}) if not missing else {}
+        try:
+            with path.open("rb") as stream:
+                data = stream.read(_SERVER_LIMIT + 1)
+            if len(data) > _SERVER_LIMIT:
+                raise ValueError("Server configuration exceeds its size limit.")
+        except FileNotFoundError:
+            data, missing = b"", True
+        else:
+            missing = False
+        loaded = yaml.safe_load(data.decode("utf-8")) or {}
     if not isinstance(loaded, dict):
         raise ValueError("Server configuration must be a mapping.")
     if overrides:
@@ -203,11 +246,11 @@ def load_server_config(data_dir: Path, *, overrides: dict | None = None) -> dict
                 loaded = {**loaded, "tls": override_tls}
         loaded = {**loaded, **overrides}
     config = validate_server(loaded)
-    if missing:
+    if missing and create:
         if _WINDOWS:
             try:
                 with windows_files.directory(path.parent, owned_root=data_dir, create=True) as pinned:
-                    pinned.publish_private(path.name, yaml.safe_dump(config, sort_keys=False).encode("utf-8"))
+                    pinned.publish_private(path.name, _encode_server(config))
             except FileExistsError:
                 # Another creator won. Read/validate that complete winner;
                 # never replace their settings with our defaults or overrides.
@@ -219,12 +262,19 @@ def load_server_config(data_dir: Path, *, overrides: dict | None = None) -> dict
 
 def save_server_config(data_dir: Path, config: dict) -> dict:
     config = validate_server(config)
-    text = yaml.safe_dump(config, sort_keys=False)
+    text = _encode_server(config)
     if _WINDOWS:
         write_private(config_path(data_dir), text, owned_root=data_dir)
     else:
         write_private(config_path(data_dir), text)
     return config
+
+
+def _encode_server(config):
+    data = yaml.safe_dump(config, sort_keys=False).encode("utf-8")
+    if len(data) > _SERVER_LIMIT:
+        raise ValueError("Server configuration exceeds its size limit.")
+    return data
 
 
 def setting_get(config: dict, key: str):

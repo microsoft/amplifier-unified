@@ -10,21 +10,26 @@ import json
 import os
 import re
 import secrets
+import socket
 import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import aiohttp
 from aiohttp import web
 from filelock import FileLock, Timeout
+from yaml import YAMLError
 
-from .deployment import validate_origin, write_private
+from .deployment import is_loopback, load_server_config, save_server_config, validate_origin, write_private
 from .errors import AppError
+from .linked_discovery import DEVICE, Discovery, Unavailable
+from .linked_peer_listener import Listener
 
 PREFIX = "/api/linked-instances/v1"
 PEER_PREFIX = PREFIX + "/peer"
-PEER_PATHS = frozenset({PEER_PREFIX + "/enroll", PEER_PREFIX + "/status"})
+PEER_PATHS = frozenset(PEER_PREFIX + "/" + operation for operation in ("enroll", "status", "identity"))
 OFFER_PREFIX = "amp-link-v1."
 OFFER_TTL = 300
 MAX_BODY = 4096
@@ -52,6 +57,8 @@ ERRORS = {
     "link_join_unconfirmed": (503, "Joining was not confirmed. Reconcile with the same code and command ID."),
     "link_capacity": (409, "This installation reached its link or receipt limit."),
     "link_store_unavailable": (503, "The private link store is unavailable."),
+    "link_setup_unavailable": (503, "Linking settings could not be saved. Read the settings again before retrying."),
+    "link_setup_conflict": (409, "Linking settings changed. Refresh the settings before making another change."),
 }
 
 
@@ -73,6 +80,15 @@ def _json(value):
 
 def _digest(value):
     return hashlib.sha256(value).hexdigest()
+
+
+def _setup_revision(saved):
+    # The change mark also fences an on/off/on sequence, while the choices
+    # detect edits by the existing CLI/configuration owner.
+    return _digest(_json({key: saved.get(key) for key in (
+        "linked_instances", "linked_instances_peer_listener", "linked_instances_discovery",
+        "linked_instances_setup_mark", "bind", "port", "public_origins", "tls",
+    )}))
 
 
 def _origin(value):
@@ -134,6 +150,74 @@ class DirectTransport:
 
     async def status(self, route, payload, credential):
         return await self._post(route, "status", payload, credential)
+
+    async def discovered_status(self, route, saved, payload, current_credential):
+        """Prove identity on the pinned connection before sending the grant."""
+        authority = urlsplit(route.origin)
+        origin = f"https://{saved['address']}:{saved['port']}"
+        trace = aiohttp.TraceConfig()
+        phase = "identity"
+
+        async def open_identity(_session, _context, _params):
+            nonlocal phase
+            if phase != "identity":
+                # In particular, refuse if the idle connection closed after
+                # identity proof and the connector attempts a fresh TLS session.
+                raise failure("link_unavailable")
+            phase = "opened"
+
+        async def reuse_for_status(_session, _context, _params):
+            nonlocal phase
+            if phase != "status":
+                raise failure("link_verification_failed")
+            phase = "reused"
+
+        trace.on_connection_create_start.append(open_identity)
+        trace.on_connection_reuseconn.append(reuse_for_status)
+
+        def direct_socket(addr_info):
+            family, kind, proto, _, _ = addr_info
+            sock = socket.socket(family, kind, proto)
+            try:
+                if saved["deviceId"] is None and hasattr(socket, "SO_DONTROUTE"):
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_DONTROUTE, 1)
+                elif saved.get("interface") == "tailscale0" and hasattr(socket, "SO_BINDTODEVICE"):
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"tailscale0\0")
+                else:
+                    raise failure("link_unavailable")
+                return sock
+            except BaseException:
+                sock.close()
+                raise
+
+        try:
+            async with asyncio.timeout(5):
+                connector = aiohttp.TCPConnector(limit=1, socket_factory=direct_socket)
+                async with aiohttp.ClientSession(connector=connector, trace_configs=[trace],
+                                                 cookie_jar=aiohttp.DummyCookieJar(), trust_env=False,
+                                                 auto_decompress=False) as client:
+                    options = {"ssl": aiohttp.Fingerprint(bytes.fromhex(route.fingerprint)),
+                               "allow_redirects": False, "server_hostname": authority.hostname}
+                    host = {"Host": authority.netloc}
+                    async with client.post(origin + PEER_PREFIX + "/identity",
+                                           json={"instanceId": payload["instanceId"]}, headers=host,
+                                           **options) as response:
+                        if response.status != 200:
+                            raise failure("link_verification_failed")
+                        identity = await self._result(response)
+                    if identity != {"instanceId": payload["instanceId"]} or phase != "opened":
+                        raise failure("link_verification_failed")
+                    phase = "status"
+                    headers = {**host, "Authorization": "Bearer ali_" + current_credential()}
+                    async with client.post(origin + PEER_PREFIX + "/status", json=payload, headers=headers,
+                                           **options) as response:
+                        if phase != "reused":
+                            raise failure("link_verification_failed")
+                        return await self._result(response)
+        except (aiohttp.ServerFingerprintMismatch, aiohttp.ClientSSLError, ValueError, RecursionError):
+            raise failure("link_verification_failed") from None
+        except (aiohttp.ClientError, OSError, TimeoutError):
+            raise failure("link_unavailable") from None
 
     @staticmethod
     async def _result(response, *, enrollment=False):
@@ -323,25 +407,223 @@ def _leaf_fingerprint(root, config):
 
 
 class LinkedInstances:
-    def __init__(self, root, config, *, transport=None, clock=time.time):
+    def __init__(self, root, config, *, transport=None, clock=time.time, discovery=None):
         self.config = config
-        self.origins = tuple(origin for origin in config["public_origins"] if origin.startswith("https://"))
-        self.enabled = config.get("linked_instances") is True and bool(self.origins) and config.get("tls") == LOCAL_TLS
+        self.configured_origins = tuple(origin for origin in config["public_origins"] if origin.startswith("https://"))
+        self.configured = bool(self.configured_origins) and config.get("tls") == LOCAL_TLS
         self.store = LinkStore(root)
+        self.listener = Listener(self.store)
+        self.setup_lock = asyncio.Lock()
+        self.listener_stopping = False
         self.generation = uuid.uuid4().hex
         self.transport = DirectTransport() if transport is None else transport
         self.clock = clock
+        self.discovery_backend = discovery
+        self.discovery = Discovery(config, backend=discovery)
+        self.route_writes = asyncio.Lock()
+        self.route_checks = asyncio.Semaphore(4)
+
+    @property
+    def origins(self):
+        return (self.listener.origin,) if self.listener.origin else self.configured_origins
+
+    @property
+    def enabled(self):
+        return self.listener.origin is not None or (self.configured and self.config.get("linked_instances") is True)
 
     def require_enabled(self):
         if not self.enabled:
             raise failure("link_unsupported")
 
+    def _setup(self, args=None):
+        from .tls import tls_ready
+
+        live = self.discovery.capabilities()
+        enabled = self.config.get("linked_instances") is True
+        peer_listener = self.config.get("linked_instances_peer_listener") is True
+        blockers = []
+        try:
+            saved = load_server_config(self.store.root, create=False)
+            if args is not None:
+                if args.get("expectedRevision") != _setup_revision(saved):
+                    raise failure("link_setup_conflict")
+                discovery = saved["linked_instances_discovery"]
+                consent = args.get("peerListener", saved["linked_instances_peer_listener"])
+                if (saved["linked_instances"] != args["enabled"]
+                        or saved["linked_instances_peer_listener"] != consent
+                        or any(discovery[key] != args[key] for key in live)):
+                    saved = save_server_config(self.store.root, {
+                        **saved, "linked_instances": args["enabled"],
+                        "linked_instances_peer_listener": consent,
+                        "linked_instances_setup_mark": uuid.uuid4().hex,
+                        "linked_instances_discovery": {**discovery, **{key: args[key] for key in live}},
+                    })
+        except (OSError, ValueError, YAMLError, RecursionError):
+            if args is not None:
+                raise failure("link_setup_unavailable") from None
+            saved = None
+            blockers.append("saved_configuration_unavailable")
+        choice = saved["linked_instances"] if saved is not None else enabled
+        consent = saved["linked_instances_peer_listener"] if saved is not None else peer_listener
+        revision = _setup_revision(saved) if saved is not None else None
+        discovery = {key: saved["linked_instances_discovery"][key] for key in live} if saved is not None else live
+        listener = ("peer-only" if self.listener.origin else
+                    "configured" if self.configured and enabled else "none")
+        if not self.configured and (consent or listener == "peer-only"):
+            if self.listener.blocker and choice and consent:
+                blockers.append(self.listener.blocker)
+            if "saved_configuration_unavailable" in blockers:
+                status = "unavailable"
+            elif not choice and listener == "none":
+                status = "off"
+            elif choice and consent and blockers:
+                status = "unavailable"
+            elif choice and consent and listener == "peer-only" and discovery == live:
+                status = "active"
+            else:
+                status = "pending"
+            return saved, {"status": status, "enabled": choice, "peerListener": consent, "revision": revision,
+                           "listener": listener, "discovery": discovery,
+                           "origins": [self.listener.origin] if self.listener.origin else [],
+                           "blockers": blockers, "lanExpiresAt": self.discovery.expires_at()}
+        # Effective startup config can include explicit launch flags. They
+        # apply over the saved settings, not the other way around. Do not copy
+        # startup overrides into server.yaml or claim the socket was tested.
+        if not self.origins:
+            blockers.append("https_origin_required")
+        if self.config.get("tls") != LOCAL_TLS:
+            blockers.append("app_tls_required")
+        elif not tls_ready(self.store.root, self.config):
+            blockers.append("app_tls_unavailable")
+        if "saved_configuration_unavailable" in blockers:
+            status = "unavailable"
+        elif not choice and not (enabled and self.configured):
+            status = "off"
+        elif not choice:
+            status = "pending"
+        elif blockers:
+            status = "unavailable"
+        elif enabled != choice or discovery != live:
+            status = "pending"
+        else:
+            status = "active"
+        if listener == "configured" and "app_tls_unavailable" in blockers:
+            listener = "none"
+        return saved, {"status": status, "enabled": choice, "peerListener": consent, "revision": revision,
+                       "listener": listener, "discovery": discovery,
+                       "origins": list(self.origins), "blockers": blockers,
+                       "lanExpiresAt": self.discovery.expires_at()}
+
+    def setup(self):
+        return self._setup()[1]
+
+    async def _apply_listener(self, saved):
+        if self.configured or self.listener_stopping:
+            return
+        choice = saved.get("linked_instances") is True
+        consent = saved.get("linked_instances_peer_listener") is True
+        discovery = saved.get("linked_instances_discovery", {})
+        binding = self.listener.binding
+        if not choice or not consent or (binding and binding.route == "tailscale" and not discovery["tailscale"]):
+            try:
+                await self.listener.close()
+            finally:
+                await self.discovery.close(None)
+        if not choice or not consent:
+            return
+        if self.listener.origin is None:
+            if self.config["public_origins"] or not all(is_loopback(item) for item in self.config.get("bind", ())):
+                self.listener.blocker = "peer_listener_unsupported"
+                return
+            await self.listener.open(PEER_PATHS, self.dedicated_peer, tailscale=discovery["tailscale"])
+        binding = self.listener.binding
+        if binding is not None and (self.discovery.closed or self.discovery.port != self.listener.port
+                                    or self.discovery.config != discovery):
+            await self.discovery.close(None)
+            self.discovery = Discovery(
+                {"port": self.listener.port, "bind": [str(binding.local.ip)], "linked_instances_discovery": discovery},
+                backend=self.discovery_backend,
+            )
+
+    async def lifetime(self, app):
+        # aiohttp only registers the context's exit after it yields. Clean up
+        # partial activation here as well as on normal or failed host startup.
+        try:
+            if self.config.get("linked_instances_peer_listener") is True:
+                async with self.setup_lock:
+                    await self._apply_listener(self.config)
+            yield
+        finally:
+            self.listener_stopping = True
+            async with self.setup_lock:
+                try:
+                    await self.listener.close()
+                finally:
+                    await self.discovery.close(app)
+
+    async def save_setup(self, args):
+        async with self.setup_lock:
+            if self.listener_stopping:
+                raise failure("link_setup_unavailable")
+            saved, result = self._setup(args)
+            if not self.configured and (saved["linked_instances_peer_listener"] or self.listener.origin is not None):
+                await self._apply_listener(saved)
+                result = self.setup()
+            elif not saved["linked_instances_peer_listener"]:
+                self.listener.blocker = None
+            return result
+
+    async def fence_shutdown(self, _app):
+        self.listener_stopping = True
+
+    async def dedicated_peer(self, request):
+        headers = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+        try:
+            listener = self.listener
+            # The accepted socket, not a claimed or forwarded host, selects
+            # this listener. Reject alternate wire authorities and paths.
+            if (self.listener_stopping or listener.origin is None or request.raw_path not in PEER_PATHS
+                    or request.headers.getall("Host", []) != [listener.origin.removeprefix("https://")]
+                    or not listener.binding.accepts(request.transport, listener.port)):
+                raise failure("link_unsupported")
+            result = await self.peer(request, listener.origin, binding=listener.binding)
+            return web.json_response({"result": result}, headers=headers)
+        except AppError as exc:
+            return web.json_response({"error": str(exc), "accepted": False, "code": exc.code},
+                                     status=exc.status, headers=headers)
+
+    async def peer(self, request, origin, *, binding=None):
+        if not request.secure or "Origin" in request.headers or "Cookie" in request.headers:
+            raise failure("link_unsupported")
+        try:
+            async with asyncio.timeout(5):
+                args = await _read_body(request)
+        except TimeoutError:
+            raise failure("link_invalid") from None
+        if binding is not None and (self.listener.binding is not binding or self.listener_stopping):
+            raise failure("link_unsupported")
+        authorization = request.headers.getall("Authorization", [])
+        if request.path == PEER_PREFIX + "/status":
+            if len(authorization) != 1 and binding is not None:
+                raise failure("link_revoked")
+            return self.peer_status(args, request.headers.get("Authorization", ""))
+        if authorization and (binding is not None or request.path == PEER_PREFIX + "/identity"):
+            raise failure("link_unsupported")
+        if request.path == PEER_PREFIX + "/identity":
+            return self.peer_identity(args)
+        return self.enroll(args, origin)
+
     def list(self, *, outgoing_only=False):
-        self.require_enabled()
+        if outgoing_only:
+            self.require_enabled()
         with self.store.transaction() as state:
-            return {"instanceId": state["instanceId"], "origins": [] if outgoing_only else list(self.origins),
-                    "links": [_link(row) for row in state["links"].values()
-                              if not outgoing_only or row["direction"] == "outgoing"]}
+            result = {"instanceId": state["instanceId"],
+                      "origins": list(self.origins) if not outgoing_only and self.enabled else [],
+                      "links": [_link(row) for row in state["links"].values()
+                                if not outgoing_only or row["direction"] == "outgoing"]}
+            if not outgoing_only:
+                result["discovery"] = self.discovery.capabilities()
+            return result
 
     def offer(self, args):
         if not record(args, commandId=COMMAND, origin=r".{1,300}"):
@@ -353,7 +635,7 @@ class LinkedInstances:
             saved = _command(state, "offer", args, create=True)
             if "offer" not in saved:
                 saved["offer"] = {"origin": origin, "instanceId": state["instanceId"],
-                                  "fingerprint": _leaf_fingerprint(self.store.root, self.config),
+                                  "fingerprint": self.listener.fingerprint or _leaf_fingerprint(self.store.root, self.config),
                                   "secret": secrets.token_urlsafe(32)}
                 saved["expiresAt"] = int(self.clock()) + OFFER_TTL
             code = _encode_offer(saved["offer"])
@@ -366,13 +648,20 @@ class LinkedInstances:
                 "qrPngBase64": base64.b64encode(image.getvalue()).decode()}
 
     async def join(self, args):
-        if not record(args, commandId=COMMAND, code=r".{1,1100}"):
+        fields = {"commandId": COMMAND, "code": r".{1,1100}"}
+        if isinstance(args, dict) and "expectedInstanceId" in args:
+            fields["expectedInstanceId"] = IDENTITY
+        if not record(args, **fields):
             raise failure("link_invalid")
         offer = _parse_offer(args["code"])
         with self.store.transaction() as state:
+            saved = _command(state, "join", args)
+            if offer["instanceId"] != args.get("expectedInstanceId", offer["instanceId"]):
+                raise failure("link_verification_failed")
             if offer["instanceId"] == state["instanceId"]:
                 raise failure("link_invalid")
-            saved = _command(state, "join", args, create=True)
+            if saved is None:
+                saved = _command(state, "join", args, create=True)
             if "result" in saved:
                 return saved["result"]
             retry = "pending" in saved
@@ -489,34 +778,145 @@ class LinkedInstances:
             row["revoked"] = True
             row.pop("credential", None)
             row.pop("credentialDigest", None)
+            row.pop("routes", None)
+            row.pop("routeReceipts", None)
             saved["result"] = _link(row)
             return saved["result"]
 
-    async def status(self, args):
+    def _own_id(self):
+        with self.store.transaction() as state:
+            return state["instanceId"]
+
+    @staticmethod
+    def _outgoing(state, identity):
+        rows = _links_to(state, identity, "outgoing")
+        active = _active(rows)
+        if not active:
+            raise failure("link_revoked" if rows else "link_not_found")
+        if len(active) != 1:
+            raise failure("link_ambiguous")
+        return active[0]
+
+    def _recheck(self, state, row):
+        active = self._outgoing(state, row["instanceId"])
+        if active["grantId"] != row["grantId"] or active.get("credential") != row["credential"]:
+            raise failure("link_revoked")
+        if active.get("routes") != row.get("routes"):
+            raise failure("link_command_conflict")
+        return active
+
+    async def _discovered_status(self, row, requester, saved):
+        def current_credential():
+            with self.store.transaction() as state:
+                return self._recheck(state, row)["credential"]
+
+        if saved["deviceId"] is not None:
+            try:
+                interface = await self.discovery.backend.tailscale_interface(saved["address"])
+            except Unavailable:
+                raise failure("link_unavailable") from None
+            saved = {**saved, "interface": interface}
+        result = await self.transport.discovered_status(
+            DirectRoute(row["origin"], row["fingerprint"]), saved,
+            {"instanceId": row["instanceId"], "requesterId": requester, "grantId": row["grantId"]},
+            current_credential,
+        )
+        self._verified_status(result, row["instanceId"])
+        return result
+
+    @staticmethod
+    def _verified_status(result, identity):
+        if (not record(result, instanceId=IDENTITY, generationId=IDENTITY, availability="online")
+                or result["instanceId"] != identity):
+            raise failure("link_verification_failed")
+
+    async def remember(self, args):
+        if not record(args, candidateId=IDENTITY, grantId=IDENTITY):
+            raise failure("link_invalid")
+        try:
+            async with asyncio.timeout(13), self.route_writes, self.route_checks:
+                return await self._remember(args)
+        except TimeoutError:
+            raise failure("link_unavailable") from None
+
+    async def _remember(self, args):
+        with self.store.transaction() as state:
+            row = state["links"].get(args["grantId"])
+            if not row or row["direction"] != "outgoing":
+                raise failure("link_not_found")
+            row = self._outgoing(state, row["instanceId"])
+            if row["grantId"] != args["grantId"]:
+                raise failure("link_revoked")
+            requester = state["instanceId"]
+            for route, token in row.get("routeReceipts", {}).items():
+                if token == args["candidateId"] and self.discovery.capabilities().get(route):
+                    return {"grantId": row["grantId"], "instanceId": row["instanceId"], "route": route}
+        candidate = self.discovery.candidate(args["candidateId"])
+        if candidate is None:
+            raise failure("link_not_found")
+        if row["instanceId"] != candidate.endpoint.instance_id:
+            raise failure("link_verification_failed")
+        saved = candidate.saved()
+        if not await self.discovery.usable(candidate.route, saved, row["instanceId"]):
+            raise failure("link_unavailable")
+        await self._discovered_status(row, requester, saved)
+        with self.store.transaction() as state:
+            active = self._recheck(state, row)
+            active.setdefault("routes", {})[candidate.route] = saved
+            # One current receipt per route; recover the last confirmed save
+            # even after the discovery token expires or the process restarts.
+            active.setdefault("routeReceipts", {})[candidate.route] = args["candidateId"]
+        return {"grantId": row["grantId"], "instanceId": row["instanceId"], "route": candidate.route}
+
+    async def status(self, args, *, owner=False):
         if not record(args, instanceId=IDENTITY):
             raise failure("link_invalid")
         identity = args["instanceId"]
         with self.store.transaction() as state:
-            rows = _links_to(state, identity, "outgoing")
-            active = _active(rows)
-            if not active:
-                raise failure("link_revoked" if rows else "link_not_found")
-            if len(active) != 1:
-                raise failure("link_ambiguous")
-            row = active[0]
+            row = self._outgoing(state, identity)
             requester = state["instanceId"]
-        result = await self.transport.status(
-            DirectRoute(row["origin"], row["fingerprint"]),
-            {"instanceId": identity, "requesterId": requester, "grantId": row["grantId"]}, row["credential"])
-        if (not record(result, instanceId=IDENTITY, generationId=IDENTITY, availability="online")
-                or result["instanceId"] != identity):
-            raise failure("link_verification_failed")
+        unverified = False
+        for route in ("lan", "tailscale"):
+            saved = row.get("routes", {}).get(route)
+            if saved is None:
+                continue
+            try:
+                async with asyncio.timeout(12), self.route_checks:
+                    if not await self.discovery.usable(route, saved, identity):
+                        continue
+                    result = await self._discovered_status(row, requester, saved)
+            except TimeoutError:
+                continue
+            except AppError as exc:
+                if exc.code == "link_verification_failed":
+                    unverified = True
+                elif exc.code != "link_unavailable":
+                    raise
+                continue
+            break
+        else:
+            route = "configured"
+            with self.store.transaction() as state:
+                self._recheck(state, row)
+            try:
+                result = await self.transport.status(
+                    DirectRoute(row["origin"], row["fingerprint"]),
+                    {"instanceId": identity, "requesterId": requester, "grantId": row["grantId"]}, row["credential"])
+            except AppError as exc:
+                if unverified and exc.code == "link_unavailable":
+                    raise failure("link_verification_failed") from None
+                raise
+            self._verified_status(result, identity)
         with self.store.transaction() as state:
-            if state["links"][row["grantId"]]["revoked"]:
-                raise failure("link_revoked")
-            if len(_active(_links_to(state, identity, "outgoing"))) != 1:
-                raise failure("link_ambiguous")
+            self._recheck(state, row)
+        if owner and any(self.discovery.capabilities().values()):
+            return {**result, "route": route}
         return result
+
+    def peer_identity(self, args):
+        if not record(args, instanceId=IDENTITY) or args["instanceId"] != self._own_id():
+            raise failure("link_verification_failed")
+        return args
 
     def peer_status(self, args, authorization):
         if not record(args, instanceId=IDENTITY, requesterId=IDENTITY, grantId=IDENTITY):
@@ -565,19 +965,42 @@ async def _read_body(request):
 
 def install(app, service):
     from .auth import allowed_origin
+    from .browser_entry import _on_this_computer
 
     links = service.linked_instances
-    app["linked_instance_peer_paths"] = PEER_PATHS
 
     async def owner(request):
+        operation = request.match_info["operation"]
+        setup = operation in {"setup", "setup-save"}
+        local_grants = operation in {"list", "revoke"}
         # Only the owner control credential and regular authenticated browser
         # sessions get a history scope. Restricted/legacy devices never do.
-        if (not request.get("history_scope") or not request.secure or not request.headers.get("Origin")
+        # A default HTTP install only gets the owner linking controls on
+        # actual loopback; the dedicated socket never acquires this principal.
+        local = (setup or local_grants or links.listener.origin is not None) and _on_this_computer(request)
+        if (not request.get("history_scope") or not (request.secure or local)
+                or len(request.headers.getall("Origin", [])) != 1 or not request.headers.get("Origin")
                 or not allowed_origin(request)):
             raise failure("link_unsupported")
-        links.require_enabled()
-        args = await _read_body(request)
-        operation = request.match_info["operation"]
+        try:
+            async with asyncio.timeout(5):
+                args = await _read_body(request)
+        except TimeoutError:
+            raise failure("link_invalid") from None
+        if setup:
+            if operation == "setup" and args == {}:
+                result = links.setup()
+            elif (operation == "setup-save" and isinstance(args, dict)
+                  and {"enabled", "lan", "tailscale", "expectedRevision"} <= args.keys()
+                  <= {"enabled", "lan", "tailscale", "peerListener", "expectedRevision"}
+                  and isinstance(args["expectedRevision"], str) and re.fullmatch(DIGEST, args["expectedRevision"])
+                  and all(type(args[key]) is bool for key in args.keys() - {"expectedRevision"})):
+                result = await links.save_setup(args)
+            else:
+                raise failure("link_invalid")
+            return web.json_response({"result": result})
+        if not local_grants:
+            links.require_enabled()
         if operation == "list" and args == {}:
             result = links.list()
         elif operation == "offer":
@@ -585,32 +1008,56 @@ def install(app, service):
         elif operation == "join":
             result = await links.join(args)
         elif operation == "status":
-            result = await links.status(args)
+            result = await links.status(args, owner=True)
         elif operation == "revoke":
             result = links.revoke(args)
+        elif operation == "route-remember":
+            result = await links.remember(args)
+        elif operation in {"lan-browse", "lan-discoverable", "tailscale-devices", "tailscale-find"}:
+            discovery = links.discovery
+            if not discovery.capabilities()[operation.split("-", 1)[0]]:
+                raise failure("link_unsupported")
+            try:
+                async with asyncio.timeout(8):
+                    if operation == "lan-browse" and args == {}:
+                        result = await discovery.browse(links._own_id())
+                    elif (operation == "lan-discoverable" and isinstance(args, dict) and args.keys() == {"enabled"}
+                          and type(args["enabled"]) is bool):
+                        result = await discovery.discoverable(args["enabled"], links._own_id())
+                    elif operation == "tailscale-devices" and args == {}:
+                        result = await discovery.devices()
+                    elif operation == "tailscale-find" and record(args, deviceId=DEVICE.pattern):
+                        result = await discovery.find(args["deviceId"], links._own_id())
+                    else:
+                        raise failure("link_invalid")
+            except TimeoutError:
+                key, value = {"lan-discoverable": ("expiresAt", discovery.expires_at()),
+                              "tailscale-devices": ("devices", [])}.get(operation, ("instances", []))
+                result = {"status": "unavailable", key: value}
         else:
             raise failure("link_invalid")
         return web.json_response({"result": result})
 
-    async def peer(request):
+    async def configured_peer(request):
         links.require_enabled()
-        if not request.secure or request.headers.get("Origin") or request.headers.get("Cookie"):
-            raise failure("link_unsupported")
         try:
             origin = validate_origin(f"https://{request.host}")
         except ValueError:
             raise failure("link_unsupported") from None
         if origin not in links.origins:
             raise failure("link_unsupported")
-        try:
-            async with asyncio.timeout(5):
-                args = await _read_body(request)
-        except TimeoutError:
-            raise failure("link_invalid") from None
-        result = (links.enroll(args, origin) if request.path == PEER_PREFIX + "/enroll"
-                  else links.peer_status(args, request.headers.get("Authorization", "")))
+        result = await links.peer(request, origin)
         return web.json_response({"result": result})
 
-    app.router.add_post(PREFIX + "/{operation:list|offer|join|status|revoke}", owner)
-    for path in sorted(PEER_PATHS):
-        app.router.add_post(path, peer)
+    app.router.add_post(PREFIX + "/{operation:setup|setup-save|list|offer|join|status|revoke|"
+                        "lan-browse|lan-discoverable|tailscale-devices|tailscale-find|route-remember}", owner)
+    if links.configured:
+        # Retain previously deployed TLS endpoints and pins. A fresh local
+        # browser app never installs the peer routes or their auth exemption.
+        app["linked_instance_peer_paths"] = PEER_PATHS
+        for path in sorted(PEER_PATHS):
+            app.router.add_post(path, configured_peer)
+    app.cleanup_ctx.append(links.lifetime)
+    # Fence admissions promptly on normal shutdown. The cleanup context is
+    # also finalized by aiohttp after failed startup, which skips on_shutdown.
+    app.on_shutdown.append(links.fence_shutdown)

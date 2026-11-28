@@ -71,7 +71,13 @@ async def run(args, *, config=None):
             passive = {'background_work': False, 'preload_providers': False, 'voice': False} if args.command == 'access' else {}
             runner = web.AppRunner(await create_app(data_dir, workspace=args.workspace, background_updates=False,
                                                     server_config=config, **passive))
-            await runner.setup(); site = web.TCPSite(runner, "127.0.0.1", 0); await site.start()
+            try:
+                await runner.setup()
+                site = web.TCPSite(runner, "127.0.0.1", 0)
+                await site.start()
+            except BaseException:
+                await runner.cleanup()
+                raise
             port = site._server.sockets[0].getsockname()[1]; base = f"http://127.0.0.1:{port}"
         async def state(identity=None):
             # A browser may switch chats while this terminal command is running.

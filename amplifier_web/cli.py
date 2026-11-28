@@ -395,6 +395,28 @@ def _serve_unlocked(args, data_dir: Path, *, task_runner=None) -> None:
         _serve_listeners(args, data_dir, config, secure, sockets, task_runner=task_runner)
 
 
+async def _serve_with_peer_cleanup(app, sockets, secure, listening, **runner_options):
+    """Own cleanup even when aiohttp fails before AppRunner.setup returns."""
+    import signal
+    from aiohttp import web
+
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGTERM, stop.set)
+    try:
+        runner = web.AppRunner(await app, **runner_options)
+        try:
+            await runner.setup()
+            for sock in sockets:
+                await web.SockSite(runner, sock, ssl_context=secure).start()
+            listening(None)
+            await stop.wait()
+        finally:
+            await runner.cleanup()
+    finally:
+        loop.remove_signal_handler(signal.SIGTERM)
+
+
 def _serve_listeners(args, data_dir, config, secure, sockets, *, task_runner=None):
     from aiohttp import web
     from .settings_migration import migrate_settings
@@ -446,8 +468,17 @@ def _serve_listeners(args, data_dir, config, secure, sockets, *, task_runner=Non
                 app["owner_task"] = task_runner.spec
                 return app
             app = managed_app()
-        web.run_app(app,
-                    sock=sockets, ssl_context=secure, print=listening, access_log_class=SafeAccessLogger, access_log_format='%a %t "%r" %s %b')
+        logging_options = {"access_log_class": SafeAccessLogger, "access_log_format": '%a %t "%r" %s %b'}
+        if (sys.platform == "linux" and config.get("linked_instances_peer_listener")
+                and config.get("linked_instances") and not config["public_origins"]):
+            # Stock web.run_app enters its cleanup try only after startup.
+            # Leave all other launcher paths, including Windows, unchanged.
+            try:
+                asyncio.run(_serve_with_peer_cleanup(app, sockets, secure, listening, **logging_options))
+            except KeyboardInterrupt:
+                pass
+        else:
+            web.run_app(app, sock=sockets, ssl_context=secure, print=listening, **logging_options)
     except PublishingError as exc:
         # The same library error can also mean unsupported OS locking. Only an
         # actual held-lock conflict establishes that another process owns it.
