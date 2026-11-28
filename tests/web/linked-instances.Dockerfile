@@ -19,7 +19,7 @@ RUN npm ci --prefix tests/web \
     && tests/web/node_modules/.bin/playwright install --with-deps chromium \
     && chmod -R a+rX /opt/paired/browsers
 COPY pyproject.toml uv.lock ./
-RUN uv sync --locked --group dev --no-install-project
+RUN uv sync --locked --no-dev --no-install-project
 COPY . .
 # Explicit copied-source inputs. Never silently build an old public selection.
 # With an accepted public client, set delivery.type=repository in selection.json
@@ -63,7 +63,7 @@ RUN if test -e amplifier_web/static || test -L amplifier_web/static; then \
 # The checkout alone does not provide top-level imports for selected components
 # under components/*-delivery. Install the exact project with its normal build
 # hook once all copied source and rebuilt assets are present.
-RUN uv sync --locked --group dev \
+RUN uv sync --locked --no-dev \
     && .venv/bin/python -c 'import amplifier_web.server'
 RUN install -d -m 0700 -o 24031 -g 24031 /home/fixture-source \
     && install -d -m 0700 -o 24032 -g 24032 /home/fixture-destination \

@@ -36,9 +36,11 @@ trap finish EXIT
 [[ $(git rev-parse "$fixture^{tree}") == 25b7fee36c66f104df43ee4c6654faafd278f2e6 && $(git rev-parse "$fixture^1") == "$host" ]]
 web="$PWD/.build/qualification-client"
 [[ $(git -C "$web" rev-parse HEAD) == "$client" && $(git -C "$web" rev-parse HEAD^{tree}) == 077b7f593aae2b499936ef58c26f9c04ccf2037c ]]
-git archive "$fixture" | tar -x -C "$work"
-# Preserve exactly the public fixture blobs; the workflow and its driver are not app inputs.
-stage="$work/tests/web/linked-client-candidate"
+context="$work/source"
+mkdir "$context"
+# Use only tracked source plus the reviewed fixture-only changes on this branch.
+git archive "$GITHUB_SHA" | tar -x -C "$context"
+stage="$context/tests/web/linked-client-candidate"
 mkdir "$stage"
 node "$web/scripts/client-source.mjs" record "$stage/selection.json"
 python3 - "$stage/selection.json" "$inputs" <<'PY'
@@ -51,10 +53,10 @@ p.write_text(json.dumps(record) + '\n')
 PY
 phase=canonical_package
 export CI=true TZ=UTC LC_ALL=C.UTF-8
-python3 - "$work" "$web" <<'PY'
+python3 - "$context" "$web" "$work" <<'PY'
 import json, hashlib, shutil, sys
 from pathlib import Path
-root, web = map(Path, sys.argv[1:]); export = root / 'exported-client-inputs'
+root, web, work = map(Path, sys.argv[1:]); export = work / 'exported-client-inputs'
 export.mkdir()
 lock = web / 'build-inputs.lock.json'; shutil.copyfile(lock, export / lock.name)
 for name, check in json.loads(lock.read_bytes())['inputs'].items():
@@ -67,18 +69,18 @@ node "$web/scripts/prepare-inputs.mjs" "$work/exported-client-inputs"
 actual=$(sha256sum "$work/client-package/component.json" | cut -d ' ' -f 1)
 printf '{"expected":"%s","actual":"%s","node":"%s"}\n' "$component" "$actual" "$(node --version)" > "$evidence/static-stamp.json"
 [[ $actual == "$component" ]]
-python3 - "$work" <<'PY'
+python3 - "$context" "$work" <<'PY'
 import runpy, sys
 from pathlib import Path
-root = Path(sys.argv[1]); fixture = runpy.run_path(str(root / 'tests/web/linked-fresh-install.py'))
-fixture['verify_static_package'](root / 'client-package')
+root, work = map(Path, sys.argv[1:]); fixture = runpy.run_path(str(root / 'tests/web/linked-fresh-install.py'))
+fixture['verify_static_package'](work / 'client-package')
 PY
 git -C "$web" archive "$client" | gzip -n > "$stage/client-source.tar.gz"
 tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - -C "$work/client-package" component.json static | gzip -n > "$stage/static-component.tar.gz"
 printf 'ready\n' > "$stage/fixture-mode"
 (cd "$stage" && sha256sum fixture-mode selection.json client-source.tar.gz static-component.tar.gz > SHA256SUMS)
 manifest=$(sha256sum "$stage/SHA256SUMS" | cut -d ' ' -f 1)
-compose=(docker compose --project-name "$project" -f "$work/tests/web/linked-fresh-install.compose.yaml")
+compose=(docker compose --project-name "$project" -f "$context/tests/web/linked-fresh-install.compose.yaml")
 phase=compose_preflight
 "${compose[@]}" config --format json | python3 -c 'import json,sys; v=json.load(sys.stdin); n=v["networks"]["peer"]; assert list(v["networks"])==["peer"] and n["internal"] and n["driver_opts"]["com.docker.network.bridge.gateway_mode_ipv4"]=="isolated"; assert v["services"]["twin"]["network_mode"]=="none"; assert all(not s.get("ports") and not s.get("privileged") and s.get("network_mode")!="host" and all(m["type"]=="volume" for m in s.get("volumes",[])) for s in v["services"].values())'
 [[ -z $(docker ps -aq --filter "label=com.docker.compose.project=$project") ]]
@@ -92,7 +94,7 @@ fi
 phase=browser
 set +e
 timeout 300s "${compose[@]}" exec -T \
-  -e "AMPLIFIER_PAIRED_HOST_REVISION=$host" -e "AMPLIFIER_PAIRED_FIXTURE_REVISION=$fixture" \
+  -e "AMPLIFIER_PAIRED_HOST_REVISION=$host" -e "AMPLIFIER_PAIRED_FIXTURE_REVISION=$GITHUB_SHA" \
   -e "AMPLIFIER_PAIRED_CLIENT_REVISION=$client" -e "AMPLIFIER_PAIRED_INPUTS_SHA256=$inputs" \
   -e "AMPLIFIER_PAIRED_MANIFEST_SHA256=$manifest" -e AMPLIFIER_TEST_ARTIFACTS=/run/link-control \
   twin .venv/bin/python tests/web/linked-fresh-install.py coordinate > "$work/check.log" 2>&1
