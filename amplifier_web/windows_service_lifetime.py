@@ -208,7 +208,7 @@ def owner_choice(spec, *, stop, manual=True):
     with store(spec) as pinned:
         try:
             previous = read(pinned, spec)
-        except (OSError, ValueError):
+        except Exception:
             previous = None
         try:
             key = native_sign_in(spec.sid)

@@ -91,10 +91,12 @@ def test_missing_record_grants_no_automatic_repeating_start_but_explicit_start_w
     assert lifetime.admit(spec()) == intent
 
 
-@pytest.mark.parametrize("failure", ["missing", "malformed", "unreadable", "identity"])
+@pytest.mark.parametrize("failure", ["missing", "malformed", "deep-json", "unreadable", "identity"])
 def test_explicit_start_does_not_require_a_successful_new_read(disk, failure):
     if failure == "malformed":
         disk["bytes"] = b"not json"
+    elif failure == "deep-json":
+        disk["bytes"] = b"[" * 1100 + b"]" * 1100
     elif failure == "unreadable":
         seed(disk)
         disk["read_error"] = True
