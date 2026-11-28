@@ -141,8 +141,7 @@ jobs:
           p = tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb"))
           locked = tomllib.load(open("uv.lock", "rb"))
           loop, = [row for row in locked["package"] if row["name"] == "amplifier-module-loop-live"]
-          revision = (loop["source"]["git"].rsplit("#", 1)[1] if os.environ["CHECK_SUITE"] in {"live-first-send", "live-first-accepted-graph"}
-                      else "76073827ba6742ae026a12b524f596120cd2b314" if os.environ["CHECK_SUITE"] == "manager-exception-boundary"
+          revision = (loop["source"]["git"].rsplit("#", 1)[1] if os.environ["CHECK_SUITE"] in {"manager-exception-boundary", "live-first-send", "live-first-accepted-graph"}
                       else p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])
           print("revision=" + revision)
           PY
