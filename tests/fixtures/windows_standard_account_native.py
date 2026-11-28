@@ -843,6 +843,7 @@ def in_session(sid, program, phase, stage, exchange, *, timeout):
         time.sleep(3)
         report = read_json(exchange / f"{phase}.json")
         if report and report.get("finished"):
+            need(not report.get("error"), "The standard-user measurement failed", report)
             return report
         state = task("state", HELPER)
         idle = idle + 1 if state.get("instances") == 0 else 0
@@ -3004,7 +3005,13 @@ def standard(stage, exchange, phase):
         (exchange / "identity-direct.json").write_text(json.dumps({"token": token}), encoding="utf-8")
         return True
     if phase in ("identity-first", "identity-second"):
-        return identity_measure(stage, exchange, account, token, second=phase == "identity-second")
+        try:
+            return identity_measure(stage, exchange, account, token, second=phase == "identity-second")
+        except Exception as error:
+            (exchange / f"{phase}.json").write_text(json.dumps({
+                "finished": True, "error": str(error)[-4000:], "errorType": type(error).__name__,
+                "onDemand": token}), encoding="utf-8")
+            return False
     # One run for each phase: a second start of the helper task changes nothing.
     try:
         with open(exchange / f"{phase}.started", "x", encoding="utf-8") as marker:
