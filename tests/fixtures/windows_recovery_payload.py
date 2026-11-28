@@ -192,8 +192,9 @@ def main():
     if (not folder.is_dir() or not folder.name.startswith("w8-recovery-")
             or not (folder / "synthetic-hosted-probe").is_file()
             or label not in {"runner", "ignore", "actionzero", "childzero",
-                             "actionforce", "disabled", "retryonly", "retryrepeat"}
-            or mode not in {"direct", "child", "fail", "long"}):
+                             "actionforce", "disabled", "retryonly", "retryrepeat",
+                             "retryhighonly", "retryhighrepeat", "retrytimeonly"}
+            or mode not in {"direct", "child", "fail", "failhigh", "long"}):
         raise SystemExit("Expected the probe's existing temporary folder.")
     if mode == "direct":
         publish(folder, label, "direct")
@@ -204,10 +205,10 @@ def main():
         while time.monotonic() < deadline and not (folder / f"{label}.stop").exists():
             time.sleep(0.2)
         return 0
-    if mode == "fail":
+    if mode in {"fail", "failhigh"}:
         publish(folder, label, "action")
         time.sleep(2)
-        return 7
+        return 7 if mode == "fail" else -2147467259  # E_FAIL, 0x80004005.
     child = subprocess.Popen(
         [sys.executable, "-I", "-S", "-B", __file__, str(folder), label, "child"],
         creationflags=subprocess.CREATE_NO_WINDOW,

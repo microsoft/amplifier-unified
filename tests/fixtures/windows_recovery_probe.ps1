@@ -78,7 +78,7 @@ function Enable($label, $enabled) {
     Snapshot $label 'enabled-readback'
 }
 
-function Create($label, $mode, $repeatMinutes, $restart) {
+function Create($label, $mode, $repeatMinutes, $restart, $demand = $true) {
     $name = $prefix + $id + '-' + $label
     try {
         $null = $root.GetTask($name)
@@ -130,13 +130,23 @@ function Create($label, $mode, $repeatMinutes, $restart) {
     $action.Arguments = "-I -S -B `"$payload`" `"$base`" $label $mode"
     $action.WorkingDirectory = $base
     $definition.Actions.Context = 'Owner'
-    $submitted = $definition.XmlText
+    # NewTask adds two idle defaults which the product's XML does not send.
+    # Remove those before registration so the round trip covers that omission.
+    $inputXml = [xml]$definition.XmlText
+    $inputNs = [Xml.XmlNamespaceManager]::new($inputXml.NameTable)
+    $inputNs.AddNamespace('t', 'http://schemas.microsoft.com/windows/2004/02/mit/task')
+    foreach ($node in @($inputXml.SelectNodes(
+        '/t:Task/t:Settings/t:IdleSettings/t:Duration | /t:Task/t:Settings/t:IdleSettings/t:WaitTimeout', $inputNs))) {
+        $null = $node.ParentNode.RemoveChild($node)
+    }
+    $submitted = $inputXml.OuterXml
     $submitted | Set-Content -LiteralPath "$base/$label-submitted.xml" -Encoding utf8
     # TASK_CREATE only. Never replace an existing task.
     $t = $root.RegisterTask($name, $submitted, 2, $sid, $null, 3, $null)
     $tasks[$label] = @{ name = $name; xml = $t.Xml }
     $t.Xml | Set-Content -LiteralPath "$base/$label-export.xml" -Encoding utf8
-    Fact 'created' @{ label = $label; name = $name; repeatMinutes = $repeatMinutes; restart = $restart }
+    Fact 'created' @{ label = $label; name = $name; repeatMinutes = $repeatMinutes
+        restart = $restart; mode = $mode; demand = $demand }
     if ($label -eq 'ignore') {
         Fact 'submitted-xml' $submitted
         Fact 'exported-xml' $t.Xml
@@ -161,8 +171,8 @@ function Create($label, $mode, $repeatMinutes, $restart) {
             throw 'The indefinite trigger did not survive registration.'
         }
     }
-    $null = $t.Run($null)
-    Snapshot $label 'on-demand-request'
+    if ($demand) { $null = $t.Run($null) }
+    Snapshot $label $(if ($demand) { 'on-demand-request' } else { 'awaiting-timer-only' })
 }
 
 function Read-Payloads {
@@ -242,6 +252,11 @@ try {
     Create disabled long 1 $true
     Create retryonly fail 0 $true
     Create retryrepeat fail 2 $true
+    # The first run found no retries for code 7. Vary the native status and
+    # initial trigger instead of treating that absence as a universal rule.
+    Create retryhighonly failhigh 0 $true
+    Create retryhighrepeat failhigh 2 $true
+    Create retrytimeonly fail 2 $true $false
     $measure = [Diagnostics.Stopwatch]::StartNew()
     $done = @{}
     $lastSample = -10
