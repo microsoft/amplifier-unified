@@ -14,7 +14,7 @@ $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 if ($LASTEXITCODE -ne 0) { throw 'Could not make the probe folder private.' }
 $null = New-Item -ItemType File -Path "$base/synthetic-hosted-probe"
 $payload = Join-Path $PSScriptRoot 'windows_recovery_payload.py'
-$python = (Get-Command python.exe -CommandType Application).Source
+$python = (Get-Command python.exe -CommandType Application | Select-Object -First 1).Source
 $pythonw = Join-Path (Split-Path $python) 'pythonw.exe'
 if (-not (Test-Path -LiteralPath $pythonw)) { throw 'Windowless Python is absent.' }
 $scheduler = New-Object -ComObject Schedule.Service
