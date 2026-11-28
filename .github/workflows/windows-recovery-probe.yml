@@ -1,0 +1,46 @@
+name: W8 synthetic Windows recovery probe
+# Phase 1 only. No product imports, installation, user account or secrets.
+# A separate path-scoped workflow cannot add waits or failures to other PRs.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/windows-recovery-probe.yml
+      - tests/fixtures/windows_recovery_probe.ps1
+      - tests/fixtures/windows_recovery_payload.py
+permissions:
+  contents: read
+jobs:
+  synthetic-scheduler:
+    if: >-
+      github.repository == 'microsoft/amplifier-unified' &&
+      github.head_ref == 'feat/windows-service-comes-back'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      AMPLIFIER_W8_SYNTHETIC_TASKS: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - name: Measure only synthetic Scheduler tasks
+        shell: pwsh
+        run: |
+          git rev-parse HEAD
+          & ./tests/fixtures/windows_recovery_probe.ps1
+      - name: Retain only synthetic facts and definitions
+        if: ${{ always() && env.W8_EVIDENCE != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: w8-synthetic-scheduler-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ env.W8_EVIDENCE }}/*.json
+            ${{ env.W8_EVIDENCE }}/*.xml
+          if-no-files-found: error
+          retention-days: 14
