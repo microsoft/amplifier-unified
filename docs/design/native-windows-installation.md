@@ -4880,19 +4880,14 @@ Use absolute executable/data/workspace/shared-state paths and explicit quoting.
 Configure indefinite execution, restart-on-failure and battery behavior
 deliberately. Automatic logon startup must not open a browser.
 
-#### Recovery preparation: lifetime record (slice 1)
-
-The standard-account fixture measures the token authentication LUID and native
-LSA logon time for direct, on-demand, timed and next-sign-in starts. Within one
-sign-in the pair must agree. After sign-out and sign-in it must differ. A failure
-stops the qualification; it is not a skipped pass.
+#### Recovery preparation: design C (slice 1)
 
 `windows_service_lifetime` owns one private `task-lifetime.json` and one lock in
-`config/services`. The closed record holds the registration, owner SID, sign-in
-pair, random intent, Stop, one explicit-start allowance and at most three saved
+`config/services`. The closed record holds the registration, owner SID,
+random intent, Stop, one explicit-start allowance and at most three saved
 automatic-start times. Only explicit Start clears Stop. Neither six hours nor a
 new sign-in clears it. Explicit Start does not need a successful read of the old
-record or the new sign-in key. It replaces unreadable record content through the
+record. It replaces unreadable record content through the
 existing private writer; it does not bypass private-file ownership checks.
 
 The limit is **three automatic start reservations in any six hours**, not three
@@ -4901,9 +4896,8 @@ across sign-ins and explicit starts. An explicit start is not an automatic
 reservation. A clock that went back pauses automatic starts until the saved time
 is reached. A forward clock change can age times early; this is a wall-clock
 reservation rule, not a monotonic six-hour promise across a clock correction.
-An automatic start needs a readable record and one confirmed interactive sign-in
-for the owner. A second session, even disconnected, is ambiguous. An unknown
-identity pauses automatic starts and never clears Stop.
+There is no sign-in key, LSA/WTS lookup or one-sign-in recovery gate. The record
+serves a persistent choice, not a choice that expires at sign-out.
 
 Slice 1 can read both the exact legacy task and a supervised two-trigger layout
 with a saved offset-bearing boundary and indefinite PT5M repetition. It selects
@@ -4917,10 +4911,17 @@ checks retain a later Stop across spawn and update gaps. Internal launcher
 maintenance does not call an owner Start or owner Stop.
 
 The record is bounded to 4096 bytes and three reservation times. Admission reads
-one record and writes one reservation or consumes one explicit-start allowance
-under the existing file lock. A running tracked host checks that record with its
-existing quarter-second Stop check; no native session enumeration occurs in that
-loop. No session history, network call or separate interruption log is added.
+one record before taking any write lock. A stopped or budget-paused tick exits
+without a lock-file change, diagnostic write or failure record. An allowed tick
+rechecks under the existing lock before saving its reservation or consuming the
+explicit-start allowance. The host's quarter-second watcher keeps only the
+existing exact-run Stop signals: no new read is added to that loop. Lifetime
+intent is checked at launcher transitions before and after a spawn and at update
+boundaries. A later owner Stop uses the same exact-host request as before.
+The guarded standard-user fixture measures cold paused entries (using a synthetic
+query receipt, excluding COM time) and compares the old extra-read watcher with
+the unchanged exact-run watcher. No session history, network call or separate
+interruption log is added.
 No Scheduler result is treated as health. A failed private write grants no
 automatic start.
 

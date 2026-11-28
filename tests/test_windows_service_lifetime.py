@@ -13,7 +13,6 @@ from amplifier_web import windows_service as service
 from amplifier_web import windows_service_lifetime as lifetime
 
 SID = "S-1-5-21-100-200-300-1001"
-KEY = {"authenticationId": "00000000:00000001", "logonTime": "134000000000000001"}
 
 
 def spec(**values):
@@ -27,7 +26,7 @@ def spec(**values):
 
 @pytest.fixture
 def disk(monkeypatch):
-    state = {"bytes": None, "writes": [], "time": 100000, "key": dict(KEY)}
+    state = {"bytes": None, "writes": [], "locks": [], "time": 100000}
 
     class Pinned:
         def read_private(self, name, *, limit):
@@ -46,19 +45,14 @@ def disk(monkeypatch):
             state["writes"].append(json.loads(raw))
 
     @contextmanager
-    def store(_):
+    def store(_, *, writing=True):
+        state["locks"].append(writing)
         yield Pinned()
 
     monkeypatch.setattr(lifetime, "supported", lambda _: True)
     monkeypatch.setattr(lifetime, "store", store)
     monkeypatch.setattr(lifetime.time, "time", lambda: state["time"])
 
-    def identity(_):
-        if state.get("ambiguous"):
-            raise ValueError("two sessions")
-        return state["key"]
-
-    monkeypatch.setattr(lifetime, "native_sign_in", identity)
     return state
 
 
@@ -70,13 +64,12 @@ def seed(disk, *, manual=False):
     return lifetime.owner_choice(spec(), stop=False, manual=manual)
 
 
-def test_stop_while_down_is_saved_and_neither_time_nor_new_sign_in_clears_it(disk):
+def test_stop_while_down_is_saved_and_elapsed_time_never_clears_it(disk):
     lifetime.owner_choice(spec(), stop=True)
     before = disk["bytes"]
     for offset in (1, 6 * 3600, 30 * 86400):
         disk["time"] += offset
-        disk["key"] = {**KEY, "authenticationId": "00000000:00000002"}
-        with pytest.raises(lifetime.Paused, match="stays stopped"):
+        with pytest.raises(lifetime.Paused, match="stopped by you"):
             lifetime.admit(spec())
         assert disk["bytes"] == before
     lifetime.owner_choice(spec(), stop=False)
@@ -91,7 +84,7 @@ def test_missing_record_grants_no_automatic_repeating_start_but_explicit_start_w
     assert lifetime.admit(spec()) == intent
 
 
-@pytest.mark.parametrize("failure", ["missing", "malformed", "deep-json", "unreadable", "identity"])
+@pytest.mark.parametrize("failure", ["missing", "malformed", "deep-json", "unreadable"])
 def test_explicit_start_does_not_require_a_successful_new_read(disk, failure):
     if failure == "malformed":
         disk["bytes"] = b"not json"
@@ -100,24 +93,17 @@ def test_explicit_start_does_not_require_a_successful_new_read(disk, failure):
     elif failure == "unreadable":
         seed(disk)
         disk["read_error"] = True
-    elif failure == "identity":
-        disk["ambiguous"] = True
     intent = lifetime.owner_choice(spec(), stop=False)
     disk.pop("read_error", None)
     assert lifetime.admit(spec()) == intent
     assert saved(disk)["manual"] is False
 
 
-def test_native_lookup_failure_cannot_block_explicit_start_or_grant_automatic_start(disk, monkeypatch):
-    def failed(_):
-        # Windows' account-lookup error is not an OSError or RuntimeError.
-        raise service._LookupFailed("no answer")
-
-    monkeypatch.setattr(lifetime, "native_sign_in", failed)
-    intent = lifetime.owner_choice(spec(), stop=False)
-    assert lifetime.admit(spec()) == intent
-    with pytest.raises(lifetime.Paused):
-        lifetime.admit(spec())
+def test_record_has_no_sign_in_gate(disk):
+    seed(disk)
+    assert set(saved(disk)) == {"schema", "registration", "ownerSid", "intent",
+                               "stopped", "manual", "starts", "lastTime"}
+    assert not hasattr(lifetime, "native_sign_in")
 
 
 def test_limit_is_shared_across_entries_and_refills_only_after_six_hours(disk):
@@ -126,7 +112,7 @@ def test_limit_is_shared_across_entries_and_refills_only_after_six_hours(disk):
         lifetime.admit(spec())
         disk["time"] += 1
     assert len(saved(disk)["starts"]) == 3
-    with pytest.raises(lifetime.Paused, match="three times"):
+    with pytest.raises(lifetime.Paused, match="three automatic starts"):
         lifetime.admit(spec())
     first = saved(disk)["starts"][0]
     disk["time"] = first + lifetime.WINDOW - 1
@@ -137,12 +123,11 @@ def test_limit_is_shared_across_entries_and_refills_only_after_six_hours(disk):
     assert saved(disk)["starts"] == [first + 1, first + 2, disk["time"]]
 
 
-def test_new_sign_in_and_explicit_start_keep_automatic_reservations(disk):
+def test_explicit_start_keeps_automatic_reservations(disk):
     seed(disk)
     for _ in range(3):
         lifetime.admit(spec())
     starts = saved(disk)["starts"]
-    disk["key"] = {**KEY, "authenticationId": "00000000:00000002"}
     with pytest.raises(lifetime.Paused):
         lifetime.admit(spec())
     lifetime.owner_choice(spec(), stop=False)
@@ -152,14 +137,12 @@ def test_new_sign_in_and_explicit_start_keep_automatic_reservations(disk):
         lifetime.admit(spec())
 
 
-@pytest.mark.parametrize("failure", ["backward-clock", "ambiguous", "malformed", "write-error"])
+@pytest.mark.parametrize("failure", ["backward-clock", "malformed", "write-error"])
 def test_automatic_uncertainty_pauses_and_does_not_spend_a_lost_reservation(disk, failure):
     seed(disk)
     before = disk["bytes"]
     if failure == "backward-clock":
         disk["time"] -= 1
-    elif failure == "ambiguous":
-        disk["ambiguous"] = True
     elif failure == "malformed":
         disk["bytes"] = b"{}"
         before = disk["bytes"]
@@ -202,22 +185,23 @@ def test_legacy_controls_are_not_blocked_by_an_unreadable_new_record(disk, monke
     assert lifetime.admit(value) is None
 
 
-def test_host_watcher_sees_lifetime_stop_without_using_scheduler_result(disk, monkeypatch):
+def test_host_watcher_adds_no_lifetime_read(disk, monkeypatch):
     from amplifier_web import windows_task_runtime as runtime
-    intent = seed(disk)
     runner = runtime.Runner.__new__(runtime.Runner)
-    runner.spec, runner.intent, runner.record = spec(), intent, {}
+    runner.spec, runner.record = spec(), {}
     monkeypatch.setattr(runtime, "stop_requested", lambda *a, **k: False)
-    assert not runner.stop_requested()
-    lifetime.owner_choice(spec(), stop=True)
-    assert runner.stop_requested()
+    monkeypatch.setattr(lifetime, "store", lambda *a, **k: pytest.fail("no lifetime watch read"))
+    for _ in range(100):
+        assert not runner.stop_requested()
+    monkeypatch.setattr(runtime, "stop_requested", lambda *a, **k: True)
+    assert runner.stop_requested()  # The exact-run signal still works.
 
 
 @pytest.mark.parametrize("field, bad", [
     ("schema", True), ("ownerSid", "foreign"), ("registration", "b" * 32),
     ("intent", "not-random"), ("manual", 1), ("starts", [100001]),
     ("starts", [1, 2, 3, 4]), ("starts", [True]), ("lastTime", -1),
-    ("logon", {"authenticationId": "bad", "logonTime": "123"}),
+    ("unexpected", "refused"),
 ])
 def test_closed_record_refuses_changed_fields(disk, field, bad):
     seed(disk)
@@ -314,8 +298,27 @@ def test_owner_stop_while_down_and_internal_maintenance_use_different_paths(disk
     assert saved(disk)["stopped"] is False
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Native Windows token and Scheduler account required")
-def test_native_sign_in_is_readable_for_the_runner_account():
-    from amplifier_web.windows_files import current_process_sid
-    key = lifetime.native_sign_in(current_process_sid())
-    assert lifetime.logon_key(key) == key
+@pytest.mark.parametrize("why", ["stop", "budget"])
+def test_paused_tick_changes_no_record_lock_or_failure_file(disk, monkeypatch, why):
+    from amplifier_web import windows_task_runtime
+    seed(disk)
+    if why == "stop":
+        lifetime.owner_choice(spec(), stop=True)
+    else:
+        for _ in range(3):
+            lifetime.admit(spec())
+    disk["locks"].clear()
+    before, writes = disk["bytes"], len(disk["writes"])
+    value = spec()
+    monkeypatch.setattr(service, "_require_python", lambda: None)
+    monkeypatch.setattr(service, "_owner", lambda: SID)
+    monkeypatch.setattr(service, "_read", lambda _: ({"state": 4, "instances": 1}, value))
+    monkeypatch.setattr(service.os, "chdir", lambda _: None)
+    monkeypatch.setattr(windows_task_runtime, "record_failure", lambda *a: pytest.fail("not a failure"))
+    for _ in range(4):
+        with pytest.raises(SystemExit) as ended:
+            service._run(value.encoded())
+        assert ended.value.code == 0
+    assert disk["locks"] == [False] * 4
+    assert disk["bytes"] == before and len(disk["writes"]) == writes
+    assert lifetime.status(value) == (lifetime.STOPPED if why == "stop" else lifetime.BUDGET)

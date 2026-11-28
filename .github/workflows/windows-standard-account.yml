@@ -29,6 +29,7 @@ on:
     paths:
       - .github/workflows/windows-standard-account.yml
       - tests/fixtures/windows_standard_account_native.py
+      - tests/fixtures/windows_lifetime_cost.py
       - tests/test_windows_standard_account.py
       - tests/fixtures/windows_start_again_native.py
       - tests/fixtures/windows_setup_native.py

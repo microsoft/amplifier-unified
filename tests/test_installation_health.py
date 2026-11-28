@@ -474,7 +474,7 @@ def windows_health_chain(tmp_path, monkeypatch):
     from types import SimpleNamespace
     import aiohttp
     from amplifier_web import auth, browser_entry, deployment, windows_task_runtime
-    spec = SimpleNamespace(sid="S-1-5-21-100-200-300-1001")
+    spec = SimpleNamespace(sid="S-1-5-21-100-200-300-1001", repeat_start=None)
     task = {"state": 4, "instances": 1}
     record = {"pid": 123, "created": "134000000000000001", "phase": "listening", "run": "a" * 32}
     state = {"reads": 0, "listener": True, "record": record, "requests": [],
@@ -551,6 +551,17 @@ def test_windows_status_says_why_the_background_app_stopped(windows_health_chain
     result = asyncio.run(health._windows_status(state["home"],
                          {"version": "1.2.3", "revision": None}, "stopped"))
     assert result["message"] == "Windows background host is not ready." and "lastFailure" not in result
+
+
+@pytest.mark.parametrize("choice", ["stopped by you", "paused after three automatic starts in six hours"])
+def test_windows_status_owner_choice_is_not_an_app_failure(windows_health_chain, monkeypatch, choice):
+    from amplifier_web import windows_service_lifetime as lifetime, windows_task_runtime
+    state = windows_health_chain
+    state["task"].update(state=3, instances=0)
+    monkeypatch.setattr(lifetime, "status", lambda spec: choice)
+    monkeypatch.setattr(windows_task_runtime, "last_failure", lambda spec: pytest.fail("not a new failure"))
+    result = asyncio.run(health._windows_status(state["home"], {}, "stopped"))
+    assert result["message"] == choice and "lastFailure" not in result and not result["ok"]
 
 
 def test_windows_status_of_a_running_or_starting_host_does_not_read_an_old_failure(windows_health_chain, monkeypatch):

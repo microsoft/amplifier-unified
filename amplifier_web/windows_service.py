@@ -836,9 +836,8 @@ def _run(encoded: str) -> None:
     from .windows_service_lifetime import admit, Paused
     try:
         intent = admit(spec)
-    except Paused as error:
-        from .windows_task_runtime import record_failure
-        record_failure(spec, error, "launcher")
+    except Paused:
+        # Stop and the rolling allowance are choices, not new app failures.
         raise SystemExit(0) from None
     if spec.supervised:
         from .windows_jobs import contain_current_host
@@ -1124,7 +1123,7 @@ def _serve_host(spec, *, intent=None):
     from .host_dependencies import prepare_environment
     from . import cli
     prepare_environment()
-    runner = Runner(spec, intent=intent) if intent is not None else Runner(spec)
+    runner = Runner(spec)
     with PrivateLog(spec) as log, redirect_stdout(log), redirect_stderr(log):
         print("Windowless console for child programs: " + console["status"] + "".join(
             f" {key}={value}" for key, value in console.items()
