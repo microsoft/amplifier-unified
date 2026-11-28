@@ -19,6 +19,8 @@ on:
       - amplifier_web/windows_removal.py
       - amplifier_web/windows_uninstall.py
       - tests/fixtures/windows_private_shell_probe.py
+      - amplifier_web/shell_tool_containment.py
+      - tests/test_shell_tool_real.py
       - tests/test_windows_private_git.py
       - tests/fixtures/windows_setup_native.py
       - tests/windows/native_setup.Tests.cs
@@ -87,7 +89,7 @@ jobs:
           "SHELL_BASE=$base" >> $env:GITHUB_ENV
           uv venv --python (Get-Command python).Source "$base/env"
           if ($LASTEXITCODE -ne 0) { throw 'Probe environment creation failed.' }
-          uv pip install --python "$base/env/Scripts/python.exe" --only-binary amplifier-core "amplifier-core==2.0.2" "pytest>=8,<10" "amplifier-module-tool-bash @ git+https://github.com/microsoft/amplifier-module-tool-bash@d5bb46d24dcae8e260211bf8fb5c22de3a67f406"
+          uv pip install --python "$base/env/Scripts/python.exe" --only-binary amplifier-core "amplifier-core==2.0.2" "pytest>=8,<10" "amplifier-module-tool-bash @ git+https://github.com/microsoft/amplifier-module-tool-bash@bf36c12bd3833a8b1020eed460fbcb82b4e2a4a9"
           if ($LASTEXITCODE -ne 0) { throw 'Shell tool installation failed.' }
       # Setup unpacks with its private uv-managed CPython, not the runner's Python.
       - name: Install the same kind of private Python that setup uses
@@ -128,6 +130,21 @@ jobs:
           $listed = [regex]::Match((@($lines | Where-Object { $_.StartsWith('collected ') }) -join "`n"), '^collected (\d+) items?$')
           $passed = [regex]::Match($summary, '^=+ (\d+) passed(, \d+ warnings?)? in [0-9.]+s( \([0-9:]+\))? =+$')
           if (-not ($listed.Success -and $passed.Success -and $listed.Groups[1].Value -eq $passed.Groups[1].Value)) { throw "Not every setup folder case ran and passed. pytest collected: '$($listed.Value)'. Its last line: $summary" }
+      # The worker's guard against the real shell tool at the revision installed
+      # above, on native Windows: both entry points to the tool's job exist and
+      # are replaced, and a command still runs through Git Bash. The case is
+      # skipped where the real tool is not installed. So this step uses the rule
+      # of the step before it: the one case must be collected, run and pass.
+      - name: Check the worker's shell tool guard against the real shell tool
+        shell: pwsh
+        run: |
+          & "$env:SHELL_BASE/env/Scripts/python.exe" -B -m pytest -ra --color=no -p no:cacheprovider tests/test_shell_tool_real.py | Tee-Object -Variable log
+          if ($LASTEXITCODE -ne 0) { throw 'The guard check against the real shell tool failed.' }
+          $lines = @($log | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+          $summary = if ($lines.Count) { $lines[-1] } else { '' }
+          $listed = [regex]::Match((@($lines | Where-Object { $_.StartsWith('collected ') }) -join "`n"), '^collected (\d+) items?$')
+          $passed = [regex]::Match($summary, '^=+ (\d+) passed(, \d+ warnings?)? in [0-9.]+s( \([0-9:]+\))? =+$')
+          if (-not ($listed.Success -and $passed.Success -and $listed.Groups[1].Value -eq $passed.Groups[1].Value)) { throw "The guard case against the real shell tool did not run and pass. pytest collected: '$($listed.Value)'. Its last line: $summary" }
       - name: Unpack the pinned Git and run the real shell tool without developer tools on PATH
         timeout-minutes: 10
         shell: pwsh

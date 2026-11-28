@@ -114,20 +114,26 @@ only entry points to its job (`_get_windows_job_object`,
 no process, whatever else it does. If a module that has `BashTool` lacks one of
 them, stderr names it and the result lists it. The other two names are the walk
 over the process table. They are replaced when present. The tool's own repair
-(a separate change, not merged when this was written) removes the walk, so
-their absence is no fault. A renamed entry point needs review: this guard
-cannot disable an unknown replacement.
+removes the walk, so their absence is no fault (commit `bf36c12` of
+`microsoft/amplifier-module-tool-bash`, November 27, 2026: a command is
+created suspended, put into the tool's job and then resumed, so its children
+are born in that job). An installation follows the tool's `main` branch: it
+takes that commit with its component update, not with an app release. A
+renamed entry point needs review: this guard cannot disable an unknown
+replacement.
 No step of the guard can fail the tool's import. A name that cannot be
 replaced, or a message that cannot be written, leaves the tool loaded. The
 names that could be replaced stay replaced, and the result lists the one that
 could not. Errors of the tool's own code still reach its importer.
 The helper programs `update_probe.py` and `module_validate.py` mount tools
 without a worker and have no guard. Their ordinary paths run no shell command.
-A command that the tool runs through WSL is expected to be contained too.
-Measured on one Windows 11 PC with throwaway foreground commands, not in a
-Unified worker: every Windows process of such a command is born in the job of
-the process that started it, and its Linux process ends within a second after
-a job ends them. A Linux process that detaches itself was not measured. Job
+A command that the tool runs through WSL or through Git Bash is expected to
+be contained too. Measured on one Windows 11 PC with the repaired tool, this
+guard and throwaway foreground commands, in a process that had put itself into
+a kill-on-close job as a stand-in for the worker's job, not in a Unified
+worker: every Windows process of a command was in that job, and when the
+process ended abruptly, no Windows process and no Linux process of the
+command was left. A Linux process that detaches itself was not measured. Job
 containment does not cover a process that another service starts on its own
 account.
 
@@ -138,6 +144,11 @@ The existing `test_windows_runtime_identity_transport_and_stop_model` and
 `ABITests.test_query_length_limits_and_inherit_fail_closed` in
 `tests/test_windows_owned_process.py` pin the job's flags and their verification.
 These portable models are not a native Windows run of this change.
+The native run is `tests/test_shell_tool_real.py` on a Windows runner. The
+case installs the guard, imports the real tool at the revision that
+`pyproject.toml` pins for tests, and runs a command. The workflow
+`windows-private-shell.yml` installs that revision and requires that the case
+ran and passed, through Git Bash. A runner has no WSL and no Unified worker.
 
 ### Stable launcher and update recovery
 
