@@ -6,6 +6,60 @@
 
 Both actions are shared by the UI and agent action surface. Details and copyable IDs remain available under the conversation settings after an error notice is dismissed. Recovery is disabled while work or configuration changes are active.
 
+## Model changes and context-preparation failures
+
+The chat notice and Details & reporting use `failure.summary` and `guidance`.
+Unified keeps context failure codes only when they match `[a-z_]{1,80}`. It never
+uses an exception message as the explanation. Known codes have fixed guidance;
+an unknown fixed code stays in diagnostics with a request to share those details.
+
+Some loop versions omit newer context codes from `generation.failed`. Unified
+can supplement the saved failure from the real immediate exception, bound to the
+same failed generation and input IDs. It does not rewrite the native event,
+infer a cause for older saved failures, or promote a different handled error.
+Stop and stale-generation checks still apply.
+
+`model_transition_required` means the selected model needs history preparation
+that the participating host did not admit. The notice asks the person to send
+again, and says that this takes a while and uses extra model calls; if that
+fails, select the previous model and connection, send a new message, and share
+diagnostics. A new worker can prepare the chosen model from
+originals, so this failure does not prove that sending again will always fail.
+It does not recommend deleting the checkpoint, resetting a preparation record,
+or automatically repeating summary calls.
+
+The exact-count transition path and the uncounted ordinary path are different:
+the pinned streaming loop invokes `context.measured_request_view` only when the
+provider advertises an exact counter. The pinned context module invokes the
+host's journaled transition entry there, but not from `context.request_retention`.
+An uncounted warm model change with an older checkpoint that cannot be safely
+carried can therefore still refuse. Handling that route requires coordinated
+context/loop support, not a synthetic exact count or removal of the host's paid
+call guards. This diagnostic change does not claim to repair that limitation.
+
+An offline experiment confirms that a cold worker can answer on the new model.
+It also shows why merely restarting on every such change is not a safe repair:
+if that uncounted rebuild stops after a confirmed summary call, a later cold
+worker can buy the same work again without a transition-journal reservation.
+This change does not add an automatic restart or claim durable continuation of
+that uncounted paid prefix.
+Sending again by hand runs the same rebuild: 12 summary calls in the
+experiment, and an interrupted rebuild starts again from the first call.
+In the experiment the saved checkpoint did not change after the successful
+reply. So the experiment does not show that the rebuilt summary is saved
+for a later cold start.
+
+`summary_work_paused` has two distinct meanings. A native context failure reports
+its local call limit. The host's `ContextRecoveryError` reports a saved transition
+with an unconfirmed call and an offered continuation, even before that limit is
+used. Its notice keeps the “Review preparation” instruction; that control checks
+the current offer before the person can approve more calls.
+
+The pinned live loop ends execution after a failed manager turn, including a
+context-preparation refusal. Unified preserves the cause and closes that worker;
+the next message can need a cold start. This change does not restart the loop,
+reuse its closed runtime, or automatically send the failed input again.
+
 ## Bundle ID casing and legacy Work chats
 
 New standalone bundle registrations use lowercase IDs with dashes, separate from

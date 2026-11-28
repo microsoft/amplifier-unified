@@ -4,15 +4,10 @@ from pathlib import Path
 import re
 
 
-_TRANSITION_FAILURE_CODES = (
-    'transition_unsupported', 'transition_intent_required', 'recovery_checkpoint_rejected',
-    'recovery_unreconciled', 'summary_work_paused',
-)
-
-
 def _context_recovery_fields(code, reason):
     from .context_continuity import TRANSITION_HOLD_REASONS
-    if type(code) is not str or code not in _TRANSITION_FAILURE_CODES:
+    from .context_failures import context_code
+    if not context_code(code):
         return {}
     fields = {'contextRecoveryCode': code}
     if code == 'recovery_unreconciled' and type(reason) is str and reason in TRANSITION_HOLD_REASONS:
@@ -72,6 +67,16 @@ def exception_chain(error):
             from .context_continuity import ContextRecoveryError
             if type(error) is ContextRecoveryError:
                 item.update(_context_recovery_fields(error.code, error.reason))
+        if type(error).__name__ == 'CompactionError':
+            # Do not trust a plugin's class name or parse its message.
+            try:
+                from amplifier_module_context_managed.errors import CompactionError
+            except ImportError:
+                pass
+            else:
+                from .context_failures import context_code
+                if type(error) is CompactionError and context_code(error.code):
+                    item['compactionCode'] = error.code
         chain.append(item)
         error = error.__cause__ or error.__context__
     return chain
@@ -113,6 +118,11 @@ def public_exception_chain(value):
             row['providerFailure'] = {'code': 'function_call_truncated'}
         if kind == 'ContextRecoveryError':
             row.update(_context_recovery_fields(item.get('contextRecoveryCode'), item.get('contextRecoveryReason')))
+        if kind == 'CompactionError':
+            from .context_failures import context_code
+            code = context_code(item.get('compactionCode'))
+            if code:
+                row['compactionCode'] = code
         result.append(row)
     return result
 
@@ -179,6 +189,14 @@ def terminal_context_recovery(chain):
     return None
 
 
+def terminal_compaction_code(chain):
+    """Only the certified immediate cause, not an earlier handled failure."""
+    index = 1 if chain and chain[0]['errorType'] == 'ManagerTurnError' else 0
+    if len(chain) > index and chain[index]['errorType'] == 'CompactionError':
+        return chain[index].get('compactionCode')
+    return None
+
+
 def terminal_request_refusal(chain):
     """Do not promote an earlier handled refusal over the actual failure."""
     if not chain:
@@ -236,6 +254,9 @@ def event_detail(row):
         if type(row.get(key)) in (int, float, bool):
             result[key] = row[key]
     result.update(callback_rejection_detail(row))
+    from .context_failures import context_code
+    if code := context_code(row.get('error_code')):
+        result['error_code'] = code
     error = row.get('error')
     if isinstance(error, dict):
         kind = error.get('type')
