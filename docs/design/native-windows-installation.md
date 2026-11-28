@@ -109,9 +109,10 @@ If it cannot be installed, the worker says so in one stderr line ("Unified
 could not turn off the shell tool's own Windows job: ...") and runs as it did
 before the guard existed.
 The function names belong to another repository. Two of them are the tool's
-only entry points to its job (`_get_windows_job_object`,
-`_assign_to_windows_job`). With both replaced the tool makes no job and assigns
-no process, whatever else it does. If a module that has `BashTool` lacks one of
+only entry points to its module-wide kill-on-close job
+(`_get_windows_job_object`, `_assign_to_windows_job`). With both replaced the
+tool makes no such job and assigns no process to one. The tool's job for one
+command stays; see below. If a module that has `BashTool` lacks one of
 them, stderr names it and the result lists it. The other two names are the walk
 over the process table. They are replaced when present. The tool's own repair
 removes the walk, so their absence is no fault (commit `bf36c12` of
@@ -122,10 +123,13 @@ commit with its component update, not with an app release. A renamed entry
 point needs review: this guard cannot disable an unknown replacement.
 Since its commit `3ca72d0` the tool also gives each foreground command a job
 of its own (`_create_windows_command_job`). That job has no kill-on-close
-flag, and the command is put into it while it is still suspended, so it can
-hold only what the command starts. The tool uses it to end a command's whole
-tree at a time limit or a Stop. The guard leaves it in place: it is inside
-the worker's job, and it cannot outlive or take anything else.
+flag, and the command is put into it while it is still suspended, so it
+holds only the command and what the command starts. The tool uses it to end
+a command's whole tree at a time limit or a Stop. The guard leaves it in
+place. The job is nested inside the worker's job, so its processes end with
+the worker, and the tool puts only that one command into it. If Windows
+refuses the job, the tool warns once and ends only the command's first
+process, as it did before.
 No step of the guard can fail the tool's import. A name that cannot be
 replaced, or a message that cannot be written, leaves the tool loaded. The
 names that could be replaced stay replaced, and the result lists the one that
@@ -141,6 +145,14 @@ process ended abruptly, no Windows process and no Linux process of the
 command was left. A Linux process that detaches itself was not measured. Job
 containment does not cover a process that another service starts on its own
 account.
+Later on that PC, in a real Unified worker (app 0.132.1, through WSL): with
+the tool at `bf36c12` the worker held no shell-tool job, the Windows
+processes of a running command were members of the worker's job, and a Stop
+ended the worker and the command and left the service running. With the tool
+at `3ca72d0` a command returned its exit code, and a command that passed its
+time limit was ended; no process of it was found afterwards, and the service
+stayed up. Job membership was not read in that second run. Git Bash was not
+used in a real worker.
 
 The existing `test_windows_runtime_identity_transport_and_stop_model` and
 `test_windows_runtime_identity_failure_never_admits_input` in
