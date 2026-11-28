@@ -32,6 +32,110 @@ def host(monkeypatch):
 
 
 @pytest.fixture
+def real_host(host):
+    from amplifier_core import HookRegistry
+    host.hooks = HookRegistry()
+    host.register_capability('web.request_recovery', False)
+    install(host)
+    return host
+
+
+@pytest.mark.parametrize('streaming', [False, True])
+@pytest.mark.parametrize('payload', ['a response', ['a response'], None])
+async def test_real_hooks_malformed_response_blocks_replay(real_host, streaming, payload):
+    from amplifier_core import HookResult
+    seen, calls = [], []
+    async def observe(event, data):
+        seen.append(data)
+        return HookResult()
+    real_host.hooks.register('llm:response', observe, name='response-reader')
+    async def complete(request):
+        calls.append(request)
+        await real_host.hooks.emit('llm:response', payload)
+        if len(calls) == 1: raise LLMTimeoutError('after response')
+        return 'duplicate'
+    async def stream(request):
+        yield await complete(request)
+    wrapped = RecoveringProvider(SimpleNamespace(complete=complete, stream=stream), real_host)
+    with pytest.raises(LLMTimeoutError):
+        if streaming:
+            async for _ in wrapped.stream({}): pytest.fail('unexpected output')
+        else: await wrapped.complete({})
+    assert len(calls) == 1 and seen == [payload]
+
+
+@pytest.mark.parametrize('payload', ['a response', ['a response'], None])
+async def test_exposure_handler_accepts_unknown_payload_without_handler_failure(host, payload):
+    # In addition to Core's isolated-handler behavior above, enforce that our
+    # own observer handles these payloads without relying on that isolation.
+    from amplifier_web.request_recovery import _ACTIVE
+    scope = {'exposed': False}
+    token = _ACTIVE.set(scope)
+    try:
+        await host.hooks.emit('llm:response', payload)
+        assert scope['exposed'] is True
+    finally:
+        _ACTIVE.reset(token)
+
+
+@pytest.mark.parametrize('streaming', [False, True])
+@pytest.mark.parametrize('event', ['thinking:delta', 'thinking:final', 'llm:content_block',
+                                  'orchestrator:goal_progress'])
+async def test_real_hooks_progressive_output_then_error_blocks_replay(real_host, streaming, event):
+    from amplifier_core import HookResult
+    seen, calls = [], []
+    async def observe(event, data):
+        seen.append(data)
+        return HookResult()
+    real_host.hooks.register(event, observe, name='output-reader')
+    async def complete(request):
+        calls.append(request)
+        await real_host.hooks.emit(event, {'text': 'Already shown'})
+        await real_host.hooks.emit('llm:response', {'status': 'error', 'error': 'offline'})
+        if len(calls) == 1: raise LLMTimeoutError('after output')
+        return 'duplicate'
+    async def stream(request):
+        yield await complete(request)
+    wrapped = RecoveringProvider(SimpleNamespace(complete=complete, stream=stream), real_host)
+    with pytest.raises(LLMTimeoutError):
+        if streaming:
+            async for _ in wrapped.stream({}): pytest.fail('unexpected output')
+        else: await wrapped.complete({})
+    assert len(calls) == 1 and len(seen) == 1 and seen[0]['text'] == 'Already shown'
+
+
+@pytest.mark.parametrize('kind,extra,recover', [
+    ('chatgpt', {'error': 'offline', 'model': 'fixture'}, True),
+    ('anthropic', {'error': 'offline', 'model': 'fixture'}, True),
+    ('gemini', {'error': 'offline', 'model': 'fixture'}, True),
+    ('openai', {'error': 'offline', 'model': 'fixture'}, True),
+    ('azure-openai', {'error': 'offline', 'model': 'fixture'}, True),
+    ('github-copilot', {'error_type': 'ProviderUnavailableError', 'error_message': 'offline'}, False),
+    ('chat-completions', {'error_type': 'APIConnectionError'}, False),
+    ('openai-with-usage', {'error': 'offline', 'usage': {}}, False),
+    ('openai-with-cost', {'error': 'offline', 'known_cost_usd': '0.01'}, False),
+    ('openai-with-details', {'error': 'offline', 'response_details': {}}, False),
+])
+async def test_real_hooks_connection_error_shapes_keep_conservative_policy(real_host, kind, extra, recover):
+    """Source-derived payloads; not live qualification of these connections."""
+    calls = []
+    async def complete(request):
+        calls.append(request)
+        if len(calls) == 1:
+            await real_host.hooks.emit('llm:response', {
+                'provider': kind, 'status': 'error', 'duration_ms': 5, **extra})
+            raise ProviderUnavailableError('offline')
+        return 'Recovered'
+    wrapped = RecoveringProvider(SimpleNamespace(complete=complete), real_host)
+    if recover:
+        assert await wrapped.complete({}) == 'Recovered'
+        assert len(calls) == 2
+    else:
+        with pytest.raises(ProviderUnavailableError): await wrapped.complete({})
+        assert len(calls) == 1
+
+
+@pytest.fixture
 def clock(host, monkeypatch):
     clock = SimpleNamespace(now=0, waits=[])
     async def wait(delay):
@@ -87,10 +191,10 @@ async def test_retries_are_bounded_and_return_original_final_error(host, clock, 
             await wrapped.complete({})
     assert caught.value is error
     assert (len(calls) if streaming else original.complete.await_count) == 22
-    assert clock.now == 600
-    assert clock.waits == [5, 10, 20] + [30] * 18 + [25]
+    assert clock.now == 575
+    assert clock.waits == [5, 10, 20] + [30] * 18
     retries = [data for event, data in host.hooks.events]
-    assert [data['attempt'] for data in retries] == list(range(1, 23))
+    assert [data['attempt'] for data in retries] == list(range(1, 22))
     assert all(data['max_retries'] == 22 and data['tools_replayed'] is False for data in retries)
     assert [data['delay'] for data in retries] == clock.waits
 
@@ -103,17 +207,47 @@ async def test_provider_retry_after_is_respected_within_bound(host, clock, hint)
     assert clock.waits == [max(5, hint)]
 
 
-@pytest.mark.parametrize('spent', [599, 600, 650])
-async def test_initial_provider_time_counts_against_recovery_budget(host, clock, spent):
+@pytest.mark.parametrize('spent', [480, 516, 650])
+@pytest.mark.parametrize('streaming', [False, True])
+async def test_first_retryable_failure_starts_recovery_budget(host, clock, spent, streaming):
     calls = []
     async def complete(request):
         calls.append(clock.now)
-        clock.now += spent
-        raise LLMTimeoutError('provider exhausted its own retries')
-    with pytest.raises(LLMTimeoutError):
-        await RecoveringProvider(SimpleNamespace(complete=complete), host).complete({})
-    assert calls == [0]
-    assert clock.waits == ([1] if spent == 599 else [])
+        if len(calls) == 1: clock.now += spent
+        # Connection comes back 150 s after the first failure; healthy work
+        # before that failure must not shorten the recovery opportunity.
+        if clock.now < spent + 150:
+            raise LLMTimeoutError('provider exhausted its own retries')
+        return 'Recovered'
+    async def stream(request):
+        yield await complete(request)
+    wrapped = RecoveringProvider(SimpleNamespace(complete=complete, stream=stream), host)
+    if streaming: assert [item async for item in wrapped.stream({})] == ['Recovered']
+    else: assert await wrapped.complete({}) == 'Recovered'
+    assert calls == [0] + [spent + offset for offset in (5, 15, 35, 65, 95, 125, 155)]
+    assert clock.now == spent + 155
+
+
+@pytest.mark.parametrize('remaining', [30, 27, 0, -1])
+@pytest.mark.parametrize('streaming', [False, True])
+async def test_no_wait_when_another_retry_cannot_start_before_deadline(host, clock, remaining, streaming):
+    calls, errors = [], []
+    async def complete(request):
+        calls.append(clock.now)
+        if len(calls) == 2: clock.now = 600 - remaining
+        error = ProviderUnavailableError('last failure', retry_after=30)
+        errors.append(error)
+        raise error
+    async def stream(request):
+        yield await complete(request)
+    wrapped = RecoveringProvider(SimpleNamespace(complete=complete, stream=stream), host)
+    with pytest.raises(ProviderUnavailableError) as caught:
+        if streaming:
+            async for _ in wrapped.stream({}): pytest.fail('unexpected output')
+        else: await wrapped.complete({})
+    assert calls == [0, 30] and caught.value is errors[-1]
+    assert clock.waits == [30]
+    assert len(host.hooks.events) == 1
 
 
 @pytest.mark.parametrize('event', ['content_block:start', 'content_block:delta', 'content_block:end',
@@ -224,11 +358,13 @@ async def test_retried_transport_is_bounded_and_cancellable(host, monkeypatch, s
     monkeypatch.setattr('amplifier_web.request_recovery.DELAYS', (0,) * 22)
     monkeypatch.setattr('amplifier_web.request_recovery.RECOVERY_SECONDS', .05)
     monkeypatch.setattr('amplifier_web.request_recovery.asyncio.sleep', real_sleep)
-    error, calls, closed = LLMTimeoutError('first connection loss'), [], []
+    first, error = LLMTimeoutError('first loss'), ProviderUnavailableError('last loss')
+    calls, closed = [], []
     waiting = asyncio.Event()
     async def complete(request):
         calls.append(request)
-        if len(calls) == 1: raise error
+        if len(calls) == 1: raise first
+        if len(calls) == 2: raise error
         waiting.set()
         try: await asyncio.Future()
         finally: closed.append(True)
@@ -242,10 +378,10 @@ async def test_retried_transport_is_bounded_and_cancellable(host, monkeypatch, s
     task = asyncio.create_task(consume())
     await waiting.wait()
     if stop: task.cancel()
-    with pytest.raises(asyncio.CancelledError if stop else LLMTimeoutError) as caught:
+    with pytest.raises(asyncio.CancelledError if stop else ProviderUnavailableError) as caught:
         await asyncio.wait_for(task, 2)
     if not stop: assert caught.value is error
-    assert len(calls) == 2 and closed == [True]
+    assert len(calls) == 3 and closed == [True]
 
 
 @pytest.mark.parametrize('streaming', [False, True])

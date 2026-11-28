@@ -50,22 +50,29 @@ def install(coordinator):
         return
     from amplifier_core import HookResult
     async def exposed(event, data):
+        scope = _ACTIVE.get()
+        if scope is None:
+            return HookResult()
+        # Fail closed before inspecting provider-owned payloads. HookRegistry
+        # isolates handler errors, so inspection must not leave replay enabled.
+        was_exposed, scope['exposed'] = scope['exposed'], True
         # A terminal failure diagnostic is not a returned model response.
         # Unknown fields (including raw/content/tool payloads) stay conservative.
-        if (event == 'llm:response' and data.get('status') == 'error'
-                and data.keys() <= _ERROR_DIAGNOSTIC_FIELDS):
+        if (event == 'llm:response' and isinstance(data, dict)
+                and dict.get(data, 'status') == 'error'
+                and dict.keys(data) <= _ERROR_DIAGNOSTIC_FIELDS):
+            scope['exposed'] = was_exposed
             return HookResult()
-        scope = _ACTIVE.get()
-        if scope is not None:
-            scope['exposed'] = True
-            timer = scope.get('timer')
-            if timer is not None:
-                timer.reschedule(None)  # Never cut off an exposed response.
+        timer = scope.get('timer')
+        if timer is not None:
+            timer.reschedule(None)  # Never cut off an exposed response.
         return HookResult()
     # Some complete() implementations emit progressive output through hooks.
     # Once anything escapes, replay needs provider-specific reconciliation.
     for event in ('content_block:start', 'content_block:delta', 'content_block:end',
                   'llm:stream_block_start', 'llm:stream_block_delta', 'llm:stream_block_end',
+                  'thinking:delta', 'thinking:final', 'llm:content_block',
+                  'orchestrator:goal_progress',
                   'provider:response', 'llm:response', 'tool:pre'):
         coordinator.hooks.register(event, exposed, name='unified-request-recovery', priority=-200)
     coordinator.register_capability('web.request_recovery', True)
@@ -105,10 +112,12 @@ class RecoveringProvider:
             if not isinstance(advised, (int, float)) or not math.isfinite(advised) or advised < 0 or advised > 30:
                 return False
             delay = max(delay, advised)
+        if scope['deadline'] is None:
+            # A long healthy first call must not consume connection recovery.
+            scope['deadline'] = monotonic() + RECOVERY_SECONDS
         remaining = scope['deadline'] - monotonic()
-        if remaining <= 0:
+        if delay >= remaining:
             return False
-        delay = min(delay, remaining)
         try:
             async with asyncio.timeout(remaining):
                 try:
@@ -127,9 +136,8 @@ class RecoveringProvider:
     async def complete(self, request, **kwargs):
         saved, saved_kwargs = snapshot(request), snapshot(kwargs)
         generation = self._generation()
-        deadline, last_error = monotonic() + RECOVERY_SECONDS, None
+        scope, last_error = {'exposed': False, 'deadline': None}, None
         for attempt in range(len(DELAYS) + 1):
-            scope = {'exposed': False, 'deadline': deadline}
             token = _ACTIVE.set(scope)
             try:
                 # Leave the original healthy call's timeout with its provider.
@@ -147,9 +155,8 @@ class RecoveringProvider:
     async def _stream(self, method, request, kwargs):
         saved, saved_kwargs = snapshot(request), snapshot(kwargs)
         generation = self._generation()
-        deadline, last_error = monotonic() + RECOVERY_SECONDS, None
+        scope, last_error = {'exposed': False, 'deadline': None}, None
         for attempt in range(len(DELAYS) + 1):
-            scope = {'exposed': False, 'deadline': deadline}
             iterator = None
             try:
                 try:

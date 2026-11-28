@@ -954,7 +954,8 @@ class Worker:
                     retry = {"retryAttempt": attempt, "retryMax": maximum}
                 detail = "The model request was interrupted; retrying" + suffix + "."
                 if data.get("recovery") == "unreturned_model_request":
-                    detail = "Waiting for the connection; retrying the same model request" + suffix + "."
+                    count = f" (attempt {attempt})" if isinstance(attempt, int) else ""
+                    detail = "The model service did not answer; sending the same request again" + count + "."
             elif event.startswith("tool:"):
                 phase = "tools"
                 tool = data.get("tool_name")

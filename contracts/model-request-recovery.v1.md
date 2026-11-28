@@ -7,20 +7,27 @@ new turn or triggers this policy. Other clients observe the same host-owned work
 - Retry only `LLMTimeoutError` / `ProviderUnavailableError` with `retryable is True`.
   Wait 5, 10, 20, then 30 seconds between host attempts, at most 22 retries.
   This tries soon after a short interruption, then avoids a tight request loop.
-  A 600-second elapsed budget counts from entry to the original provider call,
-  including provider/SDK retries, host waits and later provider calls. The last
-  wait is shortened to the remaining time and no request starts at that deadline.
+  A 600-second elapsed budget starts when the first retryable failure of that
+  request reaches the host. The initial call keeps its provider-owned timeout:
+  a long healthy call must not consume the time for recovery from a later loss.
+  The budget includes host waits and all later provider/SDK calls and retries.
+  If the next wait would reach or pass the deadline, fail at once with the last
+  provider error instead of waiting without sending again. No request starts at
+  or after the deadline.
   Valid provider retry-after values up to 30 seconds are minimum waits; if the
   budget ends sooner, stop without another request.
 - After a retryable connection failure starts recovery, a retried call that has
   not exposed output is cancelled at that same deadline. A permanent outage
-  therefore fails after about ten minutes from the original call's entry, not
-  ten minutes plus another round of provider retries. Scheduling and cooperative
-  provider cancellation can add cleanup time. The original healthy call retains
-  its provider-owned timeout: quiet generation alone does not start recovery.
-  If that first call itself fails after ten minutes, no host retry is made.
+  therefore fails within about ten minutes after the first failure reaches the
+  host; the initial provider call's time comes before that window. Scheduling
+  and cooperative provider cancellation can add cleanup time. Quiet generation
+  alone does not start recovery.
   Once any output is exposed, the host recovery deadline no longer cuts off the
-  response. Provider/SDK policies still own physical API calls.
+  response. The recovery window adds no token or money limit. Each host retry can
+  include the provider's own retries and can incur additional inference charges.
+  Attempt numbers count host retries, not physical API requests. The event's
+  `max_retries=22` is a defensive count cap, not a promised number of attempts:
+  with these waits even immediate failures fit only 21 retries before the time limit.
 - Retain the exact prepared request, selected connection/model, options, current
   generation and completed tool results. Never restart the orchestrator, repeat
   a tool or append the human message again. Changed requests or authority decline
@@ -29,17 +36,48 @@ new turn or triggers this policy. Other clients observe the same host-owned work
 - Any yielded streaming event, exposed response/output hook, or tool invocation
   prevents generic retry. Stateful native transports retain their provider-owned
   reconciliation policy. They are never resubmitted through this wrapper.
-- A metadata-only `llm:response` with `status=error` is a failure diagnostic,
-  not model output. Its allowed fields are status, error, provider, model,
-  duration and request/session correlation. A response with content, tool data,
-  raw payloads or unknown fields still blocks retry. So do all yielded stream
-  events and progressive output hooks, even if an error diagnostic follows.
-- The existing retry status says, "Waiting for the connection; retrying the same
-  model request", with attempt counts. Only that unreturned model call is retried;
+- A dictionary-only `llm:response` with `status=error` is a failure diagnostic,
+  not model output, only when its fields are within this exact set: `status`,
+  `error`, `provider`, `model`, `duration_ms`, `request_id`, `unified_call_id`,
+  `session_id`, `parent_id`, `timestamp`. A non-dictionary response or any extra
+  field blocks retry. The handler marks exposure before inspecting a payload,
+  because Core can isolate handler errors and continue.
+- The exposure hooks are `content_block:start`, `content_block:delta`,
+  `content_block:end`, `llm:stream_block_start`, `llm:stream_block_delta`,
+  `llm:stream_block_end`, `thinking:delta`, `thinking:final`, `llm:content_block`,
+  `orchestrator:goal_progress`, `provider:response`, `llm:response` and `tool:pre`.
+  These hooks, and every yielded stream event, block retry even if a metadata-only
+  failure diagnostic follows. Start/end hooks are conservative even without text.
+- The existing retry status says, "The model service did not answer; sending the
+  same request again (attempt 3)." It does not promise a maximum count or blame
+  the person's network. Diagnostic attempt, maximum and delay fields remain.
+  Only that unreturned model call is retried;
   a goal run inside the window keeps its current turn rather than starting over.
 - Authentication, invalid input, unknown errors, cancellation and exhausted retries
   keep the existing truthful failure/recovery path. Attempt diagnostics contain
   metadata only, never request or response bodies.
+
+### Connection coverage of this host policy
+
+These are source findings for a plain connection failure before any output,
+not live service tests. All the guards above still apply. The allowed field set
+is deliberately not widened for other error formats.
+
+| Connection | Does the host retry? | Source behavior |
+| --- | --- | --- |
+| ChatGPT subscription | Yes | Metadata-only error response, then retryable timeout/unavailable. |
+| Anthropic | Yes | Same allowed error fields and typed retryable connection failures. |
+| Gemini | Yes | Same allowed error fields and typed retryable connection failures. |
+| OpenAI API | Yes for a plain failure with no returned/billed response | Allowed error fields when no billing evidence exists. Error responses with `usage`, `known_cost_usd` or `response_details` block host retry. |
+| Azure OpenAI | Same as OpenAI API | Inherits the OpenAI completion/error path. The same extra fields block host retry. |
+| GitHub Copilot | No after an in-flight failure | `RequestContext.emit_response_error` emits `llm:response` with `error_type` and `error_message`; both are outside the allowed fields. The provider and its observability context call it on terminal failure. |
+| Chat-completions / OpenAI-compatible API | No after an in-flight failure | Its error response includes `error_type`, outside the allowed fields. |
+
+Inspected source revisions: ChatGPT `b6473e56`, Anthropic `1bb74ede`,
+OpenAI `903b37c0` (installed locked modules); Gemini `c5380efc`, Azure
+`f4b612ef`, Copilot `e9401fdb` and chat-completions `850d6b42` (read-only
+cached sources). Optional/custom versions and preflight errors can differ.
+Stateful native operations remain excluded, regardless of connection name.
 
 This is recovery of a surviving worker after transient transport loss (including
 host suspension). It does not infer process death was sleep, automatically start

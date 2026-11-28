@@ -59,7 +59,8 @@ async def test_model_activity_uses_same_thinking_label_without_changing_phase(mo
         'error': 'private connection detail'})
     retry = [row for row in observed if row.get('type') == event_type][-1]
     assert retry['phase'] == 'retrying' and retry['retryAttempt'] == 3 and retry['retryMax'] == 22
-    assert retry['detail'] == 'Waiting for the connection; retrying the same model request (3 of 22).'
+    assert retry['detail'] == 'The model service did not answer; sending the same request again (attempt 3).'
+    assert 'of 22' not in retry['detail']
     assert 'private' not in str(retry)
 
 
