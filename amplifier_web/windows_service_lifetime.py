@@ -212,7 +212,7 @@ def owner_choice(spec, *, stop, manual=True):
             previous = None
         try:
             key = native_sign_in(spec.sid)
-        except (OSError, ValueError, RuntimeError):
+        except Exception:
             key = None  # Only automatic starts require this new read to pass.
         now = int(time.time())
         starts = previous["starts"] if previous else []
@@ -253,7 +253,7 @@ def admit(spec):
             return value["intent"]
     except Paused:
         raise
-    except (OSError, ValueError, RuntimeError) as error:
+    except Exception as error:
         raise Paused("Amplifier could not check its saved start choice.") from error
 
 
@@ -264,5 +264,5 @@ def allowed(spec, intent, *, exact=False):
         with store(spec) as pinned:
             value = read(pinned, spec)
             return not value["stopped"] and (not exact or value["intent"] == intent)
-    except (OSError, ValueError, RuntimeError):
+    except Exception:
         return False

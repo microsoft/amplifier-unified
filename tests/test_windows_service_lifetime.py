@@ -106,6 +106,18 @@ def test_explicit_start_does_not_require_a_successful_new_read(disk, failure):
     assert saved(disk)["manual"] is False
 
 
+def test_native_lookup_failure_cannot_block_explicit_start_or_grant_automatic_start(disk, monkeypatch):
+    def failed(_):
+        # Windows' account-lookup error is not an OSError or RuntimeError.
+        raise service._LookupFailed("no answer")
+
+    monkeypatch.setattr(lifetime, "native_sign_in", failed)
+    intent = lifetime.owner_choice(spec(), stop=False)
+    assert lifetime.admit(spec()) == intent
+    with pytest.raises(lifetime.Paused):
+        lifetime.admit(spec())
+
+
 def test_limit_is_shared_across_entries_and_refills_only_after_six_hours(disk):
     seed(disk)
     for _ in range(3):
