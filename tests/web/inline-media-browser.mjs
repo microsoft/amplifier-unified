@@ -787,19 +787,28 @@ try{
    }
    // UA shadow controls are not portable DOM. Only claim when THIS browser
    // exposes usable accessibility targets; absence is explicit, never PASS.
-   const fullscreen=page.getByRole('button',{name:/full.?screen/i}),volume=page.getByRole('slider',{name:/volume/i});
-   if(await fullscreen.count()!==1||await volume.count()!==1)
-    throw new CantCheck('Browser does not expose native fullscreen/volume controls as actionable accessibility targets');
+   const figure=figureFor(page,mp4.id),video=figure.locator('video');
+   const fullscreen=figure.getByRole('button',{name:/full.?screen/i});
+   const unmute=figure.getByRole('button',{name:/^unmute$/i});
+   const mute=figure.getByRole('button',{name:/^mute$/i});
+   const volume=figure.getByRole('slider',{name:/^volume$/i});
+   if(await fullscreen.count()!==1||await unmute.count()!==1)
+    throw new CantCheck('This video does not expose actionable native fullscreen and unmute controls');
    await fullscreen.click();
-   await expect.poll(()=>page.evaluate(()=>!!document.fullscreenElement)).toBe(true);
+   await expect.poll(()=>video.evaluate(node=>document.fullscreenElement===node)).toBe(true);
    await page.screenshot({path:join(evidenceDir,'mp4-fullscreen.png')});
    await page.keyboard.press('Escape');
    await expect.poll(()=>page.evaluate(()=>document.fullscreenElement===null)).toBe(true);
-   const video=figureFor(page,mp4.id).locator('video');
+   await unmute.click();
+   await expect.poll(()=>video.evaluate(node=>node.muted)).toBe(false);
+   if(await volume.count()!==1||await mute.count()!==1)
+    throw new CantCheck('This video does not expose actionable native volume and mute controls');
    const before=await video.evaluate(node=>node.volume);
    await volume.focus();await page.keyboard.press(before>.5?'ArrowDown':'ArrowUp');
    await expect.poll(()=>video.evaluate(node=>node.volume)).not.toBe(before);
-   return {fullscreenUI:true,volumeUI:true};
+   await mute.click();
+   await expect.poll(()=>video.evaluate(node=>node.muted)).toBe(true);
+   return {fullscreenUI:true,fullscreenVideo:true,fullscreenExitNull:true,volumeUI:true,unmutedThenMuted:true};
   },{required:false});
 
   await phase('mp4-decode-error',async()=>{
@@ -1617,7 +1626,7 @@ try{
    await page.bringToFront();
    const reset=async()=>{
     if(guestNative){nativeKey('Control_L','0');await expect.poll(()=>page.evaluate(()=>devicePixelRatio)).toBe(1)}
-    else await page.keyboard.press('Control+0');
+    else await page.keyboard.press('ControlOrMeta+0');
    };
    try{
    // Browser keyboard zoom, not CSS transform masquerading as zoom.
@@ -1628,7 +1637,7 @@ try{
     if(guestNative){
      nativeKey('Control_L','equal');
      await expect.poll(()=>page.evaluate(()=>devicePixelRatio)).not.toBe(after);
-    }else await page.keyboard.press('Control++');
+    }else await page.keyboard.press('ControlOrMeta+Equal');
     after=await page.evaluate(()=>devicePixelRatio);
    }
    if(after/before<1.99||after/before>2.01)throw new CantCheck('This browser does not apply true 200% keyboard page zoom');
