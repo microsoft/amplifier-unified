@@ -71,6 +71,9 @@ def test_the_real_shell_tool_is_turned_off_and_still_runs_a_command(clean_import
         assert getattr(module, name).__module__ == containment.__name__, name
     assert module._get_windows_job_object() is None
     assert module._assign_to_windows_job(os.getpid()) is False
+    # The tool's job for one command stays the tool's own: it has no
+    # kill-on-close flag and ends only that command's tree.
+    assert module._create_windows_command_job.__module__ == TARGET
     assert capsys.readouterr().err == ""                    # The guard has nothing to report.
     config = {"working_dir": str(tmp_path)}
     if sys.platform == "win32":
@@ -80,7 +83,10 @@ def test_the_real_shell_tool_is_turned_off_and_still_runs_a_command(clean_import
     assert isinstance(result.output, dict), result.output
     assert result.output["stdout"].strip() == "guard-ok", result.output
     assert result.output["returncode"] == 3, result.output
-    assert getattr(module, "_windows_job_handle", None) is None  # The tool made no job of its own.
+    assert getattr(module, "_windows_job_handle", None) is None  # The tool made no module-wide job.
+    if sys.platform == "win32":
+        # The tool made its job for this one command; it did not fall back.
+        assert module._windows_command_job_failure_reported is False
 
 
 def test_one_revision_of_the_tool_is_named_for_tests_and_for_the_windows_workflow():

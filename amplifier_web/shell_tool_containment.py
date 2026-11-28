@@ -34,10 +34,12 @@ _REPLACEMENTS = {
     "_spawn_descendant_sweep": _nothing,
     "_protect_windows_descendants": _no_protection,
 }
-# The job's two entry points. With both replaced the tool makes no job and
-# assigns no process, whatever else it does. A tool that lacks one has changed.
+# The two entry points to the tool's module-wide kill-on-close job. With both
+# replaced the tool makes no such job and assigns no process to one. Its job
+# for one command (_create_windows_command_job) stays: see the design note.
+# A tool that lacks one of the two has changed.
 _REQUIRED = ("_get_windows_job_object", "_assign_to_windows_job")
-# The other two names are the walk over the process table. Without a job the
+# The other two names are the walk over the process table. Without that job the
 # walk can assign nothing; it is replaced to save its work. The tool's own
 # repair (its commit bf36c12) removes the walk, so its absence is no fault
 # and gets no message.
@@ -62,7 +64,8 @@ def neutralize(module):
     It does not raise: each step that touches the module is contained, and
     both callers contain it once more. "missing" lists required names that
     the module does not have. "failed" lists names that could not be
-    replaced. With either, the tool's own job can be active in this process.
+    replaced. With either, the tool's module-wide job can be active in this
+    process.
     """
     replaced, missing, failed = [], [], []
     try:
