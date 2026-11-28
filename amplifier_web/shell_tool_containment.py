@@ -39,8 +39,8 @@ _REPLACEMENTS = {
 _REQUIRED = ("_get_windows_job_object", "_assign_to_windows_job")
 # The other two names are the walk over the process table. Without a job the
 # walk can assign nothing; it is replaced to save its work. The tool's own
-# repair (not merged when this was written) removes the walk, so its absence
-# is no fault and gets no message.
+# repair (its commit bf36c12) removes the walk, so its absence is no fault
+# and gets no message.
 
 
 # One beginning for every message, so that a reader can find them all.

@@ -163,7 +163,7 @@ work-media = [
     # Opt-in, offline ordinary-Work composition tests mount every declared
     # module. Keep these out of the host's production dependency set.
     "amplifier-module-tool-transcript @ git+https://github.com/microsoft/amplifier-bundle-context-managed@b3ce1a88108ecf1ad5d057edba54a641a7aae755#subdirectory=modules/tool-transcript",
-    "amplifier-module-tool-bash @ git+https://github.com/microsoft/amplifier-module-tool-bash@d5bb46d24dcae8e260211bf8fb5c22de3a67f406",
+    "amplifier-module-tool-bash @ git+https://github.com/microsoft/amplifier-module-tool-bash@bf36c12bd3833a8b1020eed460fbcb82b4e2a4a9",
     "amplifier-module-tool-web @ git+https://github.com/microsoft/amplifier-module-tool-web@2a58cf71f6f941f5b5ef28d59564f5d47af5f294",
     "amplifier-module-tool-search @ git+https://github.com/microsoft/amplifier-module-tool-search@ccd11795f6bb47853cfd1761b126f3b40d95a517",
     "amplifier-module-tool-computer-use @ git+https://github.com/microsoft/amplifier-bundle-computer-use@main#subdirectory=modules/tool-computer-use",

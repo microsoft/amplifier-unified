@@ -385,7 +385,7 @@ work-media = [
     { name = "amplifier-module-hooks-approval", git = "https://github.com/microsoft/amplifier-module-hooks-approval?rev=c149f1e09757567d0dfc82a83bf21ac274a2061d" },
     { name = "amplifier-module-hooks-mode", git = "https://github.com/microsoft/amplifier-bundle-modes?subdirectory=modules%2Fhooks-mode&rev=a29ebceb72f02f4340290346d5a4fe0cf486dfec" },
     { name = "amplifier-module-hooks-routing", git = "https://github.com/microsoft/amplifier-bundle-routing-matrix?subdirectory=modules%2Fhooks-routing&rev=9d9d1cb17ac958a011c99b80096034663fd245b3" },
-    { name = "amplifier-module-tool-bash", git = "https://github.com/microsoft/amplifier-module-tool-bash?rev=d5bb46d24dcae8e260211bf8fb5c22de3a67f406" },
+    { name = "amplifier-module-tool-bash", git = "https://github.com/microsoft/amplifier-module-tool-bash?rev=bf36c12bd3833a8b1020eed460fbcb82b4e2a4a9" },
     { name = "amplifier-module-tool-computer-use", git = "https://github.com/microsoft/amplifier-bundle-computer-use?subdirectory=modules%2Ftool-computer-use&rev=main" },
     { name = "amplifier-module-tool-context-intelligence-set-filters", git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?subdirectory=modules%2Ftool-context-intelligence-set-filters&rev=main" },
     { name = "amplifier-module-tool-context-intelligence-transcript", git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?subdirectory=modules%2Ftool-context-intelligence-transcript&rev=main" },
