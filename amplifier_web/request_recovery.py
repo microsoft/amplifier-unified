@@ -11,7 +11,7 @@ _ACTIVE = ContextVar('unified_request_recovery', default=None)
 DELAYS = (5, 10, 20) + (30,) * 19
 RECOVERY_SECONDS = 600
 _ERROR_DIAGNOSTIC_FIELDS = frozenset((
-    'status', 'error', 'provider', 'model', 'duration_ms',
+    'status', 'error', 'error_type', 'error_message', 'provider', 'model', 'duration_ms',
     'request_id', 'unified_call_id', 'session_id', 'parent_id', 'timestamp'))
 _UNCOPYABLE = object()
 

@@ -152,7 +152,7 @@ async def test_handled_compaction_error_does_not_mark_conversation_broken(tmp_pa
     ('previous_failure', 'retry cooldown'),
     ('summary_failed', 'provider availability'),
     ('native_failed', 'provider availability'),
-    ('summary_work_paused', 'requires separate admission'),
+    ('summary_work_paused', 'Some new summary work may need to be done again.'),
     ('summary_progress_incompatible', 'Review the source and policy mismatch'),
 ])
 async def test_semantic_compaction_cause_survives_runtime_exit(tmp_path, code, remedy):
