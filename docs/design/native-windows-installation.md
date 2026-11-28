@@ -93,7 +93,8 @@ worker. The shell tool's process walk could take unrelated processes after
 Windows reused a parent process ID. Closing the tool's kill-on-close job could
 then end the launcher and its app with exit code 0. Each link of this mechanism
 was measured separately. The original reused-ID trigger left no record.
-Unified now turns off the tool's own job and descendant walk in Windows workers.
+Unified now turns off that kill-on-close job and the descendant walk in Windows
+workers.
 Every Windows worker starts inside a job held by the host, with kill-on-close
 and no breakaway flag (`WindowsOwnedProcess` in `windows_jobs.py`).
 The host settles that job when the worker ends, so directly created descendants
@@ -150,8 +151,9 @@ the tool at `bf36c12` the worker held no shell-tool job, the Windows
 processes of a running command were members of the worker's job, and a Stop
 ended the worker and the command and left the service running. With the tool
 at `3ca72d0` a command returned its exit code, and a command that passed its
-time limit was ended; no process of it was found afterwards, and the service
-stayed up. Job membership was not read in that second run. Git Bash was not
+time limit came back as timed out; seconds later the chat's next command
+found no Linux process of it. Its Windows processes and the job membership
+were not read in that second run. The service stayed up. Git Bash was not
 used in a real worker.
 
 The existing `test_windows_runtime_identity_transport_and_stop_model` and
