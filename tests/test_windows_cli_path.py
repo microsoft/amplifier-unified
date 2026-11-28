@@ -48,7 +48,7 @@ def test_non_string_types_and_nul_are_refused(value, kind):
         commands.append(value, kind, "C:\\app\\bin")
 
 
-@pytest.mark.parametrize("value", ["a" * 32760, "\U0001f600" * 16380])
+@pytest.mark.parametrize("value", ["a" * 32760, "\U0001f600" * 16380], ids=["ascii-limit", "utf16-limit"])
 def test_environment_limit_is_utf16_and_never_truncates(value):
     with pytest.raises(ValueError, match="too long"):
         commands.append(value, 2, "C:\\app\\bin")
