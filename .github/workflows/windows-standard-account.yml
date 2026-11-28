@@ -29,6 +29,7 @@ on:
     paths:
       - .github/workflows/windows-standard-account.yml
       - tests/fixtures/windows_standard_account_native.py
+      - tests/fixtures/windows_lifetime_cost.py
       - tests/test_windows_standard_account.py
       - tests/fixtures/windows_start_again_native.py
       - tests/fixtures/windows_setup_native.py
@@ -41,6 +42,7 @@ on:
       - amplifier_web/windows_consumer_shell.py
       - amplifier_web/windows_installation.py
       - amplifier_web/windows_service.py
+      - amplifier_web/windows_service_lifetime.py
       - amplifier_web/windows_task_runtime.py
       - amplifier_web/windows_files.py
       - amplifier_web/windows_jobs.py

@@ -1008,7 +1008,7 @@ class TaskService:
         return bool(value and value["status"] in {"prepared", "restoring"})
 
     def stop(self):
-        self._service.command("stop", self.home)
+        self._service.command("stop", self.home, internal=True)
 
     def run(self):
         from .windows_task_runtime import read, process, matches
@@ -1028,7 +1028,7 @@ class TaskService:
         self._service._stop(value, spec, expected=run)
 
     def start(self):
-        self._service.command("start", self.home)
+        self._service.command("start", self.home, internal=True)
 
     async def ready(self, wait):
         from .installation_health import status

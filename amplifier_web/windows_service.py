@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import asyncio
+from datetime import datetime
 from dataclasses import asdict, dataclass, field
 from contextlib import redirect_stderr, redirect_stdout
 import json
@@ -113,6 +114,7 @@ class TaskSpec:
     github_access: str = "auto"
     launch_roots: dict[str, str] = field(default_factory=dict)
     supervised: bool = False
+    repeat_start: str | None = None
 
     def __post_init__(self):
         _sid(self.sid)
@@ -135,10 +137,17 @@ class TaskSpec:
             _path(value)
         if type(self.supervised) is not bool:
             raise ValueError("Invalid task launch protocol.")
+        if self.repeat_start is not None:
+            if (not self.supervised or not isinstance(self.repeat_start, str)
+                    or not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d", self.repeat_start)):
+                raise ValueError("Invalid repeating task layout.")
+            datetime.fromisoformat(self.repeat_start)  # Also reject impossible dates.
 
     def encoded(self) -> str:
         # Only public launch configuration, never credentials, goes into XML.
         value = asdict(self)
+        if self.repeat_start is None:
+            value.pop("repeat_start")  # Legacy encodings remain byte-identical.
         if not self.supervised:
             # Exact older durable definitions stay inspectable for an explicit
             # replacement; omission is the original direct-host protocol.
@@ -179,6 +188,13 @@ def task_xml(spec: TaskSpec) -> str:
     trigger = child(child(root, "Triggers"), "LogonTrigger")
     child(trigger, "Enabled", "true")
     child(trigger, "UserId", spec.sid)
+    if spec.repeat_start is not None:
+        timer = child(root.find(_q("Triggers")), "TimeTrigger")
+        repetition = child(timer, "Repetition")
+        child(repetition, "Interval", "PT5M")
+        child(repetition, "StopAtDurationEnd", "false")
+        child(timer, "StartBoundary", spec.repeat_start)
+        child(timer, "Enabled", "true")
     principal = child(child(root, "Principals"), "Principal", id="Owner")
     child(principal, "UserId", spec.sid)
     child(principal, "LogonType", "InteractiveToken")
@@ -321,6 +337,8 @@ def _scheduler_defaults(root, sid):
             node.text = sid
     defaults = {
         "Triggers/LogonTrigger": {"Enabled": "true"},
+        "Triggers/TimeTrigger": {"Enabled": "true"},
+        "Triggers/TimeTrigger/Repetition": {"StopAtDurationEnd": "false"},
         "Principals/Principal": {"RunLevel": "LeastPrivilege"},
         "Settings": {
             "Enabled": "true", "StartWhenAvailable": "false", "WakeToRun": "false",
@@ -530,7 +548,10 @@ def _new_spec(data_dir, workspace, sid, previous):
                     registration_id=previous.registration_id if previous else uuid.uuid4().hex,
                     github_access=("anonymous" if access == "anonymous" else
                                    previous.github_access if access is None and previous else "auto"),
-                    launch_roots=roots, supervised=True)
+                    launch_roots=roots, supervised=True,
+                    # Reader support is not delivery. Fresh installs stay legacy;
+                    # an existing future layout is never silently downgraded.
+                    repeat_start=previous.repeat_start if previous else None)
 
 
 def _background_python(data_dir=None):
@@ -591,6 +612,7 @@ def install(data_dir, workspace=None, *, replace=False) -> dict:
         value = result
     # Do not infer health or adopt a listener here. Existing host/reset exclusion
     # remains in CLI serve. A repeated install starts only a stopped owned task.
+    _owner_start(spec, value)
     _scheduler("start", sid, previous=value["xml"])
     return {"status": "current" if previous == spec else "replaced" if previous else "installed",
             "path": "\\" + task_name(sid), "healthy": False, "processVerified": False,
@@ -615,7 +637,23 @@ def _stop(value, spec, *, timeout=60, expected=None):
         time.sleep(0.1)
 
 
-def command(name: str, data_dir=None):
+def _owner_start(spec, value):
+    return _owner_choice(spec, stop=False, manual=value.get("instances", 0) == 0)
+
+
+def _owner_choice(spec, *, stop, manual=True):
+    from .windows_service_lifetime import owner_choice
+    try:
+        return owner_choice(spec, stop=stop, manual=manual)
+    except (OSError, ValueError, RuntimeError):
+        if spec.repeat_start is not None:
+            raise
+        # The old task has no repeat and no new state requirement. A failure to
+        # save the future migration hint cannot break its existing controls.
+        return None
+
+
+def command(name: str, data_dir=None, *, internal=False):
     if name not in {"start", "stop", "restart", "status", "logs"}:
         raise ValueError(f"Unknown service command: {name}")
     if data_dir is None:
@@ -637,9 +675,21 @@ def command(name: str, data_dir=None):
     value, spec = _read(data_dir)
     if spec is None:
         raise WindowsServiceError("Amplifier Unified's owner-logon task is not installed.")
+    intent = None
+    if not internal:
+        if name in {"start", "restart"}:
+            intent = _owner_start(spec, value)
+        else:
+            # Save Stop even with no running task. Internal maintenance never
+            # changes this choice. It still uses the exact-run stop protocol.
+            _owner_choice(spec, stop=True)
     if name in {"stop", "restart"}:
         value = _stop(value, spec)
     if name in {"start", "restart"}:
+        if intent is not None and spec.repeat_start is not None:
+            from .windows_service_lifetime import allowed
+            if not allowed(spec, intent, exact=True):
+                return  # A later Stop or Start superseded this request.
         _scheduler("start", spec.sid, previous=value["xml"])
 
 
@@ -783,12 +833,18 @@ def _run(encoded: str) -> None:
     os.environ["AMPLIFIER_WEB_HOME"] = spec.data_dir
     os.environ.update(spec.launch_roots)
     os.chdir(spec.workspace)
+    from .windows_service_lifetime import admit, Paused
+    try:
+        intent = admit(spec)
+    except Paused:
+        # Stop and the rolling allowance are choices, not new app failures.
+        raise SystemExit(0) from None
     if spec.supervised:
         from .windows_jobs import contain_current_host
         contain_current_host()
         started = time.time()
         try:
-            code = _supervise(spec)
+            code = _supervise(spec, intent=intent) if intent is not None else _supervise(spec)
             if code:
                 # The host ended with an error. Keep its own saved reason if it
                 # wrote one; otherwise save this general one for the status command.
@@ -831,23 +887,25 @@ def _launch_python(spec):
     return str(python), target
 
 
-def _supervise(spec):
+def _supervise(spec, *, intent=None):
     """Scheduler owns one stable launcher; each app host has its own run.
 
     This is not a detached restart helper. The launcher remains within the
     owner's Scheduler lifetime and waits for each exact child to exit. A normal
     close stops here. Only an exact private restart receipt selects another app.
     """
-    return asyncio.run(_supervise_owned(spec))
+    return asyncio.run(_supervise_owned(spec, intent=intent))
 
 
-async def _supervise_owned(spec):
+async def _supervise_owned(spec, *, intent=None):
     from .windows_task_runtime import read_restart, stop_requested, RESTART_EXIT
     requested = None
     restart = None
     stop_runs = ()
     def stopped():
-        return any(stop_requested(spec, run) for run in stop_runs)
+        from .windows_service_lifetime import allowed
+        return (not allowed(spec, intent)
+                or any(stop_requested(spec, run) for run in stop_runs))
     while True:
         if stopped():
             return 0
@@ -880,7 +938,8 @@ async def _supervise_owned(spec):
         if stopped():
             return 0
         record, code, failed_start = await _launch_owned_host(
-            spec, python, restart, stop_runs=stop_runs)
+            spec, python, restart, stop_runs=stop_runs,
+            **({"intent": intent} if intent is not None else {}))
         if code != RESTART_EXIT:
             if failed_start and requested is not None:
                 if record:
@@ -909,15 +968,19 @@ async def _supervise_owned(spec):
             raise WindowsServiceError("The host requested its unchanged application generation.")
 
 
-async def _launch_owned_host(spec, python, restart, *, stop_runs=()):
+async def _launch_owned_host(spec, python, restart, *, stop_runs=(), intent=None):
     """Reuse the canonical launch guard, including pre-identity tree settlement."""
     from .windows_jobs import WindowsOwnedProcess
     from . import windows_task_runtime as runtime
+    from .windows_service_lifetime import allowed
+    if not allowed(spec, intent):
+        return None, 0, False
     if any(runtime.stop_requested(spec, run) for run in stop_runs):
         return None, 0, False
     previous = runtime.read(spec)
     owner = await WindowsOwnedProcess.start(
-        [python, "-I", "-m", "amplifier_web.windows_service", "--host", spec.encoded()],
+        [python, "-I", "-m", "amplifier_web.windows_service", "--host", spec.encoded(),
+         *([intent] if intent is not None else [])],
         cwd=spec.workspace, env=dict(os.environ), trusted_python=sys._base_executable)
     owner.stdin.close()
     # The host owns task-output.log. Drain startup output separately so neither
@@ -953,7 +1016,8 @@ async def _launch_owned_host(spec, python, restart, *, stop_runs=()):
             with runtime.process(record["pid"]) as actual:
                 if not runtime.matches(record, actual):
                     raise WindowsServiceError("The launched host identity differs from its receipt.")
-                if any(runtime.stop_requested(spec, run) for run in stop_runs):
+                if (not allowed(spec, intent)
+                        or any(runtime.stop_requested(spec, run) for run in stop_runs)):
                     await asyncio.to_thread(runtime.request_stop, spec, timeout=30, expected=record)
                 elif restart is not None:
                     failed = await _wait_updated_host(spec, finished, actual, restart)
@@ -1027,10 +1091,10 @@ async def _wait_updated_host(spec, finished, actual, restart):
         await asyncio.sleep(0.25)
 
 
-def _host(spec):
+def _host(spec, *, intent=None):
     """Run the actual application, not the stable Scheduler launcher."""
     try:
-        return _serve_host(spec)
+        return _serve_host(spec, intent=intent) if intent is not None else _serve_host(spec)
     except BaseException as error:
         # A normal stop returns. Save why this host ended, for the status command.
         if isinstance(error, Exception) or (
@@ -1040,7 +1104,7 @@ def _host(spec):
         raise
 
 
-def _serve_host(spec):
+def _serve_host(spec, *, intent=None):
     # First: every console program that this host or its code starts with
     # default flags then shares one console without a window.
     from .windows_hidden_console import ensure_hidden_console
@@ -1053,6 +1117,9 @@ def _serve_host(spec):
     sys.argv = [python, "--no-open", "--data-dir", spec.data_dir,
                 "--workspace", spec.workspace, "serve"]
     from .windows_task_runtime import PrivateLog, Runner
+    from .windows_service_lifetime import allowed
+    if not allowed(spec, intent):
+        return 0
     from .host_dependencies import prepare_environment
     from . import cli
     prepare_environment()
@@ -1074,7 +1141,8 @@ def _serve_host(spec):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3 or sys.argv[1] not in {"--run", "--host"}:
+    if (len(sys.argv) not in {3, 4} or sys.argv[1] not in {"--run", "--host"}
+            or len(sys.argv) == 4 and (sys.argv[1] != "--host" or not re.fullmatch("[0-9a-f]{32}", sys.argv[3]))):
         raise SystemExit("This module is the owner-logon task action, not a service installer.")
     if sys.argv[1] == "--run":
         _run(sys.argv[2])
@@ -1089,4 +1157,4 @@ if __name__ == "__main__":
         os.environ["AMPLIFIER_WEB_HOME"] = spec.data_dir
         os.environ.update(spec.launch_roots)
         os.chdir(spec.workspace)
-        raise SystemExit(_host(spec))
+        raise SystemExit(_host(spec, **({"intent": sys.argv[3]} if len(sys.argv) == 4 else {})))

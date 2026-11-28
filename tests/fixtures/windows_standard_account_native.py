@@ -82,6 +82,7 @@ HELPER = "AmplifierStandardAccountCheck"
 # The comment of the account that a run creates, with that run's own number.
 MARK = "Amplifier standard-account check, run "
 FILES = ("tests/fixtures/windows_standard_account_native.py", "tests/fixtures/windows_start_again_native.py",
+         "tests/fixtures/windows_lifetime_cost.py",
          "amplifier_web/windows_files.py")
 # One line for each step. FIRST runs after the first sign-in, SECOND after the
 # sign-out and the new sign-in.
@@ -778,6 +779,7 @@ def in_session(sid, program, phase, stage, exchange, *, timeout):
         time.sleep(3)
         report = read_json(exchange / f"{phase}.json")
         if report and report.get("finished"):
+            need(not report.get("error"), "The standard-user measurement failed", report)
             return report
         state = task("state", HELPER)
         idle = idle + 1 if state.get("instances") == 0 else 0
@@ -2361,6 +2363,7 @@ def journey(stage, exchange, account, token):
         from amplifier_web import windows_consumer as consumer
         from amplifier_web import windows_consumer_shell as shell, windows_installation, windows_service
         from amplifier_web import windows_uninstall
+        from amplifier_web import windows_service_lifetime as lifetime
         from amplifier_web.deployment import write_private
         from amplifier_web.updates import process
 
@@ -2409,6 +2412,8 @@ def journey(stage, exchange, account, token):
             steps.report["firstStart"]["taskOutput"] = attempt(lambda: host_output(home))
         steps.save()
         need(state.get("managed") is True, "The task was not registered. The launcher said", started["json"] or started)
+        _, installed_spec = windows_service._read(home)
+        need(installed_spec.repeat_start is None, "Slice 1 must keep the installed task's legacy layout")
         steps.passed(JOURNEY[2], task=state.get("taskPath"))
         need(started["exitCode"] == 0 and (started["json"] or {}).get("background") is True,
              "The launcher did not finish the start. It said", started["json"] or started)
@@ -2441,6 +2446,16 @@ def journey(stage, exchange, account, token):
              and not (status["json"] or {}).get("responding", False)
              and not asyncio.run(again.listener_answers(home)),
              "The app still runs after Stop", {"result": stopped, "task": state, "status": status["json"]})
+        with lifetime.store(installed_spec) as pinned:
+            need(lifetime.read(pinned, installed_spec)["stopped"], "The installed Stop was not saved")
+        down_stop = again.cli(root, "service", "stop")
+        need(down_stop["exitCode"] == 0, "Stop while down failed", down_stop)
+        with lifetime.store(installed_spec) as pinned:
+            need(lifetime.read(pinned, installed_spec)["stopped"], "Stop while down was not saved")
+        steps.report["lifetimeStopWhileDown"] = True
+        cost = load("standard_lifetime_cost", stage / "tests/fixtures/windows_lifetime_cost.py")
+        steps.report["lifetimeCost"] = cost.measure(exchange / "lifetime-cost", installed_spec)
+        print("Lifetime cost: " + json.dumps(steps.report["lifetimeCost"]), flush=True)
         steps.passed(JOURNEY[6], result=stopped, task=state)
 
         steps.begin(JOURNEY[7])
@@ -2454,6 +2469,8 @@ def journey(stage, exchange, account, token):
         steps.report["secondStart"] = {"launcher": again_started, "task": state, "serviceStatus": status}
         steps.save()
         accept_start(steps, "secondStart", again, home, root, again_started, state, status, "The second start failed")
+        with lifetime.store(installed_spec) as pinned:
+            need(not lifetime.read(pinned, installed_spec)["stopped"], "Explicit Start did not clear Stop")
         need(again.process_identity(status["json"]) != again.process_identity(started["json"]["health"])
              and windows_installation.saved_port(home) == port,
              "The second start did not give a new host on the same port")

@@ -2264,7 +2264,8 @@ def test_the_cleanup_passes_when_every_part_is_done(case, monkeypatch, tmp_path)
 
 @pytest.mark.parametrize("part, label", [
     ("credential", "credential"), ("viewers", "viewers"), ("signedOut", "signedOut"),
-    ("AmplifierStandardAccountCheck", "helperTask"), (AMPLIFIER_TASK, "amplifierTask"), ("profile", "profile")])
+    ("AmplifierStandardAccountCheck", "helperTask"),
+    (AMPLIFIER_TASK, "amplifierTask"), ("profile", "profile")])
 def test_a_part_that_fails_does_not_stop_the_other_parts_and_fails_the_cleanup(case, monkeypatch, tmp_path, part, label):
     passed, result, calls = clean_up(case, monkeypatch, tmp_path, broken=(part,))
     assert passed is False

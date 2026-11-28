@@ -222,6 +222,10 @@ async def _windows_status(home, expected, state):
         An older failure is not its reason, so that case returns the plain result.
         """
         from .windows_task_runtime import last_failure
+        from .windows_service_lifetime import status as lifetime_status
+        choice = await asyncio.to_thread(lifetime_status, spec) if spec else None
+        if choice:
+            return {**result, "message": choice, "nextStep": "Use Amplifier's Start to try again."}
         failure = await asyncio.to_thread(last_failure, spec) if spec else None
         if not failure:
             return result

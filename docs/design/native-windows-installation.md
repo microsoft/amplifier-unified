@@ -4880,6 +4880,60 @@ Use absolute executable/data/workspace/shared-state paths and explicit quoting.
 Configure indefinite execution, restart-on-failure and battery behavior
 deliberately. Automatic logon startup must not open a browser.
 
+#### Recovery preparation: design C (slice 1)
+
+`windows_service_lifetime` owns one private `task-lifetime.json` and one lock in
+`config/services`. The closed record holds the registration, owner SID,
+random intent, Stop, one explicit-start allowance and at most three saved
+automatic-start times. Only explicit Start clears Stop. Neither six hours nor a
+new sign-in clears it. Explicit Start does not need a successful read of the old
+record. It replaces unreadable record content through the
+existing private writer; it does not bypass private-file ownership checks.
+
+The limit is **three automatic start reservations in any six hours**, not three
+per sign-in. Save a reservation before spawning any app child. Keep these times
+across sign-ins and explicit starts. An explicit start is not an automatic
+reservation. A clock that went back pauses automatic starts until the saved time
+is reached. A forward clock change can age times early; this is a wall-clock
+reservation rule, not a monotonic six-hour promise across a clock correction.
+There is no sign-in key, LSA/WTS lookup or one-sign-in recovery gate. The record
+serves a persistent choice, not a choice that expires at sign-out.
+
+Slice 1 can read both the exact legacy task and a supervised two-trigger layout
+with a saved offset-bearing boundary and indefinite PT5M repetition. It selects
+neither migration nor repetition: fresh installs and existing legacy tasks keep
+their current XML. Legacy automatic entries keep their old path without a new
+record read; explicit controls save the future migration's Stop choice when the
+launcher is recognised. An unreadable new record cannot block legacy Start.
+Unknown launchers are not opted in. The new admission gate applies to each entry
+of the repeating layout, which this slice never installs. Its child and host
+checks retain a later Stop across spawn and update gaps. Internal launcher
+maintenance does not call an owner Start or owner Stop.
+
+The record is bounded to 4096 bytes and three reservation times. Admission reads
+one record before taking any write lock. A stopped or budget-paused tick exits
+without a lock-file change, diagnostic write or failure record. An allowed tick
+rechecks under the existing lock before saving its reservation or consuming the
+explicit-start allowance. The host's quarter-second watcher keeps only the
+existing exact-run Stop signals: no new read is added to that loop. Lifetime
+intent is checked at launcher transitions before and after a spawn and at update
+boundaries. A later owner Stop uses the same exact-host request as before.
+The guarded standard-user fixture measures cold paused entries (using a synthetic
+query receipt, excluding COM time) and compares the old extra-read watcher with
+the unchanged exact-run watcher. No session history, network call or separate
+interruption log is added.
+No Scheduler result is treated as health. A failed private write grants no
+automatic start.
+
+Delivery remains a later slice: launcher refresh must journal the exact old and
+new XML with the launcher and binding, disable dispatch before replacement, and
+restore the compatible pair after a cut or failure. Do not enable the new layout
+without that migration and its independent recovery helper. An installed-app
+standard-user case must then prove code-zero recovery within seven minutes while
+awake and signed in, Stop across a real five-minute tick, explicit Start, the
+rolling limit, and interrupted migration. Windows 11 screen and power checks
+remain separate. No wake, catch-up, second watchdog or force termination is added.
+
 **The task after a computer rename (measured November 15, 2026).** The app
 registers the task with the owner SID in the principal and in the sign-in
 trigger. Task Scheduler keeps the principal as the SID. It stores the trigger's

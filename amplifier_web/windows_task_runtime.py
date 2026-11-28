@@ -421,6 +421,8 @@ class Runner:
         publish(self.spec, self.record)
 
     def stop_requested(self):
+        # Owner Stop uses the existing exact-run signal. Lifetime intent is read
+        # at launcher transitions, never on this quarter-second watcher path.
         return (stop_requested(self.spec, self.record)
                 or stop_requested(self.spec, self.record, name=RECOVERY_STOP))
 
