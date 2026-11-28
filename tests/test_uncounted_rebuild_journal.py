@@ -173,7 +173,18 @@ async def test_rebuild_across_real_worker_lifecycle(tmp_path, monkeypatch, failu
             expected = 'transition_budget_exhausted' if failure == 'limit' else 'recovery_outcome_unknown'
             if not fault:
                 assert expected in serialized
-            public = generation_failure({'error_category': 'context_compaction', 'error_code': expected})
+            from amplifier_web.session_health import terminal_exception_failure
+            public = {**generation_failure(final), 'generationId': final['generation_id'],
+                      'inputIds': final['input_ids']}
+            for payload in captures:
+                capture = payload.get('terminalFailure')
+                projected = terminal_exception_failure({
+                    'id': session['id'], 'status': 'error', 'generations': [final],
+                    'failure': public}, capture)
+                if projected:
+                    public = projected
+            if not fault:
+                assert public['code'] == expected
             assert public['retryable'] is False and public['replayed'] is False
             assert 'Synthetic' not in json.dumps(public)
         assert (tmp_path / 'native' / 'context-checkpoint.json').read_bytes() == source
