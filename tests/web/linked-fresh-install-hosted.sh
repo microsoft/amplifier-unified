@@ -217,11 +217,25 @@ phase=guest_readiness
 stage_status=0
 reason=none
 timeout 75s "${compose[@]}" exec -T twin .venv/bin/python -c '
-import time
+import json, time
 from pathlib import Path
+allowed = {"confined native D-Bus and Avahi readiness", "initial authenticated host readiness",
+           "wait for managed command", "browser guest"}
+errors = {"AssertionError", "FileNotFoundError", "PermissionError", "TimeoutError",
+          "RuntimeError", "OSError", "KeyError"}
 for _ in range(280):
     roots = (Path("/run/link-source"), Path("/run/link-destination"))
-    if any((root / "fresh-failed.json").is_file() for root in roots):
+    observations = {}
+    for role, root in zip(("source", "destination"), roots):
+        file = root / "fresh-failed.json"
+        if file.is_file() and file.stat().st_size <= 1024:
+            value = json.loads(file.read_bytes())
+            observations[role] = {
+                "stage": value.get("stage") if value.get("stage") in allowed else "unclassified",
+                "error": value.get("error") if value.get("error") in errors else "unclassified",
+            }
+    if observations:
+        print(json.dumps(observations))
         raise SystemExit(3)
     if all((root / "fresh-ready.json").is_file() for root in roots):
         break
@@ -231,7 +245,22 @@ else:
 ' > "$work/guest-readiness.log" 2>&1 || stage_status=$?
 case $stage_status in
     0) ;;
-    3) reason=guest-reported-startup-failure ;;
+    3) reason=guest-reported-startup-failure
+       python3 - "$work/guest-readiness.log" "$evidence/guest-startup.json" <<'PY'
+import json, sys
+from pathlib import Path
+source, target = map(Path, sys.argv[1:])
+allowed = {"confined native D-Bus and Avahi readiness", "initial authenticated host readiness",
+           "wait for managed command", "browser guest", "unclassified"}
+errors = {"AssertionError", "FileNotFoundError", "PermissionError", "TimeoutError",
+          "RuntimeError", "OSError", "KeyError", "unclassified"}
+assert source.stat().st_size <= 1024
+value = json.loads(source.read_bytes())
+assert 1 <= len(value) <= 2 and set(value) <= {"source", "destination"}
+assert all(set(x) == {"stage", "error"} and x["stage"] in allowed and x["error"] in errors for x in value.values())
+target.write_text(json.dumps(value) + "\n")
+PY
+       ;;
     4|124) reason=guest-readiness-timeout ;;
     *) classify_launch "$work/guest-readiness.log" ;;
 esac

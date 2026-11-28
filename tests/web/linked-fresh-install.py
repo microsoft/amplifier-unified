@@ -1,10 +1,12 @@
 """Run the fresh-install lane only in its two managed Compose guests."""
 import asyncio
 import hashlib
+import grp
 import ipaddress
 import json
 import os
 from pathlib import Path
+import pwd
 import runpy
 import shutil
 import signal
@@ -56,6 +58,9 @@ async def start_guest_discovery(role, home, processes):
         )
         output, _ = await probe.communicate()
     assert probe.returncode == 0 and json.loads(output) == []
+    runtime = Path("/run/avahi-daemon").stat()
+    assert runtime.st_uid == pwd.getpwnam("avahi").pw_uid == os.getuid()
+    assert runtime.st_gid == grp.getgrnam("avahi").gr_gid == os.getgid()
     bus_socket = home / "fresh-system-bus"
     assert not bus_socket.exists()
     address = f"unix:path={bus_socket}"

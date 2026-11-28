@@ -26,6 +26,11 @@ services:
       - run-control:/run/link-control
   fresh-source:
     <<: *guest
+    build:
+      context: ../..
+      dockerfile: tests/web/linked-instances.Dockerfile
+      args:
+        FIXTURE_AVAHI_ID: '24031'
     user: '24031:24031'
     environment:
       HOME: /home/fixture-source
@@ -42,6 +47,11 @@ services:
       - /run/avahi-daemon:mode=0700,uid=24031,gid=24031
   fresh-destination:
     <<: *guest
+    build:
+      context: ../..
+      dockerfile: tests/web/linked-instances.Dockerfile
+      args:
+        FIXTURE_AVAHI_ID: '24032'
     user: '24032:24032'
     environment:
       HOME: /home/fixture-destination

@@ -65,7 +65,15 @@ RUN if test -e amplifier_web/static || test -L amplifier_web/static; then \
 # hook once all copied source and rebuilt assets are present.
 RUN uv sync --locked --no-dev \
     && .venv/bin/python -c 'import amplifier_web.server'
-RUN install -d -m 0700 -o 24031 -g 24031 /home/fixture-source \
+ARG FIXTURE_AVAHI_ID=
+# Avahi validates its runtime directory against this account even with --no-drop-root.
+# Align the account at build time; the app guest starts nonroot with no capabilities.
+RUN if test -n "$FIXTURE_AVAHI_ID"; then \
+      case "$FIXTURE_AVAHI_ID" in 24031|24032) ;; *) exit 1;; esac; \
+      groupmod -g "$FIXTURE_AVAHI_ID" avahi; \
+      usermod -u "$FIXTURE_AVAHI_ID" -g avahi avahi; \
+    fi \
+    && install -d -m 0700 -o 24031 -g 24031 /home/fixture-source \
     && install -d -m 0700 -o 24032 -g 24032 /home/fixture-destination \
     && install -d -m 0755 -o 24031 -g 24031 /run/link-source \
     && install -d -m 0755 -o 24032 -g 24032 /run/link-destination \
