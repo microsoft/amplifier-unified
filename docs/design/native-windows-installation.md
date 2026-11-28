@@ -6,6 +6,31 @@ consumer setup file for Windows 11 as an unsigned preview. This document is
 
 ## Consumer lifecycle completion
 
+### Windows app username and password
+
+The Windows sign-in page is now rendered by `browser_entry`, not the older
+client-owned `windows-login.html`. Local and remote addresses use one form.
+Both check the Amplifier username and the existing password record through
+`SavedKey.accepts`. The username is `sign_in_username` in `config/server.yaml`;
+with none saved it is the owner's Windows account name. The comparison uses
+NFKC, case folding and fixed-size constant-time digest comparison. A random
+sign-in key needs the same username. Wrong usernames and passwords share the
+answer and the password wait.
+
+The record stays in its existing format: a salt and scrypt hash, never a
+password. The local origin check is as strict as ticket redemption. A password
+session stays marked remote even at a local address. Only the launcher session
+can change it on `/connect/sign-in`; the owner's CLI can also change it with
+`browsers password`. No Windows account password or Hello PIN is checked.
+
+With no password, the launcher sends the owner to that page first. Save sets
+the username and password. Not now saves `sign_in_setup_dismissed` in the same
+server settings. The page stays on Devices & apps. Existing passwords need no
+change and suppress this prompt. POSIX pages and PAM handlers are unchanged.
+The existing client script still strips and redeems launcher tickets. Its old
+failure status is hidden; the server shows the current next step separately.
+The earlier password-only and no-local-form descriptions below are historical.
+
 The current user goal is a normal downloadable Windows application, not a
 developer bootstrap command. Installation must supply its private prerequisites;
 an information worker must not need WSL, Python, uv, Git, PowerShell 7, a compiler,

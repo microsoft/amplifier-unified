@@ -1,14 +1,14 @@
-"""Owner-to-browser handoff, not remote pairing or a fresh Windows Hello check.
+"""Windows browser sign-in and owner-to-browser handoff.
 
 The foreground owner launcher reads existing private credentials only.
 Listener authentication and grant exchange remain separate from that local read.
-A browser on another device signs in with the password that the owner set in
-the app on this computer (or the sign-in key that a command made there). The
-one-use code of earlier versions is gone: the password is the one way.
+A browser at either address signs in with the Amplifier username and saved
+password (or sign-in key). The launcher remains a separate owner-only handoff.
 """
 from __future__ import annotations
 
 import asyncio
+import getpass
 from dataclasses import dataclass
 import hashlib
 import hmac
@@ -325,6 +325,32 @@ def _scrypt(password: bytes, salt: bytes) -> str:
     return hashlib.scrypt(password, salt=salt, n=2 ** 15, r=8, p=1, maxmem=64 * 1024 * 1024, dklen=32).hex()
 
 
+def sign_in_username(data_dir: Path) -> str:
+    """Read current settings, so a command's change works without a host restart."""
+    from .deployment import load_server_config
+    return load_server_config(data_dir).get("sign_in_username") or getpass.getuser()
+
+
+def _username_bytes(text) -> bytes:
+    if not isinstance(text, str) or not 0 < len(text) <= 256:
+        return b""
+    try:
+        return hashlib.sha256(unicodedata.normalize("NFKC", text).casefold().encode("utf-8")).digest()
+    except UnicodeError:
+        return b""
+
+
+def save_sign_in_settings(data_dir: Path, *, username=None, dismissed=None):
+    """Only public names and the first-use choice; never a password."""
+    from .deployment import load_server_config, save_server_config, validate_sign_in_username
+    config = load_server_config(data_dir)
+    if username is not None:
+        config["sign_in_username"] = validate_sign_in_username(username)
+    if dismissed is not None:
+        config["sign_in_setup_dismissed"] = dismissed
+    save_server_config(data_dir, config)
+
+
 class SavedKey:
     """The running host's view of the password or sign-in key that the owner saved.
 
@@ -416,7 +442,7 @@ class SavedKey:
         """Whole seconds until a password is checked again; 0 when one is checked now."""
         return max(0, math.ceil(self._until - self.clock()))
 
-    async def accepts(self, app, text):
+    async def accepts(self, app, text, username=""):
         """Is the typed text the saved password or key, and did no sign-out of all browsers end it?
 
         True or False; a False is counted. None for a password that was not
@@ -426,6 +452,12 @@ class SavedKey:
         from .auth import sign_in_key_is_current
         data_dir = app["service"].data_dir
         record = self._saved(data_dir)
+        try:
+            expected = sign_in_username(data_dir)
+            right_user = bool(_username_bytes(username)) and hmac.compare_digest(
+                _username_bytes(username), _username_bytes(expected))
+        except (OSError, ValueError, KeyError):
+            right_user = False
         if record is not None and record[1].startswith(_SCRYPT):
             now = self.clock()
             if self._streak and now - self._last > self.QUIET:
@@ -443,7 +475,7 @@ class SavedKey:
                 finally:
                     self._checking = False
             # The record is looked at again: a password that was changed or removed during the check opens nothing.
-            if right and self._saved(data_dir) == record and sign_in_key_is_current(app, record[0]):
+            if right and right_user and self._saved(data_dir) == record and sign_in_key_is_current(app, record[0]):
                 self._streak = 0
                 return True
             self.failures += 1
@@ -454,7 +486,7 @@ class SavedKey:
                                                self.FIRST_WAIT * 2 ** min(self._streak - self.FREE, 16))
             return False
         key = _typed(text)
-        if (record is None or not _KEY.fullmatch(key)
+        if (not right_user or record is None or not _KEY.fullmatch(key)
                 or not hmac.compare_digest(hashlib.sha256(key.encode("ascii")).hexdigest(), record[1])
                 or not sign_in_key_is_current(app, record[0])):
             self.failures += 1
@@ -726,7 +758,7 @@ async def issue(request):
                              headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
 
-async def _signed_form(request, field):
+async def _signed_form(request, field, *, extra=()):
     """Return the one named form value, or None unless the signed CSRF pair matches."""
     from .auth import CSRF_COOKIE, _verified
     form = await request.clone(client_max_size=4096).post()
@@ -736,10 +768,10 @@ async def _signed_form(request, field):
                       and _verified(request.app["session_secret"], csrf, 900, "csrf"))
     except (TypeError, ValueError):
         valid_csrf = False
-    if (not valid_csrf or set(form) != {"csrf", field}
+    if (not valid_csrf or set(form) != {"csrf", field, *extra}
             or any(len(form.getall(key)) != 1 for key in form)):
         return None
-    return form.get(field)
+    return (form.get(field), *(form.get(key) for key in extra)) if extra else form.get(field)
 
 
 async def redeem(request):
@@ -760,7 +792,13 @@ async def redeem(request):
     session = None if target is None else sign_in(request.app)
     if session is None:
         return web.Response(text=next_step(request), status=403)
-    response = web.HTTPSeeOther(target)
+    from .deployment import load_server_config
+    config = load_server_config(request.app["service"].data_dir)
+    saved = request.app.get("browser_key")
+    if (saved is not None and saved.state(request.app) == "none"
+            and not config.get("sign_in_setup_dismissed")):
+        target = PASSWORD_PATH + "?first=1"
+    response = web.HTTPSeeOther(target, headers={"Cache-Control": "no-store"})
     response.set_cookie(SESSION_COOKIE, session,
                         max_age=request.app["server_config"]["session_ttl_seconds"],
                         httponly=True, samesite="Strict", secure=True, path="/")
@@ -787,14 +825,15 @@ async def key_redeem(request):
     """
     from aiohttp import web
     from .auth import CSRF_COOKIE, SESSION_COOKIE, sign_in
-    origin = remote_origin(request)
+    origin = local_origin(request) or remote_origin(request)
     saved = request.app["browser_key"]
     if not origin or not is_windows() or saved is None or request.content_type != "application/x-www-form-urlencoded":
         return web.Response(text=RELOAD_KEY, status=403)
-    text = await _signed_form(request, "password")
-    if text is None:
+    values = await _signed_form(request, "password", extra=("username",))
+    if values is None:
         return web.Response(text=RELOAD_KEY, status=403)
-    answer = await saved.accepts(request.app, text)
+    text, username = values
+    answer = await saved.accepts(request.app, text, username)
     if answer is None:
         raise web.HTTPSeeOther("/login?error=wait", headers=_PRIVATE)
     if not answer:
@@ -824,8 +863,10 @@ async def key_redeem(request):
 _ON_THE_PC = "In Amplifier on the PC, " + SETTINGS_PATH[0].lower() + SETTINGS_PATH[1:].replace("&", "&amp;")
 _PASSWORD_FORM = f"""<form method="post" action="{KEY_REDEEM_PATH}">
 <input type="hidden" name="csrf" value="__CSRF__">
+<label for="username">Username</label>
+<input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="256" autofocus required>
 <label for="password">Password</label>
-<input id="password" name="password" type="password" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" aria-describedby="password-help" autofocus required>
+<input id="password" name="password" type="password" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" aria-describedby="password-help" required>
 <button type="submit">Sign in</button>
 </form>
 """
@@ -841,11 +882,11 @@ _REMOTE_PAGE = """<!doctype html>
 __FORMS__</main></body></html>
 """
 _WITH_PASSWORD = (_PASSWORD_FORM
-                  + '<p id="password-help">Type the password that you set in Amplifier on the PC, '
-                  'or the sign-in key that a command on the PC showed. To change the password: '
-                  + _ON_THE_PC + "</p>\n")
-_WITHOUT_PASSWORD = ('<p id="password-help">No password is set for sign-in from another device. '
-                     "Set one on the PC that runs Amplifier. " + _ON_THE_PC + " Then open this page again.</p>\n")
+                  + '<p id="password-help">Type your Amplifier username and password. '
+                  'A sign-in key also goes in the Password field. It needs the same username.</p>\n')
+_WITHOUT_PASSWORD = ('<p id="password-help">No Amplifier password is set. '
+                     "Open Amplifier on the PC that runs it. Set a username and password there, "
+                     "or run: amplifier-unified browsers password.</p>\n")
 # Not "no password is set": that is not known when the record could not be read.
 _NOT_READ = ('<p id="password-help">Amplifier could not check now whether a password is set for sign-in from '
              "another device. Open this page again in a moment.</p>\n")
@@ -888,23 +929,44 @@ def remote_login_page(request):
     elif kind == "wait":
         wait = saved.wait()
         # The way out is named: with the one-use code gone, the wait has no second way around it.
-        error = (f"Too many wrong passwords were typed. No password is checked for {_duration(wait)}. "
+        error = (f"Too many wrong sign-in entries. No password is checked for {_duration(wait)}. "
                  "Then type the password again. To end the wait at once, set the password again on the PC."
                  if wait else "The password was not checked. Type it again.")
     elif kind == "password":
-        error = ("That password did not work. Check it and type it again. A password stops working when you "
-                 "change it or remove it on the PC, or sign out all browsers there.")
+        error = "That username or password did not work. Check both and try again."
     else:
         error = ""
     forms = _WITH_PASSWORD if with_password else {
         "none": _WITHOUT_PASSWORD, "unknown": _NOT_READ, "off": _NO_SIGN_IN}[state]
-    page = _REMOTE_PAGE.replace("__FORMS__", forms).replace("__ERROR__", error).replace("__CSRF__", csrf)
+    # The client-owned script still consumes launcher tickets. Its failure text
+    # belongs to older clients, so keep that status hidden and show the host's
+    # current next step separately. No client bundle is changed here.
+    launcher = ""
+    script = ""
+    if not _other_address(request):
+        import html
+        script = '<script src="/browser-entry.js" defer></script>'
+        step = next_step(request)
+        if step == ON_THE_PC:
+            step += " For a command-line install, run: amplifier-unified open. Use that install's data folder."
+        launcher = (f'<p>{html.escape(step)} This opens Amplifier without typing a password.</p>'
+                    '<p id="entry-status" role="status" hidden></p>'
+                    f'<form id="browser-entry" method="post" action="{REDEEM_PATH}" hidden>'
+                    '<input type="hidden" name="csrf" value="__CSRF__">'
+                    '<input type="hidden" name="ticket" value=""></form>')
+    page = (_REMOTE_PAGE.replace("</head>", script + "</head>").replace("__FORMS__", forms + launcher)
+            .replace("__ERROR__", error).replace("__CSRF__", csrf))
     page = request.app['service'].instance_branding.document(page, login=True)
     response = web.Response(text=page,
                             content_type="text/html",
                             headers={"Cache-Control": "no-store", "Referrer-Policy": "same-origin"})
     response.set_cookie(CSRF_COOKIE, csrf, httponly=True, samesite="Strict", secure=request.secure, path="/")
     return response
+
+
+def _other_address(request):
+    from .auth import _other_device_address
+    return _other_device_address(request)
 
 
 # The owner's page on this computer: set, change or remove the password for other devices.
@@ -970,6 +1032,8 @@ def _owner_body(request, session, saved, *, notice="", error=""):
     import html
     app = request.app
     csrf = _owner_csrf(request, session)
+    username = html.escape(sign_in_username(app["service"].data_dir), quote=True)
+    first = request.query.get("first") == "1" and saved == "none"
     if saved == "password":
         state, title, button = "A password is set.", "Change the password", "Change password"
     elif saved == "key":
@@ -997,23 +1061,28 @@ def _owner_body(request, session, saved, *, notice="", error=""):
         "Browsers that are signed in stay signed in.</p>"
         f'<form method="post"><input type="hidden" name="csrf" value="{csrf}">'
         f'<button name="action" value="remove">Remove {name}</button></form></section>\n')
+    skip = (f'<form method="post"><input type="hidden" name="csrf" value="{csrf}">'
+            '<button name="action" value="skip">Not now</button></form>' if first else "")
     return (
-        '<p class="lead">A browser on another device signs in to this Amplifier with this password. '
-        "You can use it when you are not at this PC.</p>\n"
+        '<p class="lead">Use this username and password to sign in to Amplifier in this browser again and on other devices. '
+        "Amplifier saves only a salted hash of the password.</p>\n"
         f'<div id="notice" role="{"alert" if error else "status"}">{html.escape(error or notice)}</div>\n'
         f'<section class="card"><h2>{title}</h2><p>{state}</p>'
         f'<form method="post"><input type="hidden" name="csrf" value="{csrf}">'
+        '<label for="username">Username</label>'
+        f'<input id="username" name="username" autocomplete="username" value="{username}" maxlength="256" required>'
         '<label for="password">New password</label>'
         f'<input id="password" name="password" type="password" autocomplete="new-password" minlength="{PASSWORD_MIN}" '
         f'maxlength="{PASSWORD_MAX}" aria-describedby="password-help" required>'
         '<label for="confirm">New password again</label>'
         f'<input id="confirm" name="confirm" type="password" autocomplete="new-password" minlength="{PASSWORD_MIN}" '
         f'maxlength="{PASSWORD_MAX}" required>'
-        f'<button class="primary" name="action" value="set">{button}</button></form>'
+        f'<button class="primary" name="action" value="set">{"Save" if first else button}</button></form>'
         f'<p id="password-help" class="muted">Use at least {PASSWORD_MIN} characters. Everyone who has this password '
         "and can reach an address for other devices can sign in to this Amplifier. Do not use a password that you "
         "use for something else. A sign-out of all browsers also removes the password.</p></section>\n"
-        f'<section class="card"><h2>Where the password works</h2>{where}</section>\n' + remove)
+        f'<section class="card"><h2>Where the password works</h2>'
+        f'<p>It works at this PC\'s local address too.</p>{where}</section>\n' + remove + skip)
 
 
 async def password_page(request):
@@ -1032,7 +1101,11 @@ async def password_page(request):
     headers = {"Cache-Control": "no-store", "Referrer-Policy": "same-origin"}
 
     def page(body, status=200):
-        return web.Response(text=_OWNER_PAGE.replace("__BODY__", body), status=status, content_type="text/html",
+        template = _OWNER_PAGE
+        if is_windows():
+            template = template.replace("Password for other devices", "Amplifier sign-in").replace(
+                "SIGN IN FROM ANOTHER DEVICE", "SIGN IN TO AMPLIFIER")
+        return web.Response(text=template.replace("__BODY__", body), status=status, content_type="text/html",
                             headers=headers)
     saved = request.app.get("browser_key")
     if not is_windows():
@@ -1069,6 +1142,12 @@ async def password_page(request):
         return web.Response(text="This page expired. Open it again.", status=403, headers=headers)
     data_dir = request.app["service"].data_dir
     action = form.get("action")
+    if action == "skip" and set(form) == {"csrf", "action"}:
+        try:
+            save_sign_in_settings(data_dir, dismissed=True)
+        except (OSError, ValueError):
+            return page(body(error="The choice was not saved. Try again."), 500)
+        raise web.HTTPSeeOther("/", headers=headers)
     if action == "remove" and set(form) == {"csrf", "action"}:
         try:
             await asyncio.to_thread(remove_key, data_dir, owner)
@@ -1079,13 +1158,21 @@ async def password_page(request):
         except (OSError, ValueError):
             return page(body(error=_UNCONFIRMED_REMOVE), 500)
         raise web.HTTPSeeOther(PASSWORD_PATH + "?done=removed", headers=headers)
-    if action != "set" or set(form) != {"csrf", "action", "password", "confirm"}:
+    if action != "set" or set(form) != {"csrf", "action", "username", "password", "confirm"}:
         return web.Response(text="This page expired. Open it again.", status=403, headers=headers)
     password = form["password"]
     if not isinstance(password, str) or password != form["confirm"]:
         return page(body(error="The two passwords are not the same. Type them again."), 400)
     try:
+        from .deployment import validate_sign_in_username
+        try:
+            username = validate_sign_in_username(form["username"])
+        except ValueError:
+            return page(body(error="Use a username of 1 to 256 characters. Do not use control characters."), 400)
         await asyncio.to_thread(set_password, data_dir, password, owner)
+        if _session_here(request) != session:
+            raise OwnerSignedOut()
+        save_sign_in_settings(data_dir, username=username, dismissed=True)
     except OwnerSignedOut:
         return page(_SIGNED_OUT, 403)
     except ChangedMeanwhile:
@@ -1096,7 +1183,7 @@ async def password_page(request):
         return page(body(error=str(unavailable)), 409)
     except (OSError, ValueError):
         return page(body(error=_UNCONFIRMED_SET), 500)
-    raise web.HTTPSeeOther(PASSWORD_PATH + "?done=set", headers=headers)
+    raise web.HTTPSeeOther("/" if request.query.get("first") == "1" else PASSWORD_PATH + "?done=set", headers=headers)
 
 
 async def owner_browser_url(data_dir: Path, config: dict, *, wait=0.0, pause=1.0, waiting=None) -> str:

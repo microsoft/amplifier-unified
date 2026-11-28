@@ -74,6 +74,10 @@ class PrivateFiles:
     @contextmanager
     def directory(self, path, *, owned_root, create=False):
         assert Path(path).is_relative_to(owned_root)
+        if Path(path).parts[-2:] != ("config", "auth"):
+            with self.native(path, owned_root=owned_root, create=create) as real:
+                yield real
+            return
         files = self
 
         class Pinned:
@@ -110,6 +114,7 @@ def files(monkeypatch):
 
 @pytest.fixture
 def host(home, files):
+    entry.save_sign_in_settings(home, dismissed=True)
     app = web.Application()
     app["control_token"], app["session_secret"] = TOKEN, SECRET
     app["server_config"] = {"session_ttl_seconds": 600,
@@ -560,36 +565,29 @@ def with_marks(monkeypatch):
 
 
 def test_the_sign_in_page_shows_the_step_in_its_own_place(host, monkeypatch):
-    with_marks(monkeypatch)
     page = call(host, "/login", method="GET", origin=None).text
-    assert f'<p id="entry-status" role="status">{entry.ON_THE_PC}</p>' in page and "__REOPEN__" not in page
+    assert f'<p>{entry.ON_THE_PC}' in page and "__REOPEN__" not in page
     root, looked = from_setup(host, monkeypatch)
     page = call(host, "/login", method="GET", origin=None).text
-    assert f'<p id="entry-status" role="status">{entry.START_MENU}</p>' in page and looked == [root]
+    assert f'<p>{entry.START_MENU}' in page and looked == [root]
     # The text is data in the page, never markup.
     monkeypatch.setattr(entry, "next_step", lambda request: 'a <b> & "c"')
     page = call(host, "/login", method="GET", origin=None).text
-    assert '<p id="entry-status" role="status">a &lt;b&gt; &amp; &quot;c&quot;</p>' in page and "<b>" not in page
+    assert '<p>a &lt;b&gt; &amp; &quot;c&quot;' in page and "<b>" not in page
     # The step is in the page before any value of the request: a wanted address cannot name the mark.
     monkeypatch.setattr(entry, "next_step", lambda request: "the step")
     page = call(host, "/login?next=%2F__REOPEN__", method="GET", origin=None).text
-    assert '<main data-next="/__REOPEN__">' in page and page.count("the step") == 1
+    assert "__REOPEN__" not in page and page.count("the step") == 1
 
 
 def test_a_sign_in_page_without_the_mark_is_not_changed_and_reads_nothing(host, monkeypatch):
-    """A page of a client that has no place for the step, whatever the selected client's page has."""
+    """Windows sign-in no longer reads the obsolete client-owned page."""
     read = Path.read_text
-    plain = read(Path(auth.__file__).parent / "static" / "windows-login.html", encoding="utf-8").replace(
-        "__REOPEN__", "The client's own sentence.")
     monkeypatch.setattr(Path, "read_text", lambda self, *args, **options: (
-        plain if self.name == "windows-login.html" else read(self, *args, **options)))
-    from_setup(host, monkeypatch)
-    monkeypatch.setattr(entry, "next_step", lambda request: pytest.fail("The step was worked out for nothing"))
+        pytest.fail("Read the old client page") if self.name == "windows-login.html" else read(self, *args, **options)))
     page = call(host, "/login", method="GET", origin=None)
-    csrf = page.cookies[auth.CSRF_COOKIE].value
-    # The three marks that the host filled before this change, and nothing else.
-    earlier = plain.replace("__CSRF__", csrf).replace("__NEXT__", "/").replace("__ERROR__", "")
-    assert page.text == host["service"].instance_branding.document(earlier, login=True)
+    assert entry._WITHOUT_PASSWORD in page.text
+    assert "Remote browser pairing is not available in this candidate." not in page.text
 
 
 @pytest.mark.skipif(os.name != "nt", reason="The real private store of Windows and the real record of the entries")
@@ -799,7 +797,7 @@ def test_remote_address_gets_the_password_page_and_the_local_page_is_unchanged(h
     for at in (LOCAL, "https://localhost:8941", "https://[::1]:8941"):
         local = call(host, "/login", method="GET", at=at, origin=None).text
         assert '<script src="/browser-entry.js"' in local and 'action="/api/browser-entry/redeem"' in local
-        assert entry.KEY_REDEEM_PATH not in local and 'id="password-help"' not in local
+        assert entry.KEY_REDEEM_PATH not in local and 'id="password-help"' in local
     page = call(host, "/login", method="GET", at=REMOTE, origin=None)
     text = page.text
     assert page.status == 200 and page.content_type == "text/html"
@@ -808,12 +806,9 @@ def test_remote_address_gets_the_password_page_and_the_local_page_is_unchanged(h
     assert '<link rel="stylesheet" href="/app-pages.css">' in text
     # No password is saved: the page has no form. It says where the owner sets a password, with no command.
     assert "<form" not in text and "<input" not in text and "<a " not in text
-    assert ('<p id="password-help">No password is set for sign-in from another device. Set one on the PC that runs '
-            'Amplifier. In Amplifier on the PC, open Settings, then "Advanced", then "Performance &amp; runtime", '
-            'then "Install app", then "Devices &amp; apps". There, select "Set a password". '
-            'Then open this page again.</p>') in text
+    assert entry._WITHOUT_PASSWORD in text
     # The one-use code of earlier versions is gone from the page.
-    for gone in ("one-time-code", 'name="code"', "browsers code", "amplifier-unified browsers", "browser-entry/code",
+    for gone in ("one-time-code", 'name="code"', "browsers code", "browser-entry/code",
                  "<code>"):
         assert gone not in text, gone
     csrf = page.cookies[auth.CSRF_COOKIE]
@@ -833,7 +828,7 @@ def test_remote_address_gets_the_password_page_and_the_local_page_is_unchanged(h
     assert entry.GUIDE.endswith("/docs/DEPLOYMENT.md#windows-host-reach-unified-from-another-device")
     # The host boundary reads "localhost." as this computer; so does the page.
     for at in ("https://localhost.:8941", "https://LOCALHOST:8941"):
-        assert 'id="password-help"' not in call(host, "/login", method="GET", at=at, origin=None).text
+        assert 'id="password-help"' in call(host, "/login", method="GET", at=at, origin=None).text
 
 
 def test_other_platforms_keep_the_password_page_and_refuse_the_key_endpoint(host, monkeypatch):
@@ -1032,12 +1027,13 @@ def new_key(app):
     return entry.make_key(app["service"].data_dir)[0]
 
 
-async def typed_key(app, key, *, at=REMOTE, csrf=None, headers=None, body=None, **options):
+async def typed_key(app, key, *, at=REMOTE, csrf=None, headers=None, body=None, username=None, **options):
     """Post the key form at a remote address, as the page on the other device does."""
     csrf = csrf or auth.new_csrf(app["session_secret"])
     return await send(app, entry.KEY_REDEEM_PATH, at=at, headers={
         "Content-Type": FORM, "Cookie": f"{auth.CSRF_COOKIE}={csrf}", **(headers or {})},
-        body=body or urlencode({"csrf": csrf, "password": key}), **options)
+        body=body or urlencode({"csrf": csrf, "password": key,
+                               "username": entry.sign_in_username(app["service"].data_dir) if username is None else username}), **options)
 
 
 def with_key(*args, **options):
@@ -1248,7 +1244,7 @@ def test_record_that_is_replaced_between_the_look_and_the_read_leaves_no_earlier
 
 
 KEY_REFUSED = {name: REFUSED[name] for name in (
-    "loopback Host", "localhost Host", "Host that is not a configured address", "configured address that is not HTTPS",
+    "localhost Host", "Host that is not a configured address", "configured address that is not HTTPS",
     "no Origin", "another Origin", "opaque Origin", "plain HTTP", "plain HTTP without Origin",
     "no CSRF cookie", "unsigned CSRF", "expired CSRF", "a session used as CSRF",
     "JSON content type", "multipart content type")}
@@ -1289,9 +1285,10 @@ def test_with_remote_access_off_the_key_opens_nothing(host):
     key = new_key(host)
     for origins in ([LOCAL, "https://localhost:8941"], []):
         host["server_config"]["public_origins"] = origins
-        for at in (REMOTE, OTHER, UNLISTED, LOCAL, "https://localhost:8941"):
+        for at in (REMOTE, OTHER, UNLISTED, "https://localhost:8941"):
             response = with_key(host, key, at=at)
             assert response.status == 403 and auth.SESSION_COOKIE not in response.cookies
+        assert signed_in(with_key(host, key, at=LOCAL))
     assert host["browser_key"].failures == 0
 
 
@@ -1317,25 +1314,22 @@ def test_remote_page_has_the_password_form_only_while_a_password_or_key_is_saved
                       '<button type="submit">Sign in</button>'):
         assert attribute in text
     # The page has one field for a person: the password, with the focus. A password manager finds it.
-    assert text.count("<input") == 2 and text.count("autofocus") == 1 and text.count('type="password"') == 1
+    assert text.count("<input") == 3 and text.count("autofocus") == 1 and text.count('type="password"') == 1
     assert "<script" not in text.lower() and "<a " not in text and "<code>" not in text
     for gone in ("one-time-code", 'name="code"', "one-use code", "browsers code", "Sign in with code"):
         assert gone not in text, gone
     csrf = page.cookies[auth.CSRF_COOKIE].value
     assert text.count(f'<input type="hidden" name="csrf" value="{csrf}">') == 1
-    assert ('<p id="password-help">Type the password that you set in Amplifier on the PC, or the sign-in key that a '
-            'command on the PC showed. To change the password: In Amplifier on the PC, open Settings, then '
-            '"Advanced", then "Performance &amp; runtime", then "Install app", then "Devices &amp; apps". '
-            'There, select "Set a password".</p>') in text
+    assert ('<p id="password-help">Type your Amplifier username and password. A sign-in key also goes in the '
+            'Password field. It needs the same username.</p>') in text
     assert text.count('id="password-help"') == 1 and "did not work" not in text and PASSWORD not in text
     again = remote("/login?error=password").text
-    assert ("That password did not work. Check it and type it again. A password stops working when you change it "
-            "or remove it on the PC, or sign out all browsers there.") in again
+    assert "That username or password did not work. Check both and try again." in again
     # A password that was not checked has its own texts; nothing of the request is on the page.
     assert "The password was not checked. Type it again." in remote("/login?error=wait").text
     host["browser_key"]._until = host["browser_key"].clock() + 119.5
     waiting = remote("/login?error=wait").text
-    assert ("Too many wrong passwords were typed. No password is checked for 2 minutes. Then type the password "
+    assert ("Too many wrong sign-in entries. No password is checked for 2 minutes. Then type the password "
             "again. To end the wait at once, set the password again on the PC.</p>") in waiting
     assert "code" not in waiting.split("<main>")[1]
     host["browser_key"]._until = host["browser_key"].clock() + 0.5
@@ -1349,9 +1343,9 @@ def test_remote_page_has_the_password_form_only_while_a_password_or_key_is_saved
     key = new_key(host)
     assert f'action="{entry.KEY_REDEEM_PATH}"' in remote().text and signed_in(with_key(host, key))
     assert entry.remove_key(home) is True and entry.KEY_REDEEM_PATH not in remote().text
-    # The page of this computer never has the form.
+    # The page of this computer has the same form.
     entry.set_password(home, PASSWORD)
-    assert entry.KEY_REDEEM_PATH not in call(host, "/login", method="GET", at=LOCAL, origin=None).text
+    assert entry.KEY_REDEEM_PATH in call(host, "/login", method="GET", at=LOCAL, origin=None).text
 
 
 def test_page_never_says_that_no_password_is_set_when_that_is_not_known(host, monkeypatch):
@@ -1393,7 +1387,7 @@ def test_page_never_says_that_no_password_is_set_when_that_is_not_known(host, mo
         assert signed_in(with_key(host, key))
     # With nothing saved, both pages say so.
     assert entry.remove_key(home) is True
-    assert "No password is set for sign-in from another device." in remote() and "<p>No password is set.</p>" in owner()
+    assert "No Amplifier password is set." in remote() and "<p>No password is set.</p>" in owner()
     assert '<div id="notice" role="status">No password or key is set now.</div>' in owner()
     # A host that could not confirm its owner credential at its start has no stores.
     host["browser_key"] = None
@@ -1426,7 +1420,7 @@ def test_owner_page_looks_at_the_saved_record_once_for_one_response(host, monkey
     # The page for another device has one look too.
     del looks[:]
     remote = call(host, "/login?error=wait", method="GET", at=REMOTE, origin=None).text
-    assert len(looks) == 1 and "No password is set for sign-in from another device." in remote and "<form" not in remote
+    assert len(looks) == 1 and "No Amplifier password is set." in remote and "<form" not in remote
 
 
 def test_state_of_the_saved_record_is_one_of_four(host, monkeypatch):
@@ -1492,7 +1486,8 @@ def test_real_https_sign_in_with_the_saved_key_at_the_remote_address(host, tmp_p
                         assert (f'action="{entry.KEY_REDEEM_PATH}"' in await page.text()) is form
                     form = {"Origin": REMOTE, "Content-Type": FORM, "Cookie": f"{auth.CSRF_COOKIE}={csrf}"}
                     async with at_remote("POST", entry.KEY_REDEEM_PATH, headers=form,
-                                         data=urlencode({"csrf": csrf, "password": typed_text})) as response:
+                                         data=urlencode({"csrf": csrf, "password": typed_text,
+                                                         "username": entry.sign_in_username(home)})) as response:
                         return response.status, response.headers["Location"], response.cookies.get(auth.SESSION_COOKIE)
 
                 async def signed(cookie):
@@ -1555,7 +1550,8 @@ def test_key_command_shows_a_new_key_once_and_saves_only_its_record(key_command,
     assert out == (
         "Save this sign-in key now, for example in a password manager. Amplifier does not show it again.\n\n"
         f"    {shown}\n\n"
-        'On the other device, open Amplifier and type the key in the field "Password". '
+        f"Username: {entry.sign_in_username(home)}\n"
+        'Open Amplifier and type this username and the key in the field "Password". '
         f"Addresses for other devices:\n  {REMOTE}\n  {OTHER}\n"
         'Amplifier must be running. It uses a new address only after the steps "Turn remote access on" '
         "of the deployment guide.\n"
@@ -1632,7 +1628,7 @@ def test_sign_out_command_ends_a_key_from_a_second_that_the_clock_has_not_reache
     app = {"service": SimpleNamespace(data_dir=home), "sessions": auth.Sessions.load(home)}
     saved = entry.SavedKey()
     def accepts():
-        return asyncio.run(saved.accepts(app, key))
+        return asyncio.run(saved.accepts(app, key, entry.sign_in_username(home)))
     assert record[0] == 1_900_000_500 and accepts() is True
     now[0] = 1_900_000_100                                  # The clock was set back.
     assert accepts() is False                               # A key from a later second opens nothing now.
@@ -1655,7 +1651,7 @@ def test_key_command_refusals_are_plain_and_change_nothing(key_command, home, mo
     assert "amplifier-unified config set public_origins" in str(stopped.value)
     with pytest.raises(SystemExit) as stopped:
         key_command("--remove", command="sign-out")
-    assert str(stopped.value) == "--remove is only valid with browsers key."
+        assert str(stopped.value) == "--remove is only valid with browsers key or browsers password."
     assert auth.read_sign_in_key(home) is None and auth.session_epoch(home) == 0
     key_command()
     record = auth.read_sign_in_key(home)
@@ -1793,7 +1789,7 @@ def test_password_is_exact_except_for_the_form_of_its_characters(host, capsys):
     # A form in another character set can send half of a character pair: a wrong password, with no hash.
     csrf = auth.new_csrf(SECRET)
     odd = with_key(host, "", csrf=csrf, headers={"Content-Type": FORM + "; charset=utf-7"},
-                   body=f"csrf={csrf}&password=%2B2AA-")
+                   body=f"csrf={csrf}&username=owner&password=%2B2AA-")
     assert wrong_key(odd) and host["browser_key"].failures == 5 and host["browser_key"].wait() == 2
     host["browser_key"]._streak, host["browser_key"]._until = 0, 0.0
     assert signed_in(with_key(host, "fish and Chips-12"))    # Typed as two letters on another keyboard.
@@ -1885,7 +1881,7 @@ def test_a_sender_of_wrong_passwords_has_at_most_300_guesses_in_a_day(host, monk
         saved._streak, saved._last, saved._until = 0, 0.0, 0.0
         guesses = sent = 0
         while now[0] < 86400:
-            answer = await saved.accepts(host, "wrong horse battery")
+            answer = await saved.accepts(host, "wrong horse battery", entry.sign_in_username(host["service"].data_dir))
             assert answer is False                          # The sender never sends during a wait.
             guesses, sent = guesses + 1, sent + 1
             if burst and sent == burst:
@@ -1984,7 +1980,8 @@ def owner_page(app, *, method="GET", session=..., form=None, token=None, headers
 
 
 def set_form(password=PASSWORD, confirm=None):
-    return {"action": "set", "password": password, "confirm": password if confirm is None else confirm}
+    return {"action": "set", "username": entry.getpass.getuser(), "password": password,
+            "confirm": password if confirm is None else confirm}
 
 
 def test_owner_sets_changes_and_removes_the_password_on_the_page_of_the_pc(host, capsys):
@@ -1993,7 +1990,7 @@ def test_owner_sets_changes_and_removes_the_password_on_the_page_of_the_pc(host,
     text = page.text
     assert page.status == 200 and page.content_type == "text/html" and "<script" not in text.lower()
     assert page.headers["Cache-Control"] == "no-store" and page.headers["Referrer-Policy"] == "same-origin"
-    assert "<h1>Password for other devices</h1>" in text and "<p>No password is set.</p>" in text
+    assert "<h1>Amplifier sign-in</h1>" in text and "<p>No password is set.</p>" in text
     assert '<link rel="stylesheet" href="/connect/assets/connect.css">' in text
     for part in ('<label for="password">New password</label>', 'autocomplete="new-password" minlength="12"',
                  '<label for="confirm">New password again</label>',
@@ -2478,7 +2475,7 @@ def test_owner_page_refuses_a_text_that_cannot_be_saved(host):
     token = entry._owner_csrf(SimpleNamespace(app=host), session)
     odd = "half%20of%20a%20pair%20%2B2AA-"                  # In UTF-7: a text of 15 characters; the last is half of a pair.
     page, _ = owner_page(host, method="POST", session=session, headers={"Content-Type": FORM + "; charset=utf-7"},
-                         body=f"csrf={token}&action=set&password={odd}&confirm={odd}")
+                         body=f"csrf={token}&action=set&username=owner&password={odd}&confirm={odd}")
     assert page.status == 400 and auth.read_sign_in_key(home) is None
     assert "This text has a character that cannot be saved. Use another password." in page.text
 
@@ -2554,8 +2551,8 @@ def test_host_serves_the_owner_page_and_the_command_keeps_its_one_job(home, monk
     source = (Path(entry.__file__).parent / "server.py").read_text(encoding="utf-8")
     assert "app.router.add_get(browser_entry.PASSWORD_PATH, browser_entry.password_page, allow_head=False)" in source
     assert "app.router.add_post(browser_entry.PASSWORD_PATH, browser_entry.password_page)" in source
-    # The command line has no way to set a password: a password on a command line stays in its history.
-    for words in (["browsers", "password"], ["browsers", "key", "--password", PASSWORD]):
+    # Passwords must not be command arguments.
+    for words in (["browsers", "password", PASSWORD], ["browsers", "key", "--password", PASSWORD]):
         monkeypatch.setattr(sys, "argv", ["amplifier-unified", *words])
         with pytest.raises(SystemExit):
             cli._parse()

@@ -102,12 +102,13 @@ def _parse() -> argparse.Namespace:
     runtime.add_argument("runtime_command", choices=["prepare", "status"])
     runtime.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
     browsers = subcommands.add_parser("browsers", help="Manage signed-in browsers")
-    browsers.add_argument("browsers_command", choices=["sign-out", "key"],
+    browsers.add_argument("browsers_command", choices=["sign-out", "key", "password"],
                           help="sign-out: sign out every browser on every device; "
-                               "key: make a random sign-in key to save, for a browser on another device (Windows host; "
-                               "to set your own password, use the app on the PC)")
+                               "key: make a random sign-in key; password: set your Amplifier password (Windows)")
     browsers.add_argument("--remove", action="store_true",
-                          help="key: remove the saved sign-in key or password and make no new key")
+                          help="key or password: remove the saved sign-in key or password")
+    browsers.add_argument("--username", metavar="NAME", help="password: set the Amplifier username")
+    browsers.add_argument("--stdin", action="store_true", help="password: read one password line from standard input")
     setup_tls = subcommands.add_parser("setup-tls", help="Create or inspect the app-owned local CA")
     setup_tls.add_argument("mode", nargs="?", choices=["status", "default", "force", "export"], default="default")
     reset = subcommands.add_parser("reset", help="Reinstall a clean app and runtime while preserving user data")
@@ -157,13 +158,16 @@ def _server_overrides(args: argparse.Namespace) -> dict:
 
 
 def _print_completion(shell: str) -> None:
-    words = "serve open tui acp run continue tool access doctor reset config service setup-tls browsers completion --port --workspace --data-dir --no-open --bind --host --public-origin --tls-cert --tls-key --session-ttl --version"
+    words = "serve open tui acp run continue tool access doctor reset config service setup-tls browsers completion password key sign-out --username --stdin --remove --port --workspace --data-dir --no-open --bind --host --public-origin --tls-cert --tls-key --session-ttl --version"
     if shell == "bash":
         print('complete -W "' + words + '" amplifier-unified')
     elif shell == "zsh":
         print('#compdef amplifier-unified\n_arguments "1:command:(serve open tui acp run continue tool access doctor reset config service setup-tls browsers)"')
+        print('_arguments "2:browser command:(password key sign-out)" "--username[Amplifier username]" "--stdin[Read password]" "--remove[Remove password or key]"')
     else:
         print('complete -c amplifier-unified -f -a "serve open tui acp run continue tool access doctor reset config service setup-tls browsers"')
+        print('complete -c amplifier-unified -n "__fish_seen_subcommand_from browsers" -a "password key sign-out"')
+        print('complete -c amplifier-unified -l username -l stdin -l remove')
 
 
 def _config(args, data_dir: Path) -> None:
@@ -509,6 +513,45 @@ def _remote_origins(config):
     return remote
 
 
+def _browser_password(args, data_dir):
+    """The password never goes through arguments, output or exception text."""
+    if not browser_entry.is_windows():
+        raise SystemExit("On this computer, sign in with the host account password on the sign-in page.")
+    if args.remove:
+        if args.stdin or args.username is not None:
+            raise SystemExit("Use --remove without --username or --stdin.")
+        return _browser_key(args, data_dir)
+    import getpass
+    from .deployment import validate_sign_in_username
+    try:
+        username = validate_sign_in_username(args.username) if args.username is not None else browser_entry.sign_in_username(data_dir)
+        if args.stdin:
+            password = sys.stdin.readline(browser_entry.PASSWORD_MAX + 3).removesuffix("\n").removesuffix("\r")
+        else:
+            # Do not allow getpass to fall back to visible input.
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", getpass.GetPassWarning)
+                password = getpass.getpass("New Amplifier password: ")
+                confirm = getpass.getpass("New Amplifier password again: ")
+            if password != confirm:
+                raise SystemExit("The two passwords are not the same. Nothing was changed.")
+        browser_entry.set_password(data_dir, password)
+        browser_entry.save_sign_in_settings(data_dir, username=username, dismissed=True)
+    except browser_entry.PasswordRefused as refused:
+        raise SystemExit(str(refused)) from None
+    except browser_entry.BrowserEntryUnavailable as unavailable:
+        raise SystemExit(str(unavailable)) from None
+    except (EOFError, KeyboardInterrupt, getpass.GetPassWarning):
+        raise SystemExit("The password was not read. Nothing was changed.") from None
+    except (OSError, ValueError):
+        raise SystemExit("Amplifier could not confirm the change. Set the username and password again.") from None
+    print("The Amplifier password is set.")
+    print("Username: " + username)
+    print("Use it at this PC's local Amplifier address and at its addresses for other devices.")
+    print("Browsers that are signed in stay signed in.")
+
+
 def _browser_key(args, data_dir):
     """Show the owner a new sign-in key once, or remove the saved one. No credential is read."""
     if not browser_entry.is_windows():
@@ -541,7 +584,8 @@ def _browser_key(args, data_dir):
     print()
     print("    " + browser_entry.SavedKey.display(key))
     print()
-    print('On the other device, open Amplifier and type the key in the field "Password". '
+    print("Username: " + browser_entry.sign_in_username(data_dir))
+    print('Open Amplifier and type this username and the key in the field "Password". '
           "Addresses for other devices:")
     for origin in remote:
         print("  " + origin)
@@ -705,8 +749,12 @@ def main():
         _config(args, data_dir)
         return
     if args.command == "browsers":
+        if args.browsers_command == "password":
+            return _browser_password(args, data_dir)
+        if args.username is not None or args.stdin:
+            raise SystemExit("--username and --stdin are only valid with browsers password.")
         if args.remove and args.browsers_command != "key":
-            raise SystemExit("--remove is only valid with browsers key.")
+            raise SystemExit("--remove is only valid with browsers key or browsers password.")
         if args.browsers_command == "key":
             return _browser_key(args, data_dir)
         from .auth import SignOutUncertain, sign_out_all

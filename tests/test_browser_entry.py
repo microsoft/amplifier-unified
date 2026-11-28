@@ -123,6 +123,7 @@ def owner(tmp_path, monkeypatch):
     from amplifier_web.instance_branding import InstanceBranding
     app["service"].instance_branding = InstanceBranding(tmp_path, DEFAULT_SERVER)
     app["sessions"] = auth.Sessions()  # No sign-out yet, as on a new installation.
+    entry.save_sign_in_settings(tmp_path, dismissed=True)
     entry.initialize(app)
     app.router.add_post(entry.ISSUE_PATH, entry.issue)
     app.router.add_post(entry.REDEEM_PATH, entry.redeem)
