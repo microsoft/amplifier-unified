@@ -1,0 +1,76 @@
+x-dtu:
+  twin_machine: twin
+x-image: &image
+  build:
+    context: ../..
+    dockerfile: tests/web/linked-instances.Dockerfile
+x-guest: &guest
+  <<: *image
+  init: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  shm_size: 256m
+  entrypoint: [/opt/paired/source/.venv/bin/python, /opt/paired/source/tests/web/linked-fresh-install.py]
+
+services:
+  twin:
+    <<: *image
+    command: [sleep, infinity]
+    network_mode: none
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, KILL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - source-ready:/run/link-source:ro
+      - destination-ready:/run/link-destination:ro
+      - run-control:/run/link-control
+  fresh-source:
+    <<: *guest
+    user: '24031:24031'
+    environment:
+      HOME: /home/fixture-source
+    command: [guest, source]
+    networks:
+      peer:
+        interface_name: peer0
+        aliases: [fresh-source-peer]
+    volumes:
+      - source-ready:/run/link-source
+      - destination-ready:/run/link-destination:ro
+      - run-control:/run/fresh-control:ro
+      - invitation:/run/link-control
+    tmpfs:
+      - /run/avahi-daemon:mode=0700,uid=24031,gid=24031
+  fresh-destination:
+    <<: *guest
+    user: '24032:24032'
+    environment:
+      HOME: /home/fixture-destination
+    command: [guest, destination]
+    networks:
+      peer:
+        interface_name: peer0
+        aliases: [fresh-destination-peer]
+    volumes:
+      - source-ready:/run/link-source:ro
+      - destination-ready:/run/link-destination
+      - run-control:/run/fresh-control:ro
+      - invitation:/run/link-control:ro
+    tmpfs:
+      - /run/avahi-daemon:mode=0700,uid=24032,gid=24032
+
+networks:
+  peer:
+    internal: true
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+    ipam:
+      config: [{subnet: 172.29.242.0/28}]
+volumes:
+  source-ready: {}
+  destination-ready: {}
+  run-control: {}
+  # Seed from the image's guest-writable /run/link-control. Only the guests see
+  # the transient invitation, never the coordinator or exported evidence.
+  invitation: {}

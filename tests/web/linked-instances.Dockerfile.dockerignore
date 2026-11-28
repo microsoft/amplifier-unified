@@ -1,0 +1,6 @@
+# Keep the bundled assets out of this image's build context. The maintained
+# assembler installs the verified candidate into an absent static directory.
+amplifier_web/static
+.git
+.venv
+**/node_modules
