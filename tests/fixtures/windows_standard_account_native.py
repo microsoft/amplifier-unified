@@ -805,7 +805,21 @@ def identity_measure(stage, exchange, account, token, *, second=False):
     need(sign_in_key(direct_token) == sign_in_key(token),
          "Direct and on-demand sign-in keys differ")
     if not second:
-        arguments = subprocess.list2cmdline(command[:-1] + ["identity-sample"])
+        # Scheduler has no stdout pipe. Retain an early refusal too, without
+        # changing standard()'s protected-record admission.
+        wrapper = (
+            "import json,pathlib,runpy,sys\n"
+            "sys.argv=sys.argv[1:]\n"
+            "try:\n"
+            " runpy.run_path(sys.argv[0],run_name='__main__')\n"
+            "except BaseException as e:\n"
+            " if not isinstance(e,SystemExit) or e.code not in (0,None):\n"
+            "  pathlib.Path(sys.argv[5],'identity-task-error.json').write_text("
+            "json.dumps({'errorType':type(e).__name__,'error':str(e)[:2000]}),encoding='utf-8')\n"
+            "  raise\n"
+        )
+        arguments = subprocess.list2cmdline(
+            [sys.executable, "-I", "-B", "-c", wrapper, *command[3:-1], "identity-sample"][1:])
         task("identity-create", name, sid=account["sid"], program=sys.executable,
              arguments=arguments, folder=str(exchange))
     deadline = time.monotonic() + 90
@@ -813,6 +827,8 @@ def identity_measure(stage, exchange, account, token, *, second=False):
     cutoff = before["completedAt"] if second and before else 0
     samples = []
     while time.monotonic() < deadline:
+        error = read_json(exchange / "identity-task-error.json")
+        need(not error, "The identity task failed before its sample", error)
         samples = [v for p in exchange.glob("identity-sample-*.json") if (v := read_json(p))
                    and v["at"] > cutoff]
         if samples:
