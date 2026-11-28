@@ -1334,7 +1334,7 @@ def test_offline_preflight_does_not_run_import_or_independent_install_probes():
     ('managed-removal-recovery', ['tests/test_dependency_layers.py', 'tests/test_stopped_reservation_recovery.py', 'tests/test_prepared_execution_contract.py', 'tests/test_environment_preparation.py', 'tests/test_test_environment_worker.py', 'tests/test_source_transfer.py', 'tests/test_task_environments.py', 'tests/test_environment_recovery.py', 'tests/test_prelaunch_source_failure.py', 'tests/test_environment_retention.py', 'tests/test_incus_environment_worker.py', 'tests/test_release_qualification.py']),
     ('shared-work-continuity', ['tests/test_task_continuity.py', 'tests/test_coordination_delivery.py', 'tests/test_work_invocation.py', 'tests/test_schedules.py', 'tests/test_collaboration_input.py', 'tests/test_coordination_revisions.py', 'tests/test_release_qualification.py', 'tests/test_voice_visual.py', 'tests/test_surface_context.py', 'tests/test_output_image_pairs.py', 'tests/test_memory_personalization.py', 'tests/test_capacity.py']),
     ('shared-work-native', ['tests/test_native_provider.py', 'tests/test_coordination_delivery.py', 'tests/test_work_native_effects.py', 'tests/test_work_origin.py', 'tests/test_capacity.py', 'tests/test_release_qualification.py']),
-    ('manager-exception-boundary', ['tests/test_manager_exception_boundary.py', 'tests/test_manager_failure_details.py', 'tests/test_session_health.py', 'tests/test_retained_failure_recovery.py', 'tests/test_runtime.py']),
+    ('manager-exception-boundary', ['tests/test_manager_exception_boundary.py', 'tests/test_manager_failure_details.py', 'tests/test_model_change_failure.py', 'tests/test_session_health.py', 'tests/test_retained_failure_recovery.py', 'tests/test_runtime.py']),
     ('native-child-fixtures', ['tests/test_child_app_assignment_capture.py', 'tests/test_history_scope_native.py', 'tests/test_file_source_native_children.py']),
 ])
 @pytest.mark.parametrize('missing', [False, True])
@@ -1385,6 +1385,19 @@ def test_python_selection_rejects_arbitrary_input_before_commands(tmp_path, monk
     with pytest.raises(SystemExit, match='Unknown fixed Python suite:'):
         exec(compile(script, 'workflow-python-selection', 'exec'), {})
     assert not (tmp_path / 'output').exists()
+
+
+def test_manager_boundary_uses_locked_live_runtime(monkeypatch, capsys):
+    import tomllib
+    workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    step, = [row for row in workflow['jobs']['python']['steps'] if row.get('id') == 'runtime-dependency']
+    script = '\n'.join(step['run'].splitlines()[1:-1])
+    monkeypatch.chdir(ROOT)
+    monkeypatch.setenv('CHECK_SUITE', 'manager-exception-boundary')
+    exec(compile(script, 'workflow-runtime-selection', 'exec'), {})
+    locked = tomllib.loads((ROOT / 'uv.lock').read_text())
+    loop, = [row for row in locked['package'] if row['name'] == 'amplifier-module-loop-live']
+    assert capsys.readouterr().out == 'revision=' + loop['source']['git'].rsplit('#', 1)[1] + '\n'
 
 
 def native_child_workflow():

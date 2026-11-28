@@ -464,7 +464,7 @@ async def test_original_send_recovers_only_an_applied_local_fork_choice(tmp_path
     app.runtime = manager
     try:
         if case == 'changed-mount':
-            with pytest.raises(AppError, match='verify the saved connection'):
+            with pytest.raises(AppError, match='could not verify the chat.s saved connection'):
                 await app._send(copy.deepcopy(session), 'fresh', 'new')
             assert not worker.context_bindings
         else:
