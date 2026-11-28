@@ -115,12 +115,11 @@ no process, whatever else it does. If a module that has `BashTool` lacks one of
 them, stderr names it and the result lists it. The other two names are the walk
 over the process table. They are replaced when present. The tool's own repair
 removes the walk, so their absence is no fault (commit `bf36c12` of
-`microsoft/amplifier-module-tool-bash`, November 27, 2026: a command is
-created suspended, put into the tool's job and then resumed, so its children
-are born in that job). An installation follows the tool's `main` branch: it
-takes that commit with its component update, not with an app release. A
-renamed entry point needs review: this guard cannot disable an unknown
-replacement.
+`microsoft/amplifier-module-tool-bash`: a foreground command is created
+suspended, put into the tool's job and then resumed, so its children are born
+in that job). An installation follows the tool's `main` branch: it takes that
+commit with its component update, not with an app release. A renamed entry
+point needs review: this guard cannot disable an unknown replacement.
 No step of the guard can fail the tool's import. A name that cannot be
 replaced, or a message that cannot be written, leaves the tool loaded. The
 names that could be replaced stay replaced, and the result lists the one that
@@ -144,11 +143,13 @@ The existing `test_windows_runtime_identity_transport_and_stop_model` and
 `ABITests.test_query_length_limits_and_inherit_fail_closed` in
 `tests/test_windows_owned_process.py` pin the job's flags and their verification.
 These portable models are not a native Windows run of this change.
-The native run is `tests/test_shell_tool_real.py` on a Windows runner. The
-case installs the guard, imports the real tool at the revision that
+The native run is `tests/test_shell_tool_real.py` on a Windows runner. Its
+first case installs the guard, imports the real tool at the revision that
 `pyproject.toml` pins for tests, and runs a command. The workflow
 `windows-private-shell.yml` installs that revision and requires that the case
-ran and passed, through Git Bash. A runner has no WSL and no Unified worker.
+ran and passed. The case runs through Git Bash, not through WSL, and not in a
+Unified worker. Its second case fails when `pyproject.toml`, the two lock
+files and that workflow do not name one and the same revision of the tool.
 
 ### Stable launcher and update recovery
 

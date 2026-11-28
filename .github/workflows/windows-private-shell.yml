@@ -132,9 +132,9 @@ jobs:
           if (-not ($listed.Success -and $passed.Success -and $listed.Groups[1].Value -eq $passed.Groups[1].Value)) { throw "Not every setup folder case ran and passed. pytest collected: '$($listed.Value)'. Its last line: $summary" }
       # The worker's guard against the real shell tool at the revision installed
       # above, on native Windows: both entry points to the tool's job exist and
-      # are replaced, and a command still runs through Git Bash. The case is
+      # are replaced, and a command still runs through Git Bash. That case is
       # skipped where the real tool is not installed. So this step uses the rule
-      # of the step before it: the one case must be collected, run and pass.
+      # of the step before it: every case must be collected, run and pass.
       - name: Check the worker's shell tool guard against the real shell tool
         shell: pwsh
         run: |
